@@ -5,6 +5,32 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "MarketplaceInterface": {
+      "properties": {
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MarketplaceLoadErrorInfo": {
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplacePath",
+        "message"
+      ],
+      "type": "object"
+    },
     "PluginAuthPolicy": {
       "enum": [
         "ON_INSTALL",
@@ -51,8 +77,12 @@
           ]
         },
         "defaultPrompt": {
+          "description": "Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+          "items": {
+            "type": "string"
+          },
           "type": [
-            "string",
+            "array",
             "null"
           ]
         },
@@ -123,6 +153,16 @@
     },
     "PluginMarketplaceEntry": {
       "properties": {
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MarketplaceInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "type": "string"
         },
@@ -170,14 +210,7 @@
     "PluginSummary": {
       "properties": {
         "authPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PluginAuthPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/PluginAuthPolicy"
         },
         "enabled": {
           "type": "boolean"
@@ -186,14 +219,7 @@
           "type": "string"
         },
         "installPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PluginInstallPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/PluginInstallPolicy"
         },
         "installed": {
           "type": "boolean"
@@ -216,8 +242,10 @@
         }
       },
       "required": [
+        "authPolicy",
         "enabled",
         "id",
+        "installPolicy",
         "installed",
         "name",
         "source"
@@ -226,6 +254,20 @@
     }
   },
   "properties": {
+    "featuredPluginIds": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "marketplaceLoadErrors": {
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/MarketplaceLoadErrorInfo"
+      },
+      "type": "array"
+    },
     "marketplaces": {
       "items": {
         "$ref": "#/definitions/PluginMarketplaceEntry"

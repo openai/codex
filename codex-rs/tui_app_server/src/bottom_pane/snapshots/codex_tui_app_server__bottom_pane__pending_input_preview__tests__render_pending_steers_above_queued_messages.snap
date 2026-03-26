@@ -1,0 +1,41 @@
+---
+source: tui_app_server/src/bottom_pane/pending_input_preview.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 52, height: 11 },
+    content: [
+        "• Messages to be submitted after next tool call     ",
+        "  (press esc to interrupt and send immediately)     ",
+        "  ↳ Please continue.                                ",
+        "  ↳ Check the last command output.                  ",
+        "                                                    ",
+        "• Messages to be submitted at end of turn           ",
+        "  ↳ Rejected steer that will be retried.            ",
+        "                                                    ",
+        "• Queued follow-up messages                         ",
+        "  ↳ Queued follow-up question                       ",
+        "    ⌥ + ↑ edit last queued message                  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 47, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 20, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 34, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 2, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 40, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 2, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 29, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 34, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

@@ -142,7 +142,7 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.14.0
 
@@ -209,6 +209,24 @@ jobs:
           cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure musl rusty_v8 artifact overrides
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+          release_tag="rusty-v8-v${version}"
+          base_url="https://github.com/openai/codex/releases/download/${release_tag}"
+          archive="https://github.com/openai/codex/releases/download/rusty-v8-v${version}/librusty_v8_release_${TARGET}.a.gz"
+          binding_dir="${RUNNER_TEMP}/rusty_v8"
+          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
+          mkdir -p "${binding_dir}"
+          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
+          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
 
       - name: Cargo build
         shell: bash
@@ -371,20 +389,24 @@ jobs:
       release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
     secrets: inherit
 
-  shell-tool-mcp:
-    name: shell-tool-mcp
+  argument-comment-lint-release-assets:
+    name: argument-comment-lint release assets
     needs: tag-check
-    uses: ./.github/workflows/shell-tool-mcp.yml
+    uses: ./.github/workflows/rust-release-argument-comment-lint.yml
     with:
-      release-tag: ${{ github.ref_name }}
       publish: true
-    secrets: inherit
+
+  zsh-release-assets:
+    name: zsh release assets
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-zsh.yml
 
   release:
     needs:
       - build
       - build-windows
-      - shell-tool-mcp
+      - argument-comment-lint-release-assets
+      - zsh-release-assets
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -427,11 +449,8 @@ jobs:
       - name: List
         run: ls -R dist/
 
-      # This is a temporary fix: we should modify shell-tool-mcp.yml so these
-      # files do not end up in dist/ in the first place.
       - name: Delete entries from dist/ that should not go in the release
         run: |
-          rm -rf dist/shell-tool-mcp*
           rm -rf dist/windows-binaries*
           # cargo-timing.html appears under multiple target-specific directories.
           # If included in files: dist/**, release upload races on duplicate
@@ -473,7 +492,7 @@ jobs:
           fi
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
@@ -490,9 +509,10 @@ jobs:
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
         run: |
           ./scripts/stage_npm_packages.py \
-            --release-version "${{ steps.release_name.outputs.name }}" \
+            --release-version "$RELEASE_VERSION" \
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk
@@ -519,6 +539,20 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-zsh-config.json
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-argument-comment-lint-config.json
 
       - name: Trigger developers.openai.com deploy
         # Only trigger the deploy if the release is not a pre-release.
@@ -561,10 +595,12 @@ jobs:
       - name: Download npm tarballs from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ needs.release.outputs.version }}"
-          tag="${{ needs.release.outputs.tag }}"
+          version="$RELEASE_VERSION"
+          tag="$RELEASE_TAG"
           mkdir -p dist/npm
           patterns=(
             "codex-npm-${version}.tgz"
@@ -657,7 +693,7 @@ jobs:
 
     steps:
       - name: Publish to WinGet
-        uses: vedantmgoyal9/winget-releaser@19e706d4c9121098010096f9c495a70a7518b30f
+        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
         with:
           identifier: OpenAI.Codex
           version: ${{ needs.release.outputs.version }}

@@ -3,7 +3,10 @@
   "definitions": {
     "HookEventName": {
       "enum": [
+        "preToolUse",
+        "postToolUse",
         "sessionStart",
+        "userPromptSubmit",
         "stop"
       ],
       "type": "string"

@@ -1,7 +1,7 @@
 use codex_core::config::types::Personality;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -103,6 +103,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -153,6 +154,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -210,6 +212,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -273,6 +276,7 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -324,6 +328,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -340,6 +345,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -360,6 +366,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -426,6 +433,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -442,6 +450,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -462,6 +471,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -541,6 +551,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -557,6 +568,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -577,6 +589,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -656,8 +669,8 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
     };
 
     let _models_mock = mount_models_once(
@@ -693,6 +706,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -771,8 +785,8 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
     };
 
     let _models_mock = mount_models_once(
@@ -811,6 +825,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -827,6 +842,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -847,6 +863,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,

@@ -1,7 +1,8 @@
 use super::load_plugin_manifest;
-use super::manifest::PLUGIN_MANIFEST_PATH;
-use super::plugin_manifest_name;
+use codex_plugin::PluginId;
+use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -9,53 +10,6 @@ use std::path::PathBuf;
 
 pub(crate) const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub(crate) const PLUGINS_CACHE_DIR: &str = "plugins/cache";
-
-#[derive(Debug, thiserror::Error)]
-pub enum PluginIdError {
-    #[error("{0}")]
-    Invalid(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginId {
-    pub plugin_name: String,
-    pub marketplace_name: String,
-}
-
-impl PluginId {
-    pub fn new(plugin_name: String, marketplace_name: String) -> Result<Self, PluginIdError> {
-        validate_plugin_segment(&plugin_name, "plugin name").map_err(PluginIdError::Invalid)?;
-        validate_plugin_segment(&marketplace_name, "marketplace name")
-            .map_err(PluginIdError::Invalid)?;
-        Ok(Self {
-            plugin_name,
-            marketplace_name,
-        })
-    }
-
-    pub fn parse(plugin_key: &str) -> Result<Self, PluginIdError> {
-        let Some((plugin_name, marketplace_name)) = plugin_key.rsplit_once('@') else {
-            return Err(PluginIdError::Invalid(format!(
-                "invalid plugin key `{plugin_key}`; expected <plugin>@<marketplace>"
-            )));
-        };
-        if plugin_name.is_empty() || marketplace_name.is_empty() {
-            return Err(PluginIdError::Invalid(format!(
-                "invalid plugin key `{plugin_key}`; expected <plugin>@<marketplace>"
-            )));
-        }
-
-        Self::new(plugin_name.to_string(), marketplace_name.to_string()).map_err(|err| match err {
-            PluginIdError::Invalid(message) => {
-                PluginIdError::Invalid(format!("{message} in `{plugin_key}`"))
-            }
-        })
-    }
-
-    pub fn as_key(&self) -> String {
-        format!("{}@{}", self.plugin_name, self.marketplace_name)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -81,27 +35,70 @@ impl PluginStore {
         &self.root
     }
 
-    pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
+    pub fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(
             self.root
                 .as_path()
                 .join(&plugin_id.marketplace_name)
-                .join(&plugin_id.plugin_name)
+                .join(&plugin_id.plugin_name),
+        )
+        .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
+    }
+
+    pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(
+            self.plugin_base_root(plugin_id)
+                .as_path()
                 .join(plugin_version),
         )
         .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
     }
 
+    pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
+        let mut discovered_versions = fs::read_dir(self.plugin_base_root(plugin_id).as_path())
+            .ok()?
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                entry.file_type().ok().filter(std::fs::FileType::is_dir)?;
+                entry.file_name().into_string().ok()
+            })
+            .filter(|version| validate_plugin_segment(version, "plugin version").is_ok())
+            .collect::<Vec<_>>();
+        discovered_versions.sort_unstable();
+        if discovered_versions.is_empty() {
+            None
+        } else if discovered_versions
+            .iter()
+            .any(|version| version == DEFAULT_PLUGIN_VERSION)
+        {
+            Some(DEFAULT_PLUGIN_VERSION.to_string())
+        } else {
+            discovered_versions.pop()
+        }
+    }
+
+    pub fn active_plugin_root(&self, plugin_id: &PluginId) -> Option<AbsolutePathBuf> {
+        self.active_plugin_version(plugin_id)
+            .map(|plugin_version| self.plugin_root(plugin_id, &plugin_version))
+    }
+
     pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
-        self.plugin_root(plugin_id, DEFAULT_PLUGIN_VERSION)
-            .as_path()
-            .is_dir()
+        self.active_plugin_version(plugin_id).is_some()
     }
 
     pub fn install(
         &self,
         source_path: AbsolutePathBuf,
         plugin_id: PluginId,
+    ) -> Result<PluginInstallResult, PluginStoreError> {
+        self.install_with_version(source_path, plugin_id, DEFAULT_PLUGIN_VERSION.to_string())
+    }
+
+    pub fn install_with_version(
+        &self,
+        source_path: AbsolutePathBuf,
+        plugin_id: PluginId,
+        plugin_version: String,
     ) -> Result<PluginInstallResult, PluginStoreError> {
         if !source_path.as_path().is_dir() {
             return Err(PluginStoreError::Invalid(format!(
@@ -117,17 +114,14 @@ impl PluginStore {
                 plugin_id.plugin_name
             )));
         }
-        let plugin_version = DEFAULT_PLUGIN_VERSION.to_string();
+        validate_plugin_segment(&plugin_version, "plugin version")
+            .map_err(PluginStoreError::Invalid)?;
         let installed_path = self.plugin_root(&plugin_id, &plugin_version);
-
-        if let Some(parent) = installed_path.parent() {
-            fs::create_dir_all(parent.as_path()).map_err(|err| {
-                PluginStoreError::io("failed to create plugin cache directory", err)
-            })?;
-        }
-
-        remove_existing_target(installed_path.as_path())?;
-        copy_dir_recursive(source_path.as_path(), installed_path.as_path())?;
+        replace_plugin_root_atomically(
+            source_path.as_path(),
+            self.plugin_base_root(&plugin_id).as_path(),
+            &plugin_version,
+        )?;
 
         Ok(PluginInstallResult {
             plugin_id,
@@ -137,12 +131,7 @@ impl PluginStore {
     }
 
     pub fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
-        let plugin_path = self
-            .root
-            .as_path()
-            .join(&plugin_id.marketplace_name)
-            .join(&plugin_id.plugin_name);
-        remove_existing_target(&plugin_path)
+        remove_existing_target(self.plugin_base_root(plugin_id).as_path())
     }
 }
 
@@ -181,25 +170,10 @@ fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError
         ))
     })?;
 
-    let plugin_name = plugin_manifest_name(&manifest, source_path);
+    let plugin_name = manifest.name;
     validate_plugin_segment(&plugin_name, "plugin name")
         .map_err(PluginStoreError::Invalid)
         .map(|_| plugin_name)
-}
-
-fn validate_plugin_segment(segment: &str, kind: &str) -> Result<(), String> {
-    if segment.is_empty() {
-        return Err(format!("invalid {kind}: must not be empty"));
-    }
-    if !segment
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return Err(format!(
-            "invalid {kind}: only ASCII letters, digits, `_`, and `-` are allowed"
-        ));
-    }
-    Ok(())
 }
 
 fn remove_existing_target(path: &Path) -> Result<(), PluginStoreError> {
@@ -216,6 +190,73 @@ fn remove_existing_target(path: &Path) -> Result<(), PluginStoreError> {
             PluginStoreError::io("failed to remove existing plugin cache entry", err)
         })
     }
+}
+
+fn replace_plugin_root_atomically(
+    source: &Path,
+    target_root: &Path,
+    plugin_version: &str,
+) -> Result<(), PluginStoreError> {
+    let Some(parent) = target_root.parent() else {
+        return Err(PluginStoreError::Invalid(format!(
+            "plugin cache path has no parent: {}",
+            target_root.display()
+        )));
+    };
+
+    fs::create_dir_all(parent)
+        .map_err(|err| PluginStoreError::io("failed to create plugin cache directory", err))?;
+
+    let Some(plugin_dir_name) = target_root.file_name() else {
+        return Err(PluginStoreError::Invalid(format!(
+            "plugin cache path has no directory name: {}",
+            target_root.display()
+        )));
+    };
+    let staged_dir = tempfile::Builder::new()
+        .prefix("plugin-install-")
+        .tempdir_in(parent)
+        .map_err(|err| {
+            PluginStoreError::io("failed to create temporary plugin cache directory", err)
+        })?;
+    let staged_root = staged_dir.path().join(plugin_dir_name);
+    let staged_version_root = staged_root.join(plugin_version);
+    copy_dir_recursive(source, &staged_version_root)?;
+
+    if target_root.exists() {
+        let backup_dir = tempfile::Builder::new()
+            .prefix("plugin-backup-")
+            .tempdir_in(parent)
+            .map_err(|err| {
+                PluginStoreError::io("failed to create plugin cache backup directory", err)
+            })?;
+        let backup_root = backup_dir.path().join(plugin_dir_name);
+        fs::rename(target_root, &backup_root)
+            .map_err(|err| PluginStoreError::io("failed to back up plugin cache entry", err))?;
+
+        if let Err(err) = fs::rename(&staged_root, target_root) {
+            let rollback_result = fs::rename(&backup_root, target_root);
+            return match rollback_result {
+                Ok(()) => Err(PluginStoreError::io(
+                    "failed to activate updated plugin cache entry",
+                    err,
+                )),
+                Err(rollback_err) => {
+                    let backup_path = backup_dir.keep().join(plugin_dir_name);
+                    Err(PluginStoreError::Invalid(format!(
+                        "failed to activate updated plugin cache entry at {}: {err}; failed to restore previous cache entry (left at {}): {rollback_err}",
+                        target_root.display(),
+                        backup_path.display()
+                    )))
+                }
+            };
+        }
+    } else {
+        fs::rename(&staged_root, target_root)
+            .map_err(|err| PluginStoreError::io("failed to activate plugin cache entry", err))?;
+    }
+
+    Ok(())
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
@@ -245,146 +286,5 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreErr
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
-
-    fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
-        let plugin_root = root.join(dir_name);
-        fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
-        fs::create_dir_all(plugin_root.join("skills")).unwrap();
-        fs::write(
-            plugin_root.join(".codex-plugin/plugin.json"),
-            format!(r#"{{"name":"{manifest_name}"}}"#),
-        )
-        .unwrap();
-        fs::write(plugin_root.join("skills/SKILL.md"), "skill").unwrap();
-        fs::write(plugin_root.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
-    }
-
-    #[test]
-    fn install_copies_plugin_into_default_marketplace() {
-        let tmp = tempdir().unwrap();
-        write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
-        let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
-
-        let result = PluginStore::new(tmp.path().to_path_buf())
-            .install(
-                AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
-                plugin_id.clone(),
-            )
-            .unwrap();
-
-        let installed_path = tmp.path().join("plugins/cache/debug/sample-plugin/local");
-        assert_eq!(
-            result,
-            PluginInstallResult {
-                plugin_id,
-                plugin_version: "local".to_string(),
-                installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
-            }
-        );
-        assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
-        assert!(installed_path.join("skills/SKILL.md").is_file());
-    }
-
-    #[test]
-    fn install_uses_manifest_name_for_destination_and_key() {
-        let tmp = tempdir().unwrap();
-        write_plugin(tmp.path(), "source-dir", "manifest-name");
-        let plugin_id = PluginId::new("manifest-name".to_string(), "market".to_string()).unwrap();
-
-        let result = PluginStore::new(tmp.path().to_path_buf())
-            .install(
-                AbsolutePathBuf::try_from(tmp.path().join("source-dir")).unwrap(),
-                plugin_id.clone(),
-            )
-            .unwrap();
-
-        assert_eq!(
-            result,
-            PluginInstallResult {
-                plugin_id,
-                plugin_version: "local".to_string(),
-                installed_path: AbsolutePathBuf::try_from(
-                    tmp.path().join("plugins/cache/market/manifest-name/local"),
-                )
-                .unwrap(),
-            }
-        );
-    }
-
-    #[test]
-    fn plugin_root_derives_path_from_key_and_version() {
-        let tmp = tempdir().unwrap();
-        let store = PluginStore::new(tmp.path().to_path_buf());
-        let plugin_id = PluginId::new("sample".to_string(), "debug".to_string()).unwrap();
-
-        assert_eq!(
-            store.plugin_root(&plugin_id, "local").as_path(),
-            tmp.path().join("plugins/cache/debug/sample/local")
-        );
-    }
-
-    #[test]
-    fn plugin_root_rejects_path_separators_in_key_segments() {
-        let err = PluginId::parse("../../etc@debug").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "invalid plugin name: only ASCII letters, digits, `_`, and `-` are allowed in `../../etc@debug`"
-        );
-
-        let err = PluginId::parse("sample@../../etc").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "invalid marketplace name: only ASCII letters, digits, `_`, and `-` are allowed in `sample@../../etc`"
-        );
-    }
-
-    #[test]
-    fn install_rejects_manifest_names_with_path_separators() {
-        let tmp = tempdir().unwrap();
-        write_plugin(tmp.path(), "source-dir", "../../etc");
-
-        let err = PluginStore::new(tmp.path().to_path_buf())
-            .install(
-                AbsolutePathBuf::try_from(tmp.path().join("source-dir")).unwrap(),
-                PluginId::new("source-dir".to_string(), "debug".to_string()).unwrap(),
-            )
-            .unwrap_err();
-
-        assert_eq!(
-            err.to_string(),
-            "invalid plugin name: only ASCII letters, digits, `_`, and `-` are allowed"
-        );
-    }
-
-    #[test]
-    fn install_rejects_marketplace_names_with_path_separators() {
-        let err = PluginId::new("sample-plugin".to_string(), "../../etc".to_string()).unwrap_err();
-
-        assert_eq!(
-            err.to_string(),
-            "invalid marketplace name: only ASCII letters, digits, `_`, and `-` are allowed"
-        );
-    }
-
-    #[test]
-    fn install_rejects_manifest_names_that_do_not_match_marketplace_plugin_name() {
-        let tmp = tempdir().unwrap();
-        write_plugin(tmp.path(), "source-dir", "manifest-name");
-
-        let err = PluginStore::new(tmp.path().to_path_buf())
-            .install(
-                AbsolutePathBuf::try_from(tmp.path().join("source-dir")).unwrap(),
-                PluginId::new("different-name".to_string(), "debug".to_string()).unwrap(),
-            )
-            .unwrap_err();
-
-        assert_eq!(
-            err.to_string(),
-            "plugin manifest name `manifest-name` does not match marketplace plugin name `different-name`"
-        );
-    }
-}
+#[path = "store_tests.rs"]
+mod tests;

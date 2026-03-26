@@ -275,7 +275,12 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
-        if dacl_mask_allows(p_dacl, &[*sid], allow_mask, true) {
+        if dacl_mask_allows(
+            p_dacl,
+            &[*sid],
+            allow_mask,
+            /*require_all_bits*/ true,
+        ) {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {

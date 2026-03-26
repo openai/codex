@@ -1,25 +1,31 @@
 use super::*;
+use crate::compact::InitialContextInjection;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
-use crate::features::Feature;
-use crate::guardian::GUARDIAN_SUBAGENT_NAME;
+use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
+use codex_features::Feature;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathExt;
+use core_test_support::TempDirExt;
 use core_test_support::codex_linux_sandbox_exe_or_skip;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -75,7 +81,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         .expect("test setup should allow enabling guardian approvals");
     session
         .features
-        .enable(Feature::RequestPermissions)
+        .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
     turn_context_raw
         .sandbox_policy
@@ -119,12 +125,17 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         expiration: expiration_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         windows_sandbox_level: turn_context.windows_sandbox_level,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
+            .windows_sandbox_private_desktop,
         justification: Some("test".to_string()),
         arg0: None,
     };
@@ -137,6 +148,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
             tool_name: "shell".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -190,7 +202,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         .expect("test setup should allow enabling guardian approvals");
     session
         .features
-        .enable(Feature::RequestPermissions)
+        .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
@@ -204,6 +216,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: "exec_command".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -226,6 +239,145 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
 }
 
 #[tokio::test]
+async fn process_compacted_history_preserves_separate_guardian_developer_message() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let guardian_policy = crate::guardian::guardian_policy_prompt();
+    let guardian_source =
+        SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()));
+
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.session_source = guardian_source.clone();
+    }
+    turn_context.session_source = guardian_source;
+    turn_context.developer_instructions = Some(guardian_policy.clone());
+
+    let refreshed = crate::compact_remote::process_compacted_history(
+        &session,
+        &turn_context,
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale developer message".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "summary".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+        InitialContextInjection::BeforeLastUserMessage,
+    )
+    .await;
+
+    let developer_messages = refreshed
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                crate::content_items_to_text(content)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        !developer_messages
+            .iter()
+            .any(|message| message.contains("stale developer message"))
+    );
+    assert!(developer_messages.len() >= 2);
+    assert_eq!(developer_messages.last(), Some(&guardian_policy));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_permissions_feature() {
+    let (mut session, turn_context_raw) = make_session_and_context().await;
+    session
+        .features
+        .enable(Feature::RequestPermissionsTool)
+        .expect("test setup should allow enabling request permissions tool");
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        let active_turn = active_turn.as_mut().expect("active turn");
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.record_granted_permissions(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            ..Default::default()
+        });
+    }
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+
+    let handler = ShellHandler;
+    let resp = handler
+        .handle(ToolInvocation {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn_context),
+            tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call_id: "sticky-turn-grant".to_string(),
+            tool_name: "shell".to_string(),
+            tool_namespace: None,
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "command": [
+                        "/bin/sh",
+                        "-c",
+                        "echo hi",
+                    ],
+                    "timeout_ms": 1_000_u64,
+                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    match resp {
+        Ok(output) => {
+            let output = expect_text_output(&output);
+
+            #[derive(Deserialize, PartialEq, Eq, Debug)]
+            struct ResponseExecMetadata {
+                exit_code: i32,
+            }
+
+            #[derive(Deserialize)]
+            struct ResponseExecOutput {
+                output: String,
+                metadata: ResponseExecMetadata,
+            }
+
+            let exec_output: ResponseExecOutput =
+                serde_json::from_str(&output).expect("valid exec output json");
+
+            assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
+            assert!(exec_output.output.contains("hi"));
+        }
+        Err(FunctionCallError::RespondToModel(output)) => {
+            assert!(
+                !output.contains("additional permissions are disabled"),
+                "sticky turn permissions should bypass inline validation: {output}"
+            );
+        }
+        Err(err) => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[tokio::test]
 async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let codex_home = tempdir().expect("create codex home");
     let project_dir = tempdir().expect("create project dir");
@@ -238,12 +390,11 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     .expect("write policy file");
 
     let mut config = build_test_config(codex_home.path()).await;
-    config.cwd = project_dir.path().to_path_buf();
+    config.cwd = project_dir.abs();
     config.config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
             ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_dir.path())
-                    .expect("absolute project path"),
+                dot_codex_folder: project_dir.path().abs(),
             },
             toml::Value::Table(Default::default()),
         )],
@@ -279,30 +430,32 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         CollaborationModesConfig::default(),
     ));
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        Arc::clone(&plugins_manager),
-        true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let file_watcher = Arc::new(FileWatcher::noop());
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
+    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
+        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         skills_manager,
         plugins_manager,
         mcp_manager,
-        file_watcher,
-        InitialHistory::New,
-        SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string())),
-        AgentControl::default(),
-        Vec::new(),
-        false,
-        None,
-        None,
-    )
+        skills_watcher,
+        conversation_history: InitialHistory::New,
+        session_source: SessionSource::SubAgent(SubAgentSource::Other(
+            GUARDIAN_REVIEWER_NAME.to_string(),
+        )),
+        agent_control: AgentControl::default(),
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        metrics_service_name: None,
+        inherited_shell_snapshot: None,
+        inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
+        user_shell_override: None,
+        parent_trace: None,
+    })
     .await
     .expect("spawn guardian subagent");
 

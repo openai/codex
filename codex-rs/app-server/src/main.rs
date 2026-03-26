@@ -1,9 +1,11 @@
 use clap::Parser;
 use codex_app_server::AppServerTransport;
+use codex_app_server::AppServerWebsocketAuthArgs;
 use codex_app_server::run_main_with_transport;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_core::config_loader::LoaderOverrides;
+use codex_protocol::protocol::SessionSource;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
@@ -21,6 +23,18 @@ struct AppServerArgs {
         default_value = AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: AppServerTransport,
+
+    /// Session source used to derive product restrictions and metadata.
+    #[arg(
+        long = "session-source",
+        value_name = "SOURCE",
+        default_value = "vscode",
+        value_parser = SessionSource::from_startup_arg
+    )]
+    session_source: SessionSource,
+
+    #[command(flatten)]
+    auth: AppServerWebsocketAuthArgs,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,13 +46,17 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let transport = args.listen;
+        let session_source = args.session_source;
+        let auth = args.auth.try_into_settings()?;
 
         run_main_with_transport(
             arg0_paths,
             CliConfigOverrides::default(),
             loader_overrides,
-            false,
+            /*default_analytics_enabled*/ false,
             transport,
+            session_source,
+            auth,
         )
         .await?;
         Ok(())

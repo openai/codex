@@ -1,0 +1,32 @@
+name: blob-size-policy
+
+on:
+  pull_request: {}
+
+jobs:
+  check:
+    name: Blob size policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine PR comparison range
+        id: range
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "base=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
+          echo "head=$(git rev-parse HEAD^2)" >> "$GITHUB_OUTPUT"
+
+      - name: Check changed blob sizes
+        env:
+          BASE_SHA: ${{ steps.range.outputs.base }}
+          HEAD_SHA: ${{ steps.range.outputs.head }}
+        run: |
+          python3 scripts/check_blob_size.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --max-bytes 512000 \
+            --allowlist .github/blob-size-allowlist.txt

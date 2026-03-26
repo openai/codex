@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "StopDecisionWire": {
+    "BlockDecisionWire": {
       "enum": [
         "block"
       ],
@@ -17,13 +17,14 @@
     "decision": {
       "allOf": [
         {
-          "$ref": "#/definitions/StopDecisionWire"
+          "$ref": "#/definitions/BlockDecisionWire"
         }
       ],
       "default": null
     },
     "reason": {
       "default": null,
+      "description": "Claude requires `reason` when `decision` is `block`; we enforce that semantic rule during output parsing rather than in the JSON schema.",
       "type": "string"
     },
     "stopReason": {

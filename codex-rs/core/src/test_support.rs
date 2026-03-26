@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_exec_server::EnvironmentManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -60,8 +61,41 @@ pub fn thread_manager_with_models_provider_and_home(
     auth: CodexAuth,
     provider: ModelProviderInfo,
     codex_home: PathBuf,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> ThreadManager {
-    ThreadManager::with_models_provider_and_home_for_tests(auth, provider, codex_home)
+    ThreadManager::with_models_provider_and_home_for_tests(
+        auth,
+        provider,
+        codex_home,
+        environment_manager,
+    )
+}
+
+pub async fn start_thread_with_user_shell_override(
+    thread_manager: &ThreadManager,
+    config: Config,
+    user_shell_override: crate::shell::Shell,
+) -> crate::error::Result<crate::NewThread> {
+    thread_manager
+        .start_thread_with_user_shell_override_for_tests(config, user_shell_override)
+        .await
+}
+
+pub async fn resume_thread_from_rollout_with_user_shell_override(
+    thread_manager: &ThreadManager,
+    config: Config,
+    rollout_path: PathBuf,
+    auth_manager: Arc<AuthManager>,
+    user_shell_override: crate::shell::Shell,
+) -> crate::error::Result<crate::NewThread> {
+    thread_manager
+        .resume_thread_from_rollout_with_user_shell_override_for_tests(
+            config,
+            rollout_path,
+            auth_manager,
+            user_shell_override,
+        )
+        .await
 }
 
 pub fn models_manager_with_provider(

@@ -1,6 +1,6 @@
 use std::io;
+use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
-use std::os::fd::FromRawFd as _;
 use std::os::fd::OwnedFd;
 
 use anyhow::Context as _;
@@ -11,7 +11,6 @@ use crate::unix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
 use crate::unix::escalate_protocol::EscalateAction;
 use crate::unix::escalate_protocol::EscalateRequest;
 use crate::unix::escalate_protocol::EscalateResponse;
-use crate::unix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::unix::escalate_protocol::SuperExecMessage;
 use crate::unix::escalate_protocol::SuperExecResult;
 use crate::unix::socket::AsyncDatagramSocket;
@@ -28,6 +27,12 @@ fn get_escalate_client() -> anyhow::Result<AsyncDatagramSocket> {
     Ok(unsafe { AsyncDatagramSocket::from_raw_fd(client_fd) }?)
 }
 
+fn duplicate_fd_for_transfer(fd: impl AsFd, name: &str) -> anyhow::Result<OwnedFd> {
+    fd.as_fd()
+        .try_clone_to_owned()
+        .with_context(|| format!("failed to duplicate {name} for escalation transfer"))
+}
+
 pub async fn run_shell_escalation_execve_wrapper(
     file: String,
     argv: Vec<String>,
@@ -40,12 +45,7 @@ pub async fn run_shell_escalation_execve_wrapper(
         .await
         .context("failed to send handshake datagram")?;
     let env = std::env::vars()
-        .filter(|(k, _)| {
-            !matches!(
-                k.as_str(),
-                ESCALATE_SOCKET_ENV_VAR | EXEC_WRAPPER_ENV_VAR | LEGACY_BASH_EXEC_WRAPPER_ENV_VAR
-            )
-        })
+        .filter(|(k, _)| !matches!(k.as_str(), ESCALATE_SOCKET_ENV_VAR | EXEC_WRAPPER_ENV_VAR))
         .collect();
     client
         .send(EscalateRequest {
@@ -62,11 +62,18 @@ pub async fn run_shell_escalation_execve_wrapper(
         .context("failed to receive EscalateResponse")?;
     match message.action {
         EscalateAction::Escalate => {
-            // TODO: maybe we should send ALL open FDs (except the escalate client)?
+            // Duplicate stdio before transferring ownership to the server. The
+            // wrapper must keep using its own stdin/stdout/stderr until the
+            // escalated child takes over.
+            let destination_fds = [
+                io::stdin().as_raw_fd(),
+                io::stdout().as_raw_fd(),
+                io::stderr().as_raw_fd(),
+            ];
             let fds_to_send = [
-                unsafe { OwnedFd::from_raw_fd(io::stdin().as_raw_fd()) },
-                unsafe { OwnedFd::from_raw_fd(io::stdout().as_raw_fd()) },
-                unsafe { OwnedFd::from_raw_fd(io::stderr().as_raw_fd()) },
+                duplicate_fd_for_transfer(io::stdin(), "stdin")?,
+                duplicate_fd_for_transfer(io::stdout(), "stdout")?,
+                duplicate_fd_for_transfer(io::stderr(), "stderr")?,
             ];
 
             // TODO: also forward signals over the super-exec socket
@@ -74,7 +81,7 @@ pub async fn run_shell_escalation_execve_wrapper(
             client
                 .send_with_fds(
                     SuperExecMessage {
-                        fds: fds_to_send.iter().map(AsRawFd::as_raw_fd).collect(),
+                        fds: destination_fds.into_iter().collect(),
                     },
                     &fds_to_send,
                 )
@@ -113,5 +120,25 @@ pub async fn run_shell_escalation_execve_wrapper(
             }
             Ok(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn duplicate_fd_for_transfer_does_not_close_original() {
+        let (left, _right) = UnixStream::pair().expect("socket pair");
+        let original_fd = left.as_raw_fd();
+
+        let duplicate = duplicate_fd_for_transfer(&left, "test fd").expect("duplicate fd");
+        assert_ne!(duplicate.as_raw_fd(), original_fd);
+
+        drop(duplicate);
+
+        assert_ne!(unsafe { libc::fcntl(original_fd, libc::F_GETFD) }, -1);
     }
 }

@@ -3,7 +3,7 @@
 use codex_config::CONFIG_TOML_FILE;
 use codex_core::CodexAuth;
 use codex_core::NewThread;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::WarningEvent;
@@ -42,7 +42,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false)
+        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false, None)
         .await
         .expect("spawn conversation");
 
@@ -83,7 +83,7 @@ async fn suppresses_warning_when_configured() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false)
+        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false, None)
         .await
         .expect("spawn conversation");
 

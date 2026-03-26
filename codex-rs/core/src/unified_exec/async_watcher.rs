@@ -20,6 +20,7 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 
@@ -121,21 +122,36 @@ pub(crate) fn spawn_exit_watcher(
         exit_token.cancelled().await;
         output_drained.notified().await;
 
-        let exit_code = process.exit_code().unwrap_or(-1);
         let duration = Instant::now().saturating_duration_since(started_at);
-        emit_exec_end_for_unified_exec(
-            session_ref,
-            turn_ref,
-            call_id,
-            command,
-            cwd,
-            Some(process_id.to_string()),
-            transcript,
-            String::new(),
-            exit_code,
-            duration,
-        )
-        .await;
+        if let Some(message) = process.failure_message() {
+            emit_failed_exec_end_for_unified_exec(
+                session_ref,
+                turn_ref,
+                call_id,
+                command,
+                cwd,
+                Some(process_id.to_string()),
+                transcript,
+                message,
+                duration,
+            )
+            .await;
+        } else {
+            let exit_code = process.exit_code().unwrap_or(-1);
+            emit_exec_end_for_unified_exec(
+                session_ref,
+                turn_ref,
+                call_id,
+                command,
+                cwd,
+                Some(process_id.to_string()),
+                transcript,
+                String::new(),
+                exit_code,
+                duration,
+            )
+            .await;
+        }
     });
 }
 
@@ -196,7 +212,12 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         duration,
         timed_out: false,
     };
-    let event_ctx = ToolEventCtx::new(session_ref.as_ref(), turn_ref.as_ref(), &call_id, None);
+    let event_ctx = ToolEventCtx::new(
+        session_ref.as_ref(),
+        turn_ref.as_ref(),
+        &call_id,
+        /*turn_diff_tracker*/ None,
+    );
     let emitter = ToolEmitter::unified_exec(
         &command,
         cwd,
@@ -205,6 +226,52 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     );
     emitter
         .emit(event_ctx, ToolEventStage::Success(output))
+        .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn emit_failed_exec_end_for_unified_exec(
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    call_id: String,
+    command: Vec<String>,
+    cwd: PathBuf,
+    process_id: Option<String>,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
+    message: String,
+    duration: Duration,
+) {
+    let stdout = resolve_aggregated_output(&transcript, String::new()).await;
+    let aggregated_output = if stdout.is_empty() {
+        message.clone()
+    } else {
+        format!("{stdout}\n{message}")
+    };
+    let output = ExecToolCallOutput {
+        exit_code: -1,
+        stdout: StreamOutput::new(stdout),
+        stderr: StreamOutput::new(message),
+        aggregated_output: StreamOutput::new(aggregated_output),
+        duration,
+        timed_out: false,
+    };
+    let event_ctx = ToolEventCtx::new(
+        session_ref.as_ref(),
+        turn_ref.as_ref(),
+        &call_id,
+        /*turn_diff_tracker*/ None,
+    );
+    let emitter = ToolEmitter::unified_exec(
+        &command,
+        cwd,
+        ExecCommandSource::UnifiedExecStartup,
+        process_id,
+    );
+    emitter
+        .emit(
+            event_ctx,
+            ToolEventStage::Failure(ToolEventFailure::Output(output)),
+        )
         .await;
 }
 
@@ -251,40 +318,5 @@ async fn resolve_aggregated_output(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::split_valid_utf8_prefix_with_max;
-
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn split_valid_utf8_prefix_respects_max_bytes_for_ascii() {
-        let mut buf = b"hello word!".to_vec();
-
-        let first = split_valid_utf8_prefix_with_max(&mut buf, 5).expect("expected prefix");
-        assert_eq!(first, b"hello".to_vec());
-        assert_eq!(buf, b" word!".to_vec());
-
-        let second = split_valid_utf8_prefix_with_max(&mut buf, 5).expect("expected prefix");
-        assert_eq!(second, b" word".to_vec());
-        assert_eq!(buf, b"!".to_vec());
-    }
-
-    #[test]
-    fn split_valid_utf8_prefix_avoids_splitting_utf8_codepoints() {
-        // "é" is 2 bytes in UTF-8. With a max of 3 bytes, we should only emit 1 char (2 bytes).
-        let mut buf = "ééé".as_bytes().to_vec();
-
-        let first = split_valid_utf8_prefix_with_max(&mut buf, 3).expect("expected prefix");
-        assert_eq!(std::str::from_utf8(&first).unwrap(), "é");
-        assert_eq!(buf, "éé".as_bytes().to_vec());
-    }
-
-    #[test]
-    fn split_valid_utf8_prefix_makes_progress_on_invalid_utf8() {
-        let mut buf = vec![0xff, b'a', b'b'];
-
-        let first = split_valid_utf8_prefix_with_max(&mut buf, 2).expect("expected prefix");
-        assert_eq!(first, vec![0xff]);
-        assert_eq!(buf, b"ab".to_vec());
-    }
-}
+#[path = "async_watcher_tests.rs"]
+mod tests;

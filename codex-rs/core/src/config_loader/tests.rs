@@ -382,6 +382,54 @@ flag = false
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn managed_preferences_expand_home_directory_in_workspace_write_roots() -> anyhow::Result<()>
+{
+    use base64::Engine;
+
+    let Some(home) = dirs::home_dir() else {
+        return Ok(());
+    };
+    let tmp = tempdir()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write]
+writable_roots = ["~/code"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+            macos_managed_config_requirements_base64: None,
+        })
+        .build()
+        .await?;
+
+    let expected_root = AbsolutePathBuf::from_absolute_path(home.join("code"))?;
+    match config.permissions.sandbox_policy.get() {
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            assert_eq!(
+                writable_roots
+                    .iter()
+                    .filter(|root| **root == expected_root)
+                    .count(),
+                1,
+            );
+        }
+        other => panic!("expected workspace-write policy, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn managed_preferences_requirements_are_applied() -> anyhow::Result<()> {
     use base64::Engine;
 
@@ -605,9 +653,11 @@ allowed_approval_policies = ["on-request"]
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                guardian_developer_instructions: None,
             }))
         }),
     )
@@ -654,9 +704,11 @@ allowed_approval_policies = ["on-request"]
             allowed_web_search_modes: None,
             feature_requirements: None,
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: None,
             network: None,
+            guardian_developer_instructions: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -692,9 +744,11 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
+        guardian_developer_instructions: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
@@ -741,7 +795,11 @@ async fn load_config_layers_fails_when_cloud_requirements_loader_fails() -> anyh
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::new(async {
-            Err(CloudRequirementsLoadError::new("cloud requirements failed"))
+            Err(CloudRequirementsLoadError::new(
+                codex_config::CloudRequirementsLoadErrorCode::RequestFailed,
+                None,
+                "cloud requirements failed",
+            ))
         }),
     )
     .await

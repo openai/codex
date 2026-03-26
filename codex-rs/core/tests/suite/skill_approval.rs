@@ -2,18 +2,13 @@
 #![cfg(unix)]
 
 use anyhow::Result;
-use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RejectConfig;
-use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -23,18 +18,9 @@ use core_test_support::wait_for_event_match;
 use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_policy;
 use core_test_support::zsh_fork::zsh_fork_runtime;
-use pretty_assertions::assert_eq;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-
-fn absolute_path(path: &Path) -> AbsolutePathBuf {
-    match AbsolutePathBuf::try_from(path) {
-        Ok(path) => path,
-        Err(err) => panic!("absolute path: {err}"),
-    }
-}
 
 fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
     let metadata_dir = home.join("skills").join(name).join("agents");
@@ -44,7 +30,7 @@ fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
 }
 
 fn shell_command_arguments(command: &str) -> Result<String> {
-    Ok(serde_json::to_string(&json!({
+    Ok(serde_json::to_string(&serde_json::json!({
         "command": command,
         "timeout_ms": 500,
     }))?)
@@ -65,6 +51,7 @@ async fn submit_turn_with_policies(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy,
+            approvals_reviewer: None,
             sandbox_policy,
             model: test.session_configured.model.clone(),
             effort: None,
@@ -75,18 +62,6 @@ async fn submit_turn_with_policies(
         })
         .await?;
     Ok(())
-}
-
-fn write_skill_with_shell_script(home: &Path, name: &str, script_name: &str) -> Result<PathBuf> {
-    write_skill_with_shell_script_contents(
-        home,
-        name,
-        script_name,
-        r#"#!/bin/sh
-echo 'zsh-fork-stdout'
-echo 'zsh-fork-stderr' >&2
-"#,
-    )
 }
 
 #[cfg(unix)]
@@ -120,15 +95,13 @@ description: {name} skill
     Ok(script_path)
 }
 
-fn skill_script_command(test: &TestCodex, script_name: &str) -> Result<(String, String)> {
+fn skill_script_command(test: &TestCodex, script_name: &str) -> Result<String> {
     let script_path = fs::canonicalize(
         test.codex_home_path()
             .join("skills/mbolin-test-skill/scripts")
             .join(script_name),
     )?;
-    let script_path_str = script_path.to_string_lossy().into_owned();
-    let command = shlex::try_join([script_path_str.as_str()])?;
-    Ok((script_path_str, command))
+    Ok(shlex::try_join([script_path.to_string_lossy().as_ref()])?)
 }
 
 async fn wait_for_exec_approval_request(test: &TestCodex) -> Option<ExecApprovalRequestEvent> {
@@ -153,693 +126,46 @@ fn output_shows_sandbox_denial(output: &str) -> bool {
         || output.contains("Read-only file system")
 }
 
-/// Focus on the approval payload: the skill should prompt before execution and
-/// only advertise the permissions declared in its metadata.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_prompts_for_skill_script_execution() -> Result<()> {
+async fn shell_zsh_fork_skill_scripts_ignore_declared_permissions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let Some(runtime) = zsh_fork_runtime("zsh-fork skill prompt test")? else {
+    let Some(runtime) = zsh_fork_runtime("zsh-fork skill script ignores permissions test")? else {
         return Ok(());
     };
 
-    let server = start_mock_server().await;
-    let tool_call_id = "zsh-fork-skill-call";
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        AskForApproval::OnRequest,
-        SandboxPolicy::new_workspace_write_policy(),
-        |home| {
-            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
-            write_skill_metadata(
-                home,
-                "mbolin-test-skill",
-                r#"
-permissions:
-  file_system:
-    read:
-      - "./data"
-    write:
-      - "./output"
-"#,
-            )
-            .unwrap();
-        },
-    )
-    .await?;
-
-    let (script_path_str, command) = skill_script_command(&test, "hello-mbolin.sh")?;
-    let arguments = shell_command_arguments(&command)?;
-    let mocks =
-        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
-            .await;
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        AskForApproval::OnRequest,
-        SandboxPolicy::new_workspace_write_policy(),
-    )
-    .await?;
-
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => {
-            let call_output = mocks
-                .completion
-                .single_request()
-                .function_call_output(tool_call_id);
-            panic!(
-                "expected exec approval request before completion; function_call_output={call_output:?}"
-            );
-        }
-    };
-    assert_eq!(approval.call_id, tool_call_id);
-    assert_eq!(approval.command, vec![script_path_str.clone()]);
-    assert_eq!(
-        approval.available_decisions,
-        Some(vec![
-            ReviewDecision::Approved,
-            ReviewDecision::ApprovedForSession,
-            ReviewDecision::Abort,
-        ])
-    );
-    assert_eq!(
-        approval.additional_permissions,
-        Some(PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![absolute_path(
-                    &test.codex_home_path().join("skills/mbolin-test-skill/data"),
-                )]),
-                write: Some(vec![absolute_path(
-                    &test
-                        .codex_home_path()
-                        .join("skills/mbolin-test-skill/output"),
-                )]),
-            }),
-            ..Default::default()
-        })
-    );
-    assert_eq!(
-        approval.skill_metadata,
-        Some(ExecApprovalRequestSkillMetadata {
-            path_to_skills_md: test
-                .codex_home_path()
-                .join("skills/mbolin-test-skill/agents/openai.yaml"),
-        })
-    );
-
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Denied,
-        })
-        .await?;
-
-    wait_for_turn_complete(&test).await;
-
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
-    assert!(
-        output.contains("Execution denied: User denied execution"),
-        "expected rejection marker in function_call_output: {output:?}"
-    );
-
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_false_still_prompts()
--> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork reject false skill prompt test")? else {
-        return Ok(());
-    };
-
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: false,
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
         rules: true,
         skill_approval: false,
-        request_permissions: false,
-        mcp_elicitations: false,
+        request_permissions: true,
+        mcp_elicitations: true,
     });
-    let server = start_mock_server().await;
-    let tool_call_id = "zsh-fork-skill-reject-false";
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        approval_policy,
-        SandboxPolicy::new_workspace_write_policy(),
-        |home| {
-            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
-            write_skill_metadata(
-                home,
-                "mbolin-test-skill",
-                r#"
-permissions:
-  file_system:
-    write:
-      - "./output"
-"#,
-            )
-            .unwrap();
-        },
-    )
-    .await?;
-
-    let (script_path_str, command) = skill_script_command(&test, "hello-mbolin.sh")?;
-    let arguments = shell_command_arguments(&command)?;
-    let mocks =
-        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
-            .await;
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        approval_policy,
-        SandboxPolicy::new_workspace_write_policy(),
-    )
-    .await?;
-
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => {
-            let call_output = mocks
-                .completion
-                .single_request()
-                .function_call_output(tool_call_id);
-            panic!(
-                "expected exec approval request before completion; function_call_output={call_output:?}"
-            );
-        }
-    };
-    assert_eq!(approval.call_id, tool_call_id);
-    assert_eq!(approval.command, vec![script_path_str]);
-
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Denied,
-        })
-        .await?;
-
-    wait_for_turn_complete(&test).await;
-
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
-    assert!(
-        output.contains("Execution denied: User denied execution"),
-        "expected rejection marker in function_call_output: {output:?}"
-    );
-
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_still_prompts()
--> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) =
-        zsh_fork_runtime("zsh-fork reject sandbox approval true skill prompt test")?
-    else {
-        return Ok(());
-    };
-
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: true,
-        rules: false,
-        skill_approval: false,
-        request_permissions: false,
-        mcp_elicitations: false,
-    });
-    let server = start_mock_server().await;
-    let tool_call_id = "zsh-fork-skill-reject-true";
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        approval_policy,
-        SandboxPolicy::new_workspace_write_policy(),
-        |home| {
-            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
-            write_skill_metadata(
-                home,
-                "mbolin-test-skill",
-                r#"
-permissions:
-  file_system:
-    write:
-      - "./output"
-"#,
-            )
-            .unwrap();
-        },
-    )
-    .await?;
-
-    let (_, command) = skill_script_command(&test, "hello-mbolin.sh")?;
-    let arguments = shell_command_arguments(&command)?;
-    let mocks =
-        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
-            .await;
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        approval_policy,
-        SandboxPolicy::new_workspace_write_policy(),
-    )
-    .await?;
-
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => {
-            let call_output = mocks
-                .completion
-                .single_request()
-                .function_call_output(tool_call_id);
-            panic!(
-                "expected exec approval request before completion; function_call_output={call_output:?}"
-            );
-        }
-    };
-    assert_eq!(approval.call_id, tool_call_id);
-
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Denied,
-        })
-        .await?;
-
-    wait_for_turn_complete(&test).await;
-
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
-    assert!(
-        output.contains("Execution denied: User denied execution"),
-        "expected rejection marker in function_call_output: {output:?}"
-    );
-
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_script_reject_policy_with_skill_approval_true_skips_prompt()
--> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork reject skill approval true skill prompt test")?
-    else {
-        return Ok(());
-    };
-
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: false,
-        rules: false,
-        skill_approval: true,
-        request_permissions: false,
-        mcp_elicitations: false,
-    });
-    let server = start_mock_server().await;
-    let tool_call_id = "zsh-fork-skill-reject-skill-approval-true";
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        approval_policy,
-        SandboxPolicy::new_workspace_write_policy(),
-        |home| {
-            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
-            write_skill_metadata(
-                home,
-                "mbolin-test-skill",
-                r#"
-permissions:
-  file_system:
-    write:
-      - "./output"
-"#,
-            )
-            .unwrap();
-        },
-    )
-    .await?;
-
-    let (_, command) = skill_script_command(&test, "hello-mbolin.sh")?;
-    let arguments = shell_command_arguments(&command)?;
-    let mocks =
-        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
-            .await;
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        approval_policy,
-        SandboxPolicy::new_workspace_write_policy(),
-    )
-    .await?;
-
-    let approval = wait_for_exec_approval_request(&test).await;
-    assert!(
-        approval.is_none(),
-        "expected reject skill approval policy to skip exec approval"
-    );
-
-    wait_for_turn_complete(&test).await;
-
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
-    assert!(
-        output.contains("Execution denied: Execution forbidden by policy"),
-        "expected policy rejection marker in function_call_output: {output:?}"
-    );
-
-    Ok(())
-}
-
-/// Permissionless skills should inherit the turn sandbox without prompting.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork inherited skill sandbox test")? else {
-        return Ok(());
-    };
-
-    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
-    let outside_path = outside_dir
-        .path()
-        .join("zsh-fork-skill-inherited-sandbox.txt");
-    let outside_path_quoted = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
-    let script_contents = format!(
-        "#!/bin/sh\nprintf '%s' forbidden > {outside_path_quoted}\ncat {outside_path_quoted}\n"
-    );
-    let outside_path_for_hook = outside_path.clone();
-    let script_contents_for_hook = script_contents.clone();
     let workspace_write_policy = restrictive_workspace_write_policy();
-
-    let server = start_mock_server().await;
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        AskForApproval::OnRequest,
-        workspace_write_policy.clone(),
-        move |home| {
-            let _ = fs::remove_file(&outside_path_for_hook);
-            write_skill_with_shell_script_contents(
-                home,
-                "mbolin-test-skill",
-                "sandboxed.sh",
-                &script_contents_for_hook,
-            )
-            .unwrap();
-        },
-    )
-    .await?;
-
-    let (_, command) = skill_script_command(&test, "sandboxed.sh")?;
-
-    let first_call_id = "zsh-fork-skill-permissions-1";
-    let first_arguments = shell_command_arguments(&command)?;
-    let first_mocks = mount_function_call_agent_response(
-        &server,
-        first_call_id,
-        &first_arguments,
-        "shell_command",
-    )
-    .await;
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        AskForApproval::OnRequest,
-        workspace_write_policy.clone(),
-    )
-    .await?;
-
-    let first_approval = wait_for_exec_approval_request(&test).await;
-    assert!(
-        first_approval.is_none(),
-        "expected permissionless skill script to skip exec approval"
-    );
-
-    wait_for_turn_complete(&test).await;
-
-    let first_output = first_mocks
-        .completion
-        .single_request()
-        .function_call_output(first_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        output_shows_sandbox_denial(&first_output) || !first_output.contains("forbidden"),
-        "expected inherited turn sandbox denial on first run, got output: {first_output:?}"
-    );
-    assert!(
-        !outside_path.exists(),
-        "first run should not write outside the turn sandbox"
-    );
-
-    let second_call_id = "zsh-fork-skill-permissions-2";
-    let second_arguments = shell_command_arguments(&command)?;
-    let second_mocks = mount_function_call_agent_response(
-        &server,
-        second_call_id,
-        &second_arguments,
-        "shell_command",
-    )
-    .await;
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        AskForApproval::OnRequest,
-        workspace_write_policy,
-    )
-    .await?;
-
-    let cached_approval = wait_for_exec_approval_request(&test).await;
-    assert!(
-        cached_approval.is_none(),
-        "expected permissionless skill rerun to continue skipping exec approval"
-    );
-
-    let second_output = second_mocks
-        .completion
-        .single_request()
-        .function_call_output(second_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        output_shows_sandbox_denial(&second_output) || !second_output.contains("forbidden"),
-        "expected cached skill approval to retain inherited turn sandboxing, got output: {second_output:?}"
-    );
-    assert!(
-        !outside_path.exists(),
-        "cached session approval should not widen a permissionless skill to full access"
-    );
-
-    Ok(())
-}
-
-/// Empty skill permissions should behave like no skill override and inherit the
-/// turn sandbox without prompting.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork empty skill permissions test")? else {
-        return Ok(());
-    };
-
-    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
-    let outside_path = outside_dir
-        .path()
-        .join("zsh-fork-skill-empty-permissions.txt");
-    let outside_path_quoted = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
-    let script_contents = format!(
-        "#!/bin/sh\nprintf '%s' allowed > {outside_path_quoted}\ncat {outside_path_quoted}\n"
-    );
-    let outside_path_for_hook = outside_path.clone();
-    let script_contents_for_hook = script_contents.clone();
-
-    let server = start_mock_server().await;
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        AskForApproval::OnRequest,
-        SandboxPolicy::DangerFullAccess,
-        move |home| {
-            let _ = fs::remove_file(&outside_path_for_hook);
-            write_skill_with_shell_script_contents(
-                home,
-                "mbolin-test-skill",
-                "sandboxed.sh",
-                &script_contents_for_hook,
-            )
-            .unwrap();
-            write_skill_metadata(home, "mbolin-test-skill", "permissions: {}\n").unwrap();
-        },
-    )
-    .await?;
-
-    let (_, command) = skill_script_command(&test, "sandboxed.sh")?;
-
-    let first_call_id = "zsh-fork-skill-empty-permissions-1";
-    let first_arguments = shell_command_arguments(&command)?;
-    let first_mocks = mount_function_call_agent_response(
-        &server,
-        first_call_id,
-        &first_arguments,
-        "shell_command",
-    )
-    .await;
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        AskForApproval::OnRequest,
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
-
-    let first_approval = wait_for_exec_approval_request(&test).await;
-    assert!(
-        first_approval.is_none(),
-        "expected empty skill permissions to skip exec approval"
-    );
-
-    wait_for_turn_complete(&test).await;
-
-    let first_output = first_mocks
-        .completion
-        .single_request()
-        .function_call_output(first_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        first_output.contains("allowed"),
-        "expected empty skill permissions to inherit full-access turn sandbox, got output: {first_output:?}"
-    );
-    assert_eq!(fs::read_to_string(&outside_path)?, "allowed");
-
-    let second_call_id = "zsh-fork-skill-empty-permissions-2";
-    let second_arguments = shell_command_arguments(&command)?;
-    let second_mocks = mount_function_call_agent_response(
-        &server,
-        second_call_id,
-        &second_arguments,
-        "shell_command",
-    )
-    .await;
-
-    let _ = fs::remove_file(&outside_path);
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        AskForApproval::OnRequest,
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
-
-    let cached_approval = wait_for_exec_approval_request(&test).await;
-    assert!(
-        cached_approval.is_none(),
-        "expected empty-permissions skill rerun to continue skipping exec approval"
-    );
-
-    let second_output = second_mocks
-        .completion
-        .single_request()
-        .function_call_output(second_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        second_output.contains("allowed"),
-        "expected cached empty-permissions skill approval to inherit the turn sandbox, got output: {second_output:?}"
-    );
-    assert_eq!(fs::read_to_string(&outside_path)?, "allowed");
-
-    Ok(())
-}
-
-/// The validation to focus on is: writes to the skill-approved folder succeed,
-/// and writes to an unrelated folder fail, both before and after cached approval.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork explicit skill sandbox test")? else {
-        return Ok(());
-    };
-
     let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
     let allowed_dir = outside_dir.path().join("allowed-output");
-    let blocked_dir = outside_dir.path().join("blocked-output");
     fs::create_dir_all(&allowed_dir)?;
-    fs::create_dir_all(&blocked_dir)?;
-
     let allowed_path = allowed_dir.join("allowed.txt");
-    let blocked_path = blocked_dir.join("blocked.txt");
     let allowed_path_quoted = shlex::try_join([allowed_path.to_string_lossy().as_ref()])?;
-    let blocked_path_quoted = shlex::try_join([blocked_path.to_string_lossy().as_ref()])?;
     let script_contents = format!(
-        "#!/bin/sh\nprintf '%s' allowed > {allowed_path_quoted}\ncat {allowed_path_quoted}\nprintf '%s' forbidden > {blocked_path_quoted}\nif [ -f {blocked_path_quoted} ]; then echo blocked-created; fi\n"
+        "#!/bin/sh\nprintf '%s' allowed > {allowed_path_quoted}\nif [ -f {allowed_path_quoted} ]; then cat {allowed_path_quoted}; fi\n"
     );
-    let allowed_dir_for_hook = allowed_dir.clone();
-    let allowed_path_for_hook = allowed_path.clone();
-    let blocked_path_for_hook = blocked_path.clone();
-    let script_contents_for_hook = script_contents.clone();
-
     let permissions_yaml = format!(
         "permissions:\n  file_system:\n    write:\n      - \"{}\"\n",
         allowed_dir.display()
     );
 
-    let workspace_write_policy = restrictive_workspace_write_policy();
     let server = start_mock_server().await;
+    let allowed_path_for_hook = allowed_path.clone();
+    let script_contents_for_hook = script_contents.clone();
     let test = build_zsh_fork_test(
         &server,
         runtime,
-        AskForApproval::OnRequest,
+        approval_policy,
         workspace_write_policy.clone(),
         move |home| {
             let _ = fs::remove_file(&allowed_path_for_hook);
-            let _ = fs::remove_file(&blocked_path_for_hook);
-            fs::create_dir_all(&allowed_dir_for_hook).unwrap();
-            fs::create_dir_all(blocked_path_for_hook.parent().unwrap()).unwrap();
             write_skill_with_shell_script_contents(
                 home,
                 "mbolin-test-skill",
@@ -852,128 +178,49 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     )
     .await?;
 
-    let (script_path_str, command) = skill_script_command(&test, "sandboxed.sh")?;
-
-    let first_call_id = "zsh-fork-skill-permissions-1";
-    let first_arguments = shell_command_arguments(&command)?;
-    let first_mocks = mount_function_call_agent_response(
-        &server,
-        first_call_id,
-        &first_arguments,
-        "shell_command",
-    )
-    .await;
+    let command = skill_script_command(&test, "sandboxed.sh")?;
+    let call_id = "zsh-fork-skill-script-ignores-permissions";
+    let arguments = shell_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, call_id, &arguments, "shell_command").await;
 
     submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
-        AskForApproval::OnRequest,
-        workspace_write_policy.clone(),
-    )
-    .await?;
-
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => panic!("expected exec approval request before completion"),
-    };
-    assert_eq!(approval.call_id, first_call_id);
-    assert_eq!(approval.command, vec![script_path_str.clone()]);
-    assert_eq!(
-        approval.additional_permissions,
-        Some(PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: None,
-                write: Some(vec![absolute_path(&allowed_dir)]),
-            }),
-            ..Default::default()
-        })
-    );
-
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::ApprovedForSession,
-        })
-        .await?;
-
-    wait_for_turn_complete(&test).await;
-
-    let first_output = first_mocks
-        .completion
-        .single_request()
-        .function_call_output(first_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        first_output.contains("allowed"),
-        "expected skill sandbox to permit writes to the approved folder, got output: {first_output:?}"
-    );
-    assert_eq!(fs::read_to_string(&allowed_path)?, "allowed");
-    assert!(
-        !blocked_path.exists(),
-        "first run should not write outside the explicit skill sandbox"
-    );
-    assert!(
-        !first_output.contains("blocked-created"),
-        "blocked path should not have been created: {first_output:?}"
-    );
-
-    let second_call_id = "zsh-fork-skill-permissions-2";
-    let second_arguments = shell_command_arguments(&command)?;
-    let second_mocks = mount_function_call_agent_response(
-        &server,
-        second_call_id,
-        &second_arguments,
-        "shell_command",
-    )
-    .await;
-
-    let _ = fs::remove_file(&allowed_path);
-    let _ = fs::remove_file(&blocked_path);
-
-    submit_turn_with_policies(
-        &test,
-        "use $mbolin-test-skill",
-        AskForApproval::OnRequest,
+        approval_policy,
         workspace_write_policy,
     )
     .await?;
 
-    let cached_approval = wait_for_exec_approval_request(&test).await;
+    let approval = wait_for_exec_approval_request(&test).await;
     assert!(
-        cached_approval.is_none(),
-        "expected second run to reuse the cached session approval"
+        approval.is_none(),
+        "expected skill script execution to skip the removed skill approval path"
     );
 
-    let second_output = second_mocks
+    wait_for_turn_complete(&test).await;
+
+    let call_output = mocks
         .completion
         .single_request()
-        .function_call_output(second_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+        .function_call_output(call_id);
+    let output = call_output["output"].as_str().unwrap_or_default();
     assert!(
-        second_output.contains("allowed"),
-        "expected cached skill approval to retain the explicit skill sandbox, got output: {second_output:?}"
-    );
-    assert_eq!(fs::read_to_string(&allowed_path)?, "allowed");
-    assert!(
-        !blocked_path.exists(),
-        "cached session approval should not widen skill execution beyond the explicit skill sandbox"
+        !output.contains("Execution denied: Execution forbidden by policy"),
+        "skill script should now be governed by the turn sandbox, not the removed skill approval gate: {output:?}"
     );
     assert!(
-        !second_output.contains("blocked-created"),
-        "blocked path should not have been created after cached approval: {second_output:?}"
+        output_shows_sandbox_denial(output) || !output.contains("allowed"),
+        "expected the turn sandbox to block the out-of-workspace write, got output: {output:?}"
+    );
+    assert!(
+        !allowed_path.exists(),
+        "declared skill permissions should not widen script execution beyond the turn sandbox"
     );
 
     Ok(())
 }
 
-/// This stays narrow on purpose: the important check is that `WorkspaceWrite`
-/// continues to deny writes outside the workspace even under `zsh-fork`.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {

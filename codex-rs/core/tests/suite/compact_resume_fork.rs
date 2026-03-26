@@ -16,6 +16,9 @@ use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
@@ -307,10 +310,10 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         return Ok(());
     }
 
-    // 1. Arrange mocked SSE responses for the initial flow plus the second compact.
+    // 1. Arrange mocked SSE responses as a single ordered stream so assertions
+    // observe the real request sequence instead of per-mock duplicate captures.
     let server = MockServer::start().await;
-    let mut request_log = mount_initial_flow(&server).await;
-    request_log.extend(mount_second_compact_flow(&server).await);
+    let request_log = mount_second_compact_sequence(&server).await;
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
     let (_home, config, manager, base) = start_test_conversation(&server, None).await;
@@ -346,7 +349,12 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
-    let mut requests = gather_request_bodies(&request_log);
+    let mut requests = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    requests.iter_mut().for_each(normalize_line_endings);
     normalize_compact_prompts(&mut requests);
     let input_after_compact = json!(requests[requests.len() - 2]["input"]);
     let input_after_resume = json!(requests[requests.len() - 1]["input"]);
@@ -379,21 +387,39 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     );
     let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
     let summary_after_second_compact =
-        extract_summary_user_text(&requests[requests.len() - 3], SUMMARY_TEXT);
-    let mut expected_after_second_compact_user_texts =
-        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
+        extract_summary_user_text(&requests[requests.len() - 2], SUMMARY_TEXT);
+    let mut expected_after_second_compact_user_texts = vec![
+        "hello world".to_string(),
+        "AFTER_COMPACT".to_string(),
+        "AFTER_RESUME".to_string(),
+        "AFTER_FORK".to_string(),
+        summary_after_second_compact.clone(),
+    ];
     expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
+    let mut expected_fork_local_user_texts =
+        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
+    expected_fork_local_user_texts.extend_from_slice(seeded_user_prefix);
+    expected_fork_local_user_texts.push("AFTER_COMPACT_2".to_string());
     let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
     let (final_last, final_prefix) = final_user_texts
         .split_last()
         .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
     assert_eq!(final_last, AFTER_SECOND_RESUME);
-    assert!(
-        final_prefix.starts_with(&expected_after_second_compact_user_texts),
-        "after-second-resume user texts should preserve post-compact user history prefix"
-    );
-    let final_seeded_suffix = &final_prefix[expected_after_second_compact_user_texts.len()..];
+    let matched_prefix_len = if let Some(start) = final_prefix
+        .windows(expected_after_second_compact_user_texts.len())
+        .position(|window| window == expected_after_second_compact_user_texts)
+    {
+        start + expected_after_second_compact_user_texts.len()
+    } else if let Some(start) = final_prefix
+        .windows(expected_fork_local_user_texts.len())
+        .position(|window| window == expected_fork_local_user_texts)
+    {
+        start + expected_fork_local_user_texts.len()
+    } else {
+        panic!("after-second-resume user texts should preserve post-compact user history prefix");
+    };
+    let final_seeded_suffix = &final_prefix[matched_prefix_len..];
     if seeded_user_prefix.is_empty() {
         assert!(
             final_seeded_suffix.is_empty(),
@@ -494,7 +520,143 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
                 ("after rollback", &requests[3]),
             ],
             &ContextSnapshotOptions::default()
+                .strip_capability_instructions()
                 .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Scenario: rolling back a turn that introduced persistent pre-turn context
+/// diffs should trim those context updates so the next request includes them
+/// only once.
+async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return Ok(());
+    }
+
+    const MODEL: &str = "gpt-5.1-codex";
+    const TURN_ONE_USER: &str = "turn 1 user";
+    const TURN_TWO_USER: &str = "turn 2 user";
+    const FOLLOWUP_USER: &str = "follow-up user";
+    const ROLLED_BACK_DEV_INSTRUCTIONS: &str = "ROLLED_BACK_DEV_INSTRUCTIONS";
+    const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
+
+    let server = MockServer::start().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "turn 1 assistant"),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "turn 2 assistant"),
+                ev_completed("r2"),
+            ]),
+            sse(vec![ev_completed("r3")]),
+        ],
+    )
+    .await;
+
+    let (_home, config, _manager, conversation) =
+        start_test_conversation(&server, Some(MODEL)).await;
+
+    user_turn(&conversation, TURN_ONE_USER).await;
+
+    let override_cwd = config.cwd.join(PRETURN_CONTEXT_DIFF_CWD)?;
+    std::fs::create_dir_all(&override_cwd)?;
+    conversation
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(override_cwd.to_path_buf()),
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: MODEL.to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: Some(ROLLED_BACK_DEV_INSTRUCTIONS.to_string()),
+                },
+            }),
+            personality: None,
+        })
+        .await?;
+
+    user_turn(&conversation, TURN_TWO_USER).await;
+
+    conversation
+        .submit(Op::ThreadRollback { num_turns: 1 })
+        .await?;
+    let rollback_event = wait_for_event(&conversation, |ev| {
+        matches!(ev, EventMsg::ThreadRolledBack(_))
+    })
+    .await;
+    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
+        panic!("expected thread rolled back event");
+    };
+    assert_eq!(rollback_event.num_turns, 1);
+
+    user_turn(&conversation, FOLLOWUP_USER).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+
+    let before_rollback_developer_count = requests[1]
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
+        .count();
+    assert_eq!(before_rollback_developer_count, 1);
+    assert_eq!(
+        requests[1]
+            .message_input_texts("user")
+            .iter()
+            .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
+            .count(),
+        1
+    );
+
+    let after_rollback_developer_count = requests[2]
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
+        .count();
+    assert_eq!(after_rollback_developer_count, 1);
+
+    let after_rollback_user_texts = requests[2].message_input_texts("user");
+    assert_eq!(
+        after_rollback_user_texts
+            .iter()
+            .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
+            .count(),
+        1
+    );
+    assert_eq!(
+        after_rollback_user_texts.last().map(String::as_str),
+        Some(FOLLOWUP_USER)
+    );
+
+    insta::assert_snapshot!(
+        "rollback_followup_turn_trims_context_updates",
+        context_snapshot::format_labeled_requests_snapshot(
+            "rollback trims pre-turn override context updates before the follow-up request",
+            &[
+                ("rolled-back turn request", &requests[1]),
+                ("follow-up request after rollback", &requests[2]),
+            ],
+            &ContextSnapshotOptions::default()
+                .strip_capability_instructions()
+                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 }),
         )
     );
 
@@ -593,33 +755,29 @@ async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
     vec![first, compact, after_compact, after_resume, after_fork]
 }
 
-async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
+async fn mount_second_compact_sequence(server: &MockServer) -> ResponseMock {
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", "AFTER_COMPACT_REPLY"),
+        ev_completed("r3"),
+    ]);
+    let sse4 = sse(vec![ev_completed("r4")]);
+    let sse5 = sse(vec![ev_completed("r5")]);
     let sse6 = sse(vec![
         ev_assistant_message("m4", SUMMARY_TEXT),
         ev_completed("r6"),
     ]);
     let sse7 = sse(vec![ev_completed("r7")]);
+    let sse8 = sse(vec![ev_completed("r8")]);
 
-    // Keep this matcher broad enough to survive prompt-shape differences across
-    // platforms/config (history may include either marker text or compact prompt
-    // fragments), but explicitly exclude the final resume turn so these two
-    // one-shot mocks cannot race for the same request.
-    let match_second_compact = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        (body.contains("AFTER_FORK")
-            || body_contains_text(body, SUMMARIZATION_PROMPT)
-            || body.contains(&json_fragment(FIRST_REPLY)))
-            && !body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
-    };
-    let second_compact = mount_sse_once_match(server, match_second_compact, sse6).await;
-
-    let match_after_second_resume = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
-    };
-    let after_second_resume = mount_sse_once_match(server, match_after_second_resume, sse7).await;
-
-    vec![second_compact, after_second_resume]
+    mount_sse_sequence(server, vec![sse1, sse2, sse3, sse4, sse5, sse6, sse7, sse8]).await
 }
 
 async fn start_test_conversation(
@@ -687,7 +845,7 @@ async fn resume_conversation(
     let auth_manager = codex_core::test_support::auth_manager_from_auth(
         codex_core::CodexAuth::from_api_key("dummy"),
     );
-    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager))
+    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager, None))
         .await
         .expect("resume conversation")
         .thread
@@ -700,7 +858,7 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false))
+    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
         .await
         .expect("fork conversation")
         .thread

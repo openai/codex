@@ -1,14 +1,12 @@
 ---
 source: core/tests/suite/compact_resume_fork.rs
-expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback past compaction replay after rollback\",\n&[(\"compaction request\", &requests[1]), (\"before rollback\", &requests[2]),\n(\"after rollback\", &requests[3]),],\n&ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 64 }),)"
+expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback past compaction replay after rollback\",\n&[(\"compaction request\", &requests[1]), (\"before rollback\", &requests[2]),\n(\"after rollback\", &requests[3]),],\n&ContextSnapshotOptions::default().strip_capability_instructions().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 64 }),)"
 ---
 Scenario: rollback past compaction replay after rollback
 
 ## compaction request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:hello world
 03:message/assistant:FIRST_REPLY
 04:message/user:<SUMMARIZATION_PROMPT>
@@ -17,20 +15,12 @@ Scenario: rollback past compaction replay after rollback
 00:message/user:hello world
 01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:EDITED_AFTER_COMPACT
 
 ## after rollback
 00:message/user:hello world
 01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/developer:<PERMISSIONS_INSTRUCTIONS>
-05:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-06:message/user:AFTER_ROLLBACK
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:AFTER_ROLLBACK

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "AppSummary": {
-      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
       "properties": {
         "description": {
           "type": [
@@ -21,11 +21,15 @@
         },
         "name": {
           "type": "string"
+        },
+        "needsAuth": {
+          "type": "boolean"
         }
       },
       "required": [
         "id",
-        "name"
+        "name",
+        "needsAuth"
       ],
       "type": "object"
     },
@@ -45,18 +49,12 @@
       "type": "array"
     },
     "authPolicy": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/PluginAuthPolicy"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/definitions/PluginAuthPolicy"
     }
   },
   "required": [
-    "appsNeedingAuth"
+    "appsNeedingAuth",
+    "authPolicy"
   ],
   "title": "PluginInstallResponse",
   "type": "object"

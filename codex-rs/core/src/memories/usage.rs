@@ -41,7 +41,7 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
     for kind in kinds {
         invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
-            1,
+            /*inc*/ 1,
             &[
                 ("kind", kind.as_tag()),
                 ("tool", invocation.tool_name.as_str()),
@@ -102,6 +102,7 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 let command = crate::tools::handlers::unified_exec::get_command(
                     &params,
                     invocation.session.user_shell(),
+                    &invocation.turn.tools_config.unified_exec_shell_mode,
                     invocation.turn.tools_config.allow_login_shell,
                 )
                 .ok()?;

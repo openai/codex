@@ -148,7 +148,9 @@ impl ConfigLayerStack {
         })
     }
 
-    /// Returns the user config layer, if any.
+    /// Returns the raw user config layer, if any.
+    ///
+    /// This does not merge other config layers or apply any requirements.
     pub fn get_user_layer(&self) -> Option<&ConfigLayerEntry> {
         self.user_layer_index
             .and_then(|index| self.layers.get(index))
@@ -209,33 +211,51 @@ impl ConfigLayerStack {
         }
     }
 
+    /// Returns the merged config-layer view.
+    ///
+    /// This only merges ordinary config layers and does not apply requirements
+    /// such as cloud requirements.
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
-        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
+        for layer in self.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        ) {
             merge_toml_values(&mut merged, &layer.config);
         }
         merged
     }
 
+    /// Returns field origins for the merged config-layer view.
+    ///
+    /// Requirement sources are tracked separately and are not included here.
     pub fn origins(&self) -> HashMap<String, ConfigLayerMetadata> {
         let mut origins = HashMap::new();
         let mut path = Vec::new();
 
-        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
+        for layer in self.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        ) {
             record_origins(&layer.config, &layer.metadata(), &mut path, &mut origins);
         }
 
         origins
     }
 
-    /// Returns the highest-precedence to lowest-precedence layers, so
-    /// `ConfigLayerSource::SessionFlags` would be first, if present.
+    /// Returns config layers from highest precedence to lowest precedence.
+    ///
+    /// Requirement sources are tracked separately and are not included here.
     pub fn layers_high_to_low(&self) -> Vec<&ConfigLayerEntry> {
-        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, false)
+        self.get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
     }
 
-    /// Returns the highest-precedence to lowest-precedence layers, so
-    /// `ConfigLayerSource::SessionFlags` would be first, if present.
+    /// Returns config layers in the requested precedence order.
+    ///
+    /// Requirement sources are tracked separately and are not included here.
     pub fn get_layers(
         &self,
         ordering: ConfigLayerStackOrdering,

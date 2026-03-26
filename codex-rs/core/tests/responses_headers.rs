@@ -53,6 +53,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -91,7 +92,6 @@ async fn responses_stream_includes_subagent_header_on_review() {
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
         false,
         false,
         None,
@@ -165,6 +165,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -204,7 +205,6 @@ async fn responses_stream_includes_subagent_header_on_other() {
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
         false,
         false,
         None,
@@ -272,6 +272,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -316,7 +317,6 @@ async fn responses_respects_model_info_overrides_from_config() {
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
         false,
         false,
         None,

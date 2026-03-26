@@ -1,0 +1,8 @@
+exports_files([
+    "aws-lc-sys_memcmp_check.patch",
+    "rusty_v8_prebuilt_out_dir.patch",
+    "v8_bazel_rules.patch",
+    "v8_module_deps.patch",
+    "v8_source_portability.patch",
+    "windows-link.patch",
+])

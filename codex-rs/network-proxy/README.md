@@ -39,7 +39,8 @@ mitm = false
 
 # Hosts must match the allowlist (unless denied).
 # Use exact hosts or scoped wildcards like `*.openai.com` or `**.openai.com`.
-# The global `*` wildcard is rejected.
+# The global `*` wildcard is allowed in `allowed_domains` to delegate public-host filtering to
+# `denied_domains`.
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
 allowed_domains = ["*.openai.com", "localhost", "127.0.0.1", "::1"]
 denied_domains = ["evil.example"]
@@ -189,7 +190,7 @@ This section documents the protections implemented by `codex-network-proxy`, and
 what it can reasonably guarantee.
 
 - Allowlist-first policy: if `allowed_domains` is empty, requests are blocked until an allowlist is configured.
-- Domain patterns: exact hosts plus scoped wildcards (`*.example.com`, `**.example.com`) are supported; the global `*` wildcard is rejected.
+- Domain patterns: exact hosts plus scoped wildcards (`*.example.com`, `**.example.com`) are supported. A global `*` wildcard is allowed in `allowed_domains` to permit all public hosts by default, while `denied_domains` remains field-specific and still rejects global `*`.
 - Deny wins: entries in `denied_domains` always override the allowlist.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
   and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)

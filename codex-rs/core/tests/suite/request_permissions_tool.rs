@@ -3,15 +3,15 @@
 
 use anyhow::Result;
 use codex_core::config::Constrained;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -42,7 +42,7 @@ fn absolute_path(path: &Path) -> AbsolutePathBuf {
 fn request_permissions_tool_event(
     call_id: &str,
     reason: &str,
-    permissions: &PermissionProfile,
+    permissions: &RequestPermissionProfile,
 ) -> Result<Value> {
     let args = json!({
         "reason": reason,
@@ -79,23 +79,23 @@ fn workspace_write_excluding_tmp() -> SandboxPolicy {
     }
 }
 
-fn requested_directory_write_permissions(path: &Path) -> PermissionProfile {
-    PermissionProfile {
+fn requested_directory_write_permissions(path: &Path) -> RequestPermissionProfile {
+    RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![absolute_path(path)]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     }
 }
 
-fn normalized_directory_write_permissions(path: &Path) -> Result<PermissionProfile> {
-    Ok(PermissionProfile {
+fn normalized_directory_write_permissions(path: &Path) -> Result<RequestPermissionProfile> {
+    Ok(RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![AbsolutePathBuf::try_from(path.canonicalize()?)?]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     })
 }
 
@@ -145,6 +145,7 @@ async fn submit_turn(
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy,
+            approvals_reviewer: None,
             sandbox_policy,
             model: session_model,
             effort: None,
@@ -160,7 +161,7 @@ async fn submit_turn(
 async fn expect_request_permissions_event(
     test: &TestCodex,
     expected_call_id: &str,
-) -> PermissionProfile {
+) -> RequestPermissionProfile {
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
@@ -196,7 +197,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -318,7 +319,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features

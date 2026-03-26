@@ -10,8 +10,8 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_request;
@@ -25,11 +25,11 @@ use crate::protocol::ExecCommandStatus;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
-use crate::sandboxing::SandboxPermissions;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::user_shell_command::user_shell_command_record_item;
+use codex_sandboxing::SandboxType;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -101,7 +101,7 @@ pub(crate) async fn execute_user_shell_command(
     session
         .services
         .session_telemetry
-        .counter("codex.task.user_shell", 1, &[]);
+        .counter("codex.task.user_shell", /*inc*/ 1, &[]);
 
     if mode == UserShellCommandMode::StandaloneTurn {
         // Auxiliary mode runs within an existing active turn. That turn already
@@ -145,7 +145,7 @@ pub(crate) async fn execute_user_shell_command(
                 process_id: None,
                 turn_id: turn_context.sub_id.clone(),
                 command: display_command.clone(),
-                cwd: cwd.clone(),
+                cwd: cwd.to_path_buf(),
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
@@ -156,7 +156,7 @@ pub(crate) async fn execute_user_shell_command(
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
-        cwd: cwd.clone(),
+        cwd: cwd.to_path_buf(),
         env: create_env(
             &turn_context.shell_environment_policy,
             Some(session.conversation_id),
@@ -165,13 +165,17 @@ pub(crate) async fn execute_user_shell_command(
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
         expiration: USER_SHELL_TIMEOUT_MS.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         sandbox: SandboxType::None,
         windows_sandbox_level: turn_context.windows_sandbox_level,
-        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
+            .windows_sandbox_private_desktop,
         sandbox_policy: sandbox_policy.clone(),
         file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-        justification: None,
+        windows_restricted_token_filesystem_overlay: None,
         arg0: None,
     };
 
@@ -181,9 +185,14 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_request(exec_env, &sandbox_policy, stdout_stream, None)
-        .or_cancel(&cancellation_token)
-        .await;
+    let exec_result = execute_exec_request(
+        exec_env,
+        &sandbox_policy,
+        stdout_stream,
+        /*after_spawn*/ None,
+    )
+    .or_cancel(&cancellation_token)
+    .await;
 
     match exec_result {
         Err(CancelErr::Cancelled) => {
@@ -212,7 +221,7 @@ pub(crate) async fn execute_user_shell_command(
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd.to_path_buf(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -236,7 +245,7 @@ pub(crate) async fn execute_user_shell_command(
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd.to_path_buf(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -280,7 +289,7 @@ pub(crate) async fn execute_user_shell_command(
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
                         command: display_command,
-                        cwd,
+                        cwd: cwd.to_path_buf(),
                         parsed_cmd,
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -322,6 +331,9 @@ async fn persist_user_shell_output(
         session
             .record_conversation_items(turn_context, std::slice::from_ref(&output_item))
             .await;
+        // Standalone shell turns can run before any regular user turn, so
+        // explicitly materialize rollout persistence after recording output.
+        session.ensure_rollout_materialized().await;
         return;
     }
 

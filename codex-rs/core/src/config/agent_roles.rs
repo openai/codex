@@ -17,9 +17,12 @@ use toml::Value as TomlValue;
 pub(crate) fn load_agent_roles(
     cfg: &ConfigToml,
     config_layer_stack: &ConfigLayerStack,
+    startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
-    let layers =
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false);
+    let layers = config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
     if layers.is_empty() {
         return load_agent_roles_without_layers(cfg);
     }
@@ -28,20 +31,38 @@ pub(crate) fn load_agent_roles(
     for layer in layers {
         let mut layer_roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
         let mut declared_role_files = BTreeSet::new();
-        if let Some(agents_toml) = agents_toml_from_layer(&layer.config)? {
+        let agents_toml = match agents_toml_from_layer(&layer.config) {
+            Ok(agents_toml) => agents_toml,
+            Err(err) => {
+                push_agent_role_warning(startup_warnings, err);
+                None
+            }
+        };
+        if let Some(agents_toml) = agents_toml {
             for (declared_role_name, role_toml) in &agents_toml.roles {
-                let (role_name, role) = read_declared_role(declared_role_name, role_toml)?;
+                let (role_name, role) = match read_declared_role(declared_role_name, role_toml) {
+                    Ok(role) => role,
+                    Err(err) => {
+                        push_agent_role_warning(startup_warnings, err);
+                        continue;
+                    }
+                };
                 if let Some(config_file) = role.config_file.clone() {
                     declared_role_files.insert(config_file);
                 }
-                if layer_roles.insert(role_name.clone(), role).is_some() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!(
-                            "duplicate agent role name `{role_name}` declared in the same config layer"
+                if layer_roles.contains_key(&role_name) {
+                    push_agent_role_warning(
+                        startup_warnings,
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "duplicate agent role name `{role_name}` declared in the same config layer"
+                            ),
                         ),
-                    ));
+                    );
+                    continue;
                 }
+                layer_roles.insert(role_name, role);
             }
         }
 
@@ -49,7 +70,20 @@ pub(crate) fn load_agent_roles(
             for (role_name, role) in discover_agent_roles_in_dir(
                 config_folder.as_path().join("agents").as_path(),
                 &declared_role_files,
+                startup_warnings,
             )? {
+                if layer_roles.contains_key(&role_name) {
+                    push_agent_role_warning(
+                        startup_warnings,
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "duplicate agent role name `{role_name}` declared in the same config layer"
+                            ),
+                        ),
+                    );
+                    continue;
+                }
                 layer_roles.insert(role_name, role);
             }
         }
@@ -59,15 +93,24 @@ pub(crate) fn load_agent_roles(
             if let Some(existing_role) = roles.get(&role_name) {
                 merge_missing_role_fields(&mut merged_role, existing_role);
             }
-            validate_required_agent_role_description(
+            if let Err(err) = validate_required_agent_role_description(
                 &role_name,
                 merged_role.description.as_deref(),
-            )?;
+            ) {
+                push_agent_role_warning(startup_warnings, err);
+                continue;
+            }
             roles.insert(role_name, merged_role);
         }
     }
 
     Ok(roles)
+}
+
+fn push_agent_role_warning(startup_warnings: &mut Vec<String>, err: std::io::Error) {
+    let message = format!("Ignoring malformed agent role definition: {err}");
+    tracing::warn!("{message}");
+    startup_warnings.push(message);
 }
 
 fn load_agent_roles_without_layers(
@@ -401,6 +444,7 @@ fn normalize_agent_role_nickname_candidates(
 fn discover_agent_roles_in_dir(
     agents_dir: &Path,
     declared_role_files: &BTreeSet<PathBuf>,
+    startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
     let mut roles = BTreeMap::new();
 
@@ -408,27 +452,36 @@ fn discover_agent_roles_in_dir(
         if declared_role_files.contains(&agent_file) {
             continue;
         }
-        let parsed_file = read_resolved_agent_role_file(&agent_file, None)?;
+        let parsed_file =
+            match read_resolved_agent_role_file(&agent_file, /*role_name_hint*/ None) {
+                Ok(parsed_file) => parsed_file,
+                Err(err) => {
+                    push_agent_role_warning(startup_warnings, err);
+                    continue;
+                }
+            };
         let role_name = parsed_file.role_name;
-        if roles
-            .insert(
-                role_name.clone(),
-                AgentRoleConfig {
-                    description: parsed_file.description,
-                    config_file: Some(agent_file),
-                    nickname_candidates: parsed_file.nickname_candidates,
-                },
-            )
-            .is_some()
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "duplicate agent role name `{role_name}` discovered in {}",
-                    agents_dir.display()
+        if roles.contains_key(&role_name) {
+            push_agent_role_warning(
+                startup_warnings,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "duplicate agent role name `{role_name}` discovered in {}",
+                        agents_dir.display()
+                    ),
                 ),
-            ));
+            );
+            continue;
         }
+        roles.insert(
+            role_name,
+            AgentRoleConfig {
+                description: parsed_file.description,
+                config_file: Some(agent_file),
+                nickname_candidates: parsed_file.nickname_candidates,
+            },
+        );
     }
 
     Ok(roles)

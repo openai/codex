@@ -130,6 +130,10 @@ impl Drop for PsuedoCon {
 }
 
 impl PsuedoCon {
+    pub fn raw_handle(&self) -> HPCON {
+        self.con
+    }
+
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {
@@ -168,7 +172,7 @@ impl PsuedoCon {
         si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
 
-        let mut attrs = ProcThreadAttributeList::with_capacity(1)?;
+        let mut attrs = ProcThreadAttributeList::with_capacity(/*num_attributes*/ 1)?;
         attrs.set_pty(self.con)?;
         si.lpAttributeList = attrs.as_mut_ptr();
 

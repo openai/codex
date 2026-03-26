@@ -190,6 +190,37 @@ pub(crate) fn compile_permission_profile(
     ))
 }
 
+/// Returns a list of paths that must be readable by shell tools in order
+/// for Codex to function. These should always be added to the
+/// `FileSystemSandboxPolicy` for a thread.
+pub(crate) fn get_readable_roots_required_for_codex_runtime(
+    codex_home: &Path,
+    zsh_path: Option<&PathBuf>,
+    main_execve_wrapper_exe: Option<&PathBuf>,
+) -> Vec<AbsolutePathBuf> {
+    let arg0_root = AbsolutePathBuf::from_absolute_path(codex_home.join("tmp").join("arg0")).ok();
+    let zsh_path = zsh_path.and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
+    let execve_wrapper_root = main_execve_wrapper_exe.and_then(|path| {
+        let path = AbsolutePathBuf::from_absolute_path(path).ok()?;
+        if let Some(arg0_root) = arg0_root.as_ref()
+            && path.as_path().starts_with(arg0_root.as_path())
+        {
+            path.parent()
+        } else {
+            Some(path)
+        }
+    });
+
+    let mut readable_roots = Vec::new();
+    if let Some(zsh_path) = zsh_path {
+        readable_roots.push(zsh_path);
+    }
+    if let Some(execve_wrapper_root) = execve_wrapper_root {
+        readable_roots.push(execve_wrapper_root);
+    }
+    readable_roots
+}
+
 fn compile_network_sandbox_policy(network: Option<&NetworkToml>) -> NetworkSandboxPolicy {
     let Some(network) = network else {
         return NetworkSandboxPolicy::Restricted;
@@ -281,9 +312,11 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
-        ":project_roots" => Some(FileSystemSpecialPath::project_roots(None)),
+        ":project_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
-        _ if path.starts_with(':') => Some(FileSystemSpecialPath::unknown(path, None)),
+        _ if path.starts_with(':') => {
+            Some(FileSystemSpecialPath::unknown(path, /*subpath*/ None))
+        }
         _ => None,
     }
 }
@@ -410,14 +443,5 @@ fn maybe_push_unknown_special_path_warning(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn normalize_absolute_path_for_platform_simplifies_windows_verbatim_paths() {
-        let parsed =
-            normalize_absolute_path_for_platform(r"\\?\D:\c\x\worktrees\2508\swift-base", true);
-        assert_eq!(parsed, PathBuf::from(r"D:\c\x\worktrees\2508\swift-base"));
-    }
-}
+#[path = "permissions_tests.rs"]
+mod tests;

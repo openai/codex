@@ -1,0 +1,24 @@
+{
+  "outputs": {
+    "argument-comment-lint": {
+      "platforms": {
+        "macos-aarch64": {
+          "regex": "^argument-comment-lint-aarch64-apple-darwin\\.tar\\.gz$",
+          "path": "argument-comment-lint/bin/argument-comment-lint"
+        },
+        "linux-x86_64": {
+          "regex": "^argument-comment-lint-x86_64-unknown-linux-gnu\\.tar\\.gz$",
+          "path": "argument-comment-lint/bin/argument-comment-lint"
+        },
+        "linux-aarch64": {
+          "regex": "^argument-comment-lint-aarch64-unknown-linux-gnu\\.tar\\.gz$",
+          "path": "argument-comment-lint/bin/argument-comment-lint"
+        },
+        "windows-x86_64": {
+          "regex": "^argument-comment-lint-x86_64-pc-windows-msvc\\.zip$",
+          "path": "argument-comment-lint/bin/argument-comment-lint.exe"
+        }
+      }
+    }
+  }
+}

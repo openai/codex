@@ -15,12 +15,14 @@ owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
+strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+codex-git-utils = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lints]

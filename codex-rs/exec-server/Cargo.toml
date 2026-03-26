@@ -1,0 +1,48 @@
+[package]
+name = "codex-exec-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "codex-exec-server"
+path = "src/bin/codex-exec-server.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+arc-swap = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-app-server-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-pty = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+test-case = "3.3.1"

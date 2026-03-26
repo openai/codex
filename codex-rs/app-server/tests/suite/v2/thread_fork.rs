@@ -1,8 +1,10 @@
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -22,11 +24,19 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -113,7 +123,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         "expected forked thread to include one turn"
     );
     let turn = &thread.turns[0];
-    assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(turn.status, TurnStatus::Interrupted);
     assert_eq!(turn.items.len(), 1, "expected user message item");
     match &turn.items[0] {
         ThreadItem::UserMessage { content, .. } => {
@@ -207,6 +217,102 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
             .contains("no rollout found for thread id"),
         "unexpected fork error: {}",
         fork_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/requirements"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .insert_header("content-type", "text/html")
+                .set_body_string("<html>nope</html>"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": { "code": "refresh_token_invalidated" }
+        })))
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    let model_server = create_mock_responses_server_repeating_assistant("Done").await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    create_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &model_server.uri(),
+        &chatgpt_base_url,
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .refresh_token("stale-refresh-token")
+            .plan_type("business")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let refresh_token_url = format!("{}/oauth/token", server.uri());
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (
+                REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+                Some(refresh_token_url.as_str()),
+            ),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+
+    assert!(
+        fork_err
+            .error
+            .message
+            .contains("failed to load configuration"),
+        "unexpected fork error: {}",
+        fork_err.error.message
+    );
+    assert_eq!(
+        fork_err.error.data,
+        Some(json!({
+            "reason": "cloudRequirements",
+            "errorCode": "Auth",
+            "action": "relogin",
+            "statusCode": 401,
+            "detail": "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.",
+        }))
     );
 
     Ok(())
@@ -385,6 +491,34 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_chatgpt_base_url(
+    codex_home: &Path,
+    server_uri: &str,
+    chatgpt_base_url: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
 

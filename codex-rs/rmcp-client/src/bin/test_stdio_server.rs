@@ -22,6 +22,7 @@ use rmcp::model::ResourceTemplate;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
+use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task;
@@ -45,6 +46,7 @@ impl TestToolServer {
     fn new() -> Self {
         let tools = vec![
             Self::echo_tool(),
+            Self::echo_dash_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
         ];
@@ -58,6 +60,20 @@ impl TestToolServer {
     }
 
     fn echo_tool() -> Tool {
+        Self::build_echo_tool(
+            "echo",
+            "Echo back the provided message and include environment data.",
+        )
+    }
+
+    fn echo_dash_tool() -> Tool {
+        Self::build_echo_tool(
+            "echo-tool",
+            "Echo back the provided message via a tool name that is not a legal JS identifier.",
+        )
+    }
+
+    fn build_echo_tool(name: &'static str, description: &'static str) -> Tool {
         #[expect(clippy::expect_used)]
         let schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
@@ -70,11 +86,13 @@ impl TestToolServer {
         }))
         .expect("echo tool schema should deserialize");
 
-        Tool::new(
-            Cow::Borrowed("echo"),
-            Cow::Borrowed("Echo back the provided message and include environment data."),
+        let mut tool = Tool::new(
+            Cow::Borrowed(name),
+            Cow::Borrowed(description),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     fn image_tool() -> Tool {
@@ -86,11 +104,13 @@ impl TestToolServer {
         }))
         .expect("image tool schema should deserialize");
 
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed("image"),
             Cow::Borrowed("Return a single image content block."),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     /// Tool intended for manual testing of Codex TUI rendering for MCP image tool results.
@@ -139,13 +159,15 @@ impl TestToolServer {
         }))
         .expect("image_scenario tool schema should deserialize");
 
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed("image_scenario"),
             Cow::Borrowed(
                 "Return content blocks for manual testing of MCP image rendering scenarios.",
             ),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     fn memo_resource() -> Resource {
@@ -296,7 +318,7 @@ impl ServerHandler for TestToolServer {
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
-            "echo" => {
+            "echo" | "echo-tool" => {
                 let args: EchoArgs = match request.arguments {
                     Some(arguments) => serde_json::from_value(serde_json::Value::Object(
                         arguments.into_iter().collect(),
@@ -304,7 +326,7 @@ impl ServerHandler for TestToolServer {
                     .map_err(|err| McpError::invalid_params(err.to_string(), None))?,
                     None => {
                         return Err(McpError::invalid_params(
-                            "missing arguments for echo tool",
+                            format!("missing arguments for {} tool", request.name),
                             None,
                         ));
                     }

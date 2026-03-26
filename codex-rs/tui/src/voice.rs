@@ -1,6 +1,9 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::audio_device::preferred_input_config;
+use crate::audio_device::select_configured_input_device_and_config;
 use base64::Engine;
+use codex_client::build_reqwest_client_with_custom_ca;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
@@ -22,7 +25,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
@@ -30,6 +36,21 @@ use tracing::trace;
 const AUDIO_MODEL: &str = "gpt-4o-mini-transcribe";
 const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const MODEL_AUDIO_CHANNELS: u16 = 1;
+// While playback is buffered, ignore low-level mic input that is likely just
+// speaker echo. A user who starts talking over playback should cross this peak
+// threshold and reopen the gate.
+const REALTIME_INTERRUPT_INPUT_PEAK_THRESHOLD: u16 = 4_000;
+// After we decide an interruption is intentional, keep forwarding the next few
+// callbacks so trailing syllables are not chopped up between chunks.
+const REALTIME_INTERRUPT_GRACE_PERIOD: Duration = Duration::from_millis(900);
+
+#[derive(Clone)]
+pub(crate) enum RealtimeInputBehavior {
+    Ungated,
+    PlaybackAware {
+        playback_queued_samples: Arc<AtomicUsize>,
+    },
+}
 
 struct TranscriptionAuthContext {
     mode: AuthMode,
@@ -78,8 +99,12 @@ impl VoiceCapture {
         })
     }
 
-    pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
-        let (device, config) = select_realtime_input_device_and_config(config)?;
+    pub fn start_realtime(
+        config: &Config,
+        tx: AppEventSender,
+        input_behavior: RealtimeInputBehavior,
+    ) -> Result<Self, String> {
+        let (device, config) = select_configured_input_device_and_config(config)?;
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
@@ -93,6 +118,7 @@ impl VoiceCapture {
             sample_rate,
             channels,
             tx,
+            input_behavior,
             last_peak.clone(),
         )?;
         stream
@@ -272,14 +298,8 @@ fn select_default_input_device_and_config()
     let device = host
         .default_input_device()
         .ok_or_else(|| "no input audio device available".to_string())?;
-    let config = crate::audio_device::preferred_input_config(&device)?;
+    let config = preferred_input_config(&device)?;
     Ok((device, config))
-}
-
-fn select_realtime_input_device_and_config(
-    config: &Config,
-) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    crate::audio_device::select_configured_input_device_and_config(config)
 }
 
 fn build_input_stream(
@@ -342,17 +362,31 @@ fn build_realtime_input_stream(
     sample_rate: u32,
     channels: u16,
     tx: AppEventSender,
+    input_behavior: RealtimeInputBehavior,
     last_peak: Arc<AtomicU16>,
 ) -> Result<cpal::Stream, String> {
     match config.sample_format() {
         cpal::SampleFormat::F32 => device
             .build_input_stream(
                 &config.clone().into(),
-                move |input: &[f32], _| {
-                    let peak = peak_f32(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    let samples = input.iter().copied().map(f32_to_i16).collect::<Vec<_>>();
-                    send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
+                {
+                    let last_peak = Arc::clone(&last_peak);
+                    let tx = tx;
+                    let mut allow_input_until = None;
+                    move |input: &[f32], _| {
+                        let peak = peak_f32(input);
+                        if !should_send_realtime_input(
+                            peak,
+                            &input_behavior,
+                            &mut allow_input_until,
+                        ) {
+                            last_peak.store(0, Ordering::Relaxed);
+                            return;
+                        }
+                        last_peak.store(peak, Ordering::Relaxed);
+                        let samples = input.iter().copied().map(f32_to_i16).collect::<Vec<_>>();
+                        send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
+                    }
                 },
                 move |err| error!("audio input error: {err}"),
                 None,
@@ -361,10 +395,23 @@ fn build_realtime_input_stream(
         cpal::SampleFormat::I16 => device
             .build_input_stream(
                 &config.clone().into(),
-                move |input: &[i16], _| {
-                    let peak = peak_i16(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    send_realtime_audio_chunk(&tx, input.to_vec(), sample_rate, channels);
+                {
+                    let last_peak = Arc::clone(&last_peak);
+                    let tx = tx;
+                    let mut allow_input_until = None;
+                    move |input: &[i16], _| {
+                        let peak = peak_i16(input);
+                        if !should_send_realtime_input(
+                            peak,
+                            &input_behavior,
+                            &mut allow_input_until,
+                        ) {
+                            last_peak.store(0, Ordering::Relaxed);
+                            return;
+                        }
+                        last_peak.store(peak, Ordering::Relaxed);
+                        send_realtime_audio_chunk(&tx, input.to_vec(), sample_rate, channels);
+                    }
                 },
                 move |err| error!("audio input error: {err}"),
                 None,
@@ -373,11 +420,24 @@ fn build_realtime_input_stream(
         cpal::SampleFormat::U16 => device
             .build_input_stream(
                 &config.clone().into(),
-                move |input: &[u16], _| {
-                    let mut samples = Vec::with_capacity(input.len());
-                    let peak = convert_u16_to_i16_and_peak(input, &mut samples);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
+                {
+                    let last_peak = Arc::clone(&last_peak);
+                    let tx = tx;
+                    let mut allow_input_until = None;
+                    move |input: &[u16], _| {
+                        let mut samples = Vec::with_capacity(input.len());
+                        let peak = convert_u16_to_i16_and_peak(input, &mut samples);
+                        if !should_send_realtime_input(
+                            peak,
+                            &input_behavior,
+                            &mut allow_input_until,
+                        ) {
+                            last_peak.store(0, Ordering::Relaxed);
+                            return;
+                        }
+                        last_peak.store(peak, Ordering::Relaxed);
+                        send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
+                    }
                 },
                 move |err| error!("audio input error: {err}"),
                 None,
@@ -427,6 +487,7 @@ fn send_realtime_audio_chunk(
                 sample_rate: MODEL_AUDIO_SAMPLE_RATE,
                 num_channels: MODEL_AUDIO_CHANNELS,
                 samples_per_channel: Some(samples_per_channel),
+                item_id: None,
             },
         },
     )));
@@ -485,24 +546,33 @@ fn convert_u16_to_i16_and_peak(input: &[u16], out: &mut Vec<i16>) -> u16 {
 pub(crate) struct RealtimeAudioPlayer {
     _stream: cpal::Stream,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    // Mirror the queue depth without locking so the input callback can cheaply
+    // tell whether playback is still draining.
+    queued_samples: Arc<AtomicUsize>,
     output_sample_rate: u32,
     output_channels: u16,
 }
 
 impl RealtimeAudioPlayer {
-    pub(crate) fn start(config: &Config) -> Result<Self, String> {
+    pub(crate) fn start(config: &Config, queued_samples: Arc<AtomicUsize>) -> Result<Self, String> {
         let (device, config) =
             crate::audio_device::select_configured_output_device_and_config(config)?;
         let output_sample_rate = config.sample_rate().0;
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));
-        let stream = build_output_stream(&device, &config, Arc::clone(&queue))?;
+        let stream = build_output_stream(
+            &device,
+            &config,
+            Arc::clone(&queue),
+            Arc::clone(&queued_samples),
+        )?;
         stream
             .play()
             .map_err(|e| format!("failed to start output stream: {e}"))?;
         Ok(Self {
             _stream: stream,
             queue,
+            queued_samples,
             output_sample_rate,
             output_channels,
         })
@@ -537,12 +607,17 @@ impl RealtimeAudioPlayer {
             .lock()
             .map_err(|_| "failed to lock output audio queue".to_string())?;
         // TODO(aibrahim): Cap or trim this queue if we observe producer bursts outrunning playback.
+        // Keep the atomic in sync with the buffered PCM so capture can treat any
+        // queued output as active playback even before the audio callback drains it.
+        self.queued_samples
+            .fetch_add(converted.len(), Ordering::Relaxed);
         guard.extend(converted);
         Ok(())
     }
 
     pub(crate) fn clear(&self) {
         if let Ok(mut guard) = self.queue.lock() {
+            self.queued_samples.store(0, Ordering::Relaxed);
             guard.clear();
         }
     }
@@ -552,13 +627,14 @@ fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    queued_samples: Arc<AtomicUsize>,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
         cpal::SampleFormat::F32 => device
             .build_output_stream(
                 &config_any,
-                move |output: &mut [f32], _| fill_output_f32(output, &queue),
+                move |output: &mut [f32], _| fill_output_f32(output, &queue, &queued_samples),
                 move |err| error!("audio output error: {err}"),
                 None,
             )
@@ -566,7 +642,7 @@ fn build_output_stream(
         cpal::SampleFormat::I16 => device
             .build_output_stream(
                 &config_any,
-                move |output: &mut [i16], _| fill_output_i16(output, &queue),
+                move |output: &mut [i16], _| fill_output_i16(output, &queue, &queued_samples),
                 move |err| error!("audio output error: {err}"),
                 None,
             )
@@ -574,7 +650,7 @@ fn build_output_stream(
         cpal::SampleFormat::U16 => device
             .build_output_stream(
                 &config_any,
-                move |output: &mut [u16], _| fill_output_u16(output, &queue),
+                move |output: &mut [u16], _| fill_output_u16(output, &queue, &queued_samples),
                 move |err| error!("audio output error: {err}"),
                 None,
             )
@@ -583,36 +659,121 @@ fn build_output_stream(
     }
 }
 
-fn fill_output_i16(output: &mut [i16], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_i16(
+    output: &mut [i16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    queued_samples: &Arc<AtomicUsize>,
+) {
     if let Ok(mut guard) = queue.lock() {
+        let mut consumed = 0usize;
         for sample in output {
-            *sample = guard.pop_front().unwrap_or(0);
+            *sample = if let Some(next) = guard.pop_front() {
+                consumed += 1;
+                next
+            } else {
+                0
+            };
+        }
+        if consumed > 0 {
+            let _ = queued_samples.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
+                Some(queued.saturating_sub(consumed))
+            });
         }
         return;
     }
     output.fill(0);
 }
 
-fn fill_output_f32(output: &mut [f32], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_f32(
+    output: &mut [f32],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    queued_samples: &Arc<AtomicUsize>,
+) {
     if let Ok(mut guard) = queue.lock() {
+        let mut consumed = 0usize;
         for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
+            let v = if let Some(next) = guard.pop_front() {
+                consumed += 1;
+                next
+            } else {
+                0
+            };
             *sample = (v as f32) / (i16::MAX as f32);
+        }
+        if consumed > 0 {
+            let _ = queued_samples.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
+                Some(queued.saturating_sub(consumed))
+            });
         }
         return;
     }
     output.fill(0.0);
 }
 
-fn fill_output_u16(output: &mut [u16], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_u16(
+    output: &mut [u16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    queued_samples: &Arc<AtomicUsize>,
+) {
     if let Ok(mut guard) = queue.lock() {
+        let mut consumed = 0usize;
         for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
+            let v = if let Some(next) = guard.pop_front() {
+                consumed += 1;
+                next
+            } else {
+                0
+            };
             *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
+        }
+        if consumed > 0 {
+            let _ = queued_samples.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
+                Some(queued.saturating_sub(consumed))
+            });
         }
         return;
     }
     output.fill(32768);
+}
+
+/// Block quiet mic chunks while assistant playback is still buffered, but once a
+/// real interruption is detected keep forwarding input briefly so the full
+/// utterance reaches the server.
+fn should_send_realtime_input(
+    peak: u16,
+    input_behavior: &RealtimeInputBehavior,
+    allow_input_until: &mut Option<Instant>,
+) -> bool {
+    let playback_queued_samples = match input_behavior {
+        RealtimeInputBehavior::Ungated => {
+            *allow_input_until = None;
+            return true;
+        }
+        RealtimeInputBehavior::PlaybackAware {
+            playback_queued_samples,
+        } => playback_queued_samples,
+    };
+
+    let now = Instant::now();
+
+    if playback_queued_samples.load(Ordering::Relaxed) == 0 {
+        *allow_input_until = None;
+        return true;
+    }
+
+    if let Some(deadline) = *allow_input_until {
+        if now < deadline {
+            return true;
+        }
+        *allow_input_until = None;
+    }
+
+    if peak >= REALTIME_INTERRUPT_INPUT_PEAK_THRESHOLD {
+        *allow_input_until = Some(now + REALTIME_INTERRUPT_GRACE_PERIOD);
+        return true;
+    }
+
+    false
 }
 
 fn convert_pcm16(
@@ -791,7 +952,8 @@ async fn transcribe_bytes(
     duration_seconds: f32,
 ) -> Result<String, String> {
     let auth = resolve_auth().await?;
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())
+        .map_err(|error| format!("failed to build transcription HTTP client: {error}"))?;
     let audio_bytes = wav_bytes.len();
     let prompt_for_log = context.as_deref().unwrap_or("").to_string();
     let (endpoint, request) =
@@ -872,11 +1034,18 @@ async fn transcribe_bytes(
 
 #[cfg(test)]
 mod tests {
+    use super::RealtimeInputBehavior;
     use super::RecordedAudio;
     use super::convert_pcm16;
     use super::encode_wav_normalized;
+    use super::should_send_realtime_input;
     use pretty_assertions::assert_eq;
     use std::io::Cursor;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
 
     #[test]
     fn convert_pcm16_downmixes_and_resamples_for_model_input() {
@@ -904,5 +1073,40 @@ mod tests {
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 24_000);
         assert_eq!(samples, vec![8_426, 29_490]);
+    }
+
+    #[test]
+    fn ungated_realtime_input_ignores_playback_backlog() {
+        let mut allow_input_until = Some(Instant::now() + Duration::from_secs(1));
+        let playback_queued_samples = Arc::new(AtomicUsize::new(1024));
+
+        assert!(should_send_realtime_input(
+            0,
+            &RealtimeInputBehavior::Ungated,
+            &mut allow_input_until,
+        ));
+        assert_eq!(allow_input_until, None);
+        assert_eq!(playback_queued_samples.load(Ordering::Relaxed), 1024);
+    }
+
+    #[test]
+    fn playback_aware_realtime_input_requires_an_interrupt_peak() {
+        let mut allow_input_until = None;
+        let playback_queued_samples = Arc::new(AtomicUsize::new(1024));
+        let input_behavior = RealtimeInputBehavior::PlaybackAware {
+            playback_queued_samples: Arc::clone(&playback_queued_samples),
+        };
+
+        assert!(!should_send_realtime_input(
+            100,
+            &input_behavior,
+            &mut allow_input_until,
+        ));
+        assert!(should_send_realtime_input(
+            5_000,
+            &input_behavior,
+            &mut allow_input_until,
+        ));
+        assert!(allow_input_until.is_some());
     }
 }

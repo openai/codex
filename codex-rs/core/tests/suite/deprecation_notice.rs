@@ -6,7 +6,7 @@ use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::EventMsg;
 use core_test_support::responses::start_mock_server;
@@ -48,8 +48,7 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     let DeprecationNoticeEvent { summary, details } = notice;
     assert_eq!(
         summary,
-        "`use_experimental_unified_exec_tool` is deprecated. Use `[features].unified_exec` instead."
-            .to_string(),
+        "`[features].use_experimental_unified_exec_tool` is deprecated. Use `[features].unified_exec` instead.".to_string(),
     );
     assert_eq!(
         details.as_deref(),

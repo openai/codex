@@ -13,13 +13,14 @@ workspace = true
 
 [dependencies]
 codex-execpolicy = { workspace = true }
-codex-git = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-image = { workspace = true }
+codex-utils-string = { workspace = true }
 icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 icu_provider = { workspace = true, features = ["sync"] }
-mime_guess = { workspace = true }
+quick-xml = { workspace = true, features = ["serialize"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

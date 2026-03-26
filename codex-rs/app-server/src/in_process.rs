@@ -60,6 +60,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::OutboundConnectionState;
 use crate::transport::route_outgoing_envelope;
@@ -68,7 +69,6 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
@@ -77,6 +77,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
@@ -94,16 +95,6 @@ type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorErro
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(notification, ServerNotification::TurnCompleted(_))
-}
-
-fn legacy_notification_requires_delivery(notification: &JSONRPCNotification) -> bool {
-    matches!(
-        notification
-            .method
-            .strip_prefix("codex/event/")
-            .unwrap_or(&notification.method),
-        "task_complete" | "turn_aborted" | "shutdown_complete"
-    )
 }
 
 /// Input needed to start an in-process app-server runtime.
@@ -138,11 +129,6 @@ pub struct InProcessStartArgs {
 
 /// Event emitted from the app-server to the in-process client.
 ///
-/// The stream carries three event families because CLI surfaces are mid-migration
-/// from the legacy `codex_protocol::Event` model to the typed app-server
-/// notification model. Once all surfaces consume only [`ServerNotification`],
-/// [`LegacyNotification`](Self::LegacyNotification) can be removed.
-///
 /// [`Lagged`](Self::Lagged) is a transport health marker, not an application
 /// event — it signals that the consumer fell behind and some events were dropped.
 #[derive(Debug, Clone)]
@@ -151,8 +137,6 @@ pub enum InProcessServerEvent {
     ServerRequest(ServerRequest),
     /// App-server notification directed to the embedded client.
     ServerNotification(ServerNotification),
-    /// Legacy JSON-RPC notification from core event bridge.
-    LegacyNotification(JSONRPCNotification),
     /// Indicates one or more events were dropped due to backpressure.
     Lagged { skipped: usize },
 }
@@ -371,7 +355,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
 
-        let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(channel_capacity);
+        let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(channel_capacity);
         let outbound_initialized = Arc::new(AtomicBool::new(false));
         let outbound_experimental_api_enabled = Arc::new(AtomicBool::new(false));
         let outbound_opted_out_notification_methods = Arc::new(RwLock::new(HashSet::new()));
@@ -384,7 +368,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 Arc::clone(&outbound_initialized),
                 Arc::clone(&outbound_experimental_api_enabled),
                 Arc::clone(&outbound_opted_out_notification_methods),
-                None,
+                /*disconnect_sender*/ None,
             ),
         );
         let mut outbound_handle = tokio::spawn(async move {
@@ -400,6 +384,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
+                environment_manager: Arc::new(EnvironmentManager::from_env()),
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,
@@ -474,7 +459,12 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 }
             }
 
+            processor.clear_runtime_references();
+            processor.cancel_active_login().await;
             processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
+            processor.clear_all_thread_listeners().await;
+            processor.drain_background_tasks().await;
+            processor.shutdown_threads().await;
         });
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
@@ -561,10 +551,11 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                         }
                     }
                 }
-                outgoing_message = writer_rx.recv() => {
-                    let Some(outgoing_message) = outgoing_message else {
+                queued_message = writer_rx.recv() => {
+                    let Some(queued_message) = queued_message else {
                         break;
                     };
+                    let outgoing_message = queued_message.message;
                     match outgoing_message {
                         OutgoingMessage::Response(response) => {
                             if let Some(response_tx) = pending_request_responses.remove(&response.id) {
@@ -642,32 +633,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 }
                             }
                         }
-                        OutgoingMessage::Notification(notification) => {
-                            let notification = JSONRPCNotification {
-                                method: notification.method,
-                                params: notification.params,
-                            };
-                            if legacy_notification_requires_delivery(&notification) {
-                                if event_tx
-                                    .send(InProcessServerEvent::LegacyNotification(notification))
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            } else if let Err(send_error) =
-                                event_tx.try_send(InProcessServerEvent::LegacyNotification(notification))
-                            {
-                                match send_error {
-                                    mpsc::error::TrySendError::Full(_) => {
-                                        warn!("dropping in-process legacy notification (queue full)");
-                                    }
-                                    mpsc::error::TrySendError::Closed(_) => {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                    }
+                    if let Some(write_complete_tx) = queued_message.write_complete_tx {
+                        let _ = write_complete_tx.send(());
                     }
                 }
             }
@@ -843,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn guaranteed_delivery_helpers_cover_terminal_notifications() {
+    fn guaranteed_delivery_helpers_cover_terminal_server_notifications() {
         assert!(server_notification_requires_delivery(
             &ServerNotification::TurnCompleted(TurnCompletedNotification {
                 thread_id: "thread-1".to_string(),
@@ -854,31 +822,6 @@ mod tests {
                     error: None,
                 },
             })
-        ));
-
-        assert!(legacy_notification_requires_delivery(
-            &JSONRPCNotification {
-                method: "codex/event/task_complete".to_string(),
-                params: None,
-            }
-        ));
-        assert!(legacy_notification_requires_delivery(
-            &JSONRPCNotification {
-                method: "codex/event/turn_aborted".to_string(),
-                params: None,
-            }
-        ));
-        assert!(legacy_notification_requires_delivery(
-            &JSONRPCNotification {
-                method: "codex/event/shutdown_complete".to_string(),
-                params: None,
-            }
-        ));
-        assert!(!legacy_notification_requires_delivery(
-            &JSONRPCNotification {
-                method: "codex/event/item_started".to_string(),
-                params: None,
-            }
         ));
     }
 }

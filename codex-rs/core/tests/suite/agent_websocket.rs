@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::ServiceTier;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
@@ -35,7 +35,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     ]])
     .await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_windows_cmd_shell();
 
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn_with_policy(
@@ -183,7 +183,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     ]])
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_windows_cmd_shell().with_config(|config| {
         config
             .features
             .enable(Feature::ResponsesWebsocketsV2)

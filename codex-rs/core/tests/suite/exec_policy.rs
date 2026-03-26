@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -51,6 +51,7 @@ async fn submit_user_turn(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy,
+            approvals_reviewer: None,
             sandbox_policy,
             model: session_model,
             effort: None,
@@ -131,6 +132,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,

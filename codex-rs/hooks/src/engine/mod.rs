@@ -10,10 +10,16 @@ use std::path::PathBuf;
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
 
+use crate::events::post_tool_use::PostToolUseOutcome;
+use crate::events::post_tool_use::PostToolUseRequest;
+use crate::events::pre_tool_use::PreToolUseOutcome;
+use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
+use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -21,7 +27,7 @@ pub(crate) struct CommandShell {
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
     pub event_name: codex_protocol::protocol::HookEventName,
     pub matcher: Option<String>,
@@ -44,7 +50,10 @@ impl ConfiguredHandler {
 
     fn event_name_label(&self) -> &'static str {
         match self.event_name {
+            codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
+            codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
         }
     }
@@ -71,6 +80,17 @@ impl ClaudeHooksEngine {
             };
         }
 
+        if cfg!(windows) {
+            return Self {
+                handlers: Vec::new(),
+                warnings: vec![
+                    "Disabled `codex_hooks` for this session because `hooks.json` lifecycle hooks are not supported on Windows yet."
+                        .to_string(),
+                ],
+                shell,
+            };
+        }
+
         let _ = schema_loader::generated_hook_schemas();
         let discovered = discovery::discover_handlers(config_layer_stack);
         Self {
@@ -91,12 +111,48 @@ impl ClaudeHooksEngine {
         crate::events::session_start::preview(&self.handlers, request)
     }
 
+    pub(crate) fn preview_pre_tool_use(&self, request: &PreToolUseRequest) -> Vec<HookRunSummary> {
+        crate::events::pre_tool_use::preview(&self.handlers, request)
+    }
+
+    pub(crate) fn preview_post_tool_use(
+        &self,
+        request: &PostToolUseRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::post_tool_use::preview(&self.handlers, request)
+    }
+
     pub(crate) async fn run_session_start(
         &self,
         request: SessionStartRequest,
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await
+    }
+
+    pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
+        crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) async fn run_post_tool_use(
+        &self,
+        request: PostToolUseRequest,
+    ) -> PostToolUseOutcome {
+        crate::events::post_tool_use::run(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) fn preview_user_prompt_submit(
+        &self,
+        request: &UserPromptSubmitRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::user_prompt_submit::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_user_prompt_submit(
+        &self,
+        request: UserPromptSubmitRequest,
+    ) -> UserPromptSubmitOutcome {
+        crate::events::user_prompt_submit::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {

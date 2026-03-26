@@ -34,18 +34,20 @@ use uuid::Uuid;
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec_env::create_env;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::sandboxing::CommandSpec;
-use crate::sandboxing::SandboxManager;
-use crate::sandboxing::SandboxPermissions;
+use crate::original_image_detail::normalize_output_image_detail;
+use crate::sandboxing::ExecOptions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::sandboxing::SandboxablePreference;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_text;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxablePreference;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
 const KERNEL_SOURCE: &str = include_str!("kernel.js");
@@ -93,6 +95,10 @@ impl JsReplHandle {
             .await
             .cloned()
     }
+
+    pub(crate) fn manager_if_initialized(&self) -> Option<Arc<JsReplManager>> {
+        self.cell.get().cloned()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -115,6 +121,7 @@ struct KernelState {
     stdin: Arc<Mutex<ChildStdin>>,
     pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
     exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
+    top_level_exec_state: TopLevelExecState,
     shutdown: CancellationToken,
 }
 
@@ -123,6 +130,54 @@ struct ExecContext {
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum TopLevelExecState {
+    #[default]
+    Idle,
+    FreshKernel {
+        turn_id: String,
+        exec_id: Option<String>,
+    },
+    ReusedKernelPending {
+        turn_id: String,
+        exec_id: String,
+    },
+    Submitted {
+        turn_id: String,
+        exec_id: String,
+    },
+}
+
+impl TopLevelExecState {
+    fn registered_exec_id(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::FreshKernel {
+                exec_id: Some(exec_id),
+                ..
+            }
+            | Self::ReusedKernelPending { exec_id, .. }
+            | Self::Submitted { exec_id, .. } => Some(exec_id.as_str()),
+            Self::FreshKernel { exec_id: None, .. } => None,
+        }
+    }
+
+    fn should_reset_for_interrupt(&self, turn_id: &str) -> bool {
+        match self {
+            Self::Idle => false,
+            Self::FreshKernel {
+                turn_id: active_turn_id,
+                ..
+            }
+            | Self::Submitted {
+                turn_id: active_turn_id,
+                ..
+            } => active_turn_id == turn_id,
+            Self::ReusedKernelPending { .. } => false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -451,6 +506,94 @@ impl JsReplManager {
         }
     }
 
+    async fn register_top_level_exec(&self, exec_id: String, turn_id: String) {
+        let mut kernel = self.kernel.lock().await;
+        let Some(state) = kernel.as_mut() else {
+            return;
+        };
+        state.top_level_exec_state = match &state.top_level_exec_state {
+            TopLevelExecState::FreshKernel {
+                turn_id: active_turn_id,
+                ..
+            } if active_turn_id == &turn_id => TopLevelExecState::FreshKernel {
+                turn_id,
+                exec_id: Some(exec_id),
+            },
+            TopLevelExecState::Idle
+            | TopLevelExecState::ReusedKernelPending { .. }
+            | TopLevelExecState::Submitted { .. }
+            | TopLevelExecState::FreshKernel { .. } => {
+                TopLevelExecState::ReusedKernelPending { turn_id, exec_id }
+            }
+        };
+    }
+
+    async fn mark_top_level_exec_submitted(&self, exec_id: &str) {
+        let mut kernel = self.kernel.lock().await;
+        let Some(state) = kernel.as_mut() else {
+            return;
+        };
+        let next_state = match &state.top_level_exec_state {
+            TopLevelExecState::FreshKernel {
+                turn_id,
+                exec_id: Some(active_exec_id),
+            }
+            | TopLevelExecState::ReusedKernelPending {
+                turn_id,
+                exec_id: active_exec_id,
+            } if active_exec_id == exec_id => Some(TopLevelExecState::Submitted {
+                turn_id: turn_id.clone(),
+                exec_id: active_exec_id.clone(),
+            }),
+            TopLevelExecState::Idle
+            | TopLevelExecState::FreshKernel { .. }
+            | TopLevelExecState::ReusedKernelPending { .. }
+            | TopLevelExecState::Submitted { .. } => None,
+        };
+        if let Some(next_state) = next_state {
+            state.top_level_exec_state = next_state;
+        }
+    }
+
+    async fn clear_top_level_exec_if_matches(&self, exec_id: &str) {
+        Self::clear_top_level_exec_if_matches_map(&self.kernel, exec_id).await;
+    }
+
+    async fn clear_top_level_exec_if_matches_map(
+        kernel: &Arc<Mutex<Option<KernelState>>>,
+        exec_id: &str,
+    ) {
+        let mut kernel = kernel.lock().await;
+        if let Some(state) = kernel.as_mut()
+            && state.top_level_exec_state.registered_exec_id() == Some(exec_id)
+        {
+            state.top_level_exec_state = TopLevelExecState::Idle;
+        }
+    }
+
+    async fn clear_top_level_exec_if_matches_any_map(
+        kernel: &Arc<Mutex<Option<KernelState>>>,
+        exec_ids: &[String],
+    ) {
+        let mut kernel = kernel.lock().await;
+        if let Some(state) = kernel.as_mut()
+            && state
+                .top_level_exec_state
+                .registered_exec_id()
+                .is_some_and(|exec_id| exec_ids.iter().any(|pending_id| pending_id == exec_id))
+        {
+            state.top_level_exec_state = TopLevelExecState::Idle;
+        }
+    }
+
+    async fn turn_interrupt_requires_reset(&self, turn_id: &str) -> bool {
+        self.kernel.lock().await.as_ref().is_some_and(|state| {
+            state
+                .top_level_exec_state
+                .should_reset_for_interrupt(turn_id)
+        })
+    }
+
     fn log_tool_call_response(
         req: &RunToolRequest,
         ok: bool,
@@ -637,11 +780,25 @@ impl JsReplManager {
                 summary.result_is_error = Some(!output.success());
                 summary
             }
+            ResponseInputItem::ToolSearchOutput { tools, .. } => JsReplToolCallResponseSummary {
+                response_type: Some("tool_search_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::FunctionText),
+                payload_text_preview: Some(serde_json::Value::Array(tools.clone()).to_string()),
+                payload_text_length: Some(
+                    serde_json::Value::Array(tools.clone()).to_string().len(),
+                ),
+                payload_item_count: Some(tools.len()),
+                ..Default::default()
+            },
         }
     }
 
     fn summarize_tool_call_error(error: &str) -> JsReplToolCallResponseSummary {
-        Self::summarize_text_payload(None, JsReplToolCallPayloadKind::Error, error)
+        Self::summarize_text_payload(
+            /*response_type*/ None,
+            JsReplToolCallPayloadKind::Error,
+            error,
+        )
     }
 
     pub async fn reset(&self) -> Result<(), FunctionCallError> {
@@ -651,6 +808,18 @@ impl JsReplManager {
         self.reset_kernel().await;
         Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
         Ok(())
+    }
+
+    pub async fn interrupt_turn_exec(&self, turn_id: &str) -> Result<bool, FunctionCallError> {
+        let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
+            FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
+        })?;
+        if !self.turn_interrupt_requires_reset(turn_id).await {
+            return Ok(false);
+        }
+        self.reset_kernel().await;
+        Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
+        Ok(true)
     }
 
     async fn reset_kernel(&self) {
@@ -678,10 +847,19 @@ impl JsReplManager {
         let (stdin, pending_execs, exec_contexts, child, recent_stderr) = {
             let mut kernel = self.kernel.lock().await;
             if kernel.is_none() {
-                let state = self
-                    .start_kernel(Arc::clone(&turn), Some(session.conversation_id))
+                let dependency_env = session.dependency_env().await;
+                let mut state = self
+                    .start_kernel(
+                        Arc::clone(&turn),
+                        &dependency_env,
+                        Some(session.conversation_id),
+                    )
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
+                state.top_level_exec_state = TopLevelExecState::FreshKernel {
+                    turn_id: turn.sub_id.clone(),
+                    exec_id: None,
+                };
                 *kernel = Some(state);
             }
 
@@ -717,6 +895,8 @@ impl JsReplManager {
             );
             (req_id, rx)
         };
+        self.register_top_level_exec(req_id.clone(), turn.sub_id.clone())
+            .await;
         self.register_exec_tool_calls(&req_id).await;
 
         let payload = HostToKernel::Exec {
@@ -725,8 +905,25 @@ impl JsReplManager {
             timeout_ms: args.timeout_ms,
         };
 
-        if let Err(err) = Self::write_message(&stdin, &payload).await {
-            pending_execs.lock().await.remove(&req_id);
+        let write_result = {
+            // Treat the exec as submitted before the async pipe writes begin: once we start
+            // awaiting `write_all`, the kernel may already observe runnable JS even if the turn is
+            // aborted before control returns here.
+            self.mark_top_level_exec_submitted(&req_id).await;
+            let write_result = Self::write_message(&stdin, &payload).await;
+            match write_result {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    self.clear_top_level_exec_if_matches(&req_id).await;
+                    Err(err)
+                }
+            }
+        };
+
+        if let Err(err) = write_result {
+            if pending_execs.lock().await.remove(&req_id).is_some() {
+                self.clear_top_level_exec_if_matches(&req_id).await;
+            }
             exec_contexts.lock().await.remove(&req_id);
             self.clear_exec_tool_calls(&req_id).await;
             let snapshot = Self::kernel_debug_snapshot(&child, &recent_stderr).await;
@@ -758,7 +955,11 @@ impl JsReplManager {
             Ok(Ok(msg)) => msg,
             Ok(Err(_)) => {
                 let mut pending = pending_execs.lock().await;
-                pending.remove(&req_id);
+                let removed = pending.remove(&req_id).is_some();
+                drop(pending);
+                if removed {
+                    self.clear_top_level_exec_if_matches(&req_id).await;
+                }
                 exec_contexts.lock().await.remove(&req_id);
                 self.wait_for_exec_tool_calls(&req_id).await;
                 self.clear_exec_tool_calls(&req_id).await;
@@ -767,7 +968,7 @@ impl JsReplManager {
                     with_model_kernel_failure_message(
                         "js_repl kernel closed unexpectedly",
                         "response_channel_closed",
-                        None,
+                        /*stream_error*/ None,
                         &snapshot,
                     )
                 } else {
@@ -779,6 +980,7 @@ impl JsReplManager {
                 self.reset_kernel().await;
                 self.wait_for_exec_tool_calls(&req_id).await;
                 self.exec_tool_calls.lock().await.clear();
+                self.clear_top_level_exec_if_matches(&req_id).await;
                 return Err(FunctionCallError::RespondToModel(
                     "js_repl execution timed out; kernel reset, rerun your request".to_string(),
                 ));
@@ -800,6 +1002,7 @@ impl JsReplManager {
     async fn start_kernel(
         &self,
         turn: Arc<TurnContext>,
+        dependency_env: &HashMap<String, String>,
         thread_id: Option<ThreadId>,
     ) -> Result<KernelState, String> {
         let node_path = resolve_compatible_node(self.node_path.as_deref()).await?;
@@ -810,6 +1013,9 @@ impl JsReplManager {
             .map_err(|err| err.to_string())?;
 
         let mut env = create_env(&turn.shell_environment_policy, thread_id);
+        if !dependency_env.is_empty() {
+            env.extend(dependency_env.clone());
+        }
         env.insert(
             "CODEX_JS_TMP_DIR".to_string(),
             self.tmp_dir.path().to_string_lossy().to_string(),
@@ -823,20 +1029,6 @@ impl JsReplManager {
                 joined.to_string_lossy().to_string(),
             );
         }
-
-        let spec = CommandSpec {
-            program: node_path.to_string_lossy().to_string(),
-            args: vec![
-                "--experimental-vm-modules".to_string(),
-                kernel_path.to_string_lossy().to_string(),
-            ],
-            cwd: turn.cwd.clone(),
-            env,
-            expiration: ExecExpiration::DefaultTimeout,
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: None,
-        };
 
         let sandbox = SandboxManager::new();
         let has_managed_network_requirements = turn
@@ -852,9 +1044,23 @@ impl JsReplManager {
             turn.windows_sandbox_level,
             has_managed_network_requirements,
         );
+        let command = SandboxCommand {
+            program: node_path.into_os_string(),
+            args: vec![
+                "--experimental-vm-modules".to_string(),
+                kernel_path.to_string_lossy().to_string(),
+            ],
+            cwd: turn.cwd.to_path_buf(),
+            env,
+            additional_permissions: None,
+        };
+        let options = ExecOptions {
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
+        };
         let exec_env = sandbox
-            .transform(crate::sandboxing::SandboxTransformRequest {
-                spec,
+            .transform(SandboxTransformRequest {
+                command,
                 policy: &turn.sandbox_policy,
                 file_system_policy: &turn.file_system_sandbox_policy,
                 network_policy: turn.network_sandbox_policy,
@@ -865,10 +1071,15 @@ impl JsReplManager {
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions: None,
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
-                use_linux_sandbox_bwrap: turn
-                    .features
-                    .enabled(crate::features::Feature::UseLinuxSandboxBwrap),
+                use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
+                windows_sandbox_private_desktop: turn
+                    .config
+                    .permissions
+                    .windows_sandbox_private_desktop,
+            })
+            .map(|request| {
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 
@@ -944,6 +1155,7 @@ impl JsReplManager {
             stdin: stdin_arc,
             pending_execs,
             exec_contexts,
+            top_level_exec_state: TopLevelExecState::Idle,
             shutdown,
         })
     }
@@ -1106,8 +1318,12 @@ impl JsReplManager {
                             .map(|state| state.content_items.clone())
                             .unwrap_or_default()
                     };
-                    let mut pending = pending_execs.lock().await;
-                    if let Some(tx) = pending.remove(&id) {
+                    let tx = {
+                        let mut pending = pending_execs.lock().await;
+                        pending.remove(&id)
+                    };
+                    if let Some(tx) = tx {
+                        Self::clear_top_level_exec_if_matches_map(&manager_kernel, &id).await;
                         let payload = if ok {
                             ExecResultMessage::Ok {
                                 content_items: build_exec_result_content_items(
@@ -1299,6 +1515,9 @@ impl JsReplManager {
             });
         }
         drop(pending);
+        if !pending_exec_ids.is_empty() {
+            Self::clear_top_level_exec_if_matches_any_map(&manager_kernel, &pending_exec_ids).await;
+        }
 
         if !matches!(end_reason, KernelStreamEnd::Shutdown) {
             let mut pending_exec_ids = pending_exec_ids;
@@ -1321,7 +1540,13 @@ impl JsReplManager {
         if is_js_repl_internal_tool(&req.tool_name) {
             let error = "js_repl cannot invoke itself".to_string();
             let summary = Self::summarize_tool_call_error(&error);
-            Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
+            Self::log_tool_call_response(
+                &req,
+                /*ok*/ false,
+                &summary,
+                /*response*/ None,
+                Some(&error),
+            );
             return RunToolResult {
                 id: req.id,
                 ok: false,
@@ -1341,36 +1566,43 @@ impl JsReplManager {
 
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
-            Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
-            None,
-            exec.turn.dynamic_tools.as_slice(),
+            crate::tools::router::ToolRouterParams {
+                mcp_tools: Some(
+                    mcp_tools
+                        .into_iter()
+                        .map(|(name, tool)| (name, tool.tool))
+                        .collect(),
+                ),
+                app_tools: None,
+                discoverable_tools: None,
+                dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+            },
         );
 
-        let payload =
-            if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&req.tool_name).await {
-                crate::tools::context::ToolPayload::Mcp {
-                    server,
-                    tool,
-                    raw_arguments: req.arguments.clone(),
-                }
-            } else if is_freeform_tool(&router.specs(), &req.tool_name) {
-                crate::tools::context::ToolPayload::Custom {
-                    input: req.arguments.clone(),
-                }
-            } else {
-                crate::tools::context::ToolPayload::Function {
-                    arguments: req.arguments.clone(),
-                }
-            };
+        let payload = if let Some((server, tool)) = exec
+            .session
+            .parse_mcp_tool_name(&req.tool_name, &None)
+            .await
+        {
+            crate::tools::context::ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments: req.arguments.clone(),
+            }
+        } else if is_freeform_tool(&router.specs(), &req.tool_name) {
+            crate::tools::context::ToolPayload::Custom {
+                input: req.arguments.clone(),
+            }
+        } else {
+            crate::tools::context::ToolPayload::Function {
+                arguments: req.arguments.clone(),
+            }
+        };
 
         let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
             tool_name: tool_name.clone(),
+            tool_namespace: None,
             call_id: req.id.clone(),
             payload,
         };
@@ -1380,8 +1612,8 @@ impl JsReplManager {
         let tracker = Arc::clone(&exec.tracker);
 
         match router
-            .dispatch_tool_call(
-                session.clone(),
+            .dispatch_tool_call_with_code_mode_result(
+                session,
                 turn,
                 tracker,
                 call,
@@ -1389,11 +1621,18 @@ impl JsReplManager {
             )
             .await
         {
-            Ok(response) => {
+            Ok(result) => {
+                let response = result.into_response();
                 let summary = Self::summarize_tool_call_response(&response);
                 match serde_json::to_value(response) {
                     Ok(value) => {
-                        Self::log_tool_call_response(&req, true, &summary, Some(&value), None);
+                        Self::log_tool_call_response(
+                            &req,
+                            /*ok*/ true,
+                            &summary,
+                            Some(&value),
+                            /*error*/ None,
+                        );
                         RunToolResult {
                             id: req.id,
                             ok: true,
@@ -1404,7 +1643,13 @@ impl JsReplManager {
                     Err(err) => {
                         let error = format!("failed to serialize tool output: {err}");
                         let summary = Self::summarize_tool_call_error(&error);
-                        Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
+                        Self::log_tool_call_response(
+                            &req,
+                            /*ok*/ false,
+                            &summary,
+                            /*response*/ None,
+                            Some(&error),
+                        );
                         RunToolResult {
                             id: req.id,
                             ok: false,
@@ -1417,7 +1662,13 @@ impl JsReplManager {
             Err(err) => {
                 let error = err.to_string();
                 let summary = Self::summarize_tool_call_error(&error);
-                Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
+                Self::log_tool_call_response(
+                    &req,
+                    /*ok*/ false,
+                    &summary,
+                    /*response*/ None,
+                    Some(&error),
+                );
                 RunToolResult {
                     id: req.id,
                     ok: false,
@@ -1469,7 +1720,7 @@ fn emitted_image_content_item(
 ) -> FunctionCallOutputContentItem {
     FunctionCallOutputContentItem::InputImage {
         image_url,
-        detail: detail.or_else(|| default_output_image_detail_for_turn(turn)),
+        detail: normalize_output_image_detail(turn.features.get(), &turn.model_info, detail),
     }
 }
 
@@ -1482,12 +1733,6 @@ fn validate_emitted_image_url(image_url: &str) -> Result<(), String> {
     } else {
         Err("codex.emitImage only accepts data URLs".to_string())
     }
-}
-
-fn default_output_image_detail_for_turn(turn: &TurnContext) -> Option<ImageDetail> {
-    (turn.config.features.enabled(Feature::ImageDetailOriginal)
-        && turn.model_info.supports_image_detail_original)
-        .then_some(ImageDetail::Original)
 }
 
 fn build_exec_result_content_items(
@@ -1722,2223 +1967,5 @@ pub(crate) fn resolve_node(config_path: Option<&Path>) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codex::make_session_and_context;
-    use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
-    use crate::features::Feature;
-    use crate::protocol::AskForApproval;
-    use crate::protocol::EventMsg;
-    use crate::protocol::SandboxPolicy;
-    use crate::turn_diff_tracker::TurnDiffTracker;
-    use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
-    use codex_protocol::dynamic_tools::DynamicToolResponse;
-    use codex_protocol::dynamic_tools::DynamicToolSpec;
-    use codex_protocol::models::FunctionCallOutputContentItem;
-    use codex_protocol::models::FunctionCallOutputPayload;
-    use codex_protocol::models::ImageDetail;
-    use codex_protocol::models::ResponseInputItem;
-    use codex_protocol::openai_models::InputModality;
-    use pretty_assertions::assert_eq;
-    use std::fs;
-    use std::path::Path;
-    use tempfile::tempdir;
-
-    fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
-        turn.sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
-            .expect("test setup should allow updating sandbox policy");
-        turn.file_system_sandbox_policy =
-            crate::protocol::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
-        turn.network_sandbox_policy =
-            crate::protocol::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
-    }
-
-    #[test]
-    fn node_version_parses_v_prefix_and_suffix() {
-        let version = NodeVersion::parse("v25.1.0-nightly.2024").unwrap();
-        assert_eq!(
-            version,
-            NodeVersion {
-                major: 25,
-                minor: 1,
-                patch: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn truncate_utf8_prefix_by_bytes_preserves_character_boundaries() {
-        let input = "aé🙂z";
-        assert_eq!(truncate_utf8_prefix_by_bytes(input, 0), "");
-        assert_eq!(truncate_utf8_prefix_by_bytes(input, 1), "a");
-        assert_eq!(truncate_utf8_prefix_by_bytes(input, 2), "a");
-        assert_eq!(truncate_utf8_prefix_by_bytes(input, 3), "aé");
-        assert_eq!(truncate_utf8_prefix_by_bytes(input, 6), "aé");
-        assert_eq!(truncate_utf8_prefix_by_bytes(input, 7), "aé🙂");
-        assert_eq!(truncate_utf8_prefix_by_bytes(input, 8), "aé🙂z");
-    }
-
-    #[test]
-    fn stderr_tail_applies_line_and_byte_limits() {
-        let mut lines = VecDeque::new();
-        let per_line_cap = JS_REPL_STDERR_TAIL_LINE_MAX_BYTES.min(JS_REPL_STDERR_TAIL_MAX_BYTES);
-        let long = "x".repeat(per_line_cap + 128);
-        let bounded = push_stderr_tail_line(&mut lines, &long);
-        assert_eq!(bounded.len(), per_line_cap);
-
-        for i in 0..50 {
-            let line = format!("line-{i}-{}", "y".repeat(200));
-            push_stderr_tail_line(&mut lines, &line);
-        }
-
-        assert!(lines.len() <= JS_REPL_STDERR_TAIL_LINE_LIMIT);
-        assert!(lines.iter().all(|line| line.len() <= per_line_cap));
-        assert!(stderr_tail_formatted_bytes(&lines) <= JS_REPL_STDERR_TAIL_MAX_BYTES);
-        assert_eq!(
-            format_stderr_tail(&lines).len(),
-            stderr_tail_formatted_bytes(&lines)
-        );
-    }
-
-    #[test]
-    fn model_kernel_failure_details_are_structured_and_truncated() {
-        let snapshot = KernelDebugSnapshot {
-            pid: Some(42),
-            status: "exited(code=1)".to_string(),
-            stderr_tail: "s".repeat(JS_REPL_MODEL_DIAG_STDERR_MAX_BYTES + 400),
-        };
-        let stream_error = "e".repeat(JS_REPL_MODEL_DIAG_ERROR_MAX_BYTES + 200);
-        let message = with_model_kernel_failure_message(
-            "js_repl kernel exited unexpectedly",
-            "stdout_eof",
-            Some(&stream_error),
-            &snapshot,
-        );
-        assert!(message.starts_with("js_repl kernel exited unexpectedly\n\njs_repl diagnostics: "));
-        let (_prefix, encoded) = message
-            .split_once("js_repl diagnostics: ")
-            .expect("diagnostics suffix should be present");
-        let parsed: serde_json::Value =
-            serde_json::from_str(encoded).expect("diagnostics should be valid json");
-        assert_eq!(
-            parsed.get("reason").and_then(|v| v.as_str()),
-            Some("stdout_eof")
-        );
-        assert_eq!(
-            parsed.get("kernel_pid").and_then(serde_json::Value::as_u64),
-            Some(42)
-        );
-        assert_eq!(
-            parsed.get("kernel_status").and_then(|v| v.as_str()),
-            Some("exited(code=1)")
-        );
-        assert!(
-            parsed
-                .get("kernel_stderr_tail")
-                .and_then(|v| v.as_str())
-                .expect("kernel_stderr_tail should be present")
-                .len()
-                <= JS_REPL_MODEL_DIAG_STDERR_MAX_BYTES
-        );
-        assert!(
-            parsed
-                .get("stream_error")
-                .and_then(|v| v.as_str())
-                .expect("stream_error should be present")
-                .len()
-                <= JS_REPL_MODEL_DIAG_ERROR_MAX_BYTES
-        );
-    }
-
-    #[test]
-    fn write_error_diagnostics_only_attach_for_likely_kernel_failures() {
-        let running = KernelDebugSnapshot {
-            pid: Some(7),
-            status: "running".to_string(),
-            stderr_tail: "<empty>".to_string(),
-        };
-        let exited = KernelDebugSnapshot {
-            pid: Some(7),
-            status: "exited(code=1)".to_string(),
-            stderr_tail: "<empty>".to_string(),
-        };
-        assert!(!should_include_model_diagnostics_for_write_error(
-            "failed to flush kernel message: other io error",
-            &running
-        ));
-        assert!(should_include_model_diagnostics_for_write_error(
-            "failed to write to kernel: Broken pipe (os error 32)",
-            &running
-        ));
-        assert!(should_include_model_diagnostics_for_write_error(
-            "failed to write to kernel: some other io error",
-            &exited
-        ));
-    }
-
-    #[test]
-    fn js_repl_internal_tool_guard_matches_expected_names() {
-        assert!(is_js_repl_internal_tool("js_repl"));
-        assert!(is_js_repl_internal_tool("js_repl_reset"));
-        assert!(!is_js_repl_internal_tool("shell_command"));
-        assert!(!is_js_repl_internal_tool("list_mcp_resources"));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn wait_for_exec_tool_calls_map_drains_inflight_calls_without_hanging() {
-        let exec_tool_calls = Arc::new(Mutex::new(HashMap::new()));
-
-        for _ in 0..128 {
-            let exec_id = Uuid::new_v4().to_string();
-            exec_tool_calls
-                .lock()
-                .await
-                .insert(exec_id.clone(), ExecToolCalls::default());
-            assert!(
-                JsReplManager::begin_exec_tool_call(&exec_tool_calls, &exec_id)
-                    .await
-                    .is_some()
-            );
-
-            let wait_map = Arc::clone(&exec_tool_calls);
-            let wait_exec_id = exec_id.clone();
-            let waiter = tokio::spawn(async move {
-                JsReplManager::wait_for_exec_tool_calls_map(&wait_map, &wait_exec_id).await;
-            });
-
-            let finish_map = Arc::clone(&exec_tool_calls);
-            let finish_exec_id = exec_id.clone();
-            let finisher = tokio::spawn(async move {
-                tokio::task::yield_now().await;
-                JsReplManager::finish_exec_tool_call(&finish_map, &finish_exec_id).await;
-            });
-
-            tokio::time::timeout(Duration::from_secs(1), waiter)
-                .await
-                .expect("wait_for_exec_tool_calls_map should not hang")
-                .expect("wait task should not panic");
-            finisher.await.expect("finish task should not panic");
-
-            JsReplManager::clear_exec_tool_calls_map(&exec_tool_calls, &exec_id).await;
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reset_waits_for_exec_lock_before_clearing_exec_tool_calls() {
-        let manager = JsReplManager::new(None, Vec::new())
-            .await
-            .expect("manager should initialize");
-        let permit = manager
-            .exec_lock
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("lock should be acquirable");
-        let exec_id = Uuid::new_v4().to_string();
-        manager.register_exec_tool_calls(&exec_id).await;
-
-        let reset_manager = Arc::clone(&manager);
-        let mut reset_task = tokio::spawn(async move { reset_manager.reset().await });
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        assert!(
-            !reset_task.is_finished(),
-            "reset should wait until execute lock is released"
-        );
-        assert!(
-            manager.exec_tool_calls.lock().await.contains_key(&exec_id),
-            "reset must not clear tool-call contexts while execute lock is held"
-        );
-
-        drop(permit);
-
-        tokio::time::timeout(Duration::from_secs(1), &mut reset_task)
-            .await
-            .expect("reset should complete after execute lock release")
-            .expect("reset task should not panic")
-            .expect("reset should succeed");
-        assert!(
-            !manager.exec_tool_calls.lock().await.contains_key(&exec_id),
-            "reset should clear tool-call contexts after lock acquisition"
-        );
-    }
-
-    #[test]
-    fn summarize_tool_call_response_for_multimodal_function_output() {
-        let response = ResponseInputItem::FunctionCallOutput {
-            call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload::from_content_items(vec![
-                FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,abcd".to_string(),
-                    detail: None,
-                },
-            ]),
-        };
-
-        let actual = JsReplManager::summarize_tool_call_response(&response);
-
-        assert_eq!(
-            actual,
-            JsReplToolCallResponseSummary {
-                response_type: Some("function_call_output".to_string()),
-                payload_kind: Some(JsReplToolCallPayloadKind::FunctionContentItems),
-                payload_text_preview: None,
-                payload_text_length: None,
-                payload_item_count: Some(1),
-                text_item_count: Some(0),
-                image_item_count: Some(1),
-                structured_content_present: None,
-                result_is_error: None,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn emitted_image_content_item_preserves_explicit_detail() {
-        let (_session, turn) = make_session_and_context().await;
-        let content_item = emitted_image_content_item(
-            &turn,
-            "data:image/png;base64,AAA".to_string(),
-            Some(ImageDetail::Low),
-        );
-        assert_eq!(
-            content_item,
-            FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,AAA".to_string(),
-                detail: Some(ImageDetail::Low),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn emitted_image_content_item_uses_turn_original_detail_when_enabled() {
-        let (_session, mut turn) = make_session_and_context().await;
-        Arc::make_mut(&mut turn.config)
-            .features
-            .enable(Feature::ImageDetailOriginal)
-            .expect("test config should allow feature update");
-        turn.model_info.supports_image_detail_original = true;
-
-        let content_item =
-            emitted_image_content_item(&turn, "data:image/png;base64,AAA".to_string(), None);
-
-        assert_eq!(
-            content_item,
-            FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,AAA".to_string(),
-                detail: Some(ImageDetail::Original),
-            }
-        );
-    }
-
-    #[test]
-    fn validate_emitted_image_url_accepts_case_insensitive_data_scheme() {
-        assert_eq!(
-            validate_emitted_image_url("DATA:image/png;base64,AAA"),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn validate_emitted_image_url_rejects_non_data_scheme() {
-        assert_eq!(
-            validate_emitted_image_url("https://example.com/image.png"),
-            Err("codex.emitImage only accepts data URLs".to_string())
-        );
-    }
-
-    #[test]
-    fn summarize_tool_call_response_for_multimodal_custom_output() {
-        let response = ResponseInputItem::CustomToolCallOutput {
-            call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload::from_content_items(vec![
-                FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,abcd".to_string(),
-                    detail: None,
-                },
-            ]),
-        };
-
-        let actual = JsReplManager::summarize_tool_call_response(&response);
-
-        assert_eq!(
-            actual,
-            JsReplToolCallResponseSummary {
-                response_type: Some("custom_tool_call_output".to_string()),
-                payload_kind: Some(JsReplToolCallPayloadKind::CustomContentItems),
-                payload_text_preview: None,
-                payload_text_length: None,
-                payload_item_count: Some(1),
-                text_item_count: Some(0),
-                image_item_count: Some(1),
-                structured_content_present: None,
-                result_is_error: None,
-            }
-        );
-    }
-
-    #[test]
-    fn summarize_tool_call_error_marks_error_payload() {
-        let actual = JsReplManager::summarize_tool_call_error("tool failed");
-
-        assert_eq!(
-            actual,
-            JsReplToolCallResponseSummary {
-                response_type: None,
-                payload_kind: Some(JsReplToolCallPayloadKind::Error),
-                payload_text_preview: Some("tool failed".to_string()),
-                payload_text_length: Some("tool failed".len()),
-                payload_item_count: None,
-                text_item_count: None,
-                image_item_count: None,
-                structured_content_present: None,
-                result_is_error: None,
-            }
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reset_clears_inflight_exec_tool_calls_without_waiting() {
-        let manager = JsReplManager::new(None, Vec::new())
-            .await
-            .expect("manager should initialize");
-        let exec_id = Uuid::new_v4().to_string();
-        manager.register_exec_tool_calls(&exec_id).await;
-        assert!(
-            JsReplManager::begin_exec_tool_call(&manager.exec_tool_calls, &exec_id)
-                .await
-                .is_some()
-        );
-
-        let wait_manager = Arc::clone(&manager);
-        let wait_exec_id = exec_id.clone();
-        let waiter = tokio::spawn(async move {
-            wait_manager.wait_for_exec_tool_calls(&wait_exec_id).await;
-        });
-        tokio::task::yield_now().await;
-
-        tokio::time::timeout(Duration::from_secs(1), manager.reset())
-            .await
-            .expect("reset should not hang")
-            .expect("reset should succeed");
-
-        tokio::time::timeout(Duration::from_secs(1), waiter)
-            .await
-            .expect("waiter should be released")
-            .expect("wait task should not panic");
-
-        assert!(manager.exec_tool_calls.lock().await.is_empty());
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reset_aborts_inflight_exec_tool_tasks() {
-        let manager = JsReplManager::new(None, Vec::new())
-            .await
-            .expect("manager should initialize");
-        let exec_id = Uuid::new_v4().to_string();
-        manager.register_exec_tool_calls(&exec_id).await;
-        let reset_cancel = JsReplManager::begin_exec_tool_call(&manager.exec_tool_calls, &exec_id)
-            .await
-            .expect("exec should be registered");
-
-        let task = tokio::spawn(async move {
-            tokio::select! {
-                _ = reset_cancel.cancelled() => "cancelled",
-                _ = tokio::time::sleep(Duration::from_secs(60)) => "timed_out",
-            }
-        });
-
-        tokio::time::timeout(Duration::from_secs(1), manager.reset())
-            .await
-            .expect("reset should not hang")
-            .expect("reset should succeed");
-
-        let outcome = tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("cancelled task should resolve promptly")
-            .expect("task should not panic");
-        assert_eq!(outcome, "cancelled");
-    }
-
-    async fn can_run_js_repl_runtime_tests() -> bool {
-        // These white-box runtime tests are required on macOS. Linux relies on
-        // the codex-linux-sandbox arg0 dispatch path, which is exercised in
-        // integration tests instead.
-        cfg!(target_os = "macos")
-    }
-    fn write_js_repl_test_package_source(
-        base: &Path,
-        name: &str,
-        source: &str,
-    ) -> anyhow::Result<()> {
-        let pkg_dir = base.join("node_modules").join(name);
-        fs::create_dir_all(&pkg_dir)?;
-        fs::write(
-            pkg_dir.join("package.json"),
-            format!(
-                "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {{\n    \"import\": \"./index.js\"\n  }}\n}}\n"
-            ),
-        )?;
-        fs::write(pkg_dir.join("index.js"), source)?;
-        Ok(())
-    }
-
-    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
-        write_js_repl_test_package_source(
-            base,
-            name,
-            &format!("export const value = \"{value}\";\n"),
-        )?;
-        Ok(())
-    }
-
-    fn write_js_repl_test_module(
-        base: &Path,
-        relative: &str,
-        contents: &str,
-    ) -> anyhow::Result<()> {
-        let module_path = base.join(relative);
-        if let Some(parent) = module_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(module_path, contents)?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_timeout_does_not_deadlock() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(3),
-            manager.execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "while (true) {}".to_string(),
-                    timeout_ms: Some(50),
-                },
-            ),
-        )
-        .await
-        .expect("execute should return, not deadlock")
-        .expect_err("expected timeout error");
-
-        assert_eq!(
-            result.to_string(),
-            "js_repl execution timed out; kernel reset, rerun your request"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_timeout_kills_kernel_process() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "console.log('warmup');".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-
-        let child = {
-            let guard = manager.kernel.lock().await;
-            let state = guard.as_ref().expect("kernel should exist after warmup");
-            Arc::clone(&state.child)
-        };
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "while (true) {}".to_string(),
-                    timeout_ms: Some(50),
-                },
-            )
-            .await
-            .expect_err("expected timeout error");
-
-        assert_eq!(
-            result.to_string(),
-            "js_repl execution timed out; kernel reset, rerun your request"
-        );
-
-        let exit_state = {
-            let mut child = child.lock().await;
-            child.try_wait()?
-        };
-        assert!(
-            exit_state.is_some(),
-            "timed out js_repl execution should kill previous kernel process"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_forced_kernel_exit_recovers_on_next_exec() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "console.log('warmup');".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-
-        let child = {
-            let guard = manager.kernel.lock().await;
-            let state = guard.as_ref().expect("kernel should exist after warmup");
-            Arc::clone(&state.child)
-        };
-        JsReplManager::kill_kernel_child(&child, "test_crash").await;
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let cleared = {
-                    let guard = manager.kernel.lock().await;
-                    guard
-                        .as_ref()
-                        .is_none_or(|state| !Arc::ptr_eq(&state.child, &child))
-                };
-                if cleared {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("host should clear dead kernel state promptly");
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "console.log('after-kill');".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("after-kill"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_uncaught_exception_returns_exec_error_and_recovers() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = crate::codex::make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "console.log('warmup');".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-
-        let child = {
-            let guard = manager.kernel.lock().await;
-            let state = guard.as_ref().expect("kernel should exist after warmup");
-            Arc::clone(&state.child)
-        };
-
-        let err = tokio::time::timeout(
-            Duration::from_secs(3),
-            manager.execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "setTimeout(() => { throw new Error('boom'); }, 0);\nawait new Promise(() => {});".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            ),
-        )
-        .await
-        .expect("uncaught exception should fail promptly")
-        .expect_err("expected uncaught exception to fail the exec");
-
-        let message = err.to_string();
-        assert!(message.contains("js_repl kernel uncaught exception: boom"));
-        assert!(message.contains("kernel reset."));
-        assert!(message.contains("Catch or handle async errors"));
-        assert!(!message.contains("js_repl kernel exited unexpectedly"));
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let exited = {
-                    let mut child = child.lock().await;
-                    child.try_wait()?.is_some()
-                };
-                if exited {
-                    return Ok::<(), anyhow::Error>(());
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("uncaught exception should terminate the previous kernel process")?;
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let cleared = {
-                    let guard = manager.kernel.lock().await;
-                    guard
-                        .as_ref()
-                        .is_none_or(|state| !Arc::ptr_eq(&state.child, &child))
-                };
-                if cleared {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("host should clear dead kernel state promptly");
-
-        let next = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "console.log('after reset');".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(next.output.contains("after reset"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_waits_for_unawaited_tool_calls_before_completion() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy
-            .set(AskForApproval::Never)
-            .expect("test setup should allow updating approval policy");
-        set_danger_full_access(&mut turn);
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let marker = turn
-            .cwd
-            .join(format!("js-repl-unawaited-marker-{}.txt", Uuid::new_v4()));
-        let marker_json = serde_json::to_string(&marker.to_string_lossy().to_string())?;
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: format!(
-                        r#"
-const marker = {marker_json};
-void codex.tool("shell_command", {{ command: `sleep 0.35; printf js_repl_unawaited_done > "${{marker}}"` }});
-console.log("cell-complete");
-"#
-                    ),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("cell-complete"));
-        let marker_contents = tokio::fs::read_to_string(&marker).await?;
-        assert_eq!(marker_contents, "js_repl_unawaited_done");
-        let _ = tokio::fs::remove_file(&marker).await;
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_does_not_auto_attach_image_via_view_image_tool() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, mut turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-        turn.approval_policy
-            .set(AskForApproval::Never)
-            .expect("test setup should allow updating approval policy");
-        set_danger_full_access(&mut turn);
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-const fs = await import("node:fs/promises");
-const path = await import("node:path");
-const imagePath = path.join(codex.tmpDir, "js-repl-view-image.png");
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-  "base64"
-);
-await fs.writeFile(imagePath, png);
-const out = await codex.tool("view_image", { path: imagePath });
-console.log(out.type);
-"#;
-
-        let result = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("function_call_output"));
-        assert!(result.content_items.is_empty());
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_can_emit_image_via_view_image_tool() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, mut turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-        turn.approval_policy
-            .set(AskForApproval::Never)
-            .expect("test setup should allow updating approval policy");
-        set_danger_full_access(&mut turn);
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-const fs = await import("node:fs/promises");
-const path = await import("node:path");
-const imagePath = path.join(codex.tmpDir, "js-repl-view-image-explicit.png");
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-  "base64"
-);
-await fs.writeFile(imagePath, png);
-const out = await codex.tool("view_image", { path: imagePath });
-await codex.emitImage(out);
-console.log(out.type);
-"#;
-
-        let result = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("function_call_output"));
-        assert_eq!(
-            result.content_items.as_slice(),
-            [FunctionCallOutputContentItem::InputImage {
-                image_url:
-                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-                        .to_string(),
-                detail: None,
-            }]
-            .as_slice()
-        );
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_can_emit_image_from_bytes_and_mime_type() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-  "base64"
-);
-await codex.emitImage({ bytes: png, mimeType: "image/png" });
-"#;
-
-        let result = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await?;
-        assert_eq!(
-            result.content_items.as_slice(),
-            [FunctionCallOutputContentItem::InputImage {
-                image_url:
-                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-                        .to_string(),
-                detail: None,
-            }]
-            .as_slice()
-        );
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_can_emit_multiple_images_in_one_cell() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-await codex.emitImage(
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-);
-await codex.emitImage(
-  "data:image/gif;base64,R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs="
-);
-"#;
-
-        let result = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await?;
-        assert_eq!(
-            result.content_items.as_slice(),
-            [
-                FunctionCallOutputContentItem::InputImage {
-                    image_url:
-                        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-                            .to_string(),
-                    detail: None,
-                },
-                FunctionCallOutputContentItem::InputImage {
-                    image_url:
-                        "data:image/gif;base64,R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs="
-                            .to_string(),
-                    detail: None,
-                },
-            ]
-            .as_slice()
-        );
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_waits_for_unawaited_emit_image_before_completion() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-void codex.emitImage(
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-);
-console.log("cell-complete");
-"#;
-
-        let result = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("cell-complete"));
-        assert_eq!(
-            result.content_items.as_slice(),
-            [FunctionCallOutputContentItem::InputImage {
-                image_url:
-                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-                        .to_string(),
-                detail: None,
-            }]
-            .as_slice()
-        );
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_unawaited_emit_image_errors_fail_cell() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-void codex.emitImage({ bytes: new Uint8Array(), mimeType: "image/png" });
-console.log("cell-complete");
-"#;
-
-        let err = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await
-            .expect_err("unawaited invalid emitImage should fail");
-        assert!(err.to_string().contains("expected non-empty bytes"));
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_caught_emit_image_error_does_not_fail_cell() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-try {
-  await codex.emitImage({ bytes: new Uint8Array(), mimeType: "image/png" });
-} catch (error) {
-  console.log(error.message);
-}
-console.log("cell-complete");
-"#;
-
-        let result = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("expected non-empty bytes"));
-        assert!(result.output.contains("cell-complete"));
-        assert!(result.content_items.is_empty());
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_emit_image_requires_explicit_mime_type_for_bytes() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-  "base64"
-);
-await codex.emitImage({ bytes: png });
-"#;
-
-        let err = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await
-            .expect_err("missing mimeType should fail");
-        assert!(err.to_string().contains("expected a non-empty mimeType"));
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_emit_image_rejects_non_data_url() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-await codex.emitImage("https://example.com/image.png");
-"#;
-
-        let err = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await
-            .expect_err("non-data URLs should fail");
-        assert!(err.to_string().contains("only accepts data URLs"));
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_emit_image_accepts_case_insensitive_data_url() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-await codex.emitImage("DATA:image/png;base64,AAA");
-"#;
-
-        let result = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await?;
-        assert_eq!(
-            result.content_items.as_slice(),
-            [FunctionCallOutputContentItem::InputImage {
-                image_url: "DATA:image/png;base64,AAA".to_string(),
-                detail: None,
-            }]
-            .as_slice()
-        );
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_emit_image_rejects_invalid_detail() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-  "base64"
-);
-await codex.emitImage({ bytes: png, mimeType: "image/png", detail: "ultra" });
-"#;
-
-        let err = manager
-            .execute(
-                Arc::clone(&session),
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            )
-            .await
-            .expect_err("invalid detail should fail");
-        assert!(err.to_string().contains("expected detail to be one of"));
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_emit_image_rejects_mixed_content() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn, rx_event) =
-            make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
-                name: "inline_image".to_string(),
-                description: "Returns inline text and image content.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-            }])
-            .await;
-        if !turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
-        {
-            return Ok(());
-        }
-
-        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-        let code = r#"
-const out = await codex.tool("inline_image", {});
-await codex.emitImage(out);
-"#;
-        let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-
-        let session_for_response = Arc::clone(&session);
-        let response_watcher = async move {
-            loop {
-                let event = tokio::time::timeout(Duration::from_secs(2), rx_event.recv()).await??;
-                if let EventMsg::DynamicToolCallRequest(request) = event.msg {
-                    session_for_response
-                        .notify_dynamic_tool_response(
-                            &request.call_id,
-                            DynamicToolResponse {
-                                content_items: vec![
-                                    DynamicToolCallOutputContentItem::InputText {
-                                        text: "inline image note".to_string(),
-                                    },
-                                    DynamicToolCallOutputContentItem::InputImage {
-                                        image_url: image_url.to_string(),
-                                    },
-                                ],
-                                success: true,
-                            },
-                        )
-                        .await;
-                    return Ok::<(), anyhow::Error>(());
-                }
-            }
-        };
-
-        let (result, response_watcher_result) = tokio::join!(
-            manager.execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                tracker,
-                JsReplArgs {
-                    code: code.to_string(),
-                    timeout_ms: Some(15_000),
-                },
-            ),
-            response_watcher,
-        );
-        response_watcher_result?;
-        let err = result.expect_err("mixed content should fail");
-        assert!(
-            err.to_string()
-                .contains("does not accept mixed text and image content")
-        );
-        assert!(session.get_pending_input().await.is_empty());
-
-        Ok(())
-    }
-    #[tokio::test]
-    async fn js_repl_prefers_env_node_module_dirs_over_config() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let env_base = tempdir()?;
-        write_js_repl_test_package(env_base.path(), "repl_probe", "env")?;
-
-        let config_base = tempdir()?;
-        let cwd_dir = tempdir()?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy.r#set.insert(
-            "CODEX_JS_REPL_NODE_MODULE_DIRS".to_string(),
-            env_base.path().to_string_lossy().to_string(),
-        );
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            vec![config_base.path().to_path_buf()],
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
-                        .to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("env"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_resolves_from_first_config_dir() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let first_base = tempdir()?;
-        let second_base = tempdir()?;
-        write_js_repl_test_package(first_base.path(), "repl_probe", "first")?;
-        write_js_repl_test_package(second_base.path(), "repl_probe", "second")?;
-
-        let cwd_dir = tempdir()?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            vec![
-                first_base.path().to_path_buf(),
-                second_base.path().to_path_buf(),
-            ],
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
-                        .to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("first"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_falls_back_to_cwd_node_modules() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let config_base = tempdir()?;
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_package(cwd_dir.path(), "repl_probe", "cwd")?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            vec![config_base.path().to_path_buf()],
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
-                        .to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("cwd"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_accepts_node_modules_dir_entries() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let base_dir = tempdir()?;
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_package(base_dir.path(), "repl_probe", "normalized")?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            vec![base_dir.path().join("node_modules")],
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
-                        .to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("normalized"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_supports_relative_file_imports() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "child.js",
-            "export const value = \"child\";\n",
-        )?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "parent.js",
-            "import { value as childValue } from \"./child.js\";\nexport const value = `${childValue}-parent`;\n",
-        )?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "local.mjs",
-            "export const value = \"mjs\";\n",
-        )?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "const parent = await import(\"./parent.js\"); const other = await import(\"./local.mjs\"); console.log(parent.value); console.log(other.value);".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("child-parent"));
-        assert!(result.output.contains("mjs"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_supports_absolute_file_imports() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let module_dir = tempdir()?;
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_module(
-            module_dir.path(),
-            "absolute.js",
-            "export const value = \"absolute\";\n",
-        )?;
-        let absolute_path_json =
-            serde_json::to_string(&module_dir.path().join("absolute.js").display().to_string())?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: format!(
-                        "const mod = await import({absolute_path_json}); console.log(mod.value);"
-                    ),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("absolute"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_imported_local_files_can_access_repl_globals() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "globals.js",
-            "console.log(codex.tmpDir === tmpDir);\nconsole.log(typeof codex.tool);\nconsole.log(\"local-file-console-ok\");\n",
-        )?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "await import(\"./globals.js\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("true"));
-        assert!(result.output.contains("function"));
-        assert!(result.output.contains("local-file-console-ok"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_reimports_local_files_after_edit() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        let helper_path = cwd_dir.path().join("helper.js");
-        fs::write(&helper_path, "export const value = \"v1\";\n")?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let first = manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "const { value: firstValue } = await import(\"./helper.js\");\nconsole.log(firstValue);".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(first.output.contains("v1"));
-
-        fs::write(&helper_path, "export const value = \"v2\";\n")?;
-
-        let second = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "console.log(firstValue);\nconst { value: secondValue } = await import(\"./helper.js\");\nconsole.log(secondValue);".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(second.output.contains("v1"));
-        assert!(second.output.contains("v2"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_reimports_local_files_after_fixing_failure() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        let helper_path = cwd_dir.path().join("broken.js");
-        fs::write(&helper_path, "throw new Error(\"boom\");\n")?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let err = manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "await import(\"./broken.js\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected broken module import to fail");
-        assert!(err.to_string().contains("boom"));
-
-        fs::write(&helper_path, "export const value = \"fixed\";\n")?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "console.log((await import(\"./broken.js\")).value);".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        assert!(result.output.contains("fixed"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_local_files_expose_node_like_import_meta() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        let pkg_dir = cwd_dir.path().join("node_modules").join("repl_meta_pkg");
-        fs::create_dir_all(&pkg_dir)?;
-        fs::write(
-            pkg_dir.join("package.json"),
-            "{\n  \"name\": \"repl_meta_pkg\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {\n    \"import\": \"./index.js\"\n  }\n}\n",
-        )?;
-        fs::write(
-            pkg_dir.join("index.js"),
-            "import { sep } from \"node:path\";\nexport const value = `pkg:${typeof sep}`;\n",
-        )?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "child.js",
-            "export const value = \"child-export\";\n",
-        )?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "meta.js",
-            "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"repl_meta_pkg\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\nconsole.log((await import(import.meta.resolve(\"./child.js\"))).value);\nconsole.log((await import(import.meta.resolve(\"repl_meta_pkg\"))).value);\n",
-        )?;
-        let child_path = fs::canonicalize(cwd_dir.path().join("child.js"))?;
-        let child_url = url::Url::from_file_path(&child_path)
-            .expect("child path should convert to file URL")
-            .to_string();
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let result = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "await import(\"./meta.js\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await?;
-        let cwd_display = cwd_dir.path().display().to_string();
-        let meta_path_display = cwd_dir.path().join("meta.js").display().to_string();
-        assert!(result.output.contains("file://"));
-        assert!(result.output.contains(&meta_path_display));
-        assert!(result.output.contains(&cwd_display));
-        assert!(result.output.contains("false"));
-        assert!(result.output.contains(&child_url));
-        assert!(result.output.contains("repl_meta_pkg"));
-        assert!(result.output.contains("node:fs"));
-        assert!(result.output.contains("child-export"));
-        assert!(result.output.contains("pkg:string"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_rejects_top_level_static_imports_with_clear_error() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let (session, turn) = make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let err = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "import \"./local.js\";".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected top-level static import to be rejected");
-        assert!(
-            err.to_string()
-                .contains("Top-level static import \"./local.js\" is not supported in js_repl")
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_local_files_reject_static_bare_imports() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_package(cwd_dir.path(), "repl_counter", "pkg")?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "entry.js",
-            "import { value } from \"repl_counter\";\nconsole.log(value);\n",
-        )?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let err = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "await import(\"./entry.js\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected static bare import to be rejected");
-        assert!(
-            err.to_string().contains(
-                "Static import \"repl_counter\" is not supported from js_repl local files"
-            )
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_rejects_unsupported_file_specifiers() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_module(cwd_dir.path(), "local.ts", "export const value = \"ts\";\n")?;
-        write_js_repl_test_module(cwd_dir.path(), "local", "export const value = \"noext\";\n")?;
-        fs::create_dir_all(cwd_dir.path().join("dir"))?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let unsupported_extension = manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "await import(\"./local.ts\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected unsupported extension to be rejected");
-        assert!(
-            unsupported_extension
-                .to_string()
-                .contains("Only .js and .mjs files are supported")
-        );
-
-        let extensionless = manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "await import(\"./local\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected extensionless import to be rejected");
-        assert!(
-            extensionless
-                .to_string()
-                .contains("Only .js and .mjs files are supported")
-        );
-
-        let directory = manager
-            .execute(
-                Arc::clone(&session),
-                Arc::clone(&turn),
-                Arc::clone(&tracker),
-                JsReplArgs {
-                    code: "await import(\"./dir\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected directory import to be rejected");
-        assert!(
-            directory
-                .to_string()
-                .contains("Directory imports are not supported")
-        );
-
-        let unsupported_url = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "await import(\"https://example.com/test.js\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected unsupported url import to be rejected");
-        assert!(
-            unsupported_url
-                .to_string()
-                .contains("Unsupported import specifier")
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_blocks_sensitive_builtin_imports_from_local_files() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let cwd_dir = tempdir()?;
-        write_js_repl_test_module(
-            cwd_dir.path(),
-            "blocked.js",
-            "import process from \"node:process\";\nconsole.log(process.pid);\n",
-        )?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.path().to_path_buf();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let err = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "await import(\"./blocked.js\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected blocked builtin import to be rejected");
-        assert!(
-            err.to_string()
-                .contains("Importing module \"node:process\" is not allowed in js_repl")
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn js_repl_local_files_do_not_escape_node_module_search_roots() -> anyhow::Result<()> {
-        if !can_run_js_repl_runtime_tests().await {
-            return Ok(());
-        }
-
-        let parent_dir = tempdir()?;
-        write_js_repl_test_package(parent_dir.path(), "repl_probe", "parent")?;
-        let cwd_dir = parent_dir.path().join("workspace");
-        fs::create_dir_all(&cwd_dir)?;
-        write_js_repl_test_module(
-            &cwd_dir,
-            "entry.js",
-            "const { value } = await import(\"repl_probe\");\nconsole.log(value);\n",
-        )?;
-
-        let (session, mut turn) = make_session_and_context().await;
-        turn.shell_environment_policy
-            .r#set
-            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
-        turn.cwd = cwd_dir.clone();
-        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
-            turn.config.js_repl_node_path.clone(),
-            Vec::new(),
-        ));
-
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
-        let manager = turn.js_repl.manager().await?;
-
-        let err = manager
-            .execute(
-                session,
-                turn,
-                tracker,
-                JsReplArgs {
-                    code: "await import(\"./entry.js\");".to_string(),
-                    timeout_ms: Some(10_000),
-                },
-            )
-            .await
-            .expect_err("expected parent node_modules lookup to be rejected");
-        assert!(err.to_string().contains("repl_probe"));
-        Ok(())
-    }
-}
+#[path = "mod_tests.rs"]
+mod tests;

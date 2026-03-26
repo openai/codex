@@ -4,9 +4,11 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::ToolsToml;
+use crate::config::types::ApprovalsReviewer;
 use crate::config::types::Personality;
 use crate::config::types::WindowsToml;
 use crate::protocol::AskForApproval;
+use codex_features::FeaturesToml;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
@@ -25,6 +27,7 @@ pub struct ConfigProfile {
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
@@ -58,7 +61,7 @@ pub struct ConfigProfile {
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.
     #[schemars(schema_with = "crate::config::schema::features_schema")]
-    pub features: Option<crate::features::FeaturesToml>,
+    pub features: Option<FeaturesToml>,
     pub oss_provider: Option<String>,
 }
 

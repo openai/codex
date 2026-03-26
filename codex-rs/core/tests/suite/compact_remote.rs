@@ -61,6 +61,7 @@ fn summary_with_prefix(summary: &str) -> String {
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
+        .strip_capability_instructions()
         .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
 }
 
@@ -270,6 +271,28 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     assert_eq!(
         compact_body.get("model").and_then(|v| v.as_str()),
         Some(harness.test().session_configured.model.as_str())
+    );
+    let response_requests = responses_mock.requests();
+    let first_response_request = response_requests.first().expect("initial request missing");
+    assert_eq!(
+        compact_body["tools"],
+        first_response_request.body_json()["tools"],
+        "compact requests should send the same tools payload as /v1/responses"
+    );
+    assert_eq!(
+        compact_body["parallel_tool_calls"],
+        first_response_request.body_json()["parallel_tool_calls"],
+        "compact requests should match /v1/responses parallel_tool_calls"
+    );
+    assert_eq!(
+        compact_body["reasoning"],
+        first_response_request.body_json()["reasoning"],
+        "compact requests should match /v1/responses reasoning"
+    );
+    assert_eq!(
+        compact_body["text"],
+        first_response_request.body_json()["text"],
+        "compact requests should match /v1/responses text controls"
     );
     let compact_body_text = compact_body.to_string();
     assert!(
@@ -1987,6 +2010,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
                 .submit(Op::OverrideTurnContext {
                     cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
                     approval_policy: None,
+                    approvals_reviewer: None,
                     sandbox_policy: None,
                     windows_sandbox_level: None,
                     model: None,
@@ -2097,6 +2121,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some(next_model.to_string()),

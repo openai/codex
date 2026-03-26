@@ -435,8 +435,10 @@ mod phase2 {
     use codex_state::Phase2JobClaimOutcome;
     use codex_state::Stage1Output;
     use codex_state::ThreadMetadataBuilder;
+    use core_test_support::PathBufExt;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn stage1_output_with_source_updated_at(source_updated_at: i64) -> Stage1Output {
@@ -468,7 +470,7 @@ mod phase2 {
             let codex_home = tempfile::tempdir().expect("create temp codex home");
             let mut config = test_config();
             config.codex_home = codex_home.path().to_path_buf();
-            config.cwd = config.codex_home.clone();
+            config.cwd = config.codex_home.abs();
             let config = Arc::new(config);
 
             let state_db = codex_state::StateRuntime::init(
@@ -482,6 +484,9 @@ mod phase2 {
                 CodexAuth::from_api_key("dummy"),
                 config.model_provider.clone(),
                 config.codex_home.clone(),
+                std::sync::Arc::new(codex_exec_server::EnvironmentManager::new(
+                    /*exec_server_url*/ None,
+                )),
             );
             let (mut session, _turn_context) = make_session_and_context().await;
             session.services.state_db = Some(Arc::clone(&state_db));
@@ -506,7 +511,7 @@ mod phase2 {
                 Utc::now(),
                 SessionSource::Cli,
             );
-            metadata_builder.cwd = self.config.cwd.clone();
+            metadata_builder.cwd = self.config.cwd.to_path_buf();
             metadata_builder.model_provider = Some(self.config.model_provider_id.clone());
             let metadata = metadata_builder.build(&self.config.model_provider_id);
 
@@ -547,10 +552,12 @@ mod phase2 {
         }
 
         async fn shutdown_threads(&self) {
-            self.manager
-                .remove_and_close_all_threads()
-                .await
-                .expect("shutdown spawned threads");
+            let report = self
+                .manager
+                .shutdown_all_threads_bounded(std::time::Duration::from_secs(10))
+                .await;
+            assert!(report.submit_failed.is_empty());
+            assert!(report.timed_out.is_empty());
         }
 
         fn user_input_ops_count(&self) -> usize {
@@ -661,9 +668,10 @@ mod phase2 {
         pretty_assertions::assert_eq!(user_input_ops, 1);
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 1);
+        let thread_id = thread_ids[0];
         let subagent = harness
             .manager
-            .get_thread(thread_ids[0])
+            .get_thread(thread_id)
             .await
             .expect("get consolidation thread");
         let config_snapshot = subagent.config_snapshot().await;
@@ -680,6 +688,34 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+        subagent.codex.session.ensure_rollout_materialized().await;
+        subagent.codex.session.flush_rollout().await;
+        let rollout_path = subagent
+            .rollout_path()
+            .expect("consolidation thread should have a rollout path");
+        crate::state_db::read_repair_rollout_path(
+            Some(harness.state_db.as_ref()),
+            Some(thread_id),
+            Some(/*archived_only*/ false),
+            rollout_path.as_path(),
+        )
+        .await;
+        let memory_mode = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let memory_mode = harness
+                    .state_db
+                    .get_thread_memory_mode(thread_id)
+                    .await
+                    .expect("read consolidation thread memory mode");
+                if memory_mode.is_some() {
+                    break memory_mode;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for consolidation thread memory mode to persist");
+        pretty_assertions::assert_eq!(memory_mode.as_deref(), Some("disabled"));
 
         harness.shutdown_threads().await;
     }
@@ -850,7 +886,7 @@ mod phase2 {
         let codex_home = tempfile::tempdir().expect("create temp codex home");
         let mut config = test_config();
         config.codex_home = codex_home.path().to_path_buf();
-        config.cwd = config.codex_home.clone();
+        config.cwd = config.codex_home.abs();
         let config = Arc::new(config);
 
         let state_db = codex_state::StateRuntime::init(
@@ -872,7 +908,7 @@ mod phase2 {
             Utc::now(),
             SessionSource::Cli,
         );
-        metadata_builder.cwd = config.cwd.clone();
+        metadata_builder.cwd = config.cwd.to_path_buf();
         metadata_builder.model_provider = Some(config.model_provider_id.clone());
         let metadata = metadata_builder.build(&config.model_provider_id);
         state_db

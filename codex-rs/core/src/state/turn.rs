@@ -1,5 +1,6 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +20,6 @@ use tokio::sync::oneshot;
 use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
 use crate::protocol::TokenUsage;
-use crate::sandboxing::merge_permission_profiles;
 use crate::tasks::SessionTask;
 use codex_protocol::models::PermissionProfile;
 
@@ -179,6 +179,15 @@ impl TurnState {
         self.pending_input.push(input);
     }
 
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
+    }
+
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
@@ -187,6 +196,10 @@ impl TurnState {
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
         }
+    }
+
+    pub(crate) fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
+        self.pending_input.clone()
     }
 
     pub(crate) fn has_pending_input(&self) -> bool {

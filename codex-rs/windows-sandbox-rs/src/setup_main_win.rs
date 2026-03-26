@@ -157,7 +157,7 @@ fn apply_read_acls(
         let builtin_has = read_mask_allows_or_log(
             root,
             subjects.rx_psids,
-            None,
+            /*label*/ None,
             access_mask,
             access_label,
             refresh_errors,
@@ -219,7 +219,7 @@ fn read_mask_allows_or_log(
     refresh_errors: &mut Vec<String>,
     log: &mut File,
 ) -> Result<bool> {
-    match path_mask_allows(root, psids, read_mask, true) {
+    match path_mask_allows(root, psids, read_mask, /*require_all_bits*/ true) {
         Ok(has) => Ok(has),
         Err(e) => {
             let label_suffix = label
@@ -674,25 +674,26 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             ("sandbox_group", sandbox_group_psid),
             (cap_label, cap_psid_for_root),
         ] {
-            let has = match path_mask_allows(root, &[psid], write_mask, true) {
-                Ok(h) => h,
-                Err(e) => {
-                    refresh_errors.push(format!(
-                        "write mask check failed on {} for {label}: {}",
-                        root.display(),
-                        e
-                    ));
-                    log_line(
-                        log,
-                        &format!(
-                            "write mask check failed on {} for {label}: {}; continuing",
+            let has =
+                match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        refresh_errors.push(format!(
+                            "write mask check failed on {} for {label}: {}",
                             root.display(),
                             e
-                        ),
-                    )?;
-                    false
-                }
-            };
+                        ));
+                        log_line(
+                            log,
+                            &format!(
+                                "write mask check failed on {} for {label}: {}; continuing",
+                                root.display(),
+                                e
+                            ),
+                        )?;
+                        false
+                    }
+                };
             if !has {
                 need_grant = true;
             }

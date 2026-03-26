@@ -8,8 +8,8 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use async_trait::async_trait;
-use codex_git::RestoreGhostCommitOptions;
-use codex_git::restore_ghost_commit_with_options;
+use codex_git_utils::RestoreGhostCommitOptions;
+use codex_git_utils::restore_ghost_commit_with_options;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
@@ -42,11 +42,11 @@ impl SessionTask for UndoTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
-        let _ = session
-            .session
-            .services
-            .session_telemetry
-            .counter("codex.task.undo", 1, &[]);
+        let _ = session.session.services.session_telemetry.counter(
+            "codex.task.undo",
+            /*inc*/ 1,
+            &[],
+        );
         let sess = session.clone_session();
         sess.send_event(
             ctx.as_ref(),

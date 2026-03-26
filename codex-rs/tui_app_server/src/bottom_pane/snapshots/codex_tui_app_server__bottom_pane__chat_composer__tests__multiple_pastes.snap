@@ -1,0 +1,14 @@
+---
+source: tui_app_server/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                                                                    "
+"› [Pasted Content 1003 chars][Pasted Content 1007 chars] another short paste                        "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                 100% context left  "

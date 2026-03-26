@@ -1,0 +1,21 @@
+---
+source: tui_app_server/src/render/highlight.rs
+expression: out
+---
+ansi:
+  Blue
+  Green
+  Magenta
+  Yellow
+base16:
+  Blue
+  Gray
+  Green
+  Indexed(9)
+  Magenta
+base16-256:
+  Blue
+  Gray
+  Green
+  Indexed(16)
+  Magenta

@@ -13,7 +13,7 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     config: &Config,
     path: String,
 ) -> anyhow::Result<T> {
-    chatgpt_get_request_with_timeout(config, path, None).await
+    chatgpt_get_request_with_timeout(config, path, /*timeout*/ None).await
 }
 
 pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(

@@ -32,6 +32,9 @@ axum = { workspace = true, default-features = false, features = [
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-otel = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
@@ -44,15 +47,20 @@ codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+constant_time_eq = { workspace = true }
 futures = { workspace = true }
+hmac = { workspace = true }
+jsonwebtoken = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
@@ -79,6 +87,8 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 rmcp = { workspace = true, default-features = false, features = [
@@ -88,5 +98,6 @@ rmcp = { workspace = true, default-features = false, features = [
 ] }
 serial_test = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }

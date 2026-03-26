@@ -208,9 +208,9 @@ pub(crate) fn validate_unix_socket_allowlist_paths(cfg: &NetworkProxyConfig) -> 
 pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
     validate_unix_socket_allowlist_paths(cfg)?;
 
-    let http_addr = resolve_addr(&cfg.network.proxy_url, 3128)
+    let http_addr = resolve_addr(&cfg.network.proxy_url, /*default_port*/ 3128)
         .with_context(|| format!("invalid network.proxy_url: {}", cfg.network.proxy_url))?;
-    let socks_addr = resolve_addr(&cfg.network.socks_url, 8081)
+    let socks_addr = resolve_addr(&cfg.network.socks_url, /*default_port*/ 8081)
         .with_context(|| format!("invalid network.socks_url: {}", cfg.network.socks_url))?;
     let (http_addr, socks_addr) = clamp_bind_addrs(http_addr, socks_addr, &cfg.network);
 

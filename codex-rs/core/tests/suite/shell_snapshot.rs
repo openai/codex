@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -72,7 +72,7 @@ async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
 }
 
 async fn wait_for_file_contents(path: &Path) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         match fs::read_to_string(path).await {
             Ok(contents) => return Ok(contents),
@@ -164,6 +164,7 @@ async fn run_snapshot_command_with_options(
             final_output_json_schema: None,
             cwd,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -254,6 +255,7 @@ async fn run_shell_command_snapshot_with_options(
             final_output_json_schema: None,
             cwd,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -324,6 +326,7 @@ async fn run_tool_turn_on_harness(
             final_output_json_schema: None,
             cwd,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -528,7 +531,9 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
     let args = json!({
         "command": script,
-        "timeout_ms": 1_000,
+        // The intercepted apply_patch path self-invokes codex, which can take
+        // longer than a second in Bazel macOS test environments.
+        "timeout_ms": 5_000,
     });
     let call_id = "shell-snapshot-apply-patch";
     let responses = vec![
@@ -555,6 +560,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             final_output_json_schema: None,
             cwd: cwd.clone(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
@@ -569,7 +575,32 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
     assert_posix_snapshot_sections(&snapshot_content);
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let mut saw_patch_begin = false;
+    let mut patch_end = None;
+    wait_for_event(&codex, |ev| match ev {
+        EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
+            saw_patch_begin = true;
+            false
+        }
+        EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
+            patch_end = Some(end.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert!(
+        saw_patch_begin,
+        "expected apply_patch to emit PatchApplyBegin"
+    );
+    let patch_end = patch_end.expect("expected apply_patch to emit PatchApplyEnd");
+    assert!(
+        patch_end.success,
+        "expected apply_patch to finish successfully: stdout={:?} stderr={:?}",
+        patch_end.stdout, patch_end.stderr,
+    );
 
     assert_eq!(
         wait_for_file_contents(&target).await?,

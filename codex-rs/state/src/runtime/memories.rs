@@ -30,7 +30,8 @@ impl StateRuntime {
     /// stage-1 (`memory_stage1`) and phase-2 (`memory_consolidate_global`)
     /// memory pipelines.
     pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(false).await
+        self.clear_memory_data_inner(/*disable_existing_threads*/ false)
+            .await
     }
 
     /// Resets persisted memory state for a clean-slate local start.
@@ -39,7 +40,8 @@ impl StateRuntime {
     /// jobs, this disables memory generation for all existing threads so
     /// historical rollouts are not immediately picked up again.
     pub async fn reset_memory_data_for_fresh_start(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(true).await
+        self.clear_memory_data_inner(/*disable_existing_threads*/ true)
+            .await
     }
 
     async fn clear_memory_data_inner(&self, disable_existing_threads: bool) -> anyhow::Result<()> {
@@ -164,9 +166,12 @@ SELECT
     created_at,
     updated_at,
     source,
+    agent_path,
     agent_nickname,
     agent_role,
     model_provider,
+    model,
+    reasoning_effort,
     cwd,
     cli_version,
     title,
@@ -193,12 +198,12 @@ LEFT JOIN jobs
         );
         push_thread_filters(
             &mut builder,
-            false,
+            /*archived_only*/ false,
             allowed_sources,
-            None,
-            None,
+            /*model_providers*/ None,
+            /*anchor*/ None,
             SortKey::UpdatedAt,
-            None,
+            /*search_term*/ None,
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder

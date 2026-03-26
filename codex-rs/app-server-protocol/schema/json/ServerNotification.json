@@ -1,6 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
     "AccountLoginCompletedNotification": {
       "properties": {
         "error": {
@@ -82,6 +86,9 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "AgentPath": {
+      "type": "string"
     },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
@@ -511,6 +518,28 @@
           ],
           "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
+          "properties": {
+            "activeTurnNotSteerable": {
+              "properties": {
+                "turnKind": {
+                  "$ref": "#/definitions/NonSteerableTurnKind"
+                }
+              },
+              "required": [
+                "turnKind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "activeTurnNotSteerable"
+          ],
+          "title": "ActiveTurnNotSteerableCodexErrorInfo",
+          "type": "object"
         }
       ]
     },
@@ -535,6 +564,7 @@
       "enum": [
         "pendingInit",
         "running",
+        "interrupted",
         "completed",
         "errored",
         "shutdown",
@@ -743,6 +773,15 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "CommandExecutionSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unifiedExecStartup",
+        "unifiedExecInteraction"
+      ],
+      "type": "string"
     },
     "CommandExecutionStatus": {
       "enum": [
@@ -963,6 +1002,34 @@
       ],
       "type": "object"
     },
+    "FsChangedNotification": {
+      "description": "Filesystem watch notification emitted for `fs/watch` subscribers.",
+      "properties": {
+        "changedPaths": {
+          "description": "File or directory paths associated with this event.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "watchId": {
+          "description": "Watch identifier returned by `fs/watch`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "changedPaths",
+        "watchId"
+      ],
+      "type": "object"
+    },
+    "FuzzyFileSearchMatchType": {
+      "enum": [
+        "file",
+        "directory"
+      ],
+      "type": "string"
+    },
     "FuzzyFileSearchResult": {
       "description": "Superset of [`codex_file_search::FileMatch`]",
       "properties": {
@@ -980,6 +1047,9 @@
             "null"
           ]
         },
+        "match_type": {
+          "$ref": "#/definitions/FuzzyFileSearchMatchType"
+        },
         "path": {
           "type": "string"
         },
@@ -994,6 +1064,7 @@
       },
       "required": [
         "file_name",
+        "match_type",
         "path",
         "root",
         "score"
@@ -1056,6 +1127,61 @@
       },
       "type": "object"
     },
+    "GuardianApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "GuardianApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied",
+        "aborted"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "HookCompletedNotification": {
       "properties": {
         "run": {
@@ -1079,7 +1205,10 @@
     },
     "HookEventName": {
       "enum": [
+        "preToolUse",
+        "postToolUse",
         "sessionStart",
+        "userPromptSubmit",
         "stop"
       ],
       "type": "string"
@@ -1123,6 +1252,21 @@
         "error"
       ],
       "type": "string"
+    },
+    "HookPromptFragment": {
+      "properties": {
+        "hookRunId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookRunId",
+        "text"
+      ],
+      "type": "object"
     },
     "HookRunStatus": {
       "enum": [
@@ -1253,6 +1397,56 @@
       ],
       "type": "object"
     },
+    "ItemGuardianApprovalReviewCompletedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "properties": {
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewStartedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "properties": {
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "ItemStartedNotification": {
       "properties": {
         "item": {
@@ -1290,6 +1484,36 @@
       "required": [
         "name",
         "success"
+      ],
+      "type": "object"
+    },
+    "McpServerStartupState": {
+      "enum": [
+        "starting",
+        "ready",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "McpServerStatusUpdatedNotification": {
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/McpServerStartupState"
+        }
+      },
+      "required": [
+        "name",
+        "status"
       ],
       "type": "object"
     },
@@ -1348,6 +1572,54 @@
       ],
       "type": "string"
     },
+    "MemoryCitation": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/MemoryCitationEntry"
+          },
+          "type": "array"
+        },
+        "threadIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries",
+        "threadIds"
+      ],
+      "type": "object"
+    },
+    "MemoryCitationEntry": {
+      "properties": {
+        "lineEnd": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "lineStart": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "note": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "lineEnd",
+        "lineStart",
+        "note",
+        "path"
+      ],
+      "type": "object"
+    },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
@@ -1399,6 +1671,13 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "NonSteerableTurnKind": {
+      "enum": [
+        "review",
+        "compact"
+      ],
+      "type": "string"
     },
     "PatchApplyStatus": {
       "enum": [
@@ -1588,6 +1867,25 @@
       ],
       "type": "object"
     },
+    "RealtimeConversationVersion": {
+      "enum": [
+        "v1",
+        "v2"
+      ],
+      "type": "string"
+    },
+    "ReasoningEffort": {
+      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
     "ReasoningSummaryPartAddedNotification": {
       "properties": {
         "itemId": {
@@ -1709,6 +2007,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomSessionSource",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "subAgent": {
               "$ref": "#/definitions/SubAgentSource"
             }
@@ -1746,6 +2057,17 @@
                     "string",
                     "null"
                   ]
+                },
+                "agent_path": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/AgentPath"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
                 },
                 "agent_role": {
                   "default": null,
@@ -2052,8 +2374,46 @@
         },
         {
           "properties": {
+            "fragments": {
+              "items": {
+                "$ref": "#/definitions/HookPromptFragment"
+              },
+              "type": "array"
+            },
             "id": {
               "type": "string"
+            },
+            "type": {
+              "enum": [
+                "hookPrompt"
+              ],
+              "title": "HookPromptThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fragments",
+            "id",
+            "type"
+          ],
+          "title": "HookPromptThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "memoryCitation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MemoryCitation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "phase": {
               "anyOf": [
@@ -2193,6 +2553,14 @@
                 "string",
                 "null"
               ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CommandExecutionSource"
+                }
+              ],
+              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
@@ -2375,12 +2743,30 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent, when applicable."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
@@ -2501,6 +2887,12 @@
                 "null"
               ]
             },
+            "savedPath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -2614,6 +3006,12 @@
         "data": {
           "type": "string"
         },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "numChannels": {
           "format": "uint16",
           "minimum": 0.0,
@@ -2715,9 +3113,33 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "version": {
+          "$ref": "#/definitions/RealtimeConversationVersion"
         }
       },
       "required": [
+        "threadId",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeTranscriptUpdatedNotification": {
+      "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text",
         "threadId"
       ],
       "type": "object"
@@ -3680,6 +4102,46 @@
       "properties": {
         "method": {
           "enum": [
+            "item/autoApprovalReview/started"
+          ],
+          "title": "Item/autoApprovalReview/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ItemGuardianApprovalReviewStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/autoApprovalReview/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/autoApprovalReview/completed"
+          ],
+          "title": "Item/autoApprovalReview/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ItemGuardianApprovalReviewCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/autoApprovalReview/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "item/completed"
           ],
           "title": "Item/completedNotificationMethod",
@@ -3882,6 +4344,26 @@
       "properties": {
         "method": {
           "enum": [
+            "mcpServer/startupStatus/updated"
+          ],
+          "title": "McpServer/startupStatus/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerStatusUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "McpServer/startupStatus/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "account/updated"
           ],
           "title": "Account/updatedNotificationMethod",
@@ -3936,6 +4418,26 @@
         "params"
       ],
       "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "fs/changed"
+          ],
+          "title": "Fs/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Fs/changedNotification",
       "type": "object"
     },
     {
@@ -4157,6 +4659,26 @@
         "params"
       ],
       "title": "Thread/realtime/itemAddedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/transcriptUpdated"
+          ],
+          "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeTranscriptUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/transcriptUpdatedNotification",
       "type": "object"
     },
     {

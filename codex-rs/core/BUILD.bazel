@@ -1,5 +1,13 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(
+    [
+        "templates/collaboration_mode/default.md",
+        "templates/collaboration_mode/plan.md",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "model_availability_nux_fixtures",
     srcs = [
@@ -24,9 +32,8 @@ codex_rust_crate(
         "//codex-rs:node-version.txt",
     ],
     rustc_env = {
-        # Askama resolves template paths relative to CARGO_MANIFEST_DIR. In
-        # Bazel, the Cargo-provided absolute source path points outside the
-        # sandbox, so keep the manifest root anchored inside the execroot.
+        # Keep manifest-root path lookups inside the Bazel execroot for code
+        # that relies on env!("CARGO_MANIFEST_DIR").
         "CARGO_MANIFEST_DIR": "codex-rs/core",
     },
     integration_compile_data_extra = [

@@ -209,7 +209,7 @@ impl StatusIndicatorWidget {
         let opts = RtOptions::new(usize::from(width))
             .initial_indent(Line::from(DETAILS_PREFIX.dim()))
             .subsequent_indent(Line::from(Span::from(" ".repeat(prefix_width)).dim()))
-            .break_words(true);
+            .break_words(/*break_words*/ true);
 
         let mut out = word_wrap_lines(details.lines().map(|line| vec![line.dim()]), opts);
 
@@ -354,7 +354,7 @@ mod tests {
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
-        w.set_interrupt_hint_visible(false);
+        w.set_interrupt_hint_visible(/*visible*/ false);
 
         // Freeze time-dependent rendering (elapsed + spinner) to keep the snapshot stable.
         w.is_paused = true;

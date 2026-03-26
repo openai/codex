@@ -1,4 +1,4 @@
-use codex_core::features::Feature;
+use codex_features::Feature;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -23,7 +23,14 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
             .features
             .enable(Feature::ChildAgentsMd)
             .expect("test config should allow feature update");
-        std::fs::write(config.cwd.join("AGENTS.md"), "be nice").expect("write AGENTS.md");
+        std::fs::write(
+            config
+                .cwd
+                .join("AGENTS.md")
+                .expect("absolute AGENTS.md path"),
+            "be nice",
+        )
+        .expect("write AGENTS.md");
     });
     let test = builder.build(&server).await.expect("build test codex");
 

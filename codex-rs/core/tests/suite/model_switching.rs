@@ -1,8 +1,8 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::types::Personality;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -32,7 +32,33 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::path::Path;
+use std::path::PathBuf;
 use wiremock::MockServer;
+
+fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
+    fn sanitize(value: &str) -> String {
+        let mut sanitized: String = value
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            sanitized = "generated_image".to_string();
+        }
+        sanitized
+    }
+
+    codex_home
+        .join("generated_images")
+        .join(sanitize(session_id))
+        .join(format!("{}.png", sanitize(call_id)))
+}
 
 fn test_model_info(
     slug: &str,
@@ -53,8 +79,8 @@ fn test_model_info(
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities,
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
@@ -100,6 +126,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -115,6 +142,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some(next_model.to_string()),
@@ -135,6 +163,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -194,6 +223,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -209,6 +239,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some(next_model.to_string()),
@@ -229,6 +260,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -370,6 +402,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -390,6 +423,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: text_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -477,6 +511,12 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
+    let saved_path = image_generation_artifact_path(
+        test.codex_home_path(),
+        &test.session_configured.session_id.to_string(),
+        "ig_123",
+    );
+    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -491,6 +531,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -511,6 +552,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -526,16 +568,36 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     assert_eq!(requests.len(), 2, "expected two model requests");
 
     let second_request = requests.last().expect("expected second request");
+    let image_generation_calls = second_request.inputs_of_type("image_generation_call");
     assert_eq!(
-        second_request.message_input_image_urls("user"),
-        vec!["data:image/png;base64,Zm9v".to_string()]
+        image_generation_calls.len(),
+        1,
+        "expected generated image history to be replayed as an image_generation_call"
     );
+    assert_eq!(
+        image_generation_calls[0]["id"].as_str(),
+        Some("ig_123"),
+        "expected the original image generation call id to be preserved"
+    );
+    assert_eq!(
+        image_generation_calls[0]["result"].as_str(),
+        Some("Zm9v"),
+        "expected the original generated image payload to be preserved"
+    );
+    assert!(
+        second_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "second request should include the saved-path note in model-visible history"
+    );
+    let _ = std::fs::remove_file(&saved_path);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_change_from_generated_image_to_text_strips_prior_generated_image_content()
+async fn model_change_from_generated_image_to_text_preserves_prior_generated_image_call()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -581,6 +643,12 @@ async fn model_change_from_generated_image_to_text_strips_prior_generated_image_
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
+    let saved_path = image_generation_artifact_path(
+        test.codex_home_path(),
+        &test.session_configured.session_id.to_string(),
+        "ig_123",
+    );
+    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -595,6 +663,7 @@ async fn model_change_from_generated_image_to_text_strips_prior_generated_image_
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -615,6 +684,7 @@ async fn model_change_from_generated_image_to_text_strips_prior_generated_image_
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: text_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -630,17 +700,169 @@ async fn model_change_from_generated_image_to_text_strips_prior_generated_image_
     assert_eq!(requests.len(), 2, "expected two model requests");
 
     let second_request = requests.last().expect("expected second request");
+    let image_generation_calls = second_request.inputs_of_type("image_generation_call");
     assert!(
         second_request.message_input_image_urls("user").is_empty(),
-        "second request should strip generated image content for text-only models"
+        "second request should not rewrite generated images into message input images"
+    );
+    assert!(
+        image_generation_calls.len() == 1,
+        "second request should preserve the generated image call for text-only models"
+    );
+    assert_eq!(
+        image_generation_calls[0]["id"].as_str(),
+        Some("ig_123"),
+        "second request should preserve the original generated image call id"
+    );
+    assert_eq!(
+        image_generation_calls[0]["result"].as_str(),
+        Some(""),
+        "second request should strip generated image bytes for text-only models"
     );
     assert!(
         second_request
             .message_input_texts("user")
             .iter()
-            .any(|text| text == "image content omitted because you do not support image input"),
-        "second request should include the image-omitted placeholder text"
+            .all(|text| text != "image content omitted because you do not support image input"),
+        "second request should not inject the image-omitted placeholder text"
     );
+    assert!(
+        second_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "second request should include the saved-path note in model-visible history"
+    );
+    let _ = std::fs::remove_file(&saved_path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_rollback_after_generated_image_drops_entire_image_turn_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let image_model_slug = "test-image-model";
+    let image_model = test_model_info(
+        image_model_slug,
+        "Test Image Model",
+        "supports image input",
+        default_input_modalities(),
+    );
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![image_model],
+        },
+    )
+    .await;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_image_generation_call("ig_rollback", "completed", "lobster", "Zm9v"),
+                ev_completed_with_tokens("resp-1", 10),
+            ]),
+            sse_completed("resp-2"),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model = Some(image_model_slug.to_string());
+        });
+    let test = builder.build(&server).await?;
+    let saved_path = image_generation_artifact_path(
+        test.codex_home_path(),
+        &test.session_configured.session_id.to_string(),
+        "ig_rollback",
+    );
+    let _ = std::fs::remove_file(&saved_path);
+    let models_manager = test.thread_manager.get_models_manager();
+    let _ = models_manager
+        .list_models(RefreshStrategy::OnlineIfUncached)
+        .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "generate a lobster".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: image_model_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::ThreadRollback { num_turns: 1 })
+        .await?;
+    wait_for_event(&test.codex, |ev| {
+        matches!(ev, EventMsg::ThreadRolledBack(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "after rollback".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: image_model_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let second_request = requests.last().expect("expected second request");
+    assert!(
+        !second_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "generate a lobster"),
+        "rollback should remove the rolled-back image-generation user turn"
+    );
+    assert!(
+        !second_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "rollback should remove the generated-image save note with the rolled-back turn"
+    );
+    assert!(
+        second_request
+            .inputs_of_type("image_generation_call")
+            .is_empty(),
+        "rollback should remove the generated image call with the rolled-back turn"
+    );
+    let _ = std::fs::remove_file(&saved_path);
 
     Ok(())
 }
@@ -673,8 +895,8 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
@@ -759,6 +981,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: large_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -796,6 +1019,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some(smaller_model_slug.to_string()),
@@ -816,6 +1040,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: smaller_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
