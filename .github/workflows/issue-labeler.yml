@@ -17,10 +17,10 @@ jobs:
     outputs:
       codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - id: codex
-        uses: openai/codex-action@main
+        uses: openai/codex-action@c25d10f3f498316d4b2496cc4c6dd58057a7b031 # main
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
