@@ -81,7 +81,6 @@ members = [
     "terminal-detection",
     "codex-experimental-api-macros",
     "test-macros",
-    "package-manager",
     "plugin",
 ]
 resolver = "2"
@@ -102,7 +101,6 @@ codex-ansi-escape = { path = "ansi-escape" }
 codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
 codex-code-mode = { path = "code-mode" }
-codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
@@ -395,7 +393,6 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
-    "codex-package-manager",
     "codex-utils-readiness",
     "codex-utils-template",
     "codex-v8-poc",
