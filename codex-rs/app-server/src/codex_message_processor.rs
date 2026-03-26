@@ -191,7 +191,7 @@ use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
-use codex_core::ThreadInitializeInput;
+use codex_core::ThreadInitializedInput;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::AuthMode as CoreAuthMode;
@@ -7893,8 +7893,8 @@ fn thread_initialize_input(
     thread: &Thread,
     model: String,
     initialization_mode: InitializationMode,
-) -> ThreadInitializeInput {
-    ThreadInitializeInput {
+) -> ThreadInitializedInput {
+    ThreadInitializedInput {
         connection_id: connection_id.0,
         thread_id: thread.id.clone(),
         model,
