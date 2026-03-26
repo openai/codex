@@ -9,6 +9,7 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use pretty_assertions::assert_eq;
@@ -47,7 +48,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     let session = context
         .backend
         .start(ExecParams {
-            process_id: "proc-1".to_string(),
+            process_id: ProcessId::from("proc-1"),
             argv: vec!["true".to_string()],
             cwd: std::env::current_dir()?,
             env: Default::default(),
@@ -119,7 +120,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
     let session = context
         .backend
         .start(ExecParams {
-            process_id: process_id.clone(),
+            process_id: process_id.clone().into(),
             argv: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
@@ -148,7 +149,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     let session = context
         .backend
         .start(ExecParams {
-            process_id: process_id.clone(),
+            process_id: process_id.clone().into(),
             argv: vec![
                 "/usr/bin/python3".to_string(),
                 "-c".to_string(),
@@ -184,7 +185,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
     let session = context
         .backend
         .start(ExecParams {
-            process_id: "proc-queued".to_string(),
+            process_id: ProcessId::from("proc-queued"),
             argv: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
@@ -214,7 +215,7 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
     let session = context
         .backend
         .start(ExecParams {
-            process_id: "proc-disconnect".to_string(),
+            process_id: ProcessId::from("proc-disconnect"),
             argv: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),

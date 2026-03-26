@@ -30,6 +30,15 @@ impl ToolHandler for Handler {
             .agent_control
             .get_agent_metadata(agent_id)
             .unwrap_or_default();
+        if receiver_agent
+            .agent_path
+            .as_ref()
+            .is_some_and(AgentPath::is_root)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "root is not a spawned agent".to_string(),
+            ));
+        }
         session
             .send_event(
                 &turn,

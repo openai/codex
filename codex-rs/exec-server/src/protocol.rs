@@ -5,6 +5,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::ProcessId;
+
 pub const INITIALIZE_METHOD: &str = "initialize";
 pub const INITIALIZED_METHOD: &str = "initialized";
 pub const EXEC_METHOD: &str = "process/start";
@@ -53,7 +55,7 @@ pub struct InitializeResponse {}
 pub struct ExecParams {
     /// Client-chosen logical process handle scoped to this connection/session.
     /// This is a protocol key, not an OS pid.
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
@@ -64,13 +66,13 @@ pub struct ExecParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
-    pub process_id: String,
+    pub process_id: ProcessId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadParams {
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub after_seq: Option<u64>,
     pub max_bytes: Option<usize>,
     pub wait_ms: Option<u64>,
@@ -98,7 +100,7 @@ pub struct ReadResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteParams {
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub chunk: ByteChunk,
 }
 
@@ -120,7 +122,7 @@ pub struct WriteResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminateParams {
-    pub process_id: String,
+    pub process_id: ProcessId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,7 +142,7 @@ pub enum ExecOutputStream {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecOutputDeltaNotification {
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub seq: u64,
     pub stream: ExecOutputStream,
     pub chunk: ByteChunk,
@@ -149,7 +151,7 @@ pub struct ExecOutputDeltaNotification {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecExitedNotification {
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub seq: u64,
     pub exit_code: i32,
 }
@@ -157,7 +159,7 @@ pub struct ExecExitedNotification {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecClosedNotification {
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub seq: u64,
 }
 

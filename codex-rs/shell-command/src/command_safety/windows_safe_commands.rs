@@ -1,3 +1,4 @@
+use crate::command_safety::is_dangerous_command::git_global_option_requires_prompt;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
@@ -305,33 +306,17 @@ fn is_safe_ripgrep(words: &[String]) -> bool {
 fn is_safe_git_command(words: &[String]) -> bool {
     const SAFE_SUBCOMMANDS: &[&str] = &["status", "log", "show", "diff", "cat-file"];
 
-    let mut iter = words.iter().skip(1);
-    while let Some(arg) = iter.next() {
+    for arg in words.iter().skip(1) {
         let arg_lc = arg.to_ascii_lowercase();
 
         if arg.starts_with('-') {
-            if arg.eq_ignore_ascii_case("-c") || arg.eq_ignore_ascii_case("--config") {
-                if iter.next().is_none() {
-                    // Examples rejected here: "pwsh -Command 'git -c'" and "pwsh -Command 'git --config'".
-                    return false;
-                }
-                continue;
-            }
-
-            if arg_lc.starts_with("-c=")
+            if git_global_option_requires_prompt(&arg_lc)
+                || arg.eq_ignore_ascii_case("--config")
                 || arg_lc.starts_with("--config=")
-                || arg_lc.starts_with("--git-dir=")
-                || arg_lc.starts_with("--work-tree=")
             {
-                continue;
-            }
-
-            if arg.eq_ignore_ascii_case("--git-dir") || arg.eq_ignore_ascii_case("--work-tree") {
-                if iter.next().is_none() {
-                    // Examples rejected here: "pwsh -Command 'git --git-dir'" and "pwsh -Command 'git --work-tree'".
-                    return false;
-                }
-                continue;
+                // Examples rejected here: "pwsh -Command 'git --git-dir=.evil-git diff'" and
+                // "pwsh -Command 'git -c core.pager=cat show HEAD:foo.rs'".
+                return false;
             }
 
             continue;
@@ -437,14 +422,6 @@ mod tests {
 
         assert!(is_safe_command_windows(&[
             pwsh.clone(),
-            "-NoLogo".to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            "git -c core.pager=cat show HEAD:foo.rs".to_string()
-        ]));
-
-        assert!(is_safe_command_windows(&[
-            pwsh.clone(),
             "-Command".to_string(),
             "-git cat-file -p HEAD:foo.rs".to_string()
         ]));
@@ -460,6 +437,41 @@ mod tests {
             "-Command".to_string(),
             "Get-Item foo.rs | Select-Object Length".to_string()
         ]));
+    }
+
+    #[test]
+    fn rejects_git_global_override_options() {
+        let Some(pwsh) = try_find_pwsh_executable_blocking() else {
+            return;
+        };
+
+        let pwsh: String = pwsh.as_path().to_str().unwrap().into();
+        for script in [
+            "git -c core.pager=cat show HEAD:foo.rs",
+            "git --config-env core.pager=PAGER show HEAD:foo.rs",
+            "git --config-env=core.pager=PAGER show HEAD:foo.rs",
+            "git --git-dir .evil-git diff HEAD~1..HEAD",
+            "git --git-dir=.evil-git diff HEAD~1..HEAD",
+            "git --work-tree . status",
+            "git --work-tree=. status",
+            "git --exec-path .git/helpers show HEAD:foo.rs",
+            "git --exec-path=.git/helpers show HEAD:foo.rs",
+            "git --namespace attacker show HEAD:foo.rs",
+            "git --namespace=attacker show HEAD:foo.rs",
+            "git --super-prefix attacker/ show HEAD:foo.rs",
+            "git --super-prefix=attacker/ show HEAD:foo.rs",
+        ] {
+            assert!(
+                !is_safe_command_windows(&[
+                    pwsh.clone(),
+                    "-NoLogo".to_string(),
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    script.to_string(),
+                ]),
+                "expected {script:?} to require approval due to unsafe git global option",
+            );
+        }
     }
 
     #[test]

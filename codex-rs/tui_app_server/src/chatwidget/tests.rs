@@ -1946,6 +1946,7 @@ async fn helpers_are_available_and_do_not_panic() {
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
     let mut w = ChatWidget::new_with_app_event(init);
@@ -2048,6 +2049,7 @@ async fn make_chatwidget_manual(
         stream_controller: None,
         plan_stream_controller: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+        terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_copyable_output: None,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
@@ -2099,6 +2101,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -2110,6 +2113,11 @@ async fn make_chatwidget_manual(
         current_cwd: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        last_terminal_title: None,
+        terminal_title_setup_original_items: None,
+        terminal_title_animation_origin: Instant::now(),
+        status_line_project_root_name_cache: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -6848,6 +6856,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
@@ -6892,6 +6901,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 

@@ -1846,7 +1846,6 @@ dependencies = [
  "codex-shell-escalation",
  "codex-state",
  "codex-terminal-detection",
- "codex-test-macros",
  "codex-utils-absolute-path",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
@@ -2603,15 +2602,6 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "tracing",
-]
-
-[[package]]
-name = "codex-test-macros"
-version = "0.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
 ]
 
 [[package]]

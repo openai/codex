@@ -80,7 +80,6 @@ members = [
     "state",
     "terminal-detection",
     "codex-experimental-api-macros",
-    "test-macros",
     "plugin",
 ]
 resolver = "2"
@@ -148,7 +147,6 @@ codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
-codex-test-macros = { path = "test-macros" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }

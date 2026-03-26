@@ -1991,28 +1991,19 @@ approval_mode = "approve"
 }
 
 #[test]
-fn mcp_servers_toml_parses_legacy_flattened_per_tool_approval_overrides() {
+fn mcp_servers_toml_ignores_unknown_server_fields() {
     let config = toml::from_str::<ConfigToml>(
         r#"
 [mcp_servers.docs]
 command = "docs-server"
-
-[mcp_servers.docs.search]
-approval_mode = "approve"
+trust_level = "trusted"
 "#,
     )
-    .expect("legacy TOML deserialization should succeed");
-    let tool = config
-        .mcp_servers
-        .get("docs")
-        .and_then(|server| server.tools.get("search"))
-        .expect("docs/search tool config exists");
+    .expect("unknown MCP server fields should be ignored");
 
     assert_eq!(
-        tool,
-        &McpServerToolConfig {
-            approval_mode: Some(AppToolApproval::Approve),
-        }
+        config.mcp_servers.get("docs"),
+        Some(&stdio_mcp("docs-server"))
     );
 }
 

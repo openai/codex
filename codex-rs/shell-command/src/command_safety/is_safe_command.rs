@@ -4,6 +4,7 @@ use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
 // may appear before it (e.g., `-C`, `-c`, `--git-dir`).
 // Implemented in `is_dangerous_command` and shared here.
 use crate::command_safety::is_dangerous_command::find_git_subcommand;
+use crate::command_safety::is_dangerous_command::git_global_option_requires_prompt;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
@@ -134,10 +135,10 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
 
         // Git
         Some("git") => {
-            // Global config overrides like `-c core.pager=...` can force git
-            // to execute arbitrary external commands. With no sandboxing, we
-            // should always prompt in those cases.
-            if git_has_config_override_global_option(command) {
+            // Global options that redirect config, repository, or helper
+            // lookup can make otherwise read-only git commands execute
+            // attacker-controlled code, so they must never be auto-approved.
+            if git_has_unsafe_global_option(command) {
                 return false;
             }
 
@@ -208,12 +209,12 @@ fn git_branch_is_read_only(branch_args: &[String]) -> bool {
     saw_read_only_flag
 }
 
-fn git_has_config_override_global_option(command: &[String]) -> bool {
-    command.iter().map(String::as_str).any(|arg| {
-        matches!(arg, "-c" | "--config-env")
-            || (arg.starts_with("-c") && arg.len() > 2)
-            || arg.starts_with("--config-env=")
-    })
+fn git_has_unsafe_global_option(command: &[String]) -> bool {
+    command
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .any(git_global_option_requires_prompt)
 }
 
 fn git_subcommand_args_are_read_only(args: &[String]) -> bool {
@@ -356,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn git_output_and_config_override_flags_are_not_safe() {
+    fn git_output_flags_are_not_safe() {
         assert!(!is_known_safe_command(&vec_str(&[
             "git",
             "log",
@@ -376,6 +377,10 @@ mod tests {
             "--output=/tmp/git-show-out-test",
             "HEAD",
         ])));
+    }
+
+    #[test]
+    fn git_global_override_flags_are_not_safe() {
         assert!(!is_known_safe_command(&vec_str(&[
             "git",
             "-c",
@@ -388,6 +393,32 @@ mod tests {
             "git",
             "-ccore.pager=cat",
             "status",
+        ])));
+
+        for args in [
+            vec_str(&["git", "--config-env", "core.pager=PAGER", "show", "HEAD"]),
+            vec_str(&["git", "--config-env=core.pager=PAGER", "show", "HEAD"]),
+            vec_str(&["git", "--git-dir", ".evil-git", "diff", "HEAD~1..HEAD"]),
+            vec_str(&["git", "--git-dir=.evil-git", "diff", "HEAD~1..HEAD"]),
+            vec_str(&["git", "--work-tree", ".", "status"]),
+            vec_str(&["git", "--work-tree=.", "status"]),
+            vec_str(&["git", "--exec-path", ".git/helpers", "show", "HEAD"]),
+            vec_str(&["git", "--exec-path=.git/helpers", "show", "HEAD"]),
+            vec_str(&["git", "--namespace", "attacker", "show", "HEAD"]),
+            vec_str(&["git", "--namespace=attacker", "show", "HEAD"]),
+            vec_str(&["git", "--super-prefix", "attacker/", "show", "HEAD"]),
+            vec_str(&["git", "--super-prefix=attacker/", "show", "HEAD"]),
+        ] {
+            assert!(
+                !is_known_safe_command(&args),
+                "expected {args:?} to require approval due to unsafe git global option",
+            );
+        }
+
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git --git-dir=.evil-git diff HEAD~1..HEAD",
         ])));
     }
 
