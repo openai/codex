@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use crate::mcp::RequestId;
 use crate::models::MacOsSeatbeltProfileExtensions;
 use crate::models::PermissionProfile;
@@ -14,6 +11,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,13 +106,6 @@ pub struct NetworkPolicyAmendment {
     pub action: NetworkPolicyRuleAction,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub struct ExecApprovalRequestSkillMetadata {
-    pub path_to_skills_md: PathBuf,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct GuardianAssessmentEvent {
     /// Stable identifier for this guardian review lifecycle.
@@ -181,10 +173,6 @@ pub struct ExecApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub additional_permissions: Option<PermissionProfile>,
-    /// Optional skill metadata when the approval was triggered by a skill script.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub skill_metadata: Option<ExecApprovalRequestSkillMetadata>,
     /// Ordered list of decisions the client may present for this prompt.
     ///
     /// When absent, clients should derive the legacy default set from the

@@ -426,7 +426,6 @@ impl CoreShellActionProvider {
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,
-                        /*skill_metadata*/ None,
                         Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
                     )
                     .await

@@ -118,7 +118,7 @@ pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
-
+pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
@@ -144,60 +144,11 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
-#[cfg(target_os = "linux")]
-const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     OPENAI_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
-
-#[cfg(target_os = "linux")]
-pub fn system_bwrap_warning() -> Option<String> {
-    system_bwrap_warning_for_lookup(find_system_bwrap_in_path())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn system_bwrap_warning() -> Option<String> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn system_bwrap_warning_for_lookup(system_bwrap_path: Option<PathBuf>) -> Option<String> {
-    match system_bwrap_path {
-        Some(_) => None,
-        None => Some(
-            "Codex could not find system bubblewrap on PATH. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-                .to_string(),
-        ),
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub fn find_system_bwrap_in_path() -> Option<PathBuf> {
-    let search_path = std::env::var_os("PATH")?;
-    let cwd = std::env::current_dir().ok()?;
-    find_system_bwrap_in_search_paths(std::iter::once(PathBuf::from(search_path)), &cwd)
-}
-
-#[cfg(target_os = "linux")]
-fn find_system_bwrap_in_search_paths(
-    search_paths: impl IntoIterator<Item = PathBuf>,
-    cwd: &Path,
-) -> Option<PathBuf> {
-    let search_path = std::env::join_paths(search_paths).ok()?;
-    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    which::which_in_all(SYSTEM_BWRAP_PROGRAM, Some(search_path), &cwd)
-        .ok()?
-        .find_map(|path| {
-            let path = std::fs::canonicalize(path).ok()?;
-            if path.starts_with(&cwd) {
-                None
-            } else {
-                Some(path)
-            }
-        })
-}
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -212,6 +163,7 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
         Some(resolved_cwd.join(path))
     }
 }
+
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
     let codex_home = tempfile::tempdir().expect("create temp dir");

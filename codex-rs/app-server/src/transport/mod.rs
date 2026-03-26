@@ -379,7 +379,6 @@ pub(crate) async fn route_outgoing_envelope(
 mod tests {
     use super::*;
     use crate::error_code::OVERLOADED_ERROR_CODE;
-    use codex_app_server_protocol::CommandExecutionRequestApprovalSkillMetadata;
     use codex_app_server_protocol::ConfigWarningNotification;
     use codex_app_server_protocol::ServerNotification;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -761,7 +760,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn command_execution_request_approval_strips_experimental_fields_without_capability() {
+    async fn command_execution_request_approval_strips_additional_permissions_without_capability() {
         let connection_id = ConnectionId(8);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
 
@@ -805,9 +804,6 @@ mod tests {
                                 macos: None,
                             },
                         ),
-                        skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
-                            path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
-                        }),
                         proposed_execpolicy_amendment: None,
                         proposed_network_policy_amendments: None,
                         available_decisions: None,
@@ -824,11 +820,10 @@ mod tests {
             .expect("request should be delivered to the connection");
         let json = serde_json::to_value(message.message).expect("request should serialize");
         assert_eq!(json["params"].get("additionalPermissions"), None);
-        assert_eq!(json["params"].get("skillMetadata"), None);
     }
 
     #[tokio::test]
-    async fn command_execution_request_approval_keeps_experimental_fields_with_capability() {
+    async fn command_execution_request_approval_keeps_additional_permissions_with_capability() {
         let connection_id = ConnectionId(9);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
 
@@ -872,9 +867,6 @@ mod tests {
                                 macos: None,
                             },
                         ),
-                        skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
-                            path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
-                        }),
                         proposed_execpolicy_amendment: None,
                         proposed_network_policy_amendments: None,
                         available_decisions: None,
@@ -897,15 +889,9 @@ mod tests {
                 "network": null,
                 "fileSystem": {
                     "read": [allowed_path],
-                    "write": null,
+                "write": null,
                 },
                 "macos": null,
-            })
-        );
-        assert_eq!(
-            json["params"]["skillMetadata"],
-            json!({
-                "pathToSkillsMd": "/tmp/SKILLS.md",
             })
         );
     }
