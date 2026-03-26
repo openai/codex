@@ -1,5 +1,4 @@
 use super::ShellRequest;
-use crate::SkillMetadata;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
@@ -13,8 +12,6 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
-use crate::skills_load_input_from_config;
-use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -31,7 +28,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -74,9 +70,6 @@ const REJECT_SANDBOX_APPROVAL_REASON: &str =
     "approval required by policy, but AskForApproval::Granular.sandbox_approval is false";
 const REJECT_RULES_APPROVAL_REASON: &str =
     "approval required by policy rule, but AskForApproval::Granular.rules is false";
-const REJECT_SKILL_APPROVAL_REASON: &str =
-    "approval required by skill, but AskForApproval::Granular.skill_approval is false";
-
 fn approval_sandbox_permissions(
     sandbox_permissions: SandboxPermissions,
     additional_permissions_preapproved: bool,
@@ -327,9 +320,6 @@ struct CoreShellActionProvider {
 
 #[allow(clippy::large_enum_variant)]
 enum DecisionSource {
-    SkillScript {
-        skill: SkillMetadata,
-    },
     PrefixRule,
     /// Often, this is `is_safe_command()`.
     UnmatchedCommandFallback,
@@ -341,11 +331,6 @@ fn execve_prompt_is_rejected_by_policy(
 ) -> Option<&'static str> {
     match (approval_policy, decision_source) {
         (AskForApproval::Never, _) => Some(PROMPT_CONFLICT_REASON),
-        (AskForApproval::Granular(granular_config), DecisionSource::SkillScript { .. })
-            if !granular_config.allows_skill_approval() =>
-        {
-            Some(REJECT_SKILL_APPROVAL_REASON)
-        }
         (AskForApproval::Granular(granular_config), DecisionSource::PrefixRule)
             if !granular_config.allows_rules_approval() =>
         {
@@ -397,17 +382,6 @@ impl CoreShellActionProvider {
         }
     }
 
-    fn skill_escalation_execution(skill: &SkillMetadata) -> EscalationExecution {
-        let permission_profile = skill.permission_profile.clone().unwrap_or_default();
-        if permission_profile.is_empty() {
-            EscalationExecution::TurnDefault
-        } else {
-            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
-                permission_profile,
-            ))
-        }
-    }
-
     async fn prompt(
         &self,
         program: &AbsolutePathBuf,
@@ -415,7 +389,6 @@ impl CoreShellActionProvider {
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
         additional_permissions: Option<PermissionProfile>,
-        decision_source: &DecisionSource,
     ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
@@ -442,28 +415,6 @@ impl CoreShellActionProvider {
                     )
                     .await;
                 }
-                let available_decisions = vec![
-                    Some(ReviewDecision::Approved),
-                    // Currently, ApprovedForSession is only honored for skills,
-                    // so only offer it for skill script approvals.
-                    if matches!(decision_source, DecisionSource::SkillScript { .. }) {
-                        Some(ReviewDecision::ApprovedForSession)
-                    } else {
-                        None
-                    },
-                    Some(ReviewDecision::Abort),
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
-                let skill_metadata = match decision_source {
-                    DecisionSource::SkillScript { skill } => {
-                        Some(ExecApprovalRequestSkillMetadata {
-                            path_to_skills_md: skill.path_to_skills_md.clone(),
-                        })
-                    }
-                    DecisionSource::PrefixRule | DecisionSource::UnmatchedCommandFallback => None,
-                };
                 session
                     .request_command_approval(
                         &turn,
@@ -475,46 +426,12 @@ impl CoreShellActionProvider {
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,
-                        skill_metadata,
-                        Some(available_decisions),
+                        /*skill_metadata*/ None,
+                        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
                     )
                     .await
             })
             .await)
-    }
-
-    /// Because we should be intercepting execve(2) calls, `program` should be
-    /// an absolute path. The idea is that we check to see whether it matches
-    /// any skills.
-    async fn find_skill(&self, program: &AbsolutePathBuf) -> Option<SkillMetadata> {
-        let force_reload = false;
-        let turn_config = self.turn.config.as_ref();
-        let plugin_outcome = self
-            .session
-            .services
-            .plugins_manager
-            .plugins_for_config(turn_config);
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let skills_input = skills_load_input_from_config(turn_config, effective_skill_roots);
-        let skills_outcome = self
-            .session
-            .services
-            .skills_manager
-            .skills_for_cwd(&skills_input, force_reload)
-            .await;
-
-        let program_path = program.as_path();
-        for skill in skills_outcome.skills {
-            // We intentionally ignore "enabled" status here for now.
-            let Some(skill_root) = skill.path_to_skills_md.parent() else {
-                continue;
-            };
-            if program_path.starts_with(skill_root.join("scripts")) {
-                return Some(skill);
-            }
-        }
-
-        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -540,45 +457,12 @@ impl CoreShellActionProvider {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
                     match self
-                        .prompt(
-                            program,
-                            argv,
-                            workdir,
-                            &self.stopwatch,
-                            prompt_permissions,
-                            &decision_source,
-                        )
+                        .prompt(program, argv, workdir, &self.stopwatch, prompt_permissions)
                         .await?
                     {
                         ReviewDecision::Approved
+                        | ReviewDecision::ApprovedForSession
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-                            if needs_escalation {
-                                EscalationDecision::escalate(escalation_execution.clone())
-                            } else {
-                                EscalationDecision::run()
-                            }
-                        }
-                        ReviewDecision::ApprovedForSession => {
-                            // Currently, we only add session approvals for
-                            // skill scripts because we are storing only the
-                            // `program` whereas prefix rules may be restricted by a longer prefix.
-                            if let DecisionSource::SkillScript { skill } = decision_source {
-                                tracing::debug!(
-                                    "Adding session approval for {program:?} due to user approval of skill script {skill:?}"
-                                );
-                                self.session
-                                    .services
-                                    .execve_session_approvals
-                                    .write()
-                                    .await
-                                    .insert(
-                                        program.clone(),
-                                        ExecveSessionApproval {
-                                            skill: Some(skill.clone()),
-                                        },
-                                    );
-                            }
-
                             if needs_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())
                             } else {
@@ -641,69 +525,6 @@ impl EscalationPolicy for CoreShellActionProvider {
             "Determining escalation action for command {program:?} with args {argv:?} in {workdir:?}"
         );
 
-        // Check to see whether `program` has an existing entry in
-        // `execve_session_approvals`. If so, we can skip policy checks and user
-        // prompts and go straight to allowing execution.
-        let approval = {
-            self.session
-                .services
-                .execve_session_approvals
-                .read()
-                .await
-                .get(program)
-                .cloned()
-        };
-        if let Some(approval) = approval {
-            tracing::debug!(
-                "Found session approval for {program:?}, allowing execution without further checks"
-            );
-            let execution = approval
-                .skill
-                .as_ref()
-                .map(Self::skill_escalation_execution)
-                .unwrap_or(EscalationExecution::TurnDefault);
-
-            return Ok(EscalationDecision::escalate(execution));
-        }
-
-        // In the usual case, the execve wrapper reports the command being
-        // executed in `program`, so a direct skill lookup is sufficient.
-        if let Some(skill) = self.find_skill(program).await {
-            // For now, scripts that look like they belong to skills bypass
-            // general exec policy evaluation. Permissionless skills inherit the
-            // turn sandbox directly; skills with declared permissions still
-            // prompt here before applying their permission profile.
-            let prompt_permissions = skill.permission_profile.clone();
-            if prompt_permissions
-                .as_ref()
-                .is_none_or(PermissionProfile::is_empty)
-            {
-                tracing::debug!(
-                    "Matched {program:?} to permissionless skill {skill:?}, inheriting turn sandbox"
-                );
-                return Ok(EscalationDecision::escalate(
-                    EscalationExecution::TurnDefault,
-                ));
-            }
-            tracing::debug!("Matched {program:?} to skill {skill:?}, prompting for approval");
-            let needs_escalation = true;
-            let decision_source = DecisionSource::SkillScript {
-                skill: skill.clone(),
-            };
-            return self
-                .process_decision(
-                    Decision::Prompt,
-                    needs_escalation,
-                    program,
-                    argv,
-                    workdir,
-                    prompt_permissions,
-                    Self::skill_escalation_execution(&skill),
-                    decision_source,
-                )
-                .await;
-        }
-
         let evaluation = {
             let policy = self.policy.read().await;
             evaluate_intercepted_exec_policy(
@@ -746,7 +567,6 @@ impl EscalationPolicy for CoreShellActionProvider {
                     .macos_seatbelt_profile_extensions
                     .as_ref(),
             ),
-            DecisionSource::SkillScript { .. } => unreachable!("handled above"),
         };
         self.process_decision(
             evaluation.decision,
