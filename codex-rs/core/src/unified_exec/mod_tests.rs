@@ -483,6 +483,16 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
         )
         .await?;
 
+    if !process.has_exited() {
+        let exit_signal = process.cancellation_token();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), exit_signal.cancelled())
+                .await
+                .is_ok(),
+            "process did not report exit within timeout"
+        );
+    }
+
     assert!(process.has_exited());
     assert_eq!(process.exit_code(), Some(17));
     Ok(())
