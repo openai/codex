@@ -19,6 +19,11 @@ const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
+    /// Stable path to the current Codex executable for child re-execs.
+    ///
+    /// Prefer this over [`std::env::current_exe()`] in code that may run under
+    /// a test harness, where `current_exe()` can point at the harness binary
+    /// instead of the real Codex CLI.
     pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,

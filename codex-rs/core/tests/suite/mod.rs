@@ -22,7 +22,7 @@ const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 // based on the arg0.
 // NOTE: this doesn't work on ARM
 #[ctor]
-pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = unsafe {
+pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = {
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();
     let exe_name = Path::new(&argv0)
@@ -30,6 +30,8 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = unsafe {
         .and_then(|name| name.to_str())
         .unwrap_or("");
     let argv1 = args.next().unwrap_or_default();
+    // Helper re-execs inherit this ctor too, but they may run inside a sandbox
+    // where creating another CODEX_HOME tempdir under /tmp is not allowed.
     if exe_name == CODEX_LINUX_SANDBOX_ARG0 || argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
         return None;
     }
