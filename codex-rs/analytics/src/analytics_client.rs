@@ -40,6 +40,15 @@ pub struct ThreadInitializeInput {
     pub initialization_mode: InitializationMode,
 }
 
+#[derive(Clone)]
+pub struct SubagentSessionStartedInput {
+    pub thread_id: String,
+    pub product_client_id: String,
+    pub model: String,
+    pub ephemeral: bool,
+    pub subagent_source: SubAgentSource,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InitializationMode {
@@ -104,6 +113,9 @@ pub enum CustomAnalyticsFact {
     // This remains custom on this branch because app-server-protocol does not
     // yet expose a generic client response enum we can reduce over directly.
     ThreadInitialized(ThreadInitializeInput),
+    // Subagent thread/session starts are not fully represented on the
+    // app-server request/response surface, so core emits this custom fact.
+    SubagentSessionStarted(SubagentSessionStartedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -259,6 +271,12 @@ impl AnalyticsEventsClient {
     pub fn track_thread_initialized(&self, input: ThreadInitializeInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::ThreadInitialized(input),
+        ));
+    }
+
+    pub fn track_subagent_session_started(&self, input: SubagentSessionStartedInput) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::SubagentSessionStarted(input),
         ));
     }
 
@@ -470,6 +488,9 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::ThreadInitialized(input) => {
                     self.ingest_thread_initialized(input, out);
                 }
+                CustomAnalyticsFact::SubagentSessionStarted(input) => {
+                    self.ingest_subagent_session_started(input, out);
+                }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
                 }
@@ -508,6 +529,16 @@ impl AnalyticsReducer {
         };
         out.push(TrackEventRequest::CodexThreadInitialized(
             codex_thread_initialized_event_request(client_state.product_client_id.clone(), input),
+        ));
+    }
+
+    fn ingest_subagent_session_started(
+        &mut self,
+        input: SubagentSessionStartedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::CodexThreadInitialized(
+            codex_subagent_session_started_event_request(input),
         ));
     }
 
@@ -648,10 +679,29 @@ fn codex_thread_initialized_event_params(
         ephemeral: input.ephemeral,
         session_source: session_source_name(&input.session_source),
         initialization_mode: input.initialization_mode,
-        subagent_source: session_source_subagent_source(&input.session_source)
-            .map(subagent_source_name),
-        parent_thread_id: session_source_parent_thread_id(&input.session_source),
+        subagent_source: None,
+        parent_thread_id: None,
         created_at: now_unix_timestamp_secs(),
+    }
+}
+
+fn codex_subagent_session_started_event_request(
+    input: SubagentSessionStartedInput,
+) -> CodexThreadInitializedEvent {
+    let event_params = CodexThreadInitializedEventParams {
+        thread_id: input.thread_id,
+        product_client_id: input.product_client_id,
+        model: input.model,
+        ephemeral: input.ephemeral,
+        session_source: Some("subagent"),
+        initialization_mode: InitializationMode::New,
+        subagent_source: Some(subagent_source_name(&input.subagent_source)),
+        parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
+        created_at: now_unix_timestamp_secs(),
+    };
+    CodexThreadInitializedEvent {
+        event_type: "codex_thread_initialized",
+        event_params,
     }
 }
 
@@ -693,33 +743,28 @@ fn codex_plugin_used_metadata(
 fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
     match session_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
-        SessionSource::SubAgent(_) => Some("subagent"),
-        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
+        SessionSource::SubAgent(_)
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
     }
 }
 
-fn subagent_source_name(subagent_source: SubAgentSource) -> String {
+fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
     match subagent_source {
         SubAgentSource::Review => "review".to_string(),
         SubAgentSource::Compact => "compact".to_string(),
         SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
         SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-        SubAgentSource::Other(other) => other,
+        SubAgentSource::Other(other) => other.clone(),
     }
 }
 
-fn session_source_subagent_source(session_source: &SessionSource) -> Option<SubAgentSource> {
-    match session_source {
-        SessionSource::SubAgent(subagent_source) => Some(subagent_source.clone()),
-        _ => None,
-    }
-}
-
-fn session_source_parent_thread_id(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
+    match subagent_source {
+        SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
-        }) => Some(parent_thread_id.to_string()),
+        } => Some(parent_thread_id.to_string()),
         _ => None,
     }
 }
