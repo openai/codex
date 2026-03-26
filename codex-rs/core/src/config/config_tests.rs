@@ -5741,14 +5741,20 @@ fn system_bwrap_warning_is_disabled_off_linux() {
 fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
-    // Bazel can mount the OS temp directory `noexec`, so prefer the current
-    // working directory for fake executables and fall back to the default temp
-    // dir outside that environment.
-    let temp_file = std::env::current_dir()
-        .ok()
+    // Bazel can mount the default temp directory `noexec`, so prefer Bazel's
+    // per-test temp dir when it is available. Fall back to the working
+    // directory, then the platform temp dir outside that environment.
+    let bazel_temp_dir = std::env::var_os("TEST_TMPDIR").map(PathBuf::from);
+    let temp_file = bazel_temp_dir
         .and_then(|dir| NamedTempFile::new_in(dir).ok())
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|dir| NamedTempFile::new_in(dir).ok())
+        })
         .unwrap_or_else(|| NamedTempFile::new().expect("temp file"));
     // Linux rejects exec-ing a file that is still open for writing.
     let path = temp_file.into_temp_path();

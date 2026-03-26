@@ -817,7 +817,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
 }
 
 #[test]
-fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
+fn drop_last_n_user_turns_does_not_count_session_prefix_user_messages_as_turns() {
     let items = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
@@ -861,20 +861,6 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         expected_prefix_and_first_turn
     );
 
-    let expected_prefix_only = vec![
-        user_input_text_msg("<environment_context>ctx</environment_context>"),
-        user_input_text_msg(
-            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
-        ),
-        user_input_text_msg(
-            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
-        ),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
-        user_input_text_msg(
-            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
-        ),
-    ];
-
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
@@ -893,7 +879,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         assistant_msg("turn 2 assistant"),
     ]);
     history.drop_last_n_user_turns(2);
-    assert_eq!(history.for_prompt(&modalities), expected_prefix_only);
+    assert_eq!(history.for_prompt(&modalities), Vec::<ResponseItem>::new());
 
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
@@ -913,7 +899,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         assistant_msg("turn 2 assistant"),
     ]);
     history.drop_last_n_user_turns(3);
-    assert_eq!(history.for_prompt(&modalities), expected_prefix_only);
+    assert_eq!(history.for_prompt(&modalities), Vec::<ResponseItem>::new());
 }
 
 #[test]
@@ -945,6 +931,36 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
             assistant_msg("turn 1 assistant"),
             developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
         ]
+    );
+    assert_eq!(
+        serde_json::to_value(history.reference_context_item())
+            .expect("serialize retained reference context item"),
+        serde_json::to_value(Some(reference_context_item))
+            .expect("serialize expected reference context item")
+    );
+}
+
+#[test]
+fn drop_last_n_user_turns_trims_context_updates_above_first_rolled_back_turn() {
+    let items = vec![
+        assistant_msg("session prefix item"),
+        developer_msg("<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
+        user_input_text_msg(
+            "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
+        ),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    let reference_context_item = reference_context_item();
+    history.set_reference_context_item(Some(reference_context_item.clone()));
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.clone().for_prompt(&modalities),
+        vec![assistant_msg("session prefix item")]
     );
     assert_eq!(
         serde_json::to_value(history.reference_context_item())

@@ -1422,7 +1422,8 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
     assert_eq!(rollback_event.num_turns, 99);
 
     let history = sess.clone_history().await;
-    assert_eq!(initial_context, history.raw_items());
+    assert!(history.raw_items().is_empty());
+    assert!(sess.reference_context_item().await.is_none());
 }
 
 #[tokio::test]
