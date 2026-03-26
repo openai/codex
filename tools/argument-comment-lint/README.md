@@ -110,12 +110,14 @@ host-qualified nightly filename to the plain `nightly-2025-09-18` channel when
 needed, and then invokes `cargo-dylint dylint --lib-path <that-library>` with
 the repo's default `DYLINT_RUSTFLAGS` and `CARGO_INCREMENTAL=0` settings.
 
-The checked-in `run-prebuilt-linter.sh` wrapper uses the fetched package
-contents directly so the current checked-in alpha artifact works the same way.
-It also makes sure the `rustup` shims stay ahead of any direct toolchain
-`cargo` binary on `PATH`, and sets `RUSTUP_HOME` from `rustup show home` when
-the environment does not already provide it. That extra `RUSTUP_HOME` export is
-required for the current Windows Dylint driver path.
+The checked-in `run-prebuilt-linter.sh` wrapper now invokes the package
+entrypoint directly and only layers on Codex-specific defaults like
+`--manifest-path`, `--workspace`, and `--no-deps` when the caller does not
+choose something narrower. The packaged runner now owns the bundled
+`cargo-dylint`, library discovery and filename normalization, default
+`DYLINT_RUSTFLAGS`, `CARGO_INCREMENTAL=0`, and `RUSTUP_HOME` inference. The
+shell wrapper still makes sure the `rustup` shims stay ahead of any direct
+toolchain `cargo` binary on `PATH`, because `cargo-dylint` still expects that.
 
 If you are changing the lint crate itself, use the source-build wrapper:
 
@@ -140,11 +142,11 @@ default:
 ./tools/argument-comment-lint/run-prebuilt-linter.sh -p codex-core
 ```
 
-The wrapper does that by setting `DYLINT_RUSTFLAGS`, and it leaves an explicit
-existing setting alone. It also defaults `CARGO_INCREMENTAL=0` unless you have
-already set it, because the current nightly Dylint flow can otherwise hit a
-rustc incremental compilation ICE locally. To override that behavior for an ad
-hoc run:
+The packaged runner does that by setting `DYLINT_RUSTFLAGS`, and it leaves an
+explicit existing setting alone. It also defaults `CARGO_INCREMENTAL=0` unless
+you have already set it, because the current nightly Dylint flow can otherwise
+hit a rustc incremental compilation ICE locally. To override that behavior for
+an ad hoc run:
 
 ```bash
 DYLINT_RUSTFLAGS="-A uncommented-anonymous-literal-argument" \

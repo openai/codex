@@ -8,7 +8,6 @@ dotslash_manifest="$repo_root/tools/argument-comment-lint/argument-comment-lint"
 
 has_manifest_path=false
 has_package_selection=false
-has_library_selection=false
 has_no_deps=false
 expect_value=""
 
@@ -20,9 +19,6 @@ for arg in "$@"; do
                 ;;
             package_selection)
                 has_package_selection=true
-                ;;
-            library_selection)
-                has_library_selection=true
                 ;;
         esac
         expect_value=""
@@ -44,12 +40,6 @@ for arg in "$@"; do
             ;;
         --package=*)
             has_package_selection=true
-            ;;
-        --lib|--lib-path)
-            expect_value="library_selection"
-            ;;
-        --lib=*|--lib-path=*)
-            has_library_selection=true
             ;;
         --workspace)
             has_package_selection=true
@@ -82,6 +72,8 @@ EOF
 fi
 
 if command -v rustup >/dev/null 2>&1; then
+    # cargo-dylint still expects the rustup shims to win over direct toolchain
+    # cargo binaries on PATH.
     rustup_bin_dir="$(dirname "$(command -v rustup)")"
     path_entries=()
     while IFS= read -r entry; do
@@ -92,73 +84,6 @@ if command -v rustup >/dev/null 2>&1; then
         PATH+=":$(IFS=:; echo "${path_entries[*]}")"
     fi
     export PATH
-
-    if [[ -z "${RUSTUP_HOME:-}" ]]; then
-        rustup_home="$(rustup show home 2>/dev/null || true)"
-        if [[ -n "$rustup_home" ]]; then
-            export RUSTUP_HOME="$rustup_home"
-        fi
-    fi
 fi
 
-package_entrypoint="$(dotslash -- fetch "$dotslash_manifest")"
-bin_dir="$(cd "$(dirname "$package_entrypoint")" && pwd)"
-package_root="$(cd "$bin_dir/.." && pwd)"
-library_dir="$package_root/lib"
-
-cargo_dylint="$bin_dir/cargo-dylint"
-if [[ ! -x "$cargo_dylint" ]]; then
-    cargo_dylint="$bin_dir/cargo-dylint.exe"
-fi
-if [[ ! -x "$cargo_dylint" ]]; then
-    echo "bundled cargo-dylint executable not found under $bin_dir" >&2
-    exit 1
-fi
-
-shopt -s nullglob
-libraries=("$library_dir"/*@*)
-shopt -u nullglob
-if [[ ${#libraries[@]} -eq 0 ]]; then
-    echo "no packaged Dylint library found in $library_dir" >&2
-    exit 1
-fi
-if [[ ${#libraries[@]} -ne 1 ]]; then
-    echo "expected exactly one packaged Dylint library in $library_dir" >&2
-    exit 1
-fi
-
-library_path="${libraries[0]}"
-library_filename="$(basename "$library_path")"
-normalized_library_path="$library_path"
-library_ext=".${library_filename##*.}"
-library_stem="${library_filename%.*}"
-if [[ "$library_stem" =~ ^(.+@nightly-[0-9]{4}-[0-9]{2}-[0-9]{2})-.+$ ]]; then
-    normalized_library_filename="${BASH_REMATCH[1]}$library_ext"
-    temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/argument-comment-lint.XXXXXX")"
-    normalized_library_path="$temp_dir/$normalized_library_filename"
-    cp "$library_path" "$normalized_library_path"
-fi
-
-if [[ -n "${DYLINT_RUSTFLAGS:-}" ]]; then
-    if [[ "$DYLINT_RUSTFLAGS" != *"-D uncommented-anonymous-literal-argument"* ]]; then
-        DYLINT_RUSTFLAGS+=" -D uncommented-anonymous-literal-argument"
-    fi
-    if [[ "$DYLINT_RUSTFLAGS" != *"-A unknown_lints"* ]]; then
-        DYLINT_RUSTFLAGS+=" -A unknown_lints"
-    fi
-else
-    DYLINT_RUSTFLAGS="-D uncommented-anonymous-literal-argument -A unknown_lints"
-fi
-export DYLINT_RUSTFLAGS
-
-if [[ -z "${CARGO_INCREMENTAL:-}" ]]; then
-    export CARGO_INCREMENTAL=0
-fi
-
-command=("$cargo_dylint" dylint --lib-path "$normalized_library_path")
-if [[ "$has_library_selection" == false ]]; then
-    command+=(--all)
-fi
-command+=("${lint_args[@]}")
-
-exec "${command[@]}"
+exec "$dotslash_manifest" "${lint_args[@]}"
