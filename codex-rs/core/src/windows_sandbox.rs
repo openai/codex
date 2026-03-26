@@ -236,7 +236,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         env_map,
         codex_home,
         extra_read_roots,
-        false,
+        /*proxy_enforced*/ false,
     )
 }
 
