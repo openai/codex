@@ -2258,10 +2258,10 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
-        let completed_turn_output = last_agent_message
+        let copyable_turn_output = last_agent_message
             .filter(|message| !message.trim().is_empty())
             .or_else(|| self.pending_turn_copyable_output.take());
-        if let Some(message) = completed_turn_output.as_ref() {
+        if let Some(message) = copyable_turn_output.as_ref() {
             self.last_copyable_output = Some(message.clone());
         }
         // If a stream is currently active, finalize it.
@@ -2323,7 +2323,7 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
-            response: completed_turn_output.unwrap_or_default(),
+            response: copyable_turn_output.unwrap_or_default(),
         });
 
         self.maybe_show_pending_rate_limit_prompt();
