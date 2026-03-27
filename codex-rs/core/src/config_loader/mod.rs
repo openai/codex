@@ -666,10 +666,12 @@ async fn project_trust_context(
 }
 
 fn normalized_project_trust_key(path: &Path) -> String {
-    normalize_path(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
+    normalize_project_trust_lookup_key(
+        normalize_path(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string(),
+    )
 }
 
 fn normalized_project_trust_key_str(path: &str) -> String {
@@ -677,7 +679,15 @@ fn normalized_project_trust_key_str(path: &str) -> String {
     if path.is_absolute() {
         normalized_project_trust_key(path)
     } else {
-        path.to_string_lossy().to_string()
+        normalize_project_trust_lookup_key(path.to_string_lossy().to_string())
+    }
+}
+
+fn normalize_project_trust_lookup_key(key: String) -> String {
+    if cfg!(windows) {
+        key.to_ascii_lowercase()
+    } else {
+        key
     }
 }
 
