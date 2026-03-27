@@ -1888,8 +1888,12 @@ mod tests {
             config.codex_home.clone(),
             config.model_provider_id.clone(),
         )
-        .await?;
-        state_runtime.mark_backfill_complete(None).await?;
+        .await
+        .map_err(std::io::Error::other)?;
+        state_runtime
+            .mark_backfill_complete(None)
+            .await
+            .map_err(std::io::Error::other)?;
 
         let session_cwd = temp_dir.path().join("project");
         std::fs::create_dir_all(&session_cwd)?;
@@ -1906,20 +1910,22 @@ mod tests {
         let mut metadata = builder.build(config.model_provider_id.as_str());
         metadata.title = "Different rollout title".to_string();
         metadata.first_user_message = Some("preview text".to_string());
-        state_runtime.upsert_thread(&metadata).await?;
+        state_runtime
+            .upsert_thread(&metadata)
+            .await
+            .map_err(std::io::Error::other)?;
 
         codex_core::append_thread_name(&config.codex_home, thread_id, "saved-session").await?;
 
-        let mut app_server = AppServerSession::new(start_test_embedded_app_server(config).await?);
+        let mut app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config).await?,
+            ));
         let target =
             lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session").await?;
-        assert_eq!(
-            target,
-            Some(crate::resume_picker::SessionTarget {
-                path: Some(rollout_path),
-                thread_id,
-            })
-        );
+        let target = target.expect("name lookup should find the saved thread");
+        assert_eq!(target.path, Some(rollout_path));
+        assert_eq!(target.thread_id, thread_id);
 
         app_server.shutdown().await?;
         Ok(())
