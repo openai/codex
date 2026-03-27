@@ -179,6 +179,69 @@ fn danger_full_access_keeps_managed_allowlist_and_denylist_fixed() {
 }
 
 #[test]
+fn explicit_empty_legacy_allowed_domains_pin_full_access_allowlist_empty() {
+    let mut config = NetworkProxyConfig::default();
+    config
+        .network
+        .set_allowed_domains(vec!["api.example.com".to_string()]);
+    let requirements: NetworkConstraints =
+        toml::from_str("allowed_domains = []").expect("legacy allowlist should parse");
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        Some(requirements),
+        &SandboxPolicy::DangerFullAccess,
+    )
+    .expect("explicit empty legacy allowlist should remain constraining");
+
+    assert_eq!(spec.config.network.allowed_domains(), None);
+    assert_eq!(spec.constraints.allowed_domains, Some(Vec::new()));
+    assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
+}
+
+#[test]
+fn explicit_empty_legacy_denied_domains_pin_full_access_denylist_empty() {
+    let mut config = NetworkProxyConfig::default();
+    config
+        .network
+        .set_denied_domains(vec!["blocked.example.com".to_string()]);
+    let requirements: NetworkConstraints =
+        toml::from_str("denied_domains = []").expect("legacy denylist should parse");
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        Some(requirements),
+        &SandboxPolicy::DangerFullAccess,
+    )
+    .expect("explicit empty legacy denylist should remain constraining");
+
+    assert_eq!(spec.config.network.denied_domains(), None);
+    assert_eq!(spec.constraints.denied_domains, Some(Vec::new()));
+    assert_eq!(spec.constraints.denylist_expansion_enabled, Some(false));
+}
+
+#[test]
+fn explicit_empty_legacy_allow_unix_sockets_disables_allow_all_unix_sockets() {
+    let mut config = NetworkProxyConfig::default();
+    config.network.dangerously_allow_all_unix_sockets = true;
+    let requirements: NetworkConstraints =
+        toml::from_str("allow_unix_sockets = []").expect("legacy unix socket list should parse");
+
+    let err = NetworkProxySpec::from_config_and_constraints(
+        config,
+        Some(requirements),
+        &SandboxPolicy::DangerFullAccess,
+    )
+    .expect_err("explicit empty legacy unix socket allowlist should remain constraining");
+
+    assert!(
+        err.to_string()
+            .contains("network proxy constraints are invalid: invalid value for network.dangerously_allow_all_unix_sockets"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn managed_allowed_domains_only_disables_default_mode_allowlist_expansion() {
     let mut config = NetworkProxyConfig::default();
     config

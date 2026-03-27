@@ -225,20 +225,21 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
         }
-        let managed_allowed_domains = if hard_deny_allowlist_misses {
-            Some(
+        let managed_allowed_domains =
+            if hard_deny_allowlist_misses || requirements.explicit_legacy_allowed_domains() {
+                Some(
+                    requirements
+                        .domains
+                        .as_ref()
+                        .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
+                        .unwrap_or_default(),
+                )
+            } else {
                 requirements
                     .domains
                     .as_ref()
                     .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
-                    .unwrap_or_default(),
-            )
-        } else {
-            requirements
-                .domains
-                .as_ref()
-                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
-        };
+            };
         if let Some(managed_allowed_domains) = managed_allowed_domains {
             // Managed requirements seed the baseline allowlist. User additions
             // can extend that baseline unless managed-only mode pins the
@@ -257,10 +258,20 @@ impl NetworkProxySpec {
             constraints.allowed_domains = Some(managed_allowed_domains);
             constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
         }
-        let managed_denied_domains = requirements
-            .domains
-            .as_ref()
-            .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains);
+        let managed_denied_domains = if requirements.explicit_legacy_denied_domains() {
+            Some(
+                requirements
+                    .domains
+                    .as_ref()
+                    .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
+                    .unwrap_or_default(),
+            )
+        } else {
+            requirements
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
+        };
         if let Some(managed_denied_domains) = managed_denied_domains {
             let effective_denied_domains = if denylist_expansion_enabled {
                 Self::merge_domain_lists(

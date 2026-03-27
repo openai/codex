@@ -233,6 +233,12 @@ pub struct NetworkRequirementsToml {
     pub managed_allowed_domains_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub explicit_legacy_allowed_domains: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub explicit_legacy_denied_domains: bool,
 }
 
 #[derive(Deserialize)]
@@ -278,6 +284,8 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             allow_unix_sockets,
             allow_local_binding,
         } = raw;
+        let explicit_legacy_allowed_domains = allowed_domains.is_some();
+        let explicit_legacy_denied_domains = denied_domains.is_some();
 
         if domains.is_some() && (allowed_domains.is_some() || denied_domains.is_some()) {
             return Err(D::Error::custom(
@@ -304,6 +312,8 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             unix_sockets: unix_sockets
                 .or_else(|| legacy_unix_socket_permissions_from_list(allow_unix_sockets)),
             allow_local_binding,
+            explicit_legacy_allowed_domains,
+            explicit_legacy_denied_domains,
         })
     }
 }
@@ -315,6 +325,7 @@ fn legacy_domain_permissions_from_lists(
     allowed_domains: Option<Vec<String>>,
     denied_domains: Option<Vec<String>>,
 ) -> Option<NetworkDomainPermissionsToml> {
+    let has_legacy_domain_config = allowed_domains.is_some() || denied_domains.is_some();
     let mut entries = BTreeMap::new();
 
     for pattern in allowed_domains.unwrap_or_default() {
@@ -325,19 +336,20 @@ fn legacy_domain_permissions_from_lists(
         entries.insert(pattern, NetworkDomainPermissionToml::Deny);
     }
 
-    (!entries.is_empty()).then_some(NetworkDomainPermissionsToml { entries })
+    has_legacy_domain_config.then_some(NetworkDomainPermissionsToml { entries })
 }
 
 fn legacy_unix_socket_permissions_from_list(
     allow_unix_sockets: Option<Vec<String>>,
 ) -> Option<NetworkUnixSocketPermissionsToml> {
+    let has_legacy_unix_socket_config = allow_unix_sockets.is_some();
     let entries = allow_unix_sockets
         .unwrap_or_default()
         .into_iter()
         .map(|path| (path, NetworkUnixSocketPermissionToml::Allow))
         .collect::<BTreeMap<_, _>>();
 
-    (!entries.is_empty()).then_some(NetworkUnixSocketPermissionsToml { entries })
+    has_legacy_unix_socket_config.then_some(NetworkUnixSocketPermissionsToml { entries })
 }
 
 /// Normalized network constraints derived from requirements TOML.
@@ -355,6 +367,12 @@ pub struct NetworkConstraints {
     pub managed_allowed_domains_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub explicit_legacy_allowed_domains: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub explicit_legacy_denied_domains: bool,
 }
 
 impl<'de> Deserialize<'de> for NetworkConstraints {
@@ -364,6 +382,16 @@ impl<'de> Deserialize<'de> for NetworkConstraints {
     {
         let requirements = NetworkRequirementsToml::deserialize(deserializer)?;
         Ok(requirements.into())
+    }
+}
+
+impl NetworkConstraints {
+    pub fn explicit_legacy_allowed_domains(&self) -> bool {
+        self.explicit_legacy_allowed_domains
+    }
+
+    pub fn explicit_legacy_denied_domains(&self) -> bool {
+        self.explicit_legacy_denied_domains
     }
 }
 
@@ -380,6 +408,8 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             managed_allowed_domains_only,
             unix_sockets,
             allow_local_binding,
+            explicit_legacy_allowed_domains,
+            explicit_legacy_denied_domains,
         } = value;
         Self {
             enabled,
@@ -392,6 +422,8 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             managed_allowed_domains_only,
             unix_sockets,
             allow_local_binding,
+            explicit_legacy_allowed_domains,
+            explicit_legacy_denied_domains,
         }
     }
 }
@@ -1840,6 +1872,41 @@ guardian_developer_instructions = """
                 .contains("`experimental_network.unix_sockets` cannot be combined"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    fn empty_legacy_network_lists_are_preserved_in_canonical_constraints() -> Result<()> {
+        let toml_str = r#"
+            [experimental_network]
+            allowed_domains = []
+            denied_domains = []
+            allow_unix_sockets = []
+        "#;
+
+        let source = RequirementSource::CloudRequirements;
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
+
+        let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
+        let sourced_network = requirements
+            .network
+            .expect("network requirements should be preserved as constraints");
+
+        assert_eq!(sourced_network.source, source);
+        assert_eq!(
+            sourced_network.value.domains,
+            Some(NetworkDomainPermissionsToml {
+                entries: BTreeMap::new(),
+            })
+        );
+        assert_eq!(
+            sourced_network.value.unix_sockets,
+            Some(NetworkUnixSocketPermissionsToml {
+                entries: BTreeMap::new(),
+            })
+        );
+
+        Ok(())
     }
 
     #[test]

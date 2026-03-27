@@ -339,6 +339,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         managed_allowed_domains_only,
         unix_sockets,
         allow_local_binding,
+        ..
     } = network;
 
     if let Some(enabled) = enabled {

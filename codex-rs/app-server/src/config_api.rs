@@ -590,6 +590,7 @@ mod tests {
                     )]),
                 }),
                 allow_local_binding: Some(true),
+                ..Default::default()
             }),
         };
 
@@ -675,6 +676,7 @@ mod tests {
                     )]),
                 }),
                 allow_local_binding: None,
+                ..Default::default()
             }),
         };
 
