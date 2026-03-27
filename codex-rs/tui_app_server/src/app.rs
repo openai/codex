@@ -2655,13 +2655,18 @@ impl App {
                     );
                 }
                 Err(_) => {
-                    if self.agent_navigation.get(&thread_id).is_none() {
+                    if let Some(entry) = existing_entry {
+                        self.upsert_agent_picker_thread(
+                            thread_id,
+                            entry.agent_nickname,
+                            entry.agent_role,
+                            entry.is_closed,
+                        );
+                    } else {
                         self.upsert_agent_picker_thread(
                             thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
                             /*is_closed*/ true,
                         );
-                    } else {
-                        self.mark_agent_picker_thread_closed(thread_id);
                     }
                 }
             }
@@ -6929,6 +6934,36 @@ mod tests {
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
                 is_closed: true,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_preserves_live_threads_on_read_error() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(1));
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            false,
+        );
+
+        app.open_agent_picker(&mut app_server).await;
+
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: false,
             })
         );
         Ok(())
