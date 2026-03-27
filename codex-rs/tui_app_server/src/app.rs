@@ -8530,19 +8530,25 @@ guardian_approval = true
         store.rebase_buffer_after_session_refresh();
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 2);
-        assert!(matches!(
-            snapshot.events.first(),
-            Some(ThreadBufferedEvent::Notification(
-                ServerNotification::HookStarted(_)
-            ))
-        ));
-        assert!(matches!(
-            snapshot.events.get(1),
-            Some(ThreadBufferedEvent::Notification(
-                ServerNotification::HookCompleted(_)
-            ))
-        ));
+        let hook_notifications = snapshot
+            .events
+            .into_iter()
+            .map(|event| match event {
+                ThreadBufferedEvent::Notification(notification) => {
+                    serde_json::to_value(notification).expect("hook notification should serialize")
+                }
+                other => panic!("expected buffered hook notification, saw: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hook_notifications,
+            vec![
+                serde_json::to_value(hook_started_notification(thread_id, "turn-hook"))
+                    .expect("hook notification should serialize"),
+                serde_json::to_value(hook_completed_notification(thread_id, "turn-hook"))
+                    .expect("hook notification should serialize"),
+            ]
+        );
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
