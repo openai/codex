@@ -8533,11 +8533,15 @@ guardian_approval = true
         assert_eq!(snapshot.events.len(), 2);
         assert!(matches!(
             snapshot.events.first(),
-            Some(ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_)))
+            Some(ThreadBufferedEvent::Notification(
+                ServerNotification::HookStarted(_)
+            ))
         ));
         assert!(matches!(
             snapshot.events.get(1),
-            Some(ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_)))
+            Some(ThreadBufferedEvent::Notification(
+                ServerNotification::HookCompleted(_)
+            ))
         ));
     }
 
