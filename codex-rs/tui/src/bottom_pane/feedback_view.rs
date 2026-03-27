@@ -559,6 +559,10 @@ pub(crate) fn feedback_upload_consent_params(
             }
         }
     }
+    header_lines.push(Line::from("").into());
+    header_lines.push(
+        Line::from("V2 sub-agent reports may include subtree rollouts.".dim()).into(),
+    );
 
     super::SelectionViewParams {
         footer_hint: Some(standard_popup_hint_line()),

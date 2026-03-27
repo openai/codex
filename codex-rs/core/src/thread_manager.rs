@@ -403,6 +403,13 @@ impl ThreadManager {
         self.state.get_thread(thread_id).await
     }
 
+    pub async fn list_subtree_thread_ids(&self, thread_id: ThreadId) -> CodexResult<Vec<ThreadId>> {
+        self.state.get_thread(thread_id).await?;
+        Ok(self
+            .agent_control()
+            .list_agent_subtree_thread_ids_for_thread(thread_id))
+    }
+
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.

@@ -7374,20 +7374,35 @@ impl CodexMessageProcessor {
         }
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
+        let feedback_thread_ids = match conversation_id {
+            Some(conversation_id) => self.resolve_feedback_thread_ids(conversation_id).await,
+            None => Vec::new(),
+        };
         let sqlite_feedback_logs = if include_logs {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
             let state_db_ctx = get_state_db(&self.config).await;
-            match (state_db_ctx.as_ref(), conversation_id) {
-                (Some(state_db_ctx), Some(conversation_id)) => {
-                    let thread_id_text = conversation_id.to_string();
-                    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
+            match state_db_ctx.as_ref() {
+                Some(state_db_ctx) if !feedback_thread_ids.is_empty() => {
+                    let feedback_thread_id_text = feedback_thread_ids
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>();
+                    let feedback_thread_id_refs = feedback_thread_id_text
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>();
+                    match state_db_ctx
+                        .query_feedback_logs_for_threads(&feedback_thread_id_refs)
+                        .await
+                    {
                         Ok(logs) if logs.is_empty() => None,
                         Ok(logs) => Some(logs),
                         Err(err) => {
                             warn!(
-                                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
+                                thread_ids = ?feedback_thread_id_text,
+                                "failed to query feedback logs from sqlite for feedback upload: {err}"
                             );
                             None
                         }
@@ -7399,15 +7414,12 @@ impl CodexMessageProcessor {
             None
         };
 
-        let validated_rollout_path = if include_logs {
-            match conversation_id {
-                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
-                None => None,
-            }
+        let rollout_paths = if include_logs {
+            self.resolve_feedback_rollout_paths(&feedback_thread_ids).await
         } else {
-            None
+            Vec::new()
         };
-        let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
+        let mut attachment_paths = rollout_paths;
         if let Some(extra_log_files) = extra_log_files {
             attachment_paths.extend(extra_log_files);
         }
@@ -7533,6 +7545,38 @@ impl CodexMessageProcessor {
             Ok(conv) => conv.rollout_path(),
             Err(_) => None,
         }
+    }
+
+    async fn resolve_feedback_thread_ids(&self, conversation_id: ThreadId) -> Vec<ThreadId> {
+        let Ok(thread) = self.thread_manager.get_thread(conversation_id).await else {
+            return vec![conversation_id];
+        };
+        let session_source = thread.config_snapshot().await.session_source;
+        let Some(agent_path) = session_source.get_agent_path() else {
+            return vec![conversation_id];
+        };
+        if agent_path.is_root() {
+            return vec![conversation_id];
+        }
+
+        match self.thread_manager.list_subtree_thread_ids(conversation_id).await {
+            Ok(thread_ids) if !thread_ids.is_empty() => thread_ids,
+            Ok(_) | Err(_) => vec![conversation_id],
+        }
+    }
+
+    async fn resolve_feedback_rollout_paths(&self, thread_ids: &[ThreadId]) -> Vec<PathBuf> {
+        let mut seen = HashSet::new();
+        let mut rollout_paths = Vec::new();
+        for thread_id in thread_ids {
+            let Some(path) = self.resolve_rollout_path(*thread_id).await else {
+                continue;
+            };
+            if seen.insert(path.clone()) {
+                rollout_paths.push(path);
+            }
+        }
+        rollout_paths
     }
 }
 

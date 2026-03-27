@@ -9,7 +9,10 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::user_input::UserInput;
+use codex_protocol::AgentPath;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::PathExt;
@@ -302,6 +305,102 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
     assert_eq!(models_mock.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn list_subtree_thread_ids_returns_current_agent_and_descendants_only() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let _ = config.features.enable(codex_features::Feature::MultiAgentV2);
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
+    );
+
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    let control = manager.agent_control();
+
+    let worker_path = AgentPath::from_string("/root/researcher/worker".to_string())
+        .expect("worker path");
+    let helper_path = worker_path.join("helper").expect("helper path");
+    let sibling_path = AgentPath::from_string("/root/researcher/other_worker".to_string())
+        .expect("sibling path");
+
+    let worker = control
+        .spawn_agent_with_metadata(
+            config.clone(),
+            vec![UserInput::Text {
+                text: "worker".to_string(),
+                text_elements: Vec::new(),
+            }],
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: Some(worker_path),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("worker should spawn");
+    let helper = control
+        .spawn_agent_with_metadata(
+            config.clone(),
+            vec![UserInput::Text {
+                text: "helper".to_string(),
+                text_elements: Vec::new(),
+            }],
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker.thread_id,
+                depth: 2,
+                agent_path: Some(helper_path),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("helper should spawn");
+    let _sibling = control
+        .spawn_agent_with_metadata(
+            config,
+            vec![UserInput::Text {
+                text: "sibling".to_string(),
+                text_elements: Vec::new(),
+            }],
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: Some(sibling_path),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("sibling should spawn");
+
+    let thread_ids = manager
+        .list_subtree_thread_ids(worker.thread_id)
+        .await
+        .expect("subtree thread ids should load");
+
+    assert_eq!(thread_ids, vec![worker.thread_id, helper.thread_id]);
 }
 
 #[test]

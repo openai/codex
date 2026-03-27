@@ -37,6 +37,7 @@ use codex_state::DirectionalThreadSpawnEdgeStatus;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
@@ -719,18 +720,7 @@ impl AgentControl {
             .transpose()?;
 
         let mut live_agents = self.state.live_agents();
-        live_agents.sort_by(|left, right| {
-            left.agent_path
-                .as_deref()
-                .unwrap_or_default()
-                .cmp(right.agent_path.as_deref().unwrap_or_default())
-                .then_with(|| {
-                    left.agent_id
-                        .map(|id| id.to_string())
-                        .unwrap_or_default()
-                        .cmp(&right.agent_id.map(|id| id.to_string()).unwrap_or_default())
-                })
-        });
+        live_agents.sort_by(compare_agent_metadata);
 
         let root_path = AgentPath::root();
         let mut agents = Vec::with_capacity(live_agents.len().saturating_add(1));
@@ -778,6 +768,23 @@ impl AgentControl {
         }
 
         Ok(agents)
+    }
+
+    pub(crate) fn list_agent_subtree_thread_ids_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Vec<ThreadId> {
+        let Some(agent_path) = self
+            .get_agent_metadata(thread_id)
+            .and_then(|metadata| metadata.agent_path)
+        else {
+            return Vec::new();
+        };
+        if agent_path.is_root() {
+            return Vec::new();
+        }
+
+        self.list_agent_thread_ids_for_prefix(&agent_path)
     }
 
     /// Starts a detached watcher for sub-agents spawned from another thread.
@@ -1070,6 +1077,31 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
                 .strip_prefix(prefix.as_str())
                 .is_some_and(|suffix| suffix.starts_with('/'))
     })
+}
+
+fn compare_agent_metadata(left: &AgentMetadata, right: &AgentMetadata) -> Ordering {
+    left.agent_path
+        .as_deref()
+        .unwrap_or_default()
+        .cmp(right.agent_path.as_deref().unwrap_or_default())
+        .then_with(|| {
+            left.agent_id
+                .map(|id| id.to_string())
+                .unwrap_or_default()
+                .cmp(&right.agent_id.map(|id| id.to_string()).unwrap_or_default())
+        })
+}
+
+impl AgentControl {
+    fn list_agent_thread_ids_for_prefix(&self, agent_path: &AgentPath) -> Vec<ThreadId> {
+        let mut live_agents = self.state.live_agents();
+        live_agents.sort_by(compare_agent_metadata);
+        live_agents
+            .into_iter()
+            .filter(|metadata| agent_matches_prefix(metadata.agent_path.as_ref(), agent_path))
+            .filter_map(|metadata| metadata.agent_id)
+            .collect()
+    }
 }
 
 async fn last_task_message_for_thread(thread: &crate::CodexThread) -> Option<String> {
