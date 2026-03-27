@@ -51,6 +51,7 @@ members = [
     "otel",
     "tui",
     "tui_app_server",
+    "tools",
     "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
@@ -80,10 +81,8 @@ members = [
     "state",
     "terminal-detection",
     "codex-experimental-api-macros",
-    "test-macros",
     "package-manager",
     "plugin",
-    "artifacts",
 ]
 resolver = "2"
 
@@ -102,7 +101,6 @@ app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
-codex-artifacts = { path = "artifacts" }
 codex-code-mode = { path = "code-mode" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
@@ -152,8 +150,8 @@ codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
-codex-test-macros = { path = "test-macros" }
 codex-terminal-detection = { path = "terminal-detection" }
+codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
 codex-v8-poc = { path = "v8-poc" }
@@ -189,7 +187,7 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
-askama = "0.15.4"
+arc-swap = "1.9.0"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -397,6 +395,7 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
+    "codex-package-manager",
     "codex-utils-readiness",
     "codex-utils-template",
     "codex-v8-poc",

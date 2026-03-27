@@ -545,6 +545,7 @@ impl CodexMessageProcessor {
                 data: None,
             })?;
         apply_runtime_feature_enablement(&mut config, &self.current_runtime_feature_enablement());
+        config.codex_self_exe = self.arg0_paths.codex_self_exe.clone();
         config.codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
         config.main_execve_wrapper_exe = self.arg0_paths.main_execve_wrapper_exe.clone();
         Ok(config)
@@ -1411,7 +1412,12 @@ impl CodexMessageProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
-            match self.auth_manager.auth().await {
+            let auth = if do_refresh {
+                self.auth_manager.auth_cached()
+            } else {
+                self.auth_manager.auth().await
+            };
+            match auth {
                 Some(auth) => {
                     let permanent_refresh_failure =
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
@@ -7947,7 +7953,7 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
             return Err(format!("duplicate dynamic tool name: {name}"));
         }
 
-        if let Err(err) = codex_core::parse_tool_input_schema(&tool.input_schema) {
+        if let Err(err) = codex_tools::parse_tool_input_schema(&tool.input_schema) {
             return Err(format!(
                 "dynamic tool input schema is not supported for {name}: {err}"
             ));

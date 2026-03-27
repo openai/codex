@@ -829,6 +829,33 @@ fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
 }
 
 #[tokio::test]
+async fn exec_approval_requirement_prompts_for_inline_additional_permissions_under_on_request() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                "zsh".to_string(),
+                "-lc".to_string(),
+                "touch requested-dir/requested-but-unused.txt".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "touch".to_string(),
+                "requested-dir/requested-but-unused.txt".to_string(),
+            ])),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_granular_sandbox_is_disabled()
  {
     assert_exec_approval_requirement_for_command(

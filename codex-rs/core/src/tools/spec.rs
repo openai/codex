@@ -46,6 +46,8 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::parse_mcp_tool;
+pub use codex_tools::parse_tool_input_schema;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -54,6 +56,11 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+pub type JsonSchema = codex_tools::JsonSchema;
+
+#[cfg(test)]
+pub(crate) use codex_tools::mcp_call_tool_result_output_schema;
 
 const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
@@ -126,12 +133,25 @@ fn agent_status_output_schema() -> JsonValue {
     })
 }
 
-fn spawn_agent_output_schema(multi_agent_v2: bool) -> JsonValue {
-    let task_name_description = if multi_agent_v2 {
-        "Canonical task name for the spawned agent."
-    } else {
-        "Canonical task name for the spawned agent when one was assigned."
-    };
+fn spawn_agent_output_schema_v1() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agent_id": {
+                "type": "string",
+                "description": "Thread identifier for the spawned agent."
+            },
+            "nickname": {
+                "type": ["string", "null"],
+                "description": "User-facing nickname for the spawned agent when available."
+            }
+        },
+        "required": ["agent_id", "nickname"],
+        "additionalProperties": false
+    })
+}
+
+fn spawn_agent_output_schema_v2() -> JsonValue {
     json!({
         "type": "object",
         "properties": {
@@ -141,7 +161,7 @@ fn spawn_agent_output_schema(multi_agent_v2: bool) -> JsonValue {
             },
             "task_name": {
                 "type": ["string", "null"],
-                "description": task_name_description
+                "description": "Canonical task name for the spawned agent."
             },
             "nickname": {
                 "type": ["string", "null"],
@@ -217,7 +237,7 @@ fn wait_output_schema_v1() -> JsonValue {
         "properties": {
             "status": {
                 "type": "object",
-                "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
+                "description": "Final statuses keyed by agent id.",
                 "additionalProperties": agent_status_output_schema()
             },
             "timed_out": {
@@ -334,7 +354,6 @@ pub(crate) struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
-    pub artifact_tools: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -394,8 +413,6 @@ impl ToolsConfig {
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
-        let include_artifact_tools =
-            features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
@@ -471,7 +488,6 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
-            artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -528,62 +544,6 @@ impl ToolsConfig {
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
     model_info.input_modalities.contains(&InputModality::Image)
-}
-
-/// Generic JSON‑Schema subset needed for our tool definitions
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum JsonSchema {
-    Boolean {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    String {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    /// MCP schema allows "number" | "integer" for Number
-    #[serde(alias = "integer")]
-    Number {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    Array {
-        items: Box<JsonSchema>,
-
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    Object {
-        properties: BTreeMap<String, JsonSchema>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        required: Option<Vec<String>>,
-        #[serde(
-            rename = "additionalProperties",
-            skip_serializing_if = "Option::is_none"
-        )]
-        additional_properties: Option<AdditionalProperties>,
-    },
-}
-
-/// Whether additional properties are allowed, and if so, any required schema
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum AdditionalProperties {
-    Boolean(bool),
-    Schema(Box<JsonSchema>),
-}
-
-impl From<bool> for AdditionalProperties {
-    fn from(b: bool) -> Self {
-        Self::Boolean(b)
-    }
-}
-
-impl From<JsonSchema> for AdditionalProperties {
-    fn from(s: JsonSchema) -> Self {
-        Self::Schema(Box::new(s))
-    }
 }
 
 fn create_network_permissions_schema() -> JsonSchema {
@@ -1137,10 +1097,8 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
-    let available_models_description = spawn_agent_models_description(&config.available_models);
-    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
-    let mut properties = BTreeMap::from([
+fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonSchema> {
+    BTreeMap::from([
         (
             "message".to_string(),
             JsonSchema::String {
@@ -1186,21 +1144,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 ),
             },
         ),
-    ]);
-    properties.insert(
-        "task_name".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
-                    .to_string(),
-            ),
-        },
-    );
+    ])
+}
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spawn_agent".to_string(),
-        description: format!(
-            r#"
+fn spawn_agent_tool_description(
+    available_models_description: &str,
+    return_value_description: &str,
+) -> String {
+    format!(
+        r#"
         Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
         Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
         Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
@@ -1235,6 +1187,20 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 - Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
 - The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
+    )
+}
+
+fn create_spawn_agent_tool_v1(config: &ToolsConfig) -> ToolSpec {
+    let available_models_description = spawn_agent_models_description(&config.available_models);
+    let return_value_description =
+        "Returns the spawned agent id plus the user-facing nickname when available.";
+    let properties = spawn_agent_common_properties(config);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agent".to_string(),
+        description: spawn_agent_tool_description(
+            &available_models_description,
+            return_value_description,
         ),
         strict: false,
         defer_loading: None,
@@ -1243,7 +1209,38 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(spawn_agent_output_schema(config.multi_agent_v2)),
+        output_schema: Some(spawn_agent_output_schema_v1()),
+    })
+}
+
+fn create_spawn_agent_tool_v2(config: &ToolsConfig) -> ToolSpec {
+    let available_models_description = spawn_agent_models_description(&config.available_models);
+    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
+    let mut properties = spawn_agent_common_properties(config);
+    properties.insert(
+        "task_name".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agent".to_string(),
+        description: spawn_agent_tool_description(
+            &available_models_description,
+            return_value_description,
+        ),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(spawn_agent_output_schema_v2()),
     })
 }
 
@@ -1405,14 +1402,12 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
     })
 }
 
-fn create_send_input_tool() -> ToolSpec {
+fn create_send_input_tool_v1() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
             JsonSchema::String {
-                description: Some(
-                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
-                ),
+                description: Some("Agent id to message (from spawn_agent).".to_string()),
             },
         ),
         (
@@ -1550,7 +1545,35 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn wait_agent_tool_parameters() -> JsonSchema {
+fn wait_agent_tool_parameters_v1() -> JsonSchema {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "targets".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String { description: None }),
+            description: Some(
+                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(format!(
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, max {MAX_WAIT_TIMEOUT_MS}. Prefer longer waits (minutes) to avoid busy polling."
+            )),
+        },
+    );
+
+    JsonSchema::Object {
+        properties,
+        required: Some(vec!["targets".to_string()]),
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn wait_agent_tool_parameters_v2() -> JsonSchema {
     let mut properties = BTreeMap::new();
     properties.insert(
         "targets".to_string(),
@@ -1585,7 +1608,7 @@ fn create_wait_agent_tool_v1() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: wait_agent_tool_parameters(),
+        parameters: wait_agent_tool_parameters_v1(),
         output_schema: Some(wait_output_schema_v1()),
     })
 }
@@ -1597,7 +1620,7 @@ fn create_wait_agent_tool_v2() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: wait_agent_tool_parameters(),
+        parameters: wait_agent_tool_parameters_v2(),
         output_schema: Some(wait_output_schema_v2()),
     })
 }
@@ -1744,7 +1767,30 @@ fn create_request_permissions_tool() -> ToolSpec {
     })
 }
 
-fn create_close_agent_tool() -> ToolSpec {
+fn create_close_agent_tool_v1() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "target".to_string(),
+        JsonSchema::String {
+            description: Some("Agent id to close (from spawn_agent).".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "close_agent".to_string(),
+        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["target".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(close_agent_output_schema()),
+    })
+}
+
+fn create_close_agent_tool_v2() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "target".to_string(),
@@ -2125,33 +2171,6 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
     })
 }
 
-fn create_artifacts_tool() -> ToolSpec {
-    const ARTIFACTS_FREEFORM_GRAMMAR: &str = r#"
-start: pragma_source | plain_source
-
-pragma_source: PRAGMA_LINE NEWLINE js_source
-plain_source: PLAIN_JS_SOURCE
-
-js_source: JS_SOURCE
-
-PRAGMA_LINE: /[ \t]*\/\/ codex-artifact-tool:[^\r\n]*/
-NEWLINE: /\r?\n/
-PLAIN_JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
-JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
-"#;
-
-    ToolSpec::Freeform(FreeformTool {
-        name: "artifacts".to_string(),
-        description: "Runs raw JavaScript against the installed `@oai/artifact-tool` package for creating presentations or spreadsheets. This is plain JavaScript executed by a local Node-compatible runtime with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package is preloaded before your code runs. Named exports are copied onto `globalThis`, and the full module namespace is available as `globalThis.artifactTool`. This matches the upstream library-first API: create with `Presentation.create()` / `Workbook.create()`, preview with `presentation.export(...)` or `slide.export(...)`, and save files with `PresentationFile.exportPptx(...)` or `SpreadsheetFile.exportXlsx(...)`. Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
-            .to_string(),
-        format: FreeformToolFormat {
-            r#type: "grammar".to_string(),
-            syntax: "lark".to_string(),
-            definition: ARTIFACTS_FREEFORM_GRAMMAR.to_string(),
-        },
-    })
-}
-
 fn create_js_repl_reset_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "js_repl_reset".to_string(),
@@ -2347,15 +2366,15 @@ pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, output_schema) = mcp_tool_to_openai_tool_parts(tool)?;
+    let parsed_tool = parse_mcp_tool(&tool)?;
 
     Ok(ResponsesApiTool {
         name: fully_qualified_name,
-        description,
+        description: parsed_tool.description,
         strict: false,
         defer_loading: None,
-        parameters: input_schema,
-        output_schema,
+        parameters: parsed_tool.input_schema,
+        output_schema: Some(parsed_tool.output_schema),
     })
 }
 
@@ -2363,14 +2382,14 @@ pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, _) = mcp_tool_to_openai_tool_parts(tool)?;
+    let parsed_tool = parse_mcp_tool(&tool)?;
 
     Ok(ResponsesApiTool {
         name,
-        description,
+        description: parsed_tool.description,
         strict: false,
         defer_loading: Some(true),
-        parameters: input_schema,
+        parameters: parsed_tool.input_schema,
         output_schema: None,
     })
 }
@@ -2388,185 +2407,6 @@ fn dynamic_tool_to_openai_tool(
         parameters: input_schema,
         output_schema: None,
     })
-}
-
-/// Parse the tool input_schema or return an error for invalid schema
-pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
-    let mut input_schema = input_schema.clone();
-    sanitize_json_schema(&mut input_schema);
-    serde_json::from_value::<JsonSchema>(input_schema)
-}
-
-fn mcp_tool_to_openai_tool_parts(
-    tool: rmcp::model::Tool,
-) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {
-    let rmcp::model::Tool {
-        description,
-        input_schema,
-        output_schema,
-        ..
-    } = tool;
-
-    let mut serialized_input_schema = serde_json::Value::Object(input_schema.as_ref().clone());
-
-    // OpenAI models mandate the "properties" field in the schema. Some MCP
-    // servers omit it (or set it to null), so we insert an empty object to
-    // match the behavior of the Agents SDK.
-    if let serde_json::Value::Object(obj) = &mut serialized_input_schema
-        && obj.get("properties").is_none_or(serde_json::Value::is_null)
-    {
-        obj.insert(
-            "properties".to_string(),
-            serde_json::Value::Object(serde_json::Map::new()),
-        );
-    }
-
-    // Serialize to a raw JSON value so we can sanitize schemas coming from MCP
-    // servers. Some servers omit the top-level or nested `type` in JSON
-    // Schemas (e.g. using enum/anyOf), or use unsupported variants like
-    // `integer`. Our internal JsonSchema is a small subset and requires
-    // `type`, so we coerce/sanitize here for compatibility.
-    sanitize_json_schema(&mut serialized_input_schema);
-    let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
-    let structured_content_schema = output_schema
-        .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
-        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
-    let output_schema = Some(mcp_call_tool_result_output_schema(
-        structured_content_schema,
-    ));
-    let description = description.map(Into::into).unwrap_or_default();
-
-    Ok((description, input_schema, output_schema))
-}
-
-fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "content": {
-                "type": "array",
-                "items": {}
-            },
-            "structuredContent": structured_content_schema,
-            "isError": {
-                "type": "boolean"
-            },
-            "_meta": {}
-        },
-        "required": ["content"],
-        "additionalProperties": false
-    })
-}
-
-/// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
-/// JsonSchema enum. This function:
-/// - Ensures every schema object has a "type". If missing, infers it from
-///   common keywords (properties => object, items => array, enum/const/format => string)
-///   and otherwise defaults to "string".
-/// - Fills required child fields (e.g. array items, object properties) with
-///   permissive defaults when absent.
-fn sanitize_json_schema(value: &mut JsonValue) {
-    match value {
-        JsonValue::Bool(_) => {
-            // JSON Schema boolean form: true/false. Coerce to an accept-all string.
-            *value = json!({ "type": "string" });
-        }
-        JsonValue::Array(arr) => {
-            for v in arr.iter_mut() {
-                sanitize_json_schema(v);
-            }
-        }
-        JsonValue::Object(map) => {
-            // First, recursively sanitize known nested schema holders
-            if let Some(props) = map.get_mut("properties")
-                && let Some(props_map) = props.as_object_mut()
-            {
-                for (_k, v) in props_map.iter_mut() {
-                    sanitize_json_schema(v);
-                }
-            }
-            if let Some(items) = map.get_mut("items") {
-                sanitize_json_schema(items);
-            }
-            // Some schemas use oneOf/anyOf/allOf - sanitize their entries
-            for combiner in ["oneOf", "anyOf", "allOf", "prefixItems"] {
-                if let Some(v) = map.get_mut(combiner) {
-                    sanitize_json_schema(v);
-                }
-            }
-
-            // Normalize/ensure type
-            let mut ty = map.get("type").and_then(|v| v.as_str()).map(str::to_string);
-
-            // If type is an array (union), pick first supported; else leave to inference
-            if ty.is_none()
-                && let Some(JsonValue::Array(types)) = map.get("type")
-            {
-                for t in types {
-                    if let Some(tt) = t.as_str()
-                        && matches!(
-                            tt,
-                            "object" | "array" | "string" | "number" | "integer" | "boolean"
-                        )
-                    {
-                        ty = Some(tt.to_string());
-                        break;
-                    }
-                }
-            }
-
-            // Infer type if still missing
-            if ty.is_none() {
-                if map.contains_key("properties")
-                    || map.contains_key("required")
-                    || map.contains_key("additionalProperties")
-                {
-                    ty = Some("object".to_string());
-                } else if map.contains_key("items") || map.contains_key("prefixItems") {
-                    ty = Some("array".to_string());
-                } else if map.contains_key("enum")
-                    || map.contains_key("const")
-                    || map.contains_key("format")
-                {
-                    ty = Some("string".to_string());
-                } else if map.contains_key("minimum")
-                    || map.contains_key("maximum")
-                    || map.contains_key("exclusiveMinimum")
-                    || map.contains_key("exclusiveMaximum")
-                    || map.contains_key("multipleOf")
-                {
-                    ty = Some("number".to_string());
-                }
-            }
-            // If we still couldn't infer, default to string
-            let ty = ty.unwrap_or_else(|| "string".to_string());
-            map.insert("type".to_string(), JsonValue::String(ty.to_string()));
-
-            // Ensure object schemas have properties map
-            if ty == "object" {
-                if !map.contains_key("properties") {
-                    map.insert(
-                        "properties".to_string(),
-                        JsonValue::Object(serde_json::Map::new()),
-                    );
-                }
-                // If additionalProperties is an object schema, sanitize it too.
-                // Leave booleans as-is, since JSON Schema allows boolean here.
-                if let Some(ap) = map.get_mut("additionalProperties") {
-                    let is_bool = matches!(ap, JsonValue::Bool(_));
-                    if !is_bool {
-                        sanitize_json_schema(ap);
-                    }
-                }
-            }
-
-            // Ensure array schemas have items
-            if ty == "array" && !map.contains_key("items") {
-                map.insert("items".to_string(), json!({ "type": "string" }));
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
@@ -2588,7 +2428,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
@@ -2613,6 +2452,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
     use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -2639,7 +2479,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
-    let artifacts_handler = Arc::new(ArtifactsHandler);
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
     if config.code_mode_enabled {
@@ -2956,67 +2795,38 @@ pub(crate) fn build_specs_with_discoverable_tools(
     );
     builder.register_handler("view_image", view_image_handler);
 
-    if config.artifact_tools {
-        push_tool_spec(
-            &mut builder,
-            create_artifacts_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("artifacts", artifacts_handler);
-    }
-
     if config.collab_tools {
-        push_tool_spec(
-            &mut builder,
-            create_spawn_agent_tool(config),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            if config.multi_agent_v2 {
-                create_send_message_tool()
-            } else {
-                create_send_input_tool()
-            },
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
         if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_spawn_agent_tool_v2(config),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_send_message_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             push_tool_spec(
                 &mut builder,
                 create_assign_task_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-        }
-        if !config.multi_agent_v2 {
             push_tool_spec(
                 &mut builder,
-                create_resume_agent_tool(),
+                create_wait_agent_tool_v2(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
-        }
-        push_tool_spec(
-            &mut builder,
-            if config.multi_agent_v2 {
-                create_wait_agent_tool_v2()
-            } else {
-                create_wait_agent_tool_v1()
-            },
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            create_close_agent_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_close_agent_tool_v2(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             push_tool_spec(
                 &mut builder,
                 create_list_agents_tool(),
@@ -3027,13 +2837,45 @@ pub(crate) fn build_specs_with_discoverable_tools(
             builder.register_handler("send_message", Arc::new(SendMessageHandlerV2));
             builder.register_handler("assign_task", Arc::new(AssignTaskHandlerV2));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
+            builder.register_handler("close_agent", Arc::new(CloseAgentHandlerV2));
             builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
         } else {
+            push_tool_spec(
+                &mut builder,
+                create_spawn_agent_tool_v1(config),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_send_input_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_resume_agent_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
+            push_tool_spec(
+                &mut builder,
+                create_wait_agent_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_close_agent_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
             builder.register_handler("send_input", Arc::new(SendInputHandler));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+            builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
         }
-        builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 
     if config.agent_jobs_tools {

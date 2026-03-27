@@ -26,6 +26,10 @@ use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as AppServerCollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandAction as AppServerCommandAction;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams as AppServerCommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
+use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GuardianApprovalReview;
@@ -1074,8 +1078,6 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
-            permission_profile: None,
-            managed_network_override: None,
             path_to_skills_md: repo_skill_path,
             scope: SkillScope::Repo,
         },
@@ -1086,8 +1088,6 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
-            permission_profile: None,
-            managed_network_override: None,
             path_to_skills_md: user_skill_path.clone(),
             scope: SkillScope::User,
         },
@@ -1942,6 +1942,7 @@ async fn helpers_are_available_and_do_not_panic() {
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
     let mut w = ChatWidget::new_with_app_event(init);
@@ -2044,6 +2045,7 @@ async fn make_chatwidget_manual(
         stream_controller: None,
         plan_stream_controller: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+        terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_copyable_output: None,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
@@ -2095,6 +2097,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -2106,6 +2109,11 @@ async fn make_chatwidget_manual(
         current_cwd: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        last_terminal_title: None,
+        terminal_title_setup_original_items: None,
+        terminal_title_animation_origin: Instant::now(),
+        status_line_project_root_name_cache: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -3471,7 +3479,6 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -3503,6 +3510,39 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     );
 }
 
+#[test]
+fn app_server_exec_approval_request_splits_shell_wrapped_command() {
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let request =
+        exec_approval_request_from_params(AppServerCommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            approval_id: Some("approval-1".to_string()),
+            reason: None,
+            network_approval_context: None,
+            command: Some(
+                shlex::try_join(["/bin/zsh", "-lc", script])
+                    .expect("round-trippable shell wrapper"),
+            ),
+            cwd: Some(PathBuf::from("/tmp")),
+            command_actions: None,
+            additional_permissions: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        });
+
+    assert_eq!(
+        request.command,
+        vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            script.to_string(),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn exec_approval_uses_approval_id_when_present() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -3522,7 +3562,6 @@ async fn exec_approval_uses_approval_id_when_present() {
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             additional_permissions: None,
-            skill_metadata: None,
             available_decisions: None,
             parsed_cmd: vec![],
         }),
@@ -3564,7 +3603,6 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -3620,7 +3658,6 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -4647,6 +4684,69 @@ async fn live_app_server_file_change_item_started_preserves_changes() {
     assert!(
         transcript.contains("Added foo.txt") || transcript.contains("Edited foo.txt"),
         "expected patch summary to include foo.txt, got: {transcript}"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_command_execution_strips_shell_wrapper() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let command =
+        shlex::try_join(["/bin/zsh", "-lc", script]).expect("round-trippable shell wrapper");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command: command.clone(),
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::InProgress,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command,
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: Some("Hello, world!\n".to_string()),
+                exit_code: Some(0),
+                duration_ms: Some(5),
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one completed command history cell"
+    );
+    let blob = lines_to_single_string(cells.first().expect("command cell"));
+    assert_snapshot!(
+        "live_app_server_command_execution_strips_shell_wrapper",
+        blob
     );
 }
 
@@ -6747,6 +6847,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
@@ -6791,6 +6892,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
@@ -10573,7 +10675,6 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -10635,7 +10736,6 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -10684,7 +10784,6 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -11068,7 +11167,6 @@ async fn status_widget_and_approval_modal_snapshot() {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -12622,6 +12720,17 @@ async fn pre_tool_use_hook_events_render_snapshot() {
         "pre-tool-use:0:/tmp/hooks.json",
         "warming the shell",
         "pre_tool_use_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn post_tool_use_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        "post-tool-use:0:/tmp/hooks.json",
+        "warming the shell",
+        "post_tool_use_hook_events_render_snapshot",
     )
     .await;
 }

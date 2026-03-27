@@ -208,15 +208,15 @@ fn default_test_overrides() -> ConfigOverrides {
 
 #[cfg(target_os = "linux")]
 pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
-    if let Ok(path) = std::env::current_exe() {
-        return Ok(path);
-    }
-
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
         .and_then(Option::as_ref)
         .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
     {
+        return Ok(path);
+    }
+
+    if let Ok(path) = std::env::current_exe() {
         return Ok(path);
     }
 

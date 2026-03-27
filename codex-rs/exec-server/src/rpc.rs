@@ -19,7 +19,6 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tracing::warn;
 
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
@@ -192,12 +191,12 @@ impl RpcClient {
                         if let Err(err) =
                             handle_server_message(&pending_for_reader, &event_tx, message).await
                         {
-                            warn!("JSON-RPC client closing after protocol error: {err}");
+                            let _ = err;
                             break;
                         }
                     }
                     JsonRpcConnectionEvent::MalformedMessage { reason } => {
-                        warn!("JSON-RPC client closing after malformed message: {reason}");
+                        let _ = reason;
                         break;
                     }
                     JsonRpcConnectionEvent::Disconnected { reason } => {

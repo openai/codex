@@ -12,6 +12,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
@@ -159,7 +160,6 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                             enabled: Some(true),
                         }),
                         file_system: None,
-                        macos: None,
                     },
                     "justification": params.justification.clone(),
                 })
@@ -233,7 +233,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
 
     assert_eq!(
         output,
-        "missing `additional_permissions`; provide at least one of `network`, `file_system`, or `macos` when using `with_additional_permissions`"
+        "missing `additional_permissions`; provide at least one of `network` or `file_system` when using `with_additional_permissions`"
     );
 }
 
@@ -437,6 +437,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         config,
         auth_manager,
         models_manager,
+        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         skills_manager,
         plugins_manager,
         mcp_manager,

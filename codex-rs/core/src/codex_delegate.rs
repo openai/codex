@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
+use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -77,6 +78,9 @@ pub(crate) async fn run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
+        environment_manager: Arc::new(EnvironmentManager::new(
+            parent_ctx.environment.exec_server_url().map(str::to_owned),
+        )),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
@@ -442,7 +446,6 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
-        skill_metadata,
         available_decisions,
         ..
     } = event;
@@ -486,7 +489,6 @@ async fn handle_exec_approval(
                 network_approval_context,
                 proposed_execpolicy_amendment,
                 additional_permissions,
-                skill_metadata,
                 available_decisions,
             ),
             parent_session,

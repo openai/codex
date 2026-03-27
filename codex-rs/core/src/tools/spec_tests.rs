@@ -11,6 +11,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_tools::AdditionalProperties;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -60,139 +61,6 @@ fn search_capable_model_info() -> ModelInfo {
         ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     model_info.supports_search_tool = true;
     model_info
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_inserts_empty_properties() {
-    let mut schema = rmcp::model::JsonObject::new();
-    schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let tool = rmcp::model::Tool {
-        name: "no_props".to_string().into(),
-        title: None,
-        description: Some("No properties".to_string().into()),
-        input_schema: std::sync::Arc::new(schema),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool =
-        mcp_tool_to_openai_tool("server/no_props".to_string(), tool).expect("convert tool");
-    let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize schema");
-
-    assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
-    let mut input_schema = rmcp::model::JsonObject::new();
-    input_schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let mut output_schema = rmcp::model::JsonObject::new();
-    output_schema.insert(
-        "properties".to_string(),
-        serde_json::json!({
-            "result": {
-                "properties": {
-                    "nested": {}
-                }
-            }
-        }),
-    );
-    output_schema.insert("required".to_string(), serde_json::json!(["result"]));
-
-    let tool = rmcp::model::Tool {
-        name: "with_output".to_string().into(),
-        title: None,
-        description: Some("Has output schema".to_string().into()),
-        input_schema: std::sync::Arc::new(input_schema),
-        output_schema: Some(std::sync::Arc::new(output_schema)),
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), tool)
-        .expect("convert tool");
-
-    assert_eq!(
-        openai_tool.output_schema,
-        Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "array",
-                    "items": {}
-                },
-                "structuredContent": {
-                    "properties": {
-                        "result": {
-                            "properties": {
-                                "nested": {}
-                            }
-                        }
-                    },
-                    "required": ["result"]
-                },
-                "isError": {
-                    "type": "boolean"
-                },
-                "_meta": {}
-            },
-            "required": ["content"],
-            "additionalProperties": false
-        }))
-    );
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
-    let mut input_schema = rmcp::model::JsonObject::new();
-    input_schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let mut output_schema = rmcp::model::JsonObject::new();
-    output_schema.insert("enum".to_string(), serde_json::json!(["ok", "error"]));
-
-    let tool = rmcp::model::Tool {
-        name: "with_enum_output".to_string().into(),
-        title: None,
-        description: Some("Has enum output schema".to_string().into()),
-        input_schema: std::sync::Arc::new(input_schema),
-        output_schema: Some(std::sync::Arc::new(output_schema)),
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool)
-        .expect("convert tool");
-
-    assert_eq!(
-        openai_tool.output_schema,
-        Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "array",
-                    "items": {}
-                },
-                "structuredContent": {
-                    "enum": ["ok", "error"]
-                },
-                "isError": {
-                    "type": "boolean"
-                },
-                "_meta": {}
-            },
-            "required": ["content"],
-            "additionalProperties": false
-        }))
-    );
 }
 
 #[test]
@@ -467,15 +335,25 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_content_types: None,
         },
         create_view_image_tool(config.can_request_original_image_detail),
-        create_spawn_agent_tool(&config),
-        create_send_input_tool(),
-        if config.multi_agent_v2 {
-            create_wait_agent_tool_v2()
-        } else {
-            create_wait_agent_tool_v1()
-        },
-        create_close_agent_tool(),
     ] {
+        expected.insert(tool_name(&spec).to_string(), spec);
+    }
+    let collab_specs = if config.multi_agent_v2 {
+        vec![
+            create_spawn_agent_tool_v2(&config),
+            create_send_message_tool(),
+            create_wait_agent_tool_v2(),
+            create_close_agent_tool_v2(),
+        ]
+    } else {
+        vec![
+            create_spawn_agent_tool_v1(&config),
+            create_send_input_tool_v1(),
+            create_wait_agent_tool_v1(),
+            create_close_agent_tool_v1(),
+        ]
+    };
+    for spec in collab_specs {
         expected.insert(tool_name(&spec).to_string(), spec);
     }
     if !config.multi_agent_v2 {
@@ -773,28 +651,6 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
     };
     assert!(description.contains("only supported value is `original`"));
     assert!(description.contains("omit this field for default resized behavior"));
-}
-
-#[test]
-fn test_build_specs_artifact_tool_enabled() {
-    let mut config = test_config();
-    let runtime_root = tempfile::TempDir::new().expect("create temp codex home");
-    config.codex_home = runtime_root.path().to_path_buf();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Artifact);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(&tools, &["artifacts"]);
 }
 
 #[test]
@@ -2102,12 +1958,12 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
         panic!("expected function tool");
     };
-    assert!(
-        description.contains(
-            "You've already tried to find a matching available tool for the user's request"
-        )
-    );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+    ));
+    assert!(description.contains(
+        "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
+    ));
 }
 
 #[test]
@@ -2355,6 +2211,9 @@ fn tool_suggest_description_lists_discoverable_tools() {
     else {
         panic!("expected function tool");
     };
+    assert!(description.contains(
+        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+    ));
     assert!(description.contains("Google Calendar"));
     assert!(description.contains("Gmail"));
     assert!(description.contains("Sample Plugin"));
@@ -2367,10 +2226,21 @@ fn tool_suggest_description_lists_discoverable_tools() {
     );
     assert!(
         description.contains(
-            "You've already tried to find a matching available tool for the user's request"
+            "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
         )
     );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely."
+    ));
+    assert!(description.contains(
+        "For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself."
+    ));
+    assert!(description.contains(
+        "Do not suggest a plugin just because one of its connectors or capabilities seems relevant."
+    ));
+    assert!(description.contains(
+        "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
+    ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("tool_search fails to find a good match"));
     let JsonSchema::Object { required, .. } = parameters else {

@@ -1,6 +1,6 @@
 use codex_core::AuthManager;
 use codex_core::config::Config;
-use codex_core::token_data::TokenData;
+use codex_login::token_data::TokenData;
 use std::collections::HashSet;
 use std::time::Duration;
 

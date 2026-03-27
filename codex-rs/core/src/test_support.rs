@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_exec_server::EnvironmentManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -60,8 +61,14 @@ pub fn thread_manager_with_models_provider_and_home(
     auth: CodexAuth,
     provider: ModelProviderInfo,
     codex_home: PathBuf,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> ThreadManager {
-    ThreadManager::with_models_provider_and_home_for_tests(auth, provider, codex_home)
+    ThreadManager::with_models_provider_and_home_for_tests(
+        auth,
+        provider,
+        codex_home,
+        environment_manager,
+    )
 }
 
 pub async fn start_thread_with_user_shell_override(

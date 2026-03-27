@@ -31,7 +31,9 @@ pub(crate) fn select_handlers(
         .iter()
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
-            HookEventName::PreToolUse | HookEventName::SessionStart => {
+            HookEventName::PreToolUse
+            | HookEventName::PostToolUse
+            | HookEventName::SessionStart => {
                 matches_matcher(handler.matcher.as_deref(), matcher_input)
             }
             HookEventName::UserPromptSubmit | HookEventName::Stop => true,
@@ -106,9 +108,10 @@ pub(crate) fn completed_summary(
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
         HookEventName::SessionStart => HookScope::Thread,
-        HookEventName::PreToolUse | HookEventName::UserPromptSubmit | HookEventName::Stop => {
-            HookScope::Turn
-        }
+        HookEventName::PreToolUse
+        | HookEventName::PostToolUse
+        | HookEventName::UserPromptSubmit
+        | HookEventName::Stop => HookScope::Turn,
     }
 }
 
@@ -179,6 +182,19 @@ mod tests {
         ];
 
         let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].display_order, 0);
+    }
+
+    #[test]
+    fn post_tool_use_matches_tool_name() {
+        let handlers = vec![
+            make_handler(HookEventName::PostToolUse, Some("^Bash$"), "echo same", 0),
+            make_handler(HookEventName::PostToolUse, Some("^Edit$"), "echo same", 1),
+        ];
+
+        let selected = select_handlers(&handlers, HookEventName::PostToolUse, Some("Bash"));
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);

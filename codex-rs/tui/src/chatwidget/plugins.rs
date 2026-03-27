@@ -418,7 +418,7 @@ impl ChatWidget {
         let status_label = if is_installed {
             "Already installed in this session."
         } else {
-            "Not installed yet."
+            "Install the required Apps in ChatGPT to continue:"
         };
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));

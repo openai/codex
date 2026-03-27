@@ -11,13 +11,16 @@ use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tokio::sync::watch;
 
+use crate::ExecBackend;
 use crate::ExecProcess;
 use crate::ExecServerError;
-use crate::ExecServerEvent;
+use crate::ProcessId;
+use crate::StartedExecProcess;
+use crate::protocol::EXEC_CLOSED_METHOD;
+use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
@@ -31,6 +34,7 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+use crate::protocol::WriteStatus;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::internal_error;
@@ -38,7 +42,6 @@ use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
-const EVENT_CHANNEL_CAPACITY: usize = 256;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
 #[cfg(test)]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
@@ -59,7 +62,10 @@ struct RunningProcess {
     retained_bytes: usize,
     next_seq: u64,
     exit_code: Option<i32>,
+    wake_tx: watch::Sender<u64>,
     output_notify: Arc<Notify>,
+    open_streams: usize,
+    closed: bool,
 }
 
 enum ProcessEntry {
@@ -69,8 +75,7 @@ enum ProcessEntry {
 
 struct Inner {
     notifications: RpcNotificationSender,
-    events_tx: broadcast::Sender<ExecServerEvent>,
-    processes: Mutex<HashMap<String, ProcessEntry>>,
+    processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -78,6 +83,12 @@ struct Inner {
 #[derive(Clone)]
 pub(crate) struct LocalProcess {
     inner: Arc<Inner>,
+}
+
+struct LocalExecProcess {
+    process_id: ProcessId,
+    backend: LocalProcess,
+    wake_tx: watch::Sender<u64>,
 }
 
 impl Default for LocalProcess {
@@ -94,7 +105,6 @@ impl LocalProcess {
         Self {
             inner: Arc::new(Inner {
                 notifications,
-                events_tx: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
                 processes: Mutex::new(HashMap::new()),
                 initialize_requested: AtomicBool::new(false),
                 initialized: AtomicBool::new(false),
@@ -152,10 +162,12 @@ impl LocalProcess {
         Ok(())
     }
 
-    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
+    async fn start_process(
+        &self,
+        params: ExecParams,
+    ) -> Result<(ExecResponse, watch::Sender<u64>), JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
-
         let (program, args) = params
             .argv
             .split_first()
@@ -203,6 +215,7 @@ impl LocalProcess {
         };
 
         let output_notify = Arc::new(Notify::new());
+        let (wake_tx, _wake_rx) = watch::channel(0);
         {
             let mut process_map = self.inner.processes.lock().await;
             process_map.insert(
@@ -214,7 +227,10 @@ impl LocalProcess {
                     retained_bytes: 0,
                     next_seq: 1,
                     exit_code: None,
+                    wake_tx: wake_tx.clone(),
                     output_notify: Arc::clone(&output_notify),
+                    open_streams: 2,
+                    closed: false,
                 })),
             );
         }
@@ -248,7 +264,13 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok(ExecResponse { process_id })
+        Ok((ExecResponse { process_id }, wake_tx))
+    }
+
+    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
+        self.start_process(params)
+            .await
+            .map(|(response, _)| response)
     }
 
     pub(crate) async fn exec_read(
@@ -256,6 +278,7 @@ impl LocalProcess {
         params: ReadParams,
     ) -> Result<ReadResponse, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
+        let _process_id = params.process_id.clone();
         let after_seq = params.after_seq.unwrap_or(0);
         let max_bytes = params.max_bytes.unwrap_or(usize::MAX);
         let wait = Duration::from_millis(params.wait_ms.unwrap_or(0));
@@ -300,6 +323,8 @@ impl LocalProcess {
                         next_seq,
                         exited: process.exit_code.is_some(),
                         exit_code: process.exit_code,
+                        closed: process.closed,
+                        failure: None,
                     },
                     Arc::clone(&process.output_notify),
                 )
@@ -309,6 +334,11 @@ impl LocalProcess {
                 || response.exited
                 || tokio::time::Instant::now() >= deadline
             {
+                let _total_bytes: usize = response
+                    .chunks
+                    .iter()
+                    .map(|chunk| chunk.chunk.0.len())
+                    .sum();
                 return Ok(response);
             }
 
@@ -325,22 +355,24 @@ impl LocalProcess {
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
+        let _process_id = params.process_id.clone();
+        let _input_bytes = params.chunk.0.len();
         let writer_tx = {
             let process_map = self.inner.processes.lock().await;
-            let process = process_map.get(&params.process_id).ok_or_else(|| {
-                invalid_request(format!("unknown process id {}", params.process_id))
-            })?;
+            let Some(process) = process_map.get(&params.process_id) else {
+                return Ok(WriteResponse {
+                    status: WriteStatus::UnknownProcess,
+                });
+            };
             let ProcessEntry::Running(process) = process else {
-                return Err(invalid_request(format!(
-                    "process id {} is starting",
-                    params.process_id
-                )));
+                return Ok(WriteResponse {
+                    status: WriteStatus::Starting,
+                });
             };
             if !process.tty {
-                return Err(invalid_request(format!(
-                    "stdin is closed for process {}",
-                    params.process_id
-                )));
+                return Ok(WriteResponse {
+                    status: WriteStatus::StdinClosed,
+                });
             }
             process.session.writer_sender()
         };
@@ -350,7 +382,9 @@ impl LocalProcess {
             .await
             .map_err(|_| internal_error("failed to write to process stdin".to_string()))?;
 
-        Ok(WriteResponse { accepted: true })
+        Ok(WriteResponse {
+            status: WriteStatus::Accepted,
+        })
     }
 
     pub(crate) async fn terminate_process(
@@ -358,6 +392,7 @@ impl LocalProcess {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
+        let _process_id = params.process_id.clone();
         let running = {
             let process_map = self.inner.processes.lock().await;
             match process_map.get(&params.process_id) {
@@ -377,38 +412,90 @@ impl LocalProcess {
 }
 
 #[async_trait]
-impl ExecProcess for LocalProcess {
-    async fn start(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        self.exec(params).await.map_err(map_handler_error)
+impl ExecBackend for LocalProcess {
+    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
+        let (response, wake_tx) = self
+            .start_process(params)
+            .await
+            .map_err(map_handler_error)?;
+        Ok(StartedExecProcess {
+            process: Arc::new(LocalExecProcess {
+                process_id: response.process_id,
+                backend: self.clone(),
+                wake_tx,
+            }),
+        })
+    }
+}
+
+#[async_trait]
+impl ExecProcess for LocalExecProcess {
+    fn process_id(&self) -> &ProcessId {
+        &self.process_id
     }
 
-    async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
-        self.exec_read(params).await.map_err(map_handler_error)
+    fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        self.wake_tx.subscribe()
+    }
+
+    async fn read(
+        &self,
+        after_seq: Option<u64>,
+        max_bytes: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError> {
+        self.backend
+            .read(&self.process_id, after_seq, max_bytes, wait_ms)
+            .await
+    }
+
+    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
+        self.backend.write(&self.process_id, chunk).await
+    }
+
+    async fn terminate(&self) -> Result<(), ExecServerError> {
+        self.backend.terminate(&self.process_id).await
+    }
+}
+
+impl LocalProcess {
+    async fn read(
+        &self,
+        process_id: &ProcessId,
+        after_seq: Option<u64>,
+        max_bytes: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError> {
+        self.exec_read(ReadParams {
+            process_id: process_id.clone(),
+            after_seq,
+            max_bytes,
+            wait_ms,
+        })
+        .await
+        .map_err(map_handler_error)
     }
 
     async fn write(
         &self,
-        process_id: &str,
+        process_id: &ProcessId,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
         self.exec_write(WriteParams {
-            process_id: process_id.to_string(),
+            process_id: process_id.clone(),
             chunk: chunk.into(),
         })
         .await
         .map_err(map_handler_error)
     }
 
-    async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
+    async fn terminate(&self, process_id: &ProcessId) -> Result<(), ExecServerError> {
         self.terminate_process(TerminateParams {
-            process_id: process_id.to_string(),
+            process_id: process_id.clone(),
         })
         .await
-        .map_err(map_handler_error)
-    }
-
-    fn subscribe_events(&self) -> broadcast::Receiver<ExecServerEvent> {
-        self.inner.events_tx.subscribe()
+        .map_err(map_handler_error)?;
+        Ok(())
     }
 }
 
@@ -420,13 +507,14 @@ fn map_handler_error(error: JSONRPCErrorError) -> ExecServerError {
 }
 
 async fn stream_output(
-    process_id: String,
+    process_id: ProcessId,
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
 ) {
     while let Some(chunk) = receiver.recv().await {
+        let _chunk_len = chunk.len();
         let notification = {
             let mut processes = inner.processes.lock().await;
             let Some(entry) = processes.get_mut(&process_id) else {
@@ -448,21 +536,16 @@ async fn stream_output(
                     break;
                 };
                 process.retained_bytes = process.retained_bytes.saturating_sub(evicted.chunk.len());
-                warn!(
-                    "retained output cap exceeded for process {process_id}; dropping oldest output"
-                );
             }
+            let _ = process.wake_tx.send(seq);
             ExecOutputDeltaNotification {
                 process_id: process_id.clone(),
+                seq,
                 stream,
                 chunk: chunk.into(),
             }
         };
         output_notify.notify_waiters();
-        let _ = inner
-            .events_tx
-            .send(ExecServerEvent::OutputDelta(notification.clone()));
-
         if inner
             .notifications
             .notify(crate::protocol::EXEC_OUTPUT_DELTA_METHOD, &notification)
@@ -472,37 +555,45 @@ async fn stream_output(
             break;
         }
     }
+
+    finish_output_stream(process_id, inner).await;
 }
 
 async fn watch_exit(
-    process_id: String,
+    process_id: ProcessId,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
-    {
+    let notification = {
         let mut processes = inner.processes.lock().await;
         if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
+            let seq = process.next_seq;
+            process.next_seq += 1;
             process.exit_code = Some(exit_code);
+            let _ = process.wake_tx.send(seq);
+            Some(ExecExitedNotification {
+                process_id: process_id.clone(),
+                seq,
+                exit_code,
+            })
+        } else {
+            None
         }
-    }
-    output_notify.notify_waiters();
-    let notification = ExecExitedNotification {
-        process_id: process_id.clone(),
-        exit_code,
     };
-    let _ = inner
-        .events_tx
-        .send(ExecServerEvent::Exited(notification.clone()));
-    if inner
-        .notifications
-        .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
-        .await
-        .is_err()
+    output_notify.notify_waiters();
+    if let Some(notification) = notification
+        && inner
+            .notifications
+            .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
+            .await
+            .is_err()
     {
         return;
     }
+
+    maybe_emit_closed(process_id.clone(), Arc::clone(&inner)).await;
 
     tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
     let mut processes = inner.processes.lock().await;
@@ -512,4 +603,52 @@ async fn watch_exit(
     ) {
         processes.remove(&process_id);
     }
+}
+
+async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
+    {
+        let mut processes = inner.processes.lock().await;
+        let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
+            return;
+        };
+
+        if process.open_streams > 0 {
+            process.open_streams -= 1;
+        }
+    }
+
+    maybe_emit_closed(process_id, inner).await;
+}
+
+async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
+    let notification = {
+        let mut processes = inner.processes.lock().await;
+        let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
+            return;
+        };
+
+        if process.closed || process.open_streams != 0 || process.exit_code.is_none() {
+            return;
+        }
+
+        process.closed = true;
+        let seq = process.next_seq;
+        process.next_seq += 1;
+        let _ = process.wake_tx.send(seq);
+        Some(ExecClosedNotification {
+            process_id: process_id.clone(),
+            seq,
+        })
+    };
+
+    let Some(notification) = notification else {
+        return;
+    };
+
+    if inner
+        .notifications
+        .notify(EXEC_CLOSED_METHOD, &notification)
+        .await
+        .is_err()
+    {}
 }

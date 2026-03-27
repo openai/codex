@@ -57,8 +57,6 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        permission_profile: None,
-        managed_network_override: None,
         path_to_skills_md: path,
         scope: SkillScope::User,
     }

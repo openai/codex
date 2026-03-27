@@ -24,6 +24,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -236,6 +237,7 @@ fn build_test_processor(
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
         config,
+        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
         cloud_requirements: CloudRequirementsLoader::default(),

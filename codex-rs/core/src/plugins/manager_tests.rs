@@ -164,6 +164,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
                     disabled_tools: None,
                     scopes: None,
                     oauth_resource: None,
+                    tools: HashMap::new(),
                 },
             )]),
             apps: vec![AppConnectorId("connector_example".to_string())],
@@ -483,6 +484,7 @@ fn load_plugins_uses_manifest_configured_component_paths() {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         )])
     );
@@ -586,6 +588,7 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         )])
     );
@@ -735,6 +738,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         disabled_tools: None,
         scopes: None,
         oauth_resource: None,
+        tools: HashMap::new(),
     };
     let plugin = |config_name: &str, dir_name: &str, manifest_name: &str| LoadedPlugin {
         config_name: config_name.to_string(),
@@ -1386,7 +1390,7 @@ plugins = true
             path: AbsolutePathBuf::try_from(curated_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
             interface: Some(MarketplaceInterface {
-                display_name: Some("ChatGPT Official".to_string()),
+                display_name: Some(OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()),
             }),
             plugins: vec![ConfiguredMarketplacePlugin {
                 id: "linear@openai-curated".to_string(),
