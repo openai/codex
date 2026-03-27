@@ -281,7 +281,13 @@ impl Session {
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            active_turn.clear_pending().await;
+            // Preserve buffered input on real interrupts so redirected agent messages survive the
+            // abort boundary and can be replayed into the follow-up turn.
+            if reason == TurnAbortReason::Interrupted {
+                active_turn.clear_pending_waiters().await;
+            } else {
+                active_turn.clear_pending().await;
+            }
         }
         if reason == TurnAbortReason::Interrupted {
             self.ensure_task_for_queued_response_items().await;
