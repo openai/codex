@@ -2653,16 +2653,6 @@ pub enum TruncationPolicy {
     Tokens(usize),
 }
 
-const APPROX_BYTES_PER_TOKEN: usize = 4;
-
-fn approx_tokens_from_byte_count(bytes: usize) -> usize {
-    bytes.saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1)) / APPROX_BYTES_PER_TOKEN
-}
-
-fn approx_bytes_for_tokens(tokens: usize) -> usize {
-    tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)
-}
-
 impl From<crate::openai_models::TruncationPolicyConfig> for TruncationPolicy {
     fn from(config: crate::openai_models::TruncationPolicyConfig) -> Self {
         match config.mode {
@@ -2675,7 +2665,10 @@ impl From<crate::openai_models::TruncationPolicyConfig> for TruncationPolicy {
 impl TruncationPolicy {
     pub fn token_budget(&self) -> usize {
         match self {
-            TruncationPolicy::Bytes(bytes) => approx_tokens_from_byte_count(*bytes),
+            TruncationPolicy::Bytes(bytes) => {
+                usize::try_from(codex_utils_string::approx_tokens_from_byte_count(*bytes))
+                    .unwrap_or(usize::MAX)
+            }
             TruncationPolicy::Tokens(tokens) => *tokens,
         }
     }
@@ -2683,7 +2676,9 @@ impl TruncationPolicy {
     pub fn byte_budget(&self) -> usize {
         match self {
             TruncationPolicy::Bytes(bytes) => *bytes,
-            TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(*tokens),
+            TruncationPolicy::Tokens(tokens) => {
+                codex_utils_string::approx_bytes_for_tokens(*tokens)
+            }
         }
     }
 }
