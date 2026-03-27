@@ -128,6 +128,7 @@ pub(super) async fn try_run_zsh_fork(
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
+        sandbox_policy_cwd,
         env: sandbox_env,
         exec_server_env_config: _,
         network: sandbox_network,
@@ -779,6 +780,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             crate::sandboxing::ExecRequest {
                 command: self.command.clone(),
                 cwd: self.cwd.clone(),
+                sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
                 env: exec_env,
                 exec_server_env_config: None,
                 network: self.network.clone(),
