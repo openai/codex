@@ -120,6 +120,41 @@ macro_rules! client_request_definitions {
             }
         }
 
+        /// Typed response from the server to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ClientResponse {
+            $(
+                $(#[doc = $variant_doc])*
+                $(#[serde(rename = $wire)])?
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    response: $response,
+                },
+            )*
+        }
+
+        impl ClientResponse {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            }
+        }
+
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {
@@ -1266,6 +1301,84 @@ mod tests {
     }
 
     #[test]
+    fn serialize_client_response() -> Result<()> {
+        let response = ClientResponse::ThreadStart {
+            request_id: RequestId::Integer(7),
+            response: v2::ThreadStartResponse {
+                thread: v2::Thread {
+                    id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    preview: "first prompt".to_string(),
+                    ephemeral: true,
+                    model_provider: "openai".to_string(),
+                    created_at: 1,
+                    updated_at: 2,
+                    status: v2::ThreadStatus::Idle,
+                    path: None,
+                    cwd: PathBuf::from("/tmp"),
+                    cli_version: "0.0.0".to_string(),
+                    source: v2::SessionSource::Exec,
+                    agent_nickname: None,
+                    agent_role: None,
+                    git_info: None,
+                    name: None,
+                    turns: Vec::new(),
+                },
+                model: "gpt-5".to_string(),
+                model_provider: "openai".to_string(),
+                service_tier: None,
+                cwd: PathBuf::from("/tmp"),
+                approval_policy: v2::AskForApproval::OnFailure,
+                approvals_reviewer: v2::ApprovalsReviewer::User,
+                sandbox: v2::SandboxPolicy::DangerFullAccess,
+                reasoning_effort: None,
+            },
+        };
+
+        assert_eq!(response.id(), &RequestId::Integer(7));
+        assert_eq!(response.method(), "thread/start");
+        assert_eq!(
+            json!({
+                "method": "thread/start",
+                "id": 7,
+                "response": {
+                    "thread": {
+                        "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "preview": "first prompt",
+                        "ephemeral": true,
+                        "modelProvider": "openai",
+                        "createdAt": 1,
+                        "updatedAt": 2,
+                        "status": {
+                            "type": "idle"
+                        },
+                        "path": null,
+                        "cwd": "/tmp",
+                        "cliVersion": "0.0.0",
+                        "source": "exec",
+                        "agentNickname": null,
+                        "agentRole": null,
+                        "gitInfo": null,
+                        "name": null,
+                        "turns": []
+                    },
+                    "model": "gpt-5",
+                    "modelProvider": "openai",
+                    "serviceTier": null,
+                    "cwd": "/tmp",
+                    "approvalPolicy": "on-failure",
+                    "approvalsReviewer": "user",
+                    "sandbox": {
+                        "type": "dangerFullAccess"
+                    },
+                    "reasoningEffort": null
+                }
+            }),
+            serde_json::to_value(&response)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_config_requirements_read() -> Result<()> {
         let request = ClientRequest::ConfigRequirementsRead {
             request_id: RequestId::Integer(1),
@@ -1703,9 +1816,7 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/allowed")]),
                     write: None,
                 }),
-                macos: None,
             }),
-            skill_metadata: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             available_decisions: None,
@@ -1714,33 +1825,6 @@ mod tests {
         assert_eq!(
             reason,
             Some("item/commandExecution/requestApproval.additionalPermissions")
-        );
-    }
-
-    #[test]
-    fn command_execution_request_approval_skill_metadata_is_marked_experimental() {
-        let params = v2::CommandExecutionRequestApprovalParams {
-            thread_id: "thr_123".to_string(),
-            turn_id: "turn_123".to_string(),
-            item_id: "call_123".to_string(),
-            approval_id: None,
-            reason: None,
-            network_approval_context: None,
-            command: Some("cat file".to_string()),
-            cwd: None,
-            command_actions: None,
-            additional_permissions: None,
-            skill_metadata: Some(v2::CommandExecutionRequestApprovalSkillMetadata {
-                path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
-            }),
-            proposed_execpolicy_amendment: None,
-            proposed_network_policy_amendments: None,
-            available_decisions: None,
-        };
-        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
-        assert_eq!(
-            reason,
-            Some("item/commandExecution/requestApproval.skillMetadata")
         );
     }
 }

@@ -118,6 +118,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     #[cfg(target_os = "linux")]
     let sandbox_env = match linux_sandbox_test_env().await {
         Some(env) => env,
+        // Skip on Linux hosts where Landlock cannot actually be enforced.
         None => return,
     };
     #[cfg(not(target_os = "linux"))]
@@ -310,6 +311,78 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         .await
         .expect("try_exists allowed failed");
     assert!(allowed_exists, "allowed path should exist");
+}
+
+#[tokio::test]
+async fn sandbox_blocks_first_time_dot_codex_creation() {
+    core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
+
+    let temp = tempfile::tempdir().expect("should be able to create temp dir");
+    let repo_root = temp.path().join("repo");
+    create_dir_all(&repo_root).await.expect("mkdir repo");
+    let dot_codex = repo_root.join(".codex");
+    let config_toml = dot_codex.join("config.toml");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+
+    let mut child = spawn_command_under_sandbox(
+        vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "mkdir -p .codex && echo 'sandbox_mode = \"danger-full-access\"' > .codex/config.toml"
+                .to_string(),
+        ],
+        repo_root.clone(),
+        &policy,
+        repo_root.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        sandbox_env,
+    )
+    .await
+    .expect("should spawn command creating .codex");
+
+    let status = child.wait().await.expect("should wait for .codex command");
+    assert!(
+        !status.success(),
+        "sandbox unexpectedly allowed first-time .codex creation: {status:?}"
+    );
+    let dot_codex_metadata = tokio::fs::symlink_metadata(&dot_codex).await;
+    if let Ok(metadata) = dot_codex_metadata {
+        assert!(
+            !metadata.is_dir(),
+            "{} should not be creatable as a directory",
+            dot_codex.display()
+        );
+    } else if let Err(err) = &dot_codex_metadata {
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::NotFound,
+            "unexpected metadata error for {}: {err}",
+            dot_codex.display()
+        );
+    }
+    let config_toml_exists = match tokio::fs::try_exists(&config_toml).await {
+        Ok(exists) => exists,
+        Err(err) if err.kind() == io::ErrorKind::NotADirectory => false,
+        Err(err) => panic!("try_exists {} failed: {err}", config_toml.display()),
+    };
+    assert!(
+        !config_toml_exists,
+        "{} should not have been created",
+        config_toml.display()
+    );
 }
 
 fn unix_sock_body() {

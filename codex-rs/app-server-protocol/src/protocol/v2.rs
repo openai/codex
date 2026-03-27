@@ -7,7 +7,6 @@ use crate::protocol::common::AuthMode;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
-use codex_protocol::approvals::ExecApprovalRequestSkillMetadata as CoreExecApprovalRequestSkillMetadata;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
@@ -33,10 +32,6 @@ use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
-use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
-use codex_protocol::models::MacOsContactsPermission as CoreMacOsContactsPermission;
-use codex_protocol::models::MacOsPreferencesPermission as CoreMacOsPreferencesPermission;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions as CoreMacOsSeatbeltProfileExtensions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
@@ -1115,47 +1110,6 @@ impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct AdditionalMacOsPermissions {
-    pub preferences: CoreMacOsPreferencesPermission,
-    pub automations: CoreMacOsAutomationPermission,
-    pub launch_services: bool,
-    pub accessibility: bool,
-    pub calendar: bool,
-    pub reminders: bool,
-    pub contacts: CoreMacOsContactsPermission,
-}
-
-impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
-    fn from(value: CoreMacOsSeatbeltProfileExtensions) -> Self {
-        Self {
-            preferences: value.macos_preferences,
-            automations: value.macos_automation,
-            launch_services: value.macos_launch_services,
-            accessibility: value.macos_accessibility,
-            calendar: value.macos_calendar,
-            reminders: value.macos_reminders,
-            contacts: value.macos_contacts,
-        }
-    }
-}
-
-impl From<AdditionalMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
-    fn from(value: AdditionalMacOsPermissions) -> Self {
-        Self {
-            macos_preferences: value.preferences,
-            macos_automation: value.automations,
-            macos_launch_services: value.launch_services,
-            macos_accessibility: value.accessibility,
-            macos_calendar: value.calendar,
-            macos_reminders: value.reminders,
-            macos_contacts: value.contacts,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct AdditionalNetworkPermissions {
     pub enabled: Option<bool>,
 }
@@ -1209,7 +1163,6 @@ impl From<RequestPermissionProfile> for CoreRequestPermissionProfile {
 pub struct AdditionalPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
-    pub macos: Option<AdditionalMacOsPermissions>,
 }
 
 impl From<CorePermissionProfile> for AdditionalPermissionProfile {
@@ -1217,7 +1170,6 @@ impl From<CorePermissionProfile> for AdditionalPermissionProfile {
         Self {
             network: value.network.map(AdditionalNetworkPermissions::from),
             file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
-            macos: value.macos.map(AdditionalMacOsPermissions::from),
         }
     }
 }
@@ -1227,7 +1179,6 @@ impl From<AdditionalPermissionProfile> for CorePermissionProfile {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
-            macos: value.macos.map(CoreMacOsSeatbeltProfileExtensions::from),
         }
     }
 }
@@ -1249,7 +1200,6 @@ impl From<GrantedPermissionProfile> for CorePermissionProfile {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
-            macos: None,
         }
     }
 }
@@ -3545,14 +3495,6 @@ impl From<CoreSkillMetadata> for SkillMetadata {
     }
 }
 
-impl From<CoreExecApprovalRequestSkillMetadata> for CommandExecutionRequestApprovalSkillMetadata {
-    fn from(value: CoreExecApprovalRequestSkillMetadata) -> Self {
-        Self {
-            path_to_skills_md: value.path_to_skills_md,
-        }
-    }
-}
-
 impl From<CoreSkillInterface> for SkillInterface {
     fn from(value: CoreSkillInterface) -> Self {
         Self {
@@ -5266,11 +5208,6 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub additional_permissions: Option<AdditionalPermissionProfile>,
-    /// Optional skill metadata when the approval was triggered by a skill script.
-    #[experimental("item/commandExecution/requestApproval.skillMetadata")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub skill_metadata: Option<CommandExecutionRequestApprovalSkillMetadata>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
@@ -5292,15 +5229,7 @@ impl CommandExecutionRequestApprovalParams {
         // We need a generic outbound compatibility design for stripping or
         // otherwise handling experimental server->client payloads.
         self.additional_permissions = None;
-        self.skill_metadata = None;
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CommandExecutionRequestApprovalSkillMetadata {
-    pub path_to_skills_md: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6123,10 +6052,8 @@ mod tests {
                 "fileSystem": {
                     "read": ["relative/path"],
                     "write": null
-                },
-                "macos": null
+                }
             },
-            "skillMetadata": null,
             "proposedExecpolicyAmendment": null,
             "proposedNetworkPolicyAmendments": null,
             "availableDecisions": null
@@ -6136,121 +6063,6 @@ mod tests {
             err.to_string()
                 .contains("AbsolutePathBuf deserialized without a base path"),
             "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn command_execution_request_approval_accepts_macos_automation_bundle_ids_object() {
-        let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
-            "threadId": "thr_123",
-            "turnId": "turn_123",
-            "itemId": "call_123",
-            "command": "cat file",
-            "cwd": "/tmp",
-            "commandActions": null,
-            "reason": null,
-            "networkApprovalContext": null,
-            "additionalPermissions": {
-                "network": null,
-                "fileSystem": null,
-                "macos": {
-                    "preferences": "read_only",
-                    "automations": {
-                        "bundle_ids": ["com.apple.Notes"]
-                    },
-                    "launchServices": false,
-                    "accessibility": false,
-                    "calendar": false,
-                    "reminders": false,
-                    "contacts": "read_only"
-                }
-            },
-            "skillMetadata": null,
-            "proposedExecpolicyAmendment": null,
-            "proposedNetworkPolicyAmendments": null,
-            "availableDecisions": null
-        }))
-        .expect("bundle_ids object should deserialize");
-
-        assert_eq!(
-            params
-                .additional_permissions
-                .and_then(|permissions| permissions.macos)
-                .map(|macos| (macos.automations, macos.launch_services, macos.contacts)),
-            Some((
-                CoreMacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),]),
-                false,
-                CoreMacOsContactsPermission::ReadOnly,
-            ))
-        );
-    }
-
-    #[test]
-    fn command_execution_request_approval_accepts_macos_reminders_permission() {
-        let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
-            "threadId": "thr_123",
-            "turnId": "turn_123",
-            "itemId": "call_123",
-            "command": "cat file",
-            "cwd": "/tmp",
-            "commandActions": null,
-            "reason": null,
-            "networkApprovalContext": null,
-            "additionalPermissions": {
-                "network": null,
-                "fileSystem": null,
-                "macos": {
-                    "preferences": "read_only",
-                    "automations": "none",
-                    "launchServices": false,
-                    "accessibility": false,
-                    "calendar": false,
-                    "reminders": true,
-                    "contacts": "none"
-                }
-            },
-            "skillMetadata": null,
-            "proposedExecpolicyAmendment": null,
-            "proposedNetworkPolicyAmendments": null,
-            "availableDecisions": null
-        }))
-        .expect("reminders permission should deserialize");
-
-        assert_eq!(
-            params
-                .additional_permissions
-                .and_then(|permissions| permissions.macos)
-                .map(|macos| macos.reminders),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn command_execution_request_approval_accepts_skill_metadata() {
-        let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
-            "threadId": "thr_123",
-            "turnId": "turn_123",
-            "itemId": "call_123",
-            "command": "cat file",
-            "cwd": "/tmp",
-            "commandActions": null,
-            "reason": null,
-            "networkApprovalContext": null,
-            "additionalPermissions": null,
-            "skillMetadata": {
-                "pathToSkillsMd": "/tmp/SKILLS.md"
-            },
-            "proposedExecpolicyAmendment": null,
-            "proposedNetworkPolicyAmendments": null,
-            "availableDecisions": null
-        }))
-        .expect("skill metadata should deserialize");
-
-        assert_eq!(
-            params.skill_metadata,
-            Some(CommandExecutionRequestApprovalSkillMetadata {
-                path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
-            })
         );
     }
 
@@ -6411,7 +6223,6 @@ mod tests {
                             .expect("path must be absolute"),
                     ]),
                 }),
-                macos: None,
             }
         );
     }

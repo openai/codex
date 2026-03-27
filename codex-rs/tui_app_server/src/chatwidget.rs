@@ -1317,11 +1317,6 @@ fn exec_approval_request_from_params(
                     .collect()
             },
         ),
-        skill_metadata: params.skill_metadata.map(|metadata| {
-            codex_protocol::approvals::ExecApprovalRequestSkillMetadata {
-                path_to_skills_md: metadata.path_to_skills_md,
-            }
-        }),
         available_decisions: params.available_decisions.map(|decisions| {
             decisions
                 .into_iter()

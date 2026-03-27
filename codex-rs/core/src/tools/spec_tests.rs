@@ -11,6 +11,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_tools::AdditionalProperties;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -60,139 +61,6 @@ fn search_capable_model_info() -> ModelInfo {
         ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     model_info.supports_search_tool = true;
     model_info
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_inserts_empty_properties() {
-    let mut schema = rmcp::model::JsonObject::new();
-    schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let tool = rmcp::model::Tool {
-        name: "no_props".to_string().into(),
-        title: None,
-        description: Some("No properties".to_string().into()),
-        input_schema: std::sync::Arc::new(schema),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool =
-        mcp_tool_to_openai_tool("server/no_props".to_string(), tool).expect("convert tool");
-    let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize schema");
-
-    assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
-    let mut input_schema = rmcp::model::JsonObject::new();
-    input_schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let mut output_schema = rmcp::model::JsonObject::new();
-    output_schema.insert(
-        "properties".to_string(),
-        serde_json::json!({
-            "result": {
-                "properties": {
-                    "nested": {}
-                }
-            }
-        }),
-    );
-    output_schema.insert("required".to_string(), serde_json::json!(["result"]));
-
-    let tool = rmcp::model::Tool {
-        name: "with_output".to_string().into(),
-        title: None,
-        description: Some("Has output schema".to_string().into()),
-        input_schema: std::sync::Arc::new(input_schema),
-        output_schema: Some(std::sync::Arc::new(output_schema)),
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), tool)
-        .expect("convert tool");
-
-    assert_eq!(
-        openai_tool.output_schema,
-        Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "array",
-                    "items": {}
-                },
-                "structuredContent": {
-                    "properties": {
-                        "result": {
-                            "properties": {
-                                "nested": {}
-                            }
-                        }
-                    },
-                    "required": ["result"]
-                },
-                "isError": {
-                    "type": "boolean"
-                },
-                "_meta": {}
-            },
-            "required": ["content"],
-            "additionalProperties": false
-        }))
-    );
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
-    let mut input_schema = rmcp::model::JsonObject::new();
-    input_schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let mut output_schema = rmcp::model::JsonObject::new();
-    output_schema.insert("enum".to_string(), serde_json::json!(["ok", "error"]));
-
-    let tool = rmcp::model::Tool {
-        name: "with_enum_output".to_string().into(),
-        title: None,
-        description: Some("Has enum output schema".to_string().into()),
-        input_schema: std::sync::Arc::new(input_schema),
-        output_schema: Some(std::sync::Arc::new(output_schema)),
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool)
-        .expect("convert tool");
-
-    assert_eq!(
-        openai_tool.output_schema,
-        Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "array",
-                    "items": {}
-                },
-                "structuredContent": {
-                    "enum": ["ok", "error"]
-                },
-                "isError": {
-                    "type": "boolean"
-                },
-                "_meta": {}
-            },
-            "required": ["content"],
-            "additionalProperties": false
-        }))
-    );
 }
 
 #[test]

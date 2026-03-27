@@ -2,7 +2,6 @@ use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
@@ -15,8 +14,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
 use url::Url;
-
-use crate::seatbelt_permissions::build_seatbelt_extensions;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
@@ -330,8 +327,14 @@ fn build_seatbelt_access_policy(
         {
             let excluded_subpath =
                 normalize_path_for_sandbox(excluded_subpath.as_path()).unwrap_or(excluded_subpath);
-            let excluded_param = format!("{param_prefix}_{index}_RO_{excluded_index}");
+            let excluded_param = format!("{param_prefix}_{index}_EXCLUDED_{excluded_index}");
             params.push((excluded_param.clone(), excluded_subpath.into_path_buf()));
+            // Exclude both the exact protected path and anything beneath it.
+            // `subpath` alone leaves a gap for first-time creation of the
+            // protected directory itself, such as `mkdir .codex`.
+            require_parts.push(format!(
+                "(require-not (literal (param \"{excluded_param}\")))"
+            ));
             require_parts.push(format!(
                 "(require-not (subpath (param \"{excluded_param}\")))"
             ));
@@ -350,33 +353,30 @@ fn build_seatbelt_access_policy(
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn create_seatbelt_command_args_with_extensions(
+fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
-    extensions: Option<&MacOsSeatbeltProfileExtensions>,
 ) -> Vec<String> {
-    create_seatbelt_command_args_for_policies_with_extensions(
+    create_seatbelt_command_args_for_policies(
         command,
         &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_policy_cwd),
         NetworkSandboxPolicy::from(sandbox_policy),
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
-        extensions,
     )
 }
 
-pub fn create_seatbelt_command_args_for_policies_with_extensions(
+pub fn create_seatbelt_command_args_for_policies(
     command: Vec<String>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_policy_cwd: &Path,
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
-    extensions: Option<&MacOsSeatbeltProfileExtensions>,
 ) -> Vec<String> {
     let unreadable_roots =
         file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
@@ -464,13 +464,6 @@ pub fn create_seatbelt_command_args_for_policies_with_extensions(
     let proxy = proxy_policy_inputs(network);
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
-    let seatbelt_extensions = extensions.map_or_else(
-        || {
-            // Backward-compatibility default when no extension profile is provided.
-            build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions::default())
-        },
-        build_seatbelt_extensions,
-    );
 
     let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
     let mut policy_sections = vec![
@@ -482,9 +475,6 @@ pub fn create_seatbelt_command_args_for_policies_with_extensions(
     if include_platform_defaults {
         policy_sections.push(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS.to_string());
     }
-    if !seatbelt_extensions.policy.is_empty() {
-        policy_sections.push(seatbelt_extensions.policy.clone());
-    }
 
     let full_policy = policy_sections.join("\n");
 
@@ -493,7 +483,6 @@ pub fn create_seatbelt_command_args_for_policies_with_extensions(
         file_write_dir_params,
         macos_dir_params(),
         unix_socket_dir_params(&proxy),
-        seatbelt_extensions.dir_params,
     ]
     .concat();
 

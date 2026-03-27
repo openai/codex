@@ -28,7 +28,7 @@ pub(crate) fn build_sandbox_command(
         .split_first()
         .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
     Ok(SandboxCommand {
-        program: program.clone(),
+        program: program.clone().into(),
         args: args.to_vec(),
         cwd: cwd.to_path_buf(),
         env: env.clone(),
