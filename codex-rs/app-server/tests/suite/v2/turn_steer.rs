@@ -121,6 +121,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory.clone()),
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -224,6 +225,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory.clone()),
+            submission_type: None,
             ..Default::default()
         })
         .await?;

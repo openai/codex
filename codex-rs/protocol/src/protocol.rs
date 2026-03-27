@@ -205,6 +205,13 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionType {
+    Prompt,
+    PromptQueued,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -241,6 +248,19 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+    },
+
+    /// User input with additional turn-scoped metadata supplied by a higher-level
+    /// surface such as app-server `turn/start`.
+    UserInputWithMetadata {
+        /// User input items, see `InputItem`
+        items: Vec<UserInput>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
+        /// Semantic classification of this submitted user input.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission_type: Option<SubmissionType>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -298,6 +318,11 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Semantic classification of this submitted user message when known by
+        /// the higher-level surface.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission_type: Option<SubmissionType>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
@@ -572,6 +597,7 @@ impl Op {
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::UserInput { .. } => "user_input",
+            Self::UserInputWithMetadata { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",

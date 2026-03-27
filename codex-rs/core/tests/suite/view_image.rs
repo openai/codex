@@ -164,6 +164,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -273,6 +274,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -414,6 +416,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
             summary: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -513,6 +516,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
             summary: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -605,6 +609,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -705,6 +710,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
             summary: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -816,6 +822,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_feat
             summary: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -918,6 +925,7 @@ await codex.emitImage(out);
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1038,6 +1046,7 @@ console.log(out.type);
             summary: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1131,6 +1140,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1207,6 +1217,7 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1288,6 +1299,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1411,6 +1423,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1486,6 +1499,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 

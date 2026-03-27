@@ -217,6 +217,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -239,6 +240,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
                 text: "fail turn".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

@@ -6,6 +6,7 @@ import type { Personality } from "../Personality";
 import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ReasoningSummary } from "../ReasoningSummary";
 import type { ServiceTier } from "../ServiceTier";
+import type { SubmissionType } from "../SubmissionType";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
@@ -41,6 +42,9 @@ summary?: ReasoningSummary | null, /**
  * Override the personality for this turn and subsequent turns.
  */
 personality?: Personality | null, /**
+ * Classify the primary input message submitted with `turn/start`.
+ */
+submissionType?: SubmissionType | null, /**
  * Optional JSON Schema used to constrain the final assistant message for
  * this turn.
  */

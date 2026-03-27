@@ -3077,6 +3077,7 @@ async fn user_turn_updates_approvals_reviewer() {
             final_output_json_schema: None,
             collaboration_mode: None,
             personality: config.personality,
+            submission_type: None,
         },
     )
     .await;

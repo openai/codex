@@ -92,6 +92,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
                 text: "materialize".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -189,6 +190,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
                 text: "materialize".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -266,6 +268,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
                 text: "secondary turn".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

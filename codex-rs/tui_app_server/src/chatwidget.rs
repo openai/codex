@@ -186,6 +186,7 @@ use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 #[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -5393,6 +5394,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_type(user_message, /*submission_type*/ None);
+    }
+
+    fn submit_user_message_with_type(
+        &mut self,
+        user_message: UserMessage,
+        submission_type: Option<SubmissionType>,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5608,6 +5617,7 @@ impl ChatWidget {
             /*final_output_json_schema*/ None,
             collaboration_mode,
             personality,
+            submission_type,
         );
 
         if !self.submit_op(op) {
@@ -7074,8 +7084,13 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
+        let submission_type = if self.rejected_steers_queue.is_empty() {
+            Some(SubmissionType::PromptQueued)
+        } else {
+            None
+        };
         if let Some(user_message) = self.pop_next_queued_user_message() {
-            self.submit_user_message(user_message);
+            self.submit_user_message_with_type(user_message, submission_type);
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();

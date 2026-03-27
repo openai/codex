@@ -16,6 +16,7 @@ use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnResolvedConfigFact;
 use super::TurnStatus;
+use super::TurnSubmissionType;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
@@ -447,7 +448,7 @@ fn turn_event_serializes_expected_shape() {
             2,
             TurnResolvedConfigFact {
                 turn_id: "turn-2".to_string(),
-                submission_type: None,
+                submission_type: Some(TurnSubmissionType::Default),
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -481,8 +482,8 @@ fn turn_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": "codex-tui",
-                "submission_type": null,
                 "model": "gpt-5",
+                "submission_type": "default",
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",

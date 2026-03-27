@@ -202,6 +202,7 @@ async fn send_turn_start_request(stream: &mut WsClient, id: i64, thread_id: &str
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })?),
     )

@@ -63,6 +63,7 @@ async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> 
                 text: "trigger safeguard".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -136,6 +137,7 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
                 text: "trigger response model check".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

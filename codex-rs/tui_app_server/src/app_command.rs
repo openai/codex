@@ -17,6 +17,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -51,6 +52,7 @@ pub(crate) enum AppCommandView<'a> {
         final_output_json_schema: &'a Option<Value>,
         collaboration_mode: &'a Option<CollaborationMode>,
         personality: &'a Option<Personality>,
+        submission_type: &'a Option<SubmissionType>,
     },
     OverrideTurnContext {
         cwd: &'a Option<PathBuf>,
@@ -155,6 +157,7 @@ impl AppCommand {
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
+        submission_type: Option<SubmissionType>,
     ) -> Self {
         Self(Op::UserTurn {
             items,
@@ -169,6 +172,7 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
+            submission_type,
         })
     }
 
@@ -314,6 +318,7 @@ impl AppCommand {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                submission_type,
             } => AppCommandView::UserTurn {
                 items,
                 cwd,
@@ -327,6 +332,7 @@ impl AppCommand {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                submission_type,
             },
             Op::OverrideTurnContext {
                 cwd,
