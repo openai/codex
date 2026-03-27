@@ -85,11 +85,11 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use dunce::canonicalize as normalize_path;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
-use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -1691,9 +1691,31 @@ impl ConfigToml {
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
     pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let projects = self.projects.clone().unwrap_or_default();
+        let projects = self
+            .projects
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, project_config)| {
+                let key_path = Path::new(&key);
+                let normalized_key = if key_path.is_absolute() {
+                    normalize_path(key_path)
+                        .unwrap_or_else(|_| key_path.to_path_buf())
+                        .to_string_lossy()
+                        .to_string()
+                } else {
+                    key
+                };
+                (normalized_key, project_config)
+            })
+            .collect::<HashMap<_, _>>();
 
-        if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
+        let normalized_cwd = normalize_path(resolved_cwd)
+            .unwrap_or_else(|_| resolved_cwd.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+
+        if let Some(project_config) = projects.get(&normalized_cwd) {
             return Some(project_config.clone());
         }
 
@@ -1701,8 +1723,12 @@ impl ConfigToml {
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
         if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd)
-            && let Some(project_config_for_root) =
-                projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
+            && let Some(project_config_for_root) = projects.get(
+                &normalize_path(&repo_root)
+                    .unwrap_or(repo_root)
+                    .to_string_lossy()
+                    .to_string(),
+            )
         {
             return Some(project_config_for_root.clone());
         }

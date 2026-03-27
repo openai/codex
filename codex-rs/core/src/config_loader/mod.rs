@@ -555,7 +555,7 @@ impl ProjectTrustDecision {
 
 impl ProjectTrustContext {
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
-        let dir_key = dir.as_path().to_string_lossy().to_string();
+        let dir_key = normalized_project_trust_key(dir.as_path());
         if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
             return ProjectTrustDecision {
                 trust_level: Some(trust_level),
@@ -641,15 +641,19 @@ async fn project_trust_context(
     let project_root = find_project_root(cwd, project_root_markers).await?;
     let projects = project_trust_config.projects.unwrap_or_default();
 
-    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let project_root_key = normalized_project_trust_key(project_root.as_path());
     let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
     let repo_root_key = repo_root
         .as_ref()
-        .map(|root| root.to_string_lossy().to_string());
+        .map(|root| normalized_project_trust_key(root));
 
     let projects_trust = projects
         .into_iter()
-        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
+        .filter_map(|(key, project)| {
+            project
+                .trust_level
+                .map(|trust_level| (normalized_project_trust_key_str(&key), trust_level))
+        })
         .collect();
 
     Ok(ProjectTrustContext {
@@ -659,6 +663,22 @@ async fn project_trust_context(
         projects_trust,
         user_config_file: user_config_file.clone(),
     })
+}
+
+fn normalized_project_trust_key(path: &Path) -> String {
+    normalize_path(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn normalized_project_trust_key_str(path: &str) -> String {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        normalized_project_trust_key(path)
+    } else {
+        path.to_string_lossy().to_string()
+    }
 }
 
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
