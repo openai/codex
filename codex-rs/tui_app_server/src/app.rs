@@ -2654,13 +2654,14 @@ impl App {
                         ),
                     );
                 }
-                Err(_) => {
+                Err(err) => {
+                    let terminal_not_loaded = Self::is_terminal_thread_read_error(&err);
                     if let Some(entry) = existing_entry {
                         self.upsert_agent_picker_thread(
                             thread_id,
                             entry.agent_nickname,
                             entry.agent_role,
-                            entry.is_closed,
+                            terminal_not_loaded || entry.is_closed,
                         );
                     } else {
                         self.upsert_agent_picker_thread(
@@ -2727,6 +2728,11 @@ impl App {
             initial_selected_idx,
             ..Default::default()
         });
+    }
+
+    fn is_terminal_thread_read_error(err: &color_eyre::Report) -> bool {
+        err.chain()
+            .any(|cause| cause.to_string().contains("thread not loaded:"))
     }
 
     /// Updates cached picker metadata and then mirrors any visible-label change into the footer.
@@ -6940,7 +6946,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_agent_picker_preserves_live_threads_on_read_error() -> Result<()> {
+    async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
@@ -6963,10 +6969,28 @@ mod tests {
             Some(&AgentPickerThreadEntry {
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
-                is_closed: false,
+                is_closed: true,
             })
         );
         Ok(())
+    }
+
+    #[test]
+    fn terminal_thread_read_error_detection_matches_not_loaded_errors() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: thread not loaded: thr_123"
+        );
+
+        assert!(App::is_terminal_thread_read_error(&err));
+    }
+
+    #[test]
+    fn terminal_thread_read_error_detection_ignores_transient_failures() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"
+        );
+
+        assert!(!App::is_terminal_thread_read_error(&err));
     }
 
     #[tokio::test]
