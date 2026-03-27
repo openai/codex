@@ -121,12 +121,12 @@ macro_rules! client_request_definitions {
         }
 
         /// Typed response from the server to the client.
-        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+        #[derive(Serialize, Deserialize, Debug, Clone)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientResponse {
             $(
                 $(#[doc = $variant_doc])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $(#[serde(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -191,7 +191,6 @@ macro_rules! client_request_definitions {
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
-            ClientResponse::export_all_to(out_dir)?;
             $(
                 <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
             )*

@@ -42,12 +42,10 @@ const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
 const SPECIAL_DEFINITIONS: &[&str] = &[
     "ClientNotification",
     "ClientRequest",
-    "ClientResponse",
     "ServerNotification",
     "ServerRequest",
 ];
-const FLAT_V2_SHARED_DEFINITIONS: &[&str] =
-    &["ClientRequest", "ClientResponse", "ServerNotification"];
+const FLAT_V2_SHARED_DEFINITIONS: &[&str] = &["ClientRequest", "ServerNotification"];
 const V1_CLIENT_REQUEST_METHODS: &[&str] =
     &["getConversationSummary", "gitDiffToRemote", "getAuthStatus"];
 const EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON: &[&str] = &["rawResponseItem/completed"];
@@ -205,7 +203,6 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
         |d| write_json_schema_with_return::<crate::JSONRPCError>(d, "JSONRPCError"),
         |d| write_json_schema_with_return::<crate::JSONRPCErrorError>(d, "JSONRPCErrorError"),
         |d| write_json_schema_with_return::<crate::ClientRequest>(d, "ClientRequest"),
-        |d| write_json_schema_with_return::<crate::ClientResponse>(d, "ClientResponse"),
         |d| write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest"),
         |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
         |d| write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification"),
@@ -250,12 +247,10 @@ fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
     let registered_fields = experimental_fields();
     let experimental_method_types = experimental_method_types();
     // Most generated TS files are filtered by schema processing, but
-    // `ClientRequest.ts`, `ClientResponse.ts`, and any type with
-    // `#[experimental(...)]` fields need
+    // `ClientRequest.ts` and any type with `#[experimental(...)]` fields need
     // direct post-processing because they encode method/field information in
     // file-local unions/interfaces.
-    filter_client_method_union_ts(out_dir, "ClientRequest.ts", EXPERIMENTAL_CLIENT_METHODS)?;
-    filter_client_method_union_ts(out_dir, "ClientResponse.ts", EXPERIMENTAL_CLIENT_METHODS)?;
+    filter_client_request_ts(out_dir, EXPERIMENTAL_CLIENT_METHODS)?;
     filter_experimental_type_fields_ts(out_dir, &registered_fields)?;
     remove_generated_type_files(out_dir, &experimental_method_types, "ts")?;
     Ok(())
@@ -264,14 +259,10 @@ fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
 pub(crate) fn filter_experimental_ts_tree(tree: &mut BTreeMap<PathBuf, String>) -> Result<()> {
     let registered_fields = experimental_fields();
     let experimental_method_types = experimental_method_types();
-    for file_name in ["ClientRequest.ts", "ClientResponse.ts"] {
-        if let Some(content) = tree.get_mut(Path::new(file_name)) {
-            let filtered = filter_client_method_union_ts_contents(
-                std::mem::take(content),
-                EXPERIMENTAL_CLIENT_METHODS,
-            );
-            *content = filtered;
-        }
+    if let Some(content) = tree.get_mut(Path::new("ClientRequest.ts")) {
+        let filtered =
+            filter_client_request_ts_contents(std::mem::take(content), EXPERIMENTAL_CLIENT_METHODS);
+        *content = filtered;
     }
 
     let mut fields_by_type_name: HashMap<String, HashSet<String>> = HashMap::new();
@@ -300,29 +291,21 @@ pub(crate) fn filter_experimental_ts_tree(tree: &mut BTreeMap<PathBuf, String>) 
     Ok(())
 }
 
-/// Removes union arms from a top-level method-tagged TypeScript union for
-/// methods marked experimental.
-fn filter_client_method_union_ts(
-    out_dir: &Path,
-    file_name: &str,
-    experimental_methods: &[&str],
-) -> Result<()> {
-    let path = out_dir.join(file_name);
+/// Removes union arms from `ClientRequest.ts` for methods marked experimental.
+fn filter_client_request_ts(out_dir: &Path, experimental_methods: &[&str]) -> Result<()> {
+    let path = out_dir.join("ClientRequest.ts");
     if !path.exists() {
         return Ok(());
     }
     let mut content =
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-    content = filter_client_method_union_ts_contents(content, experimental_methods);
+    content = filter_client_request_ts_contents(content, experimental_methods);
 
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
 
-fn filter_client_method_union_ts_contents(
-    mut content: String,
-    experimental_methods: &[&str],
-) -> String {
+fn filter_client_request_ts_contents(mut content: String, experimental_methods: &[&str]) -> String {
     let Some((prefix, body, suffix)) = split_type_alias(&content) else {
         return content;
     };
@@ -1009,16 +992,6 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
                         .iter()
                         .any(|(name, existing_ns)| name == &def_name && existing_ns == ns)
                     {
-                        if !namespaced_types.contains_key(&def_name)
-                            && namespace_missing_definition(&definitions, ns, &def_name)
-                        {
-                            insert_into_namespace(
-                                &mut definitions,
-                                ns,
-                                def_name.clone(),
-                                def_schema,
-                            )?;
-                        }
                         forced_namespace_refs.push((def_name.clone(), ns.clone()));
                     }
                 } else {
@@ -1093,7 +1066,6 @@ fn build_flat_v2_schema(bundle: &Value) -> Result<Value> {
         };
         let shared_schema = shared_schema.clone();
         non_v2_refs.extend(collect_non_v2_refs(&shared_schema));
-        hoist_shared_local_definitions(&shared_schema, &mut flat_definitions);
         shared_definitions.insert((*shared).to_string(), shared_schema);
     }
 
@@ -1114,25 +1086,6 @@ fn build_flat_v2_schema(bundle: &Value) -> Result<Value> {
     ensure_no_ref_prefix(&flat_bundle, "#/definitions/v2/", "flat v2")?;
     ensure_referenced_definitions_present(&flat_bundle, "flat v2")?;
     Ok(flat_bundle)
-}
-
-fn hoist_shared_local_definitions(
-    shared_schema: &Value,
-    flat_definitions: &mut Map<String, Value>,
-) {
-    for defs_key in ["definitions", "$defs"] {
-        let Some(local_definitions) = shared_schema.get(defs_key).and_then(Value::as_object) else {
-            continue;
-        };
-        for name in reachable_local_definitions(shared_schema, defs_key) {
-            if flat_definitions.contains_key(&name) {
-                continue;
-            }
-            if let Some(definition) = local_definitions.get(&name) {
-                flat_definitions.insert(name, definition.clone());
-            }
-        }
-    }
 }
 
 fn collect_non_v2_refs(value: &Value) -> HashSet<String> {
@@ -1292,17 +1245,6 @@ fn insert_into_namespace(
         }
         _ => Err(anyhow!("expected namespace {namespace} to be an object")),
     }
-}
-
-fn namespace_missing_definition(
-    definitions: &Map<String, Value>,
-    namespace: &str,
-    name: &str,
-) -> bool {
-    definitions
-        .get(namespace)
-        .and_then(Value::as_object)
-        .is_none_or(|defs| !defs.contains_key(name))
 }
 
 fn insert_definition(
@@ -1534,9 +1476,6 @@ fn detect_numbered_definition_collisions(
         if base_name == generated_name || !defs.contains_key(base_name) {
             continue;
         }
-        if defs.get(generated_name) != defs.get(base_name) {
-            continue;
-        }
 
         panic!(
             "Numbered definition naming collision detected: schema={schema_name}|container={defs_key}|generated={generated_name}|base={base_name}"
@@ -1669,7 +1608,6 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
             let pascal = to_pascal_case(method_literal);
             return Some(match base {
                 "ClientRequest" | "ServerRequest" => format!("{pascal}Request"),
-                "ClientResponse" => format!("{pascal}Response"),
                 "ClientNotification" | "ServerNotification" => format!("{pascal}Notification"),
                 _ => format!("{pascal}{base}"),
             });
@@ -2091,7 +2029,6 @@ fn index_ts_entries(paths: &[&Path], has_v2_ts: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ClientResponse;
     use crate::protocol::v2;
     use crate::schema_fixtures::read_schema_fixture_subtree;
     use anyhow::Context;
@@ -2112,22 +2049,9 @@ mod tests {
                 .get(Path::new("ClientRequest.ts"))
                 .ok_or_else(|| anyhow::anyhow!("missing ClientRequest.ts fixture"))?,
         )?;
-        let client_response_ts = std::str::from_utf8(
-            fixture_tree
-                .get(Path::new("ClientResponse.ts"))
-                .ok_or_else(|| anyhow::anyhow!("missing ClientResponse.ts fixture"))?,
-        )?;
         assert_eq!(client_request_ts.contains("mock/experimentalMethod"), false);
         assert_eq!(
             client_request_ts.contains("MockExperimentalMethodParams"),
-            false
-        );
-        assert_eq!(
-            client_response_ts.contains("mock/experimentalMethod"),
-            false
-        );
-        assert_eq!(
-            client_response_ts.contains("MockExperimentalMethodResponse"),
             false
         );
         let typescript_index = std::str::from_utf8(
@@ -2350,15 +2274,9 @@ mod tests {
     #[test]
     fn generate_ts_with_experimental_api_retains_experimental_entries() -> Result<()> {
         let client_request_ts = ClientRequest::export_to_string()?;
-        let client_response_ts = ClientResponse::export_to_string()?;
         assert_eq!(client_request_ts.contains("mock/experimentalMethod"), true);
         assert_eq!(
             client_request_ts.contains("MockExperimentalMethodParams"),
-            true
-        );
-        assert_eq!(client_response_ts.contains("mock/experimentalMethod"), true);
-        assert_eq!(
-            client_response_ts.contains("MockExperimentalMethodResponse"),
             true
         );
         assert_eq!(
@@ -2493,47 +2411,6 @@ mod tests {
     }
 
     #[test]
-    fn numbered_definition_collision_guard_allows_distinct_generated_helpers() {
-        let defs = serde_json::json!({
-            "SessionSource": {
-                "type": "string",
-                "enum": ["exec"]
-            },
-            "SessionSource2": {
-                "type": "object",
-                "properties": {
-                    "custom": {
-                        "type": "string"
-                    }
-                }
-            }
-        });
-        let defs = defs.as_object().expect("defs should be an object");
-
-        detect_numbered_definition_collisions("ClientResponse", "definitions", defs);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "Numbered definition naming collision detected: schema=ClientResponse|container=definitions|generated=SessionSource2|base=SessionSource"
-    )]
-    fn numbered_definition_collision_guard_rejects_duplicate_generated_helpers() {
-        let defs = serde_json::json!({
-            "SessionSource": {
-                "type": "string",
-                "enum": ["exec"]
-            },
-            "SessionSource2": {
-                "type": "string",
-                "enum": ["exec"]
-            }
-        });
-        let defs = defs.as_object().expect("defs should be an object");
-
-        detect_numbered_definition_collisions("ClientResponse", "definitions", defs);
-    }
-
-    #[test]
     fn build_flat_v2_schema_keeps_shared_root_schemas_and_dependencies() -> Result<()> {
         let bundle = serde_json::json!({
             "$schema": "http://json-schema.org/draft-07/schema#",
@@ -2562,32 +2439,6 @@ mod tests {
                             "type": "object",
                             "properties": {
                                 "params": { "type": "null" }
-                            }
-                        }
-                    ]
-                },
-                "ClientResponse": {
-                    "oneOf": [
-                        {
-                            "title": "StartResponse",
-                            "type": "object",
-                            "properties": {
-                                "response": { "$ref": "#/definitions/v2/ThreadStartResponse" },
-                                "shared": { "$ref": "#/definitions/SharedHelper" }
-                            }
-                        },
-                        {
-                            "title": "InitializeResponse",
-                            "type": "object",
-                            "properties": {
-                                "response": { "$ref": "#/definitions/InitializeParams" }
-                            }
-                        },
-                        {
-                            "title": "LogoutResponse",
-                            "type": "object",
-                            "properties": {
-                                "response": { "type": "null" }
                             }
                         }
                     ]
@@ -2709,25 +2560,6 @@ mod tests {
                 "InitializeRequest".to_string(),
                 "LogoutRequest".to_string(),
                 "StartRequest".to_string(),
-            ])
-        );
-        let client_response_titles: BTreeSet<String> = definitions["ClientResponse"]["oneOf"]
-            .as_array()
-            .expect("ClientResponse should remain a oneOf")
-            .iter()
-            .map(|variant| {
-                variant["title"]
-                    .as_str()
-                    .expect("ClientResponse variant should have a title")
-                    .to_string()
-            })
-            .collect();
-        assert_eq!(
-            client_response_titles,
-            BTreeSet::from([
-                "InitializeResponse".to_string(),
-                "LogoutResponse".to_string(),
-                "StartResponse".to_string(),
             ])
         );
         let notification_titles: BTreeSet<String> = definitions["ServerNotification"]["oneOf"]
@@ -2871,13 +2703,8 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         );
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
-        let client_response_json = fs::read_to_string(output_dir.join("ClientResponse.json"))?;
         assert_eq!(
             client_request_json.contains("mock/experimentalMethod"),
-            false
-        );
-        assert_eq!(
-            client_response_json.contains("mock/experimentalMethod"),
             false
         );
         assert_eq!(output_dir.join("EventMsg.json").exists(), false);
@@ -2938,31 +2765,6 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         .map(str::to_string)
         .collect();
         assert_eq!(missing_client_request_methods, Vec::<String>::new());
-        let client_response_methods: BTreeSet<String> = definitions["ClientResponse"]["oneOf"]
-            .as_array()
-            .expect("flat v2 ClientResponse should remain a oneOf")
-            .iter()
-            .filter_map(|variant| {
-                variant["properties"]["method"]["enum"]
-                    .as_array()
-                    .and_then(|values| values.first())
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .collect();
-        let missing_client_response_methods: Vec<String> = [
-            "account/logout",
-            "account/rateLimits/read",
-            "config/mcpServer/reload",
-            "configRequirements/read",
-            "fuzzyFileSearch",
-            "initialize",
-        ]
-        .into_iter()
-        .filter(|method| !client_response_methods.contains(*method))
-        .map(str::to_string)
-        .collect();
-        assert_eq!(missing_client_response_methods, Vec::<String>::new());
         let server_notification_methods: BTreeSet<String> =
             definitions["ServerNotification"]["oneOf"]
                 .as_array()
