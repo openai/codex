@@ -1575,16 +1575,16 @@ fn read_prompt_from_stdin(behavior: StdinPromptBehavior) -> Option<String> {
     };
 
     if buffer.trim().is_empty() {
-        return match behavior {
+        match behavior {
             StdinPromptBehavior::OptionalAppend => None,
             StdinPromptBehavior::RequiredIfPiped | StdinPromptBehavior::Forced => {
                 eprintln!("No prompt provided via stdin.");
                 std::process::exit(1);
             }
-        };
+        }
+    } else {
+        Some(buffer)
     }
-
-    Some(buffer)
 }
 
 fn prompt_with_stdin_context(prompt: &str, stdin_text: &str) -> String {
