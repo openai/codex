@@ -552,6 +552,7 @@ mod tests {
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
+            require_full_access_justification: None,
             guardian_developer_instructions: None,
             feature_requirements: Some(codex_core::config_loader::FeatureRequirementsToml {
                 entries: std::collections::BTreeMap::from([
@@ -709,6 +710,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            require_full_access_justification: None,
             guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: None,

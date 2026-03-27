@@ -331,6 +331,13 @@ pub(crate) enum AppEvent {
         return_to_permissions: bool,
     },
 
+    /// Open the required justification prompt before enabling full access mode.
+    OpenFullAccessJustificationPrompt {
+        preset: ApprovalPreset,
+        acknowledge_warning: bool,
+        persist_warning_acknowledged: bool,
+    },
+
     /// Open the Windows world-writable directories warning.
     /// If `preset` is `Some`, the confirmation will apply the provided
     /// approval/sandbox configuration on Continue; if `None`, it performs no

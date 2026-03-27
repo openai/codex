@@ -319,6 +319,7 @@ impl SessionTelemetry {
         auto_compact_token_limit: Option<i64>,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
+        require_full_access_justification: bool,
         mcp_servers: Vec<&str>,
         active_profile: Option<String>,
     ) {
@@ -342,6 +343,7 @@ impl SessionTelemetry {
                 auto_compact_token_limit = auto_compact_token_limit,
                 approval_policy = %approval_policy,
                 sandbox_policy = %sandbox_policy,
+                require_full_access_justification = require_full_access_justification,
             },
             log: {
                 mcp_servers = mcp_servers.join(", "),
@@ -351,6 +353,38 @@ impl SessionTelemetry {
                 mcp_server_count = mcp_servers.len() as i64,
                 active_profile_present = active_profile.is_some(),
             },
+        );
+    }
+
+    pub fn full_access_mode_enabled(
+        &self,
+        justification_required: bool,
+        justification: Option<&str>,
+        remember_choice: bool,
+    ) {
+        let justification_to_log = match justification {
+            Some(justification) if justification_required || self.metadata.log_user_prompts => {
+                justification
+            }
+            Some(_) => "[REDACTED]",
+            None => "",
+        };
+
+        log_event!(
+            self,
+            event.name = "codex.full_access_mode_enabled",
+            justification_required = justification_required,
+            justification_present = justification.is_some(),
+            justification = %justification_to_log,
+            remember_choice = remember_choice,
+        );
+        trace_event!(
+            self,
+            event.name = "codex.full_access_mode_enabled",
+            justification_required = justification_required,
+            justification_present = justification.is_some(),
+            justification_length = justification.map(|value| value.chars().count() as i64),
+            remember_choice = remember_choice,
         );
     }
 

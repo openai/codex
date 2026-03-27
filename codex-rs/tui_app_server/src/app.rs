@@ -4048,6 +4048,17 @@ impl App {
                 self.chat_widget
                     .open_full_access_confirmation(preset, return_to_permissions);
             }
+            AppEvent::OpenFullAccessJustificationPrompt {
+                preset,
+                acknowledge_warning,
+                persist_warning_acknowledged,
+            } => {
+                self.chat_widget.open_full_access_justification_prompt(
+                    preset,
+                    acknowledge_warning,
+                    persist_warning_acknowledged,
+                );
+            }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
                 sample_paths,

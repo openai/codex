@@ -201,6 +201,165 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
 }
 
 #[test]
+fn otel_export_routing_policy_routes_full_access_mode_enabled_events() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::ApiKey),
+            "codex_exec".to_string(),
+            false,
+            "tty".to_string(),
+            SessionSource::Cli,
+        );
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        manager.full_access_mode_enabled(
+            /*justification_required*/ true,
+            Some("Need to inspect repo-local secrets handling"),
+            /*remember_choice*/ false,
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let full_access_log = find_log_by_event_name(&logs, "codex.full_access_mode_enabled");
+    let full_access_log_attrs = log_attributes(&full_access_log.record);
+    assert_eq!(
+        full_access_log_attrs
+            .get("justification_required")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        full_access_log_attrs
+            .get("justification_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        full_access_log_attrs
+            .get("justification")
+            .map(String::as_str),
+        Some("Need to inspect repo-local secrets handling")
+    );
+
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    let full_access_trace_event =
+        find_span_event_by_name_attr(&spans[0].events.events, "codex.full_access_mode_enabled");
+    let full_access_trace_attrs = span_event_attributes(full_access_trace_event);
+    assert_eq!(
+        full_access_trace_attrs
+            .get("justification_required")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        full_access_trace_attrs
+            .get("justification_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        full_access_trace_attrs
+            .get("justification_length")
+            .map(String::as_str),
+        Some("43")
+    );
+}
+
+#[test]
+fn otel_export_routing_policy_redacts_optional_full_access_justification_when_prompt_logging_disabled()
+ {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter)
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::ApiKey),
+            "codex_exec".to_string(),
+            false,
+            "tty".to_string(),
+            SessionSource::Cli,
+        );
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        manager.full_access_mode_enabled(
+            /*justification_required*/ false,
+            Some("Need to inspect repo-local secrets handling"),
+            /*remember_choice*/ false,
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let full_access_log = find_log_by_event_name(&logs, "codex.full_access_mode_enabled");
+    let full_access_log_attrs = log_attributes(&full_access_log.record);
+    assert_eq!(
+        full_access_log_attrs
+            .get("justification")
+            .map(String::as_str),
+        Some("[REDACTED]")
+    );
+}
+
+#[test]
 fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
     let log_exporter = InMemoryLogExporter::default();
     let logger_provider = SdkLoggerProvider::builder()
@@ -509,6 +668,7 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
             None,
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
+            true,
             Vec::new(),
             None,
         );
@@ -547,6 +707,12 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
             .get("auth.env_provider_key_name")
             .map(String::as_str),
         Some("configured")
+    );
+    assert_eq!(
+        conversation_log_attrs
+            .get("require_full_access_justification")
+            .map(String::as_str),
+        Some("true")
     );
     let request_log = find_log_by_event_name(&logs, "codex.api_request");
     let request_log_attrs = log_attributes(&request_log.record);
@@ -608,6 +774,12 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
     assert_eq!(
         conversation_trace_attrs
             .get("auth.env_provider_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        conversation_trace_attrs
+            .get("require_full_access_justification")
             .map(String::as_str),
         Some("true")
     );

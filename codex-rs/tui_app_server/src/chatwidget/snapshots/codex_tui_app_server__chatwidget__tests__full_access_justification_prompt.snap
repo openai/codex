@@ -1,0 +1,10 @@
+---
+source: tui_app_server/src/chatwidget/tests.rs
+expression: popup
+---
+▌ Why do you need full access?
+▌ Your admin requires a justification before enabling full access.
+▌
+▌ Type a justification and press Enter
+
+Press enter to confirm or esc to go back

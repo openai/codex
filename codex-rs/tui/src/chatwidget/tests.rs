@@ -161,11 +161,13 @@ use toml::Value as TomlValue;
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
-    ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.clone())
         .build()
         .await
-        .expect("config")
+        .expect("config");
+    config.require_full_access_justification = false;
+    config
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
@@ -8937,6 +8939,40 @@ async fn full_access_confirmation_popup_snapshot() {
     assert_snapshot!("full_access_confirmation_popup", popup);
 }
 
+#[tokio::test]
+async fn full_access_confirmation_popup_with_required_justification_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.require_full_access_justification = true;
+
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "full-access")
+        .expect("full access preset");
+    chat.open_full_access_confirmation(preset, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!(
+        "full_access_confirmation_popup_with_required_justification",
+        popup
+    );
+}
+
+#[tokio::test]
+async fn full_access_justification_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "full-access")
+        .expect("full access preset");
+    chat.open_full_access_justification_prompt(
+        preset, /*acknowledge_warning*/ false, /*persist_warning_acknowledged*/ false,
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("full_access_justification_prompt", popup);
+}
+
 #[cfg(target_os = "windows")]
 #[tokio::test]
 async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
@@ -9927,6 +9963,71 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     assert!(
         rendered.contains("Permissions updated to Full Access"),
         "expected full access update history message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_full_access_still_confirms_when_warning_hidden_but_justification_required() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+    chat.config.require_full_access_justification = true;
+
+    chat.open_permissions_popup();
+    move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::OpenFullAccessConfirmation { .. })),
+        "expected full access selection to request a confirmation popup: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
+        "did not expect a history cell before justification is submitted: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn full_access_justification_prompt_submission_applies_permissions() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "full-access")
+        .expect("full access preset");
+
+    chat.open_full_access_justification_prompt(
+        preset, /*acknowledge_warning*/ false, /*persist_warning_acknowledged*/ false,
+    );
+    for ch in "Need direct filesystem access".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                ..
+            })
+        )),
+        "expected justification submission to enable full access: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
+        "expected justification submission to emit a history cell: {events:?}"
     );
 }
 

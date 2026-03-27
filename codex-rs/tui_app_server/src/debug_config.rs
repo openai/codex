@@ -130,6 +130,17 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(required) = requirements_toml.require_full_access_justification {
+        requirement_lines.push(requirement_line(
+            "require_full_access_justification",
+            required.to_string(),
+            requirements
+                .require_full_access_justification
+                .as_ref()
+                .map(|sourced| &sourced.source),
+        ));
+    }
+
     if let Some(servers) = requirements_toml.mcp_servers.as_ref() {
         let value = join_or_empty(servers.keys().cloned().collect::<Vec<_>>());
         requirement_lines.push(requirement_line(
@@ -548,6 +559,10 @@ mod tests {
                 Constrained::allow_any(WebSearchMode::Cached),
                 Some(RequirementSource::CloudRequirements),
             ),
+            require_full_access_justification: Some(Sourced::new(
+                true,
+                RequirementSource::CloudRequirements,
+            )),
             network: Some(Sourced::new(
                 NetworkConstraints {
                     enabled: Some(true),
@@ -568,6 +583,7 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            require_full_access_justification: Some(true),
             guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: Some(BTreeMap::from([(
@@ -616,6 +632,10 @@ mod tests {
             rendered.contains(
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
             )
+        );
+        assert!(
+            rendered
+                .contains("require_full_access_justification: true (source: cloud requirements)")
         );
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
@@ -731,6 +751,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            require_full_access_justification: None,
             guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: None,

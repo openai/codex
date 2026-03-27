@@ -280,6 +280,10 @@ pub struct Config {
     /// Guardian-specific developer instructions override from requirements.toml.
     pub guardian_developer_instructions: Option<String>,
 
+    /// Require a user-provided justification before enabling full access mode.
+    /// This is derived from `requirements.toml`, not `config.toml`.
+    pub require_full_access_justification: bool,
+
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
@@ -1980,6 +1984,7 @@ impl Config {
             feature_requirements,
             mcp_servers,
             exec_policy: _,
+            require_full_access_justification,
             enforce_residency,
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
@@ -2617,6 +2622,8 @@ impl Config {
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
             guardian_developer_instructions,
+            require_full_access_justification: require_full_access_justification
+                .is_some_and(|requirement| requirement.value),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),

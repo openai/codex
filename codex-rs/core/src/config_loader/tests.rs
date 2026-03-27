@@ -656,6 +656,7 @@ allowed_approval_policies = ["on-request"]
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
                 guardian_developer_instructions: None,
             }))
@@ -707,6 +708,7 @@ allowed_approval_policies = ["on-request"]
             apps: None,
             rules: None,
             enforce_residency: None,
+            require_full_access_justification: None,
             network: None,
             guardian_developer_instructions: None,
         },
@@ -747,6 +749,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         apps: None,
         rules: None,
         enforce_residency: None,
+        require_full_access_justification: None,
         network: None,
         guardian_developer_instructions: None,
     };

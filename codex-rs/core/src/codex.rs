@@ -1710,6 +1710,7 @@ impl Session {
             config.model_auto_compact_token_limit,
             config.permissions.approval_policy.value(),
             config.permissions.sandbox_policy.get().clone(),
+            config.require_full_access_justification,
             mcp_servers.keys().map(String::as_str).collect(),
             config.active_profile.clone(),
         );
