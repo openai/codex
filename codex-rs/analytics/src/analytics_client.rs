@@ -89,6 +89,35 @@ struct ThreadInitializedInput {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+    InputTooLarge,
+    InternalError,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnSteerEvent {
+    pub expected_turn_id: Option<String>,
+    pub accepted_turn_id: Option<String>,
+    pub num_input_images: usize,
+    pub result: TurnSteerResult,
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InitializationMode {
     New,
     Forked,
@@ -150,11 +179,17 @@ pub enum AnalyticsFact {
 
 pub enum CustomAnalyticsFact {
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnSteer(TurnSteerInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
+}
+
+pub struct TurnSteerInput {
+    pub tracking: TrackEventsContext,
+    pub turn_steer: CodexTurnSteerEvent,
 }
 
 pub struct SkillInvokedInput {
@@ -228,6 +263,7 @@ struct TurnState {
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at_ms: Option<u64>,
     completed: Option<CompletedTurnState>,
+    steer_count: usize,
 }
 
 #[derive(Clone)]
@@ -374,6 +410,15 @@ impl AnalyticsEventsClient {
         ));
     }
 
+    pub fn track_turn_steer(&self, tracking: TrackEventsContext, turn_steer: CodexTurnSteerEvent) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnSteer(
+            TurnSteerInput {
+                tracking,
+                turn_steer,
+            },
+        )));
+    }
+
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
@@ -446,6 +491,7 @@ enum TrackEventRequest {
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     TurnEvent(Box<CodexTurnEventRequest>),
+    TurnSteer(CodexTurnSteerEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -563,6 +609,24 @@ struct CodexTurnEventRequest {
 }
 
 #[derive(Serialize)]
+struct CodexTurnSteerEventParams {
+    thread_id: String,
+    expected_turn_id: Option<String>,
+    accepted_turn_id: Option<String>,
+    product_client_id: Option<String>,
+    num_input_images: usize,
+    result: TurnSteerResult,
+    rejection_reason: Option<TurnSteerRejectionReason>,
+    created_at: u64,
+}
+
+#[derive(Serialize)]
+struct CodexTurnSteerEventRequest {
+    event_type: &'static str,
+    event_params: CodexTurnSteerEventParams,
+}
+
+#[derive(Serialize)]
 struct CodexPluginMetadata {
     plugin_id: Option<String>,
     plugin_name: Option<String>,
@@ -622,6 +686,9 @@ impl AnalyticsReducer {
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
                     self.ingest_turn_resolved_config(*input, out);
+                }
+                CustomAnalyticsFact::TurnSteer(input) => {
+                    self.ingest_turn_steer(input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -730,6 +797,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at_ms: None,
             completed: None,
+            steer_count: 0,
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
@@ -806,6 +874,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at_ms: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
@@ -830,6 +899,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at_ms: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.started_at_ms = Some(now_unix_timestamp_millis());
             }
@@ -844,6 +914,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at_ms: None,
                             completed: None,
+                            steer_count: 0,
                         });
                 let completed_at_secs = now_unix_timestamp_secs();
                 let completed_at_ms = completed_at_secs.saturating_mul(1000);
@@ -882,6 +953,7 @@ impl AnalyticsReducer {
         let Some(completed) = turn_state.completed.clone() else {
             return;
         };
+        let steer_count = turn_state.steer_count;
         out.push(TrackEventRequest::TurnEvent(Box::new(
             CodexTurnEventRequest {
                 event_type: "codex_turn_event",
@@ -896,11 +968,29 @@ impl AnalyticsReducer {
                     num_input_images,
                     resolved_config,
                     completed,
+                    steer_count,
                     turn_state.started_at_ms.map(|value| value / 1000),
                 ),
             },
         )));
         self.turns.remove(turn_id);
+    }
+
+    fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {
+        let TurnSteerInput {
+            tracking,
+            turn_steer,
+        } = input;
+        if matches!(turn_steer.result, TurnSteerResult::Accepted)
+            && let Some(accepted_turn_id) = turn_steer.accepted_turn_id.as_ref()
+            && let Some(turn_state) = self.turns.get_mut(accepted_turn_id)
+        {
+            turn_state.steer_count += 1;
+        }
+        out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+            event_type: "codex_turn_steer_event",
+            event_params: codex_turn_steer_event_params(&tracking, turn_steer),
+        }));
     }
 
     async fn ingest_skill_invoked(
@@ -1025,6 +1115,7 @@ fn codex_turn_event_params(
     num_input_images: usize,
     resolved_config: TurnResolvedConfigFact,
     completed: CompletedTurnState,
+    steer_count: usize,
     started_at: Option<u64>,
 ) -> CodexTurnEventParams {
     let TurnResolvedConfigFact {
@@ -1067,7 +1158,7 @@ fn codex_turn_event_params(
         is_first_turn,
         status: completed.status,
         turn_error: completed.turn_error,
-        steer_count: None,
+        steer_count: Some(steer_count),
         total_tool_call_count: None,
         shell_command_count: None,
         file_change_count: None,
@@ -1084,6 +1175,22 @@ fn codex_turn_event_params(
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at_secs),
+    }
+}
+
+fn codex_turn_steer_event_params(
+    tracking: &TrackEventsContext,
+    turn_steer: CodexTurnSteerEvent,
+) -> CodexTurnSteerEventParams {
+    CodexTurnSteerEventParams {
+        thread_id: tracking.thread_id.clone(),
+        expected_turn_id: turn_steer.expected_turn_id,
+        accepted_turn_id: turn_steer.accepted_turn_id,
+        product_client_id: Some(originator().value),
+        num_input_images: turn_steer.num_input_images,
+        result: turn_steer.result,
+        rejection_reason: turn_steer.rejection_reason,
+        created_at: turn_steer.created_at,
     }
 }
 

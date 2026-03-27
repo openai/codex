@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -218,6 +220,18 @@ impl SteerInputError {
             },
         }
     }
+
+    fn to_turn_steer_rejection_reason(&self) -> TurnSteerRejectionReason {
+        match self {
+            Self::NoActiveTurn(_) => TurnSteerRejectionReason::NoActiveTurn,
+            Self::ExpectedTurnMismatch { .. } => TurnSteerRejectionReason::ExpectedTurnMismatch,
+            Self::ActiveTurnNotSteerable { turn_kind } => match turn_kind {
+                NonSteerableTurnKind::Review => TurnSteerRejectionReason::NonSteerableReview,
+                NonSteerableTurnKind::Compact => TurnSteerRejectionReason::NonSteerableCompact,
+            },
+            Self::EmptyInput => TurnSteerRejectionReason::EmptyInput,
+        }
+    }
 }
 
 /// Notes from the previous real user turn.
@@ -349,8 +363,12 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
+use codex_analytics::CodexTurnSteerEvent;
 use codex_analytics::InvocationType;
+use codex_analytics::TrackEventsContext;
 use codex_analytics::TurnResolvedConfigFact;
+use codex_analytics::TurnSteerRejectionReason;
+use codex_analytics::TurnSteerResult;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
@@ -3907,46 +3925,157 @@ impl Session {
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let thread_id = self.conversation_id.to_string();
+        let fallback_tracking = || {
+            build_track_events_context(
+                String::new(),
+                thread_id.clone(),
+                expected_turn_id.unwrap_or_default().to_string(),
+            )
+        };
+        let track_rejection = |tracking: TrackEventsContext,
+                               expected_turn_id: Option<String>,
+                               rejection_reason: TurnSteerRejectionReason,
+                               num_input_images: usize| {
+            self.services.analytics_events_client.track_turn_steer(
+                tracking,
+                CodexTurnSteerEvent {
+                    expected_turn_id,
+                    accepted_turn_id: None,
+                    num_input_images,
+                    result: TurnSteerResult::Rejected,
+                    rejection_reason: Some(rejection_reason),
+                    created_at,
+                },
+            );
+        };
+
         if input.is_empty() {
-            return Err(SteerInputError::EmptyInput);
+            let err = SteerInputError::EmptyInput;
+            track_rejection(
+                fallback_tracking(),
+                expected_turn_id.map(str::to_string),
+                err.to_turn_steer_rejection_reason(),
+                0,
+            );
+            return Err(err);
         }
+
+        let num_input_images = input
+            .iter()
+            .filter(|item| matches!(item, UserInput::Image { .. }))
+            .count();
 
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
-            return Err(SteerInputError::NoActiveTurn(input));
+            let err = SteerInputError::NoActiveTurn(input);
+            track_rejection(
+                fallback_tracking(),
+                expected_turn_id.map(str::to_string),
+                err.to_turn_steer_rejection_reason(),
+                num_input_images,
+            );
+            return Err(err);
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
-            return Err(SteerInputError::NoActiveTurn(input));
+        let Some((active_turn_id, task)) = active_turn.tasks.first() else {
+            let err = SteerInputError::NoActiveTurn(input);
+            track_rejection(
+                fallback_tracking(),
+                expected_turn_id.map(str::to_string),
+                err.to_turn_steer_rejection_reason(),
+                num_input_images,
+            );
+            return Err(err);
         };
+        let active_turn_id = active_turn_id.clone();
+        let tracking = build_track_events_context(
+            task.turn_context.model_info.slug.clone(),
+            thread_id.clone(),
+            task.turn_context.sub_id.clone(),
+        );
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
         {
-            return Err(SteerInputError::ExpectedTurnMismatch {
+            let err = SteerInputError::ExpectedTurnMismatch {
                 expected: expected_turn_id.to_string(),
                 actual: active_turn_id.clone(),
-            });
+            };
+            track_rejection(
+                tracking.clone(),
+                Some(expected_turn_id.to_string()),
+                err.to_turn_steer_rejection_reason(),
+                num_input_images,
+            );
+            return Err(err);
         }
 
         match active_turn.tasks.first().map(|(_, task)| task.kind) {
             Some(crate::state::TaskKind::Regular) => {}
             Some(crate::state::TaskKind::Review) => {
-                return Err(SteerInputError::ActiveTurnNotSteerable {
+                let err = SteerInputError::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Review,
-                });
+                };
+                track_rejection(
+                    tracking.clone(),
+                    expected_turn_id
+                        .map(str::to_string)
+                        .or_else(|| Some(active_turn_id.clone())),
+                    err.to_turn_steer_rejection_reason(),
+                    num_input_images,
+                );
+                return Err(err);
             }
             Some(crate::state::TaskKind::Compact) => {
-                return Err(SteerInputError::ActiveTurnNotSteerable {
+                let err = SteerInputError::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Compact,
-                });
+                };
+                track_rejection(
+                    tracking.clone(),
+                    expected_turn_id
+                        .map(str::to_string)
+                        .or_else(|| Some(active_turn_id.clone())),
+                    err.to_turn_steer_rejection_reason(),
+                    num_input_images,
+                );
+                return Err(err);
             }
-            None => return Err(SteerInputError::NoActiveTurn(input)),
+            None => {
+                let err = SteerInputError::NoActiveTurn(input);
+                track_rejection(
+                    fallback_tracking(),
+                    expected_turn_id.map(str::to_string),
+                    err.to_turn_steer_rejection_reason(),
+                    num_input_images,
+                );
+                return Err(err);
+            }
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
-        Ok(active_turn_id.clone())
+        drop(turn_state);
+        drop(active);
+        let expected_turn_id = expected_turn_id
+            .map(str::to_string)
+            .unwrap_or_else(|| active_turn_id.clone());
+        self.services.analytics_events_client.track_turn_steer(
+            tracking,
+            CodexTurnSteerEvent {
+                expected_turn_id: Some(expected_turn_id),
+                accepted_turn_id: Some(active_turn_id.clone()),
+                num_input_images,
+                result: TurnSteerResult::Accepted,
+                rejection_reason: None,
+                created_at,
+            },
+        );
+        Ok(active_turn_id)
     }
 
     /// Returns the input if there was no task running to inject into.
