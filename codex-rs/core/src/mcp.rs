@@ -32,7 +32,7 @@ impl McpManager {
     }
 
     pub fn configured_servers(&self, config: &Config) -> HashMap<String, McpServerConfig> {
-        let mcp_config = config.to_mcp_config(None, self.plugins_manager.as_ref());
+        let mcp_config = config.to_mcp_config(/*auth*/ None, self.plugins_manager.as_ref());
         configured_mcp_servers(&mcp_config)
     }
 
@@ -46,7 +46,7 @@ impl McpManager {
     }
 
     pub fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
-        let mcp_config = config.to_mcp_config(None, self.plugins_manager.as_ref());
+        let mcp_config = config.to_mcp_config(/*auth*/ None, self.plugins_manager.as_ref());
         mcp_tool_plugin_provenance(&mcp_config)
     }
 }

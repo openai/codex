@@ -16,13 +16,11 @@ anyhow = { workspace = true }
 async-channel = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-config = { workspace = true }
-codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-utils-pty = { workspace = true }
 futures = { workspace = true }
 regex-lite = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
@@ -39,4 +37,3 @@ url = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
 tempfile = { workspace = true }
-toml = { workspace = true }
