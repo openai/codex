@@ -45,12 +45,12 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 }
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(kind.file_name());
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join(kind.file_name());
+        if candidate.exists() {
+            return candidate;
         }
     }
     PathBuf::from(kind.file_name())
@@ -377,4 +377,3 @@ mod tests {
         );
     }
 }
-

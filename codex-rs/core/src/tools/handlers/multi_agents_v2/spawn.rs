@@ -83,7 +83,7 @@ impl ToolHandler for Handler {
             &turn.session_source,
             child_depth,
             role_name,
-            args.task_name.clone(),
+            Some(args.task_name.clone()),
         )?;
         let result = session
             .services
@@ -158,7 +158,6 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
-        let task_name = new_agent_path.clone();
         session
             .send_event(
                 &turn,
@@ -176,16 +175,21 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let new_thread_id = result?.thread_id;
+        let _ = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.session_telemetry.counter(
             "codex.multi_agent.spawn",
             /*inc*/ 1,
             &[("role", role_tag)],
         );
+        let task_name = new_agent_path.ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "spawned agent is missing a canonical task name".to_string(),
+            )
+        })?;
 
         Ok(SpawnAgentResult {
-            agent_id: task_name.is_none().then(|| new_thread_id.to_string()),
+            agent_id: None,
             task_name,
             nickname,
         })
@@ -196,7 +200,7 @@ impl ToolHandler for Handler {
 struct SpawnAgentArgs {
     message: Option<String>,
     items: Option<Vec<UserInput>>,
-    task_name: Option<String>,
+    task_name: String,
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
@@ -207,7 +211,7 @@ struct SpawnAgentArgs {
 #[derive(Debug, Serialize)]
 pub(crate) struct SpawnAgentResult {
     agent_id: Option<String>,
-    task_name: Option<String>,
+    task_name: String,
     nickname: Option<String>,
 }
 

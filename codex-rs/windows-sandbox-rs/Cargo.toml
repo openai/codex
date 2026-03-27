@@ -1,6 +1,6 @@
 [package]
 build = "build.rs"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 name = "codex-windows-sandbox"
 version.workspace = true
