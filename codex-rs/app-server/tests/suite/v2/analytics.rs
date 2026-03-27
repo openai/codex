@@ -138,7 +138,7 @@ pub(crate) fn assert_basic_thread_initialized_event(
 ) {
     assert_eq!(event["event_params"]["thread_id"], thread_id);
     assert_eq!(
-        event["event_params"]["product_client_id"],
+        event["event_params"]["app_server_client"]["product_client_id"],
         DEFAULT_CLIENT_NAME
     );
     assert_eq!(event["event_params"]["model"], expected_model);

@@ -264,10 +264,12 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(thread_initialized_event_request(
         &super::ConnectionState {
-            product_client_id: "codex-tui".to_string(),
-            client_name: Some("codex-tui".to_string()),
-            client_version: Some("1.0.0".to_string()),
-            experimental_api_enabled: Some(true),
+            app_server_client: super::CodexAppServerClientMetadata {
+                product_client_id: "codex-tui".to_string(),
+                client_name: Some("codex-tui".to_string()),
+                client_version: Some("1.0.0".to_string()),
+                experimental_api_enabled: Some(true),
+            },
         },
         ThreadInitializedInput {
             connection_id: 1,
@@ -288,10 +290,12 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
-                "product_client_id": "codex-tui",
-                "client_name": "codex-tui",
-                "client_version": "1.0.0",
-                "experimental_api_enabled": true,
+                "app_server_client": {
+                    "product_client_id": "codex-tui",
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "experimental_api_enabled": true
+                },
                 "model": "gpt-5",
                 "ephemeral": true,
                 "thread_source": "user",
@@ -358,11 +362,20 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
-    assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
-    assert_eq!(payload[0]["event_params"]["client_name"], "codex-tui");
-    assert_eq!(payload[0]["event_params"]["client_version"], "1.0.0");
     assert_eq!(
-        payload[0]["event_params"]["experimental_api_enabled"],
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["client_name"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["client_version"],
+        "1.0.0"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["experimental_api_enabled"],
         false
     );
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");

@@ -149,10 +149,7 @@ pub struct AnalyticsReducer {
 }
 
 struct ConnectionState {
-    product_client_id: String,
-    client_name: Option<String>,
-    client_version: Option<String>,
-    experimental_api_enabled: Option<bool>,
+    app_server_client: CodexAppServerClientMetadata,
 }
 
 #[derive(Clone)]
@@ -377,13 +374,18 @@ struct SkillInvocationEventParams {
     model_slug: Option<String>,
 }
 
-#[derive(Serialize)]
-struct ThreadInitializedEventParams {
-    thread_id: String,
+#[derive(Clone, Serialize)]
+struct CodexAppServerClientMetadata {
     product_client_id: String,
     client_name: Option<String>,
     client_version: Option<String>,
     experimental_api_enabled: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ThreadInitializedEventParams {
+    thread_id: String,
+    app_server_client: CodexAppServerClientMetadata,
     model: String,
     ephemeral: bool,
     thread_source: Option<&'static str>,
@@ -499,12 +501,14 @@ impl AnalyticsReducer {
         self.connections.insert(
             connection_id,
             ConnectionState {
-                product_client_id: params.client_info.name.clone(),
-                client_name: Some(params.client_info.name),
-                client_version: Some(params.client_info.version),
-                experimental_api_enabled: params
-                    .capabilities
-                    .map(|capabilities| capabilities.experimental_api),
+                app_server_client: CodexAppServerClientMetadata {
+                    product_client_id: params.client_info.name.clone(),
+                    client_name: Some(params.client_info.name),
+                    client_version: Some(params.client_info.version),
+                    experimental_api_enabled: params
+                        .capabilities
+                        .map(|capabilities| capabilities.experimental_api),
+                },
             },
         );
     }
@@ -686,10 +690,7 @@ fn thread_initialized_event_params(
 ) -> ThreadInitializedEventParams {
     ThreadInitializedEventParams {
         thread_id: input.thread_id,
-        product_client_id: connection_state.product_client_id.clone(),
-        client_name: connection_state.client_name.clone(),
-        client_version: connection_state.client_version.clone(),
-        experimental_api_enabled: connection_state.experimental_api_enabled,
+        app_server_client: connection_state.app_server_client.clone(),
         model: input.model,
         ephemeral: input.ephemeral,
         thread_source: thread_source_name(&input.thread_source),
