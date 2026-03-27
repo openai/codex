@@ -138,6 +138,27 @@ impl<T: Send + Sync> Constrained<T> {
         (self.validator)(candidate)
     }
 
+    /// Composes an additional validator onto the current constraint.
+    ///
+    /// The existing value must satisfy the combined validator before it is installed.
+    pub fn add_validator(
+        &mut self,
+        validator: impl Fn(&T) -> ConstraintResult<()> + Send + Sync + 'static,
+    ) -> ConstraintResult<()>
+    where
+        T: 'static,
+    {
+        let existing_validator = self.validator.clone();
+        let combined_validator: Arc<ConstraintValidator<T>> = Arc::new(move |candidate| {
+            existing_validator(candidate)?;
+            validator(candidate)
+        });
+
+        combined_validator(&self.value)?;
+        self.validator = combined_validator;
+        Ok(())
+    }
+
     pub fn set(&mut self, value: T) -> ConstraintResult<()> {
         let value = if let Some(normalizer) = &self.normalizer {
             normalizer(value)
@@ -221,6 +242,36 @@ mod tests {
         assert_eq!(constrained.value(), 0);
         constrained.set(10)?;
         assert_eq!(constrained.value(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn constrained_add_validator_composes_with_existing_validator() -> anyhow::Result<()> {
+        let mut constrained = Constrained::new(5, |value: &i32| {
+            if *value >= 0 {
+                Ok(())
+            } else {
+                Err(ConstraintError::empty_field("value"))
+            }
+        })?;
+        constrained.add_validator(|value| {
+            if *value <= 10 {
+                Ok(())
+            } else {
+                Err(ConstraintError::empty_field("value"))
+            }
+        })?;
+
+        assert_eq!(constrained.can_set(&7), Ok(()));
+        assert_eq!(
+            constrained.can_set(&11),
+            Err(ConstraintError::empty_field("value"))
+        );
+        assert_eq!(
+            constrained.can_set(&-1),
+            Err(ConstraintError::empty_field("value"))
+        );
+
         Ok(())
     }
 

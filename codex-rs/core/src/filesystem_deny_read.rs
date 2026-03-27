@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use globset::GlobBuilder;
+use globset::GlobMatcher;
 
 use crate::function_tool::FunctionCallError;
 
@@ -11,6 +13,7 @@ const DENY_READ_POLICY_MESSAGE: &str =
 
 pub(crate) struct ReadDenyMatcher {
     denied_candidates: Vec<Vec<PathBuf>>,
+    deny_read_matchers: Vec<GlobMatcher>,
 }
 
 impl ReadDenyMatcher {
@@ -27,17 +30,37 @@ impl ReadDenyMatcher {
             .into_iter()
             .map(|path| normalized_and_canonical_candidates(path.as_path()))
             .collect();
-        Some(Self { denied_candidates })
+        let deny_read_matchers = if cfg!(target_os = "macos") {
+            file_system_sandbox_policy
+                .deny_read_patterns()
+                .iter()
+                .filter_map(|pattern| build_glob_matcher(pattern.as_str()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Some(Self {
+            denied_candidates,
+            deny_read_matchers,
+        })
     }
 
     pub(crate) fn is_read_denied(&self, path: &Path) -> bool {
         let path_candidates = normalized_and_canonical_candidates(path);
-        self.denied_candidates.iter().any(|denied_candidates| {
+        if self.denied_candidates.iter().any(|denied_candidates| {
             path_candidates.iter().any(|candidate| {
                 denied_candidates.iter().any(|denied_candidate| {
                     candidate == denied_candidate || candidate.starts_with(denied_candidate)
                 })
             })
+        }) {
+            return true;
+        }
+
+        self.deny_read_matchers.iter().any(|matcher| {
+            path_candidates
+                .iter()
+                .any(|candidate| matcher.is_match(candidate))
         })
     }
 }
@@ -90,6 +113,14 @@ fn push_unique(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     if !candidates.iter().any(|existing| existing == &candidate) {
         candidates.push(candidate);
     }
+}
+
+fn build_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .ok()
+        .map(|glob| glob.compile_matcher())
 }
 
 #[cfg(test)]
@@ -146,5 +177,39 @@ mod tests {
 
         let policy = deny_policy(&real_dir);
         assert_eq!(is_read_denied(&alias_secret, &policy, temp.path()), true);
+    }
+
+    #[test]
+    fn literal_patterns_are_denied_and_globs_are_ignored_off_macos() {
+        let temp = tempdir().expect("temp dir");
+        let literal = temp.path().join("private");
+        let other = temp.path().join("notes.txt");
+        std::fs::create_dir_all(&literal).expect("create literal dir");
+        std::fs::write(&other, "notes").expect("write notes");
+
+        let mut policy = deny_policy(&literal);
+        policy.deny_read_patterns = vec![format!("{}/**/*.txt", temp.path().display())];
+
+        assert_eq!(is_read_denied(&literal, &policy, temp.path()), true);
+        assert_eq!(
+            is_read_denied(&other, &policy, temp.path()),
+            cfg!(target_os = "macos")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn glob_patterns_deny_matching_paths_on_macos() {
+        let temp = tempdir().expect("temp dir");
+        let denied = temp.path().join("private").join("secret1.txt");
+        std::fs::create_dir_all(denied.parent().expect("parent")).expect("create parent");
+        std::fs::write(&denied, "secret").expect("write secret");
+
+        let policy = FileSystemSandboxPolicy {
+            deny_read_patterns: vec![format!("{}/private/secret?.txt", temp.path().display())],
+            ..Default::default()
+        };
+
+        assert_eq!(is_read_denied(&denied, &policy, temp.path()), true);
     }
 }
