@@ -219,17 +219,3 @@ impl TurnState {
         self.granted_permissions.clone()
     }
 }
-
-impl ActiveTurn {
-    /// Clear any pending approvals and input buffered for the current turn.
-    pub(crate) async fn clear_pending(&self) {
-        let mut ts = self.turn_state.lock().await;
-        ts.clear_pending();
-    }
-
-    /// Clear pending waiters while preserving buffered input that should survive an interrupt.
-    pub(crate) async fn clear_pending_waiters(&self) {
-        let mut ts = self.turn_state.lock().await;
-        ts.clear_pending_waiters();
-    }
-}

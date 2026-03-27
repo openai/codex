@@ -937,7 +937,7 @@ async fn multi_agent_v2_send_message_interrupts_busy_child_without_triggering_tu
         )
     }));
 
-    timeout(Duration::from_secs(5), async {
+    let wait_result = timeout(Duration::from_secs(5), async {
         loop {
             if !thread
                 .codex
@@ -985,8 +985,47 @@ async fn multi_agent_v2_send_message_interrupts_busy_child_without_triggering_tu
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .expect("interrupting v2 send_message should queue the redirected message without a turn");
+    .await;
+    if let Err(err) = wait_result {
+        let history_items = thread
+            .codex
+            .session
+            .clone_history()
+            .await
+            .raw_items()
+            .to_vec();
+        let saw_envelope = history_contains_inter_agent_communication(
+            &history_items,
+            &InterAgentCommunication::new(
+                AgentPath::root(),
+                AgentPath::try_from("/root/worker").expect("agent path"),
+                Vec::new(),
+                "continue".to_string(),
+                false,
+            ),
+        );
+        let saw_user_message = history_items.iter().any(|item| {
+            matches!(
+                item,
+                ResponseItem::Message { role, content, .. }
+                    if role == "user"
+                        && content.iter().any(|content_item| matches!(
+                            content_item,
+                            ContentItem::InputText { text } if text == "continue"
+                        ))
+            )
+        });
+        panic!(
+            "interrupting v2 send_message should queue the redirected message without a turn: {err:?}; queued={}, envelope={}, user_message={}",
+            thread
+                .codex
+                .session
+                .has_queued_response_items_for_next_turn()
+                .await,
+            saw_envelope,
+            saw_user_message,
+        );
+    }
 
     let _ = thread
         .submit(Op::Shutdown {})

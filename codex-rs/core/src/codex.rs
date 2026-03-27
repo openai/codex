@@ -3994,6 +3994,7 @@ impl Session {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
+    #[cfg(test)]
     pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
         !self.idle_pending_input.lock().await.is_empty()
     }
