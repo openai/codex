@@ -308,6 +308,9 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
     }
 }
 
+/// Legacy list normalization is intentionally lossy: explicit empty legacy
+/// lists are treated as unset when converted to the canonical network
+/// permission shape.
 fn legacy_domain_permissions_from_lists(
     allowed_domains: Option<Vec<String>>,
     denied_domains: Option<Vec<String>>,
