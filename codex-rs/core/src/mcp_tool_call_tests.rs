@@ -1,5 +1,6 @@
 use super::*;
 use crate::codex::make_session_and_context;
+use crate::codex::make_session_and_context_with_rx;
 use crate::config::ApprovalsReviewer;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigToml;
@@ -9,6 +10,7 @@ use crate::config::types::AppToolsConfig;
 use crate::config::types::AppsConfigToml;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerToolConfig;
+use crate::state::ActiveTurn;
 use codex_config::CONFIG_TOML_FILE;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -1188,6 +1190,116 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
     .await;
 
     assert_eq!(decision, None);
+}
+
+#[tokio::test]
+async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
+    use wiremock::Mock;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    turn_context
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    let mut config = (*turn_context.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    let config = Arc::new(config);
+    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    session.services.models_manager = models_manager;
+    turn_context.config = Arc::clone(&config);
+    turn_context.provider = config.model_provider.clone();
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "read_only_tool".to_string(),
+        arguments: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(true), None, None)),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        tool_title: Some("Read Only Tool".to_string()),
+        tool_description: None,
+        codex_apps_meta: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-guardian",
+        &invocation,
+        Some(&metadata),
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(decision, None);
+}
+
+#[tokio::test]
+async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_rx().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "read_only_tool".to_string(),
+        arguments: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(true), None, None)),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        tool_title: Some("Read Only Tool".to_string()),
+        tool_description: None,
+        codex_apps_meta: None,
+    };
+
+    let mut approval_task = {
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        tokio::spawn(async move {
+            maybe_request_mcp_tool_approval(
+                &session,
+                &turn_context,
+                "call-prompt",
+                &invocation,
+                Some(&metadata),
+                AppToolApproval::Prompt,
+            )
+            .await
+        })
+    };
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), &mut approval_task)
+            .await
+            .is_err(),
+        "prompt mode should wait for approval instead of auto-allowing"
+    );
+    approval_task.abort();
 }
 
 #[tokio::test]
