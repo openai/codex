@@ -1055,12 +1055,10 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
-            deny_read_paths: self
+            deny_read_patterns: self
                 .file_system_sandbox_policy
-                .get_unreadable_roots_with_cwd(&self.cwd)
-                .into_iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect(),
+                .deny_read_patterns()
+                .to_vec(),
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
@@ -1232,6 +1230,12 @@ impl SessionConfiguration {
         let mut sandbox_policy_changed = false;
         if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_read_denies(
+                    next_configuration.sandbox_policy.get(),
+                    &next_configuration.cwd,
+                    &next_configuration.file_system_sandbox_policy,
+                );
             next_configuration.network_sandbox_policy =
                 NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
             sandbox_policy_changed = true;
@@ -1256,14 +1260,7 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
-        if sandbox_policy_changed {
-            next_configuration.file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_read_denies(
-                    next_configuration.sandbox_policy.get(),
-                    &next_configuration.cwd,
-                    &next_configuration.file_system_sandbox_policy,
-                );
-        } else if cwd_changed && file_system_policy_matches_legacy {
+        if sandbox_policy_changed || (cwd_changed && file_system_policy_matches_legacy) {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
             next_configuration.file_system_sandbox_policy =

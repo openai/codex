@@ -34,7 +34,7 @@ fn resume_history(
         approval_policy: config.permissions.approval_policy.value(),
         sandbox_policy: config.permissions.sandbox_policy.get().clone(),
         network: None,
-        deny_read_paths: Vec::new(),
+        deny_read_patterns: Vec::new(),
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,

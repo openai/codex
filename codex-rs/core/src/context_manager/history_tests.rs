@@ -133,7 +133,7 @@ fn reference_context_item() -> TurnContextItem {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         network: None,
-        deny_read_paths: Vec::new(),
+        deny_read_patterns: Vec::new(),
         model: "gpt-test".to_string(),
         personality: None,
         collaboration_mode: None,
