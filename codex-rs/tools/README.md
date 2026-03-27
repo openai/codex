@@ -9,7 +9,7 @@ schema primitives that no longer need to live in `core/src/tools/spec.rs`:
 
 - `JsonSchema`
 - `AdditionalProperties`
-- `ParsedToolDefinition`
+- `ToolDefinition`
 - `parse_tool_input_schema()`
 - `parse_dynamic_tool()`
 - `parse_mcp_tool()`

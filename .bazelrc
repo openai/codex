@@ -75,6 +75,11 @@ common:ci --disk_cache=
 common:ci-bazel --config=ci
 common:ci-bazel --build_metadata=TAG_workflow=bazel
 
+# Shared config for Bazel-backed Rust linting.
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+build:clippy --@rules_rust//rust/settings:clippy.toml=//codex-rs:clippy.toml
+
 # Rearrange caches on Windows so they're on the same volume as the checkout.
 common:ci-windows --config=ci-bazel
 common:ci-windows --build_metadata=TAG_os=windows

@@ -46,7 +46,7 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_tools::ParsedToolDefinition;
+use codex_tools::ToolDefinition;
 use codex_tools::parse_dynamic_tool;
 use codex_tools::parse_mcp_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -2386,9 +2386,8 @@ pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(parsed_tool_to_openai_tool(
-        fully_qualified_name,
-        parse_mcp_tool(&tool)?,
+    Ok(tool_definition_to_openai_tool(
+        parse_mcp_tool(&tool)?.renamed(fully_qualified_name),
     ))
 }
 
@@ -2396,35 +2395,25 @@ pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let parsed_tool = parse_mcp_tool(&tool)?;
-
-    Ok(parsed_tool_to_openai_tool(
-        name,
-        ParsedToolDefinition {
-            output_schema: None,
-            defer_loading: true,
-            ..parsed_tool
-        },
+    Ok(tool_definition_to_openai_tool(
+        parse_mcp_tool(&tool)?.renamed(name).into_deferred(),
     ))
 }
 
 fn dynamic_tool_to_openai_tool(
     tool: &DynamicToolSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(parsed_tool_to_openai_tool(
-        tool.name.clone(),
-        parse_dynamic_tool(tool)?,
-    ))
+    Ok(tool_definition_to_openai_tool(parse_dynamic_tool(tool)?))
 }
 
-fn parsed_tool_to_openai_tool(name: String, parsed_tool: ParsedToolDefinition) -> ResponsesApiTool {
+fn tool_definition_to_openai_tool(tool_definition: ToolDefinition) -> ResponsesApiTool {
     ResponsesApiTool {
-        name,
-        description: parsed_tool.description,
+        name: tool_definition.name,
+        description: tool_definition.description,
         strict: false,
-        defer_loading: parsed_tool.defer_loading.then_some(true),
-        parameters: parsed_tool.input_schema,
-        output_schema: parsed_tool.output_schema,
+        defer_loading: tool_definition.defer_loading.then_some(true),
+        parameters: tool_definition.input_schema,
+        output_schema: tool_definition.output_schema,
     }
 }
 

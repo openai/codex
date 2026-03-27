@@ -491,6 +491,7 @@ pub(crate) enum AppEvent {
 
     /// Voice transcription finished for the given placeholder id.
     #[cfg(not(target_os = "linux"))]
+    #[cfg_attr(not(feature = "voice-input"), allow(dead_code))]
     TranscriptionComplete {
         id: String,
         text: String,

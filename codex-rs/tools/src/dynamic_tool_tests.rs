@@ -1,6 +1,6 @@
 use super::parse_dynamic_tool;
 use crate::JsonSchema;
-use crate::ParsedToolDefinition;
+use crate::ToolDefinition;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -22,7 +22,8 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
 
     assert_eq!(
         parse_dynamic_tool(&tool).expect("parse dynamic tool"),
-        ParsedToolDefinition {
+        ToolDefinition {
+            name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
             input_schema: JsonSchema::Object {
                 properties: BTreeMap::from([(
@@ -54,7 +55,8 @@ fn parse_dynamic_tool_preserves_defer_loading() {
 
     assert_eq!(
         parse_dynamic_tool(&tool).expect("parse dynamic tool"),
-        ParsedToolDefinition {
+        ToolDefinition {
+            name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
             input_schema: JsonSchema::Object {
                 properties: BTreeMap::new(),

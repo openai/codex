@@ -167,6 +167,7 @@ mod voice {
     pub(crate) enum RealtimeInputBehavior {
         Ungated,
         PlaybackAware {
+            #[allow(dead_code)]
             playback_queued_samples: Arc<AtomicUsize>,
         },
     }
