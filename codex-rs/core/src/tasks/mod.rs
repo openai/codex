@@ -258,7 +258,6 @@ impl Session {
         *active = Some(turn);
     }
 
-    #[cfg(test)]
     pub(crate) async fn ensure_task_for_queued_response_items(self: &Arc<Self>) {
         if !self.has_queued_response_items_for_next_turn().await {
             return;
@@ -282,21 +281,10 @@ impl Session {
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            // Preserve buffered input on real interrupts by moving it into the session-level
-            // next-turn queue before the detached active turn is dropped.
-            let pending_input = {
-                let mut turn_state = active_turn.turn_state.lock().await;
-                if reason == TurnAbortReason::Interrupted {
-                    turn_state.clear_pending_waiters();
-                    turn_state.take_pending_input()
-                } else {
-                    turn_state.clear_pending();
-                    Vec::new()
-                }
-            };
-            if reason == TurnAbortReason::Interrupted {
-                self.queue_response_items_for_next_turn(pending_input).await;
-            }
+            active_turn.clear_pending().await;
+        }
+        if reason == TurnAbortReason::Interrupted {
+            self.ensure_task_for_queued_response_items().await;
         }
     }
 

@@ -111,14 +111,6 @@ impl TurnState {
         self.pending_input.clear();
     }
 
-    pub(crate) fn clear_pending_waiters(&mut self) {
-        self.pending_approvals.clear();
-        self.pending_request_permissions.clear();
-        self.pending_user_input.clear();
-        self.pending_elicitations.clear();
-        self.pending_dynamic_tools.clear();
-    }
-
     pub(crate) fn insert_pending_request_permissions(
         &mut self,
         key: String,
@@ -217,5 +209,13 @@ impl TurnState {
 
     pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
         self.granted_permissions.clone()
+    }
+}
+
+impl ActiveTurn {
+    /// Clear any pending approvals and input buffered for the current turn.
+    pub(crate) async fn clear_pending(&self) {
+        let mut ts = self.turn_state.lock().await;
+        ts.clear_pending();
     }
 }

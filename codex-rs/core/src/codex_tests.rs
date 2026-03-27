@@ -4753,38 +4753,6 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     assert_eq!(sess.get_pending_input().await, vec![queued_item]);
 }
 
-#[tokio::test]
-async fn interrupt_abort_requeues_active_turn_pending_input() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-
-    let pending_item = ResponseInputItem::Message {
-        role: "assistant".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "redirected during interrupt".to_string(),
-        }],
-    };
-    sess.inject_response_items(vec![pending_item.clone()])
-        .await
-        .expect("inject pending input into active turn");
-
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-
-    assert!(sess.has_queued_response_items_for_next_turn().await);
-    assert_eq!(
-        sess.take_queued_response_items_for_next_turn().await,
-        vec![pending_item]
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;

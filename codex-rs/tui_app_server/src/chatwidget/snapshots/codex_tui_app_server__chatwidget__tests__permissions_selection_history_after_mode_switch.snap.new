@@ -1,6 +1,0 @@
----
-source: tui_app_server/src/chatwidget/tests.rs
-assertion_line: 10253
-expression: "lines_to_single_string(&cells[0])"
----
-• Permissions updated to Guardian Approvals
