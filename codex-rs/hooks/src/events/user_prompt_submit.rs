@@ -418,6 +418,7 @@ mod tests {
             timeout_sec: 5,
             status_message: None,
             source_path: PathBuf::from("/tmp/hooks.json"),
+            is_project: false,
             display_order: 0,
         }
     }

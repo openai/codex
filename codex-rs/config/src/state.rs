@@ -99,6 +99,10 @@ impl ConfigLayerEntry {
         self.disabled_reason.is_some()
     }
 
+    pub fn is_project_layer(&self) -> bool {
+        matches!(self.name, ConfigLayerSource::Project { .. })
+    }
+
     pub fn raw_toml(&self) -> Option<&str> {
         self.raw_toml.as_deref()
     }
