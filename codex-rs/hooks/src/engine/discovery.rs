@@ -28,6 +28,11 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
     let mut handlers = Vec::new();
     let mut warnings = Vec::new();
     let mut display_order = 0_i64;
+    let allow_managed_hooks_only = config_layer_stack
+        .requirements()
+        .allow_managed_hooks_only
+        .as_ref()
+        .is_some_and(|requirement| requirement.value);
 
     for layer in config_layer_stack.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
@@ -38,6 +43,13 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
         };
         let source_path = folder.join("hooks.json");
         if !source_path.as_path().is_file() {
+            continue;
+        }
+        if allow_managed_hooks_only && !layer.is_managed() {
+            warnings.push(format!(
+                "skipping hooks config {} because `allow_managed_hooks_only` is enabled",
+                source_path.display()
+            ));
             continue;
         }
 
@@ -100,6 +112,20 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 groups,
             );
         }
+    }
+
+    if !handlers.is_empty() {
+        let mut source_paths = handlers
+            .iter()
+            .map(|handler| handler.source_path.display().to_string())
+            .collect::<Vec<_>>();
+        source_paths.sort();
+        source_paths.dedup();
+        warnings.push(format!(
+            "Loaded {} lifecycle hook(s) from {}. Hooks run arbitrary shell commands outside the sandbox; review hooks.json changes before continuing.",
+            handlers.len(),
+            source_paths.join(", ")
+        ));
     }
 
     DiscoveryResult { handlers, warnings }

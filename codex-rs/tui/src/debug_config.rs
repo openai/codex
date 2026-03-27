@@ -130,6 +130,17 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(allow_managed_hooks_only) = requirements_toml.allow_managed_hooks_only {
+        requirement_lines.push(requirement_line(
+            "allow_managed_hooks_only",
+            allow_managed_hooks_only.to_string(),
+            requirements
+                .allow_managed_hooks_only
+                .as_ref()
+                .map(|sourced| &sourced.source),
+        ));
+    }
+
     if let Some(servers) = requirements_toml.mcp_servers.as_ref() {
         let value = join_or_empty(servers.keys().cloned().collect::<Vec<_>>());
         requirement_lines.push(requirement_line(
@@ -554,6 +565,10 @@ mod tests {
                 Constrained::allow_any(WebSearchMode::Cached),
                 Some(RequirementSource::CloudRequirements),
             ),
+            allow_managed_hooks_only: Some(Sourced::new(
+                true,
+                RequirementSource::CloudRequirements,
+            )),
             network: Some(Sourced::new(
                 NetworkConstraints {
                     enabled: Some(true),
@@ -576,6 +591,7 @@ mod tests {
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            allow_managed_hooks_only: Some(true),
             guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: Some(BTreeMap::from([(
@@ -625,6 +641,7 @@ mod tests {
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
             )
         );
+        assert!(rendered.contains("allow_managed_hooks_only: true (source: cloud requirements)"));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
@@ -740,6 +757,7 @@ approval_policy = "never"
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            allow_managed_hooks_only: None,
             guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: None,

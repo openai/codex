@@ -36,7 +36,7 @@ pub struct UserPromptSubmitOutcome {
     pub additional_contexts: Vec<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct UserPromptSubmitHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,
