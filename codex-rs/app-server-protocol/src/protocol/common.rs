@@ -142,7 +142,7 @@ macro_rules! client_request_definitions {
                 }
             }
 
-            pub fn request_method(&self) -> String {
+            pub fn method(&self) -> String {
                 serde_json::to_value(self)
                     .ok()
                     .and_then(|value| {
@@ -1335,7 +1335,7 @@ mod tests {
         };
 
         assert_eq!(response.id(), &RequestId::Integer(7));
-        assert_eq!(response.request_method(), "thread/start");
+        assert_eq!(response.method(), "thread/start");
         assert_eq!(
             json!({
                 "method": "thread/start",
