@@ -46,7 +46,7 @@ fn finds_first_executable_bwrap_in_joined_search_path() {
     let search_path = std::env::join_paths([first_dir, second_dir]).expect("join search path");
 
     assert_eq!(
-        find_system_bwrap_in_search_path(&search_path, &cwd),
+        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd),
         Some(expected_bwrap)
     );
 }
@@ -63,7 +63,7 @@ fn skips_workspace_local_bwrap_in_joined_search_path() {
     let search_path = std::env::join_paths([cwd.clone(), trusted_dir]).expect("join search path");
 
     assert_eq!(
-        find_system_bwrap_in_search_path(&search_path, &cwd),
+        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd),
         Some(expected_bwrap)
     );
 }
