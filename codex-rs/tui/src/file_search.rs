@@ -6,12 +6,15 @@
 //! on every keystroke, and drops the session when the query becomes empty.
 
 use codex_file_search as file_search;
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+
+const FILE_SEARCH_LIMIT: usize = 100;
 
 pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
@@ -83,6 +86,8 @@ impl FileSearchManager {
         let session = file_search::create_session(
             vec![self.search_dir.clone()],
             file_search::FileSearchOptions {
+                #[expect(clippy::unwrap_used)]
+                limit: NonZero::new(FILE_SEARCH_LIMIT).unwrap(),
                 compute_indices: true,
                 ..Default::default()
             },

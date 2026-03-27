@@ -15,8 +15,8 @@ use tracing::warn;
 
 use crate::outgoing_message::OutgoingMessageSender;
 
-const MATCH_LIMIT: usize = 50;
-const MAX_THREADS: usize = 12;
+const MATCH_LIMIT: usize = 100;
+const MAX_THREADS: usize = 8;
 
 pub(crate) async fn run_fuzzy_file_search(
     query: String,

@@ -116,10 +116,10 @@ impl Default for FileSearchOptions {
     fn default() -> Self {
         Self {
             #[expect(clippy::unwrap_used)]
-            limit: NonZero::new(20).unwrap(),
+            limit: NonZero::new(100).unwrap(),
             exclude: Vec::new(),
             #[expect(clippy::unwrap_used)]
-            threads: NonZero::new(2).unwrap(),
+            threads: NonZero::new(8).unwrap(),
             compute_indices: false,
             respect_gitignore: true,
         }

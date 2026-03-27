@@ -13,7 +13,7 @@ pub struct Cli {
     pub json: bool,
 
     /// Maximum number of results to return.
-    #[clap(long, short = 'l', default_value = "64")]
+    #[clap(long, short = 'l', default_value = "100")]
     pub limit: NonZero<usize>,
 
     /// Directory to search.
@@ -25,12 +25,11 @@ pub struct Cli {
     pub compute_indices: bool,
 
     // While it is common to default to the number of logical CPUs when creating
-    // a thread pool, empirically, the I/O of the filetree traversal offers
-    // limited parallelism and is the bottleneck, so using a smaller number of
-    // threads is more efficient. (Empirically, using more than 2 threads doesn't seem to provide much benefit.)
+    // a thread pool, empirically, 8 worker threads was the fastest setting in
+    // local monorepo evals among the best-performing quality tiers.
     //
     /// Number of worker threads to use.
-    #[clap(long, default_value = "2")]
+    #[clap(long, default_value = "8")]
     pub threads: NonZero<usize>,
 
     /// Exclude patterns
