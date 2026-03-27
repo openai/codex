@@ -1,16 +1,23 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
+use codex_core::CodexAuth;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -35,8 +42,11 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
     fn sanitize(value: &str) -> String {
@@ -117,6 +127,217 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     .await;
     assert_eq!(legacy_message.message, "please inspect sample.txt");
     assert_eq!(legacy_message.text_elements, text_elements);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let chatgpt_base_url = server.uri();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+            config.personality = Some(Personality::None);
+        });
+    let TestCodex {
+        codex,
+        session_configured,
+        config,
+        ..
+    } = builder.build(&server).await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello turn metadata analytics".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_configured.model.clone(),
+            effort: Some(ReasoningEffort::High),
+            summary: Some(ReasoningSummary::Detailed),
+            service_tier: Some(Some(ServiceTier::Flex)),
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: session_configured.model.clone(),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    developer_instructions: None,
+                },
+            }),
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let event = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        let turn_events = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+            .flat_map(|payload| {
+                payload["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter(|event| event["event_type"] == "codex_turn_event")
+            .collect::<Vec<_>>();
+        if let Some(event) = turn_events.last().cloned() {
+            break event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for turn analytics event");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    let event_params = &event["event_params"];
+
+    assert_eq!(event_params["sandbox_policy"], "read_only");
+    assert_eq!(
+        event_params["product_client_id"],
+        serde_json::json!(codex_core::default_client::originator().value)
+    );
+    assert_eq!(event_params["model"], session_configured.model);
+    assert_eq!(event_params["model_provider"], config.model_provider_id);
+    assert_eq!(event_params["reasoning_effort"], "high");
+    assert_eq!(event_params["reasoning_summary"], "detailed");
+    assert_eq!(event_params["service_tier"], "flex");
+    assert_eq!(event_params["approval_policy"], "never");
+    assert_eq!(
+        event_params["approvals_reviewer"],
+        config.approvals_reviewer.to_string()
+    );
+    assert_eq!(
+        event_params["sandbox_network_access"],
+        config.permissions.network_sandbox_policy.is_enabled()
+    );
+    assert_eq!(event_params["collaboration_mode"], "plan");
+    assert!(event_params["personality"].is_null());
+    assert_eq!(event_params["num_input_images"], 0);
+    assert_eq!(event_params["is_first_turn"], true);
+    assert!(event_params["thread_id"].as_str().is_some());
+    assert!(event_params["turn_id"].as_str().is_some());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_thread_turn_tracks_is_not_first_turn_analytics() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let chatgpt_base_url = server.uri();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+        });
+    let initial = builder.build(&server).await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("persisted rollout path should be present");
+    let home = initial.home.clone();
+    let resumed_chatgpt_base_url = server.uri();
+
+    let mut resume_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = resumed_chatgpt_base_url;
+        });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "resumed turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let resumed_turn_event = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        let turn_events = requests
+            .iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+            .flat_map(|payload| {
+                payload["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter(|event| event["event_type"] == "codex_turn_event")
+            .collect::<Vec<_>>();
+        if let Some(event) = turn_events.last().cloned()
+            && turn_events.len() >= 2
+        {
+            break event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for resumed turn analytics event");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    assert_eq!(resumed_turn_event["event_params"]["is_first_turn"], false);
+
     Ok(())
 }
 

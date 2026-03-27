@@ -15,4 +15,7 @@ pub use analytics_client::PluginUsedInput;
 pub use analytics_client::SkillInvocation;
 pub use analytics_client::SkillInvokedInput;
 pub use analytics_client::TrackEventsContext;
+pub use analytics_client::TurnResolvedConfigFact;
+pub use analytics_client::TurnStatus;
+pub use analytics_client::TurnSubmissionType;
 pub use analytics_client::build_track_events_context;

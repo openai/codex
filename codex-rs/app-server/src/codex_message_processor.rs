@@ -6179,6 +6179,16 @@ impl CodexMessageProcessor {
             return;
         }
 
+        let analytics_turn_start_params = params.clone();
+        self.analytics_events_client.track_request(
+            request_id.connection_id.0,
+            request_id.request_id.clone(),
+            ClientRequest::TurnStart {
+                request_id: request_id.request_id.clone(),
+                params: analytics_turn_start_params,
+            },
+        );
+
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
         };
@@ -6254,6 +6264,13 @@ impl CodexMessageProcessor {
                 };
 
                 let response = TurnStartResponse { turn };
+                self.analytics_events_client.track_response(
+                    request_id.connection_id.0,
+                    ClientResponse::TurnStart {
+                        request_id: request_id.request_id.clone(),
+                        response: response.clone(),
+                    },
+                );
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -6976,7 +6993,7 @@ impl CodexMessageProcessor {
             outgoing,
             thread_manager,
             thread_state_manager,
-            analytics_events_client: _,
+            analytics_events_client,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -7023,6 +7040,7 @@ impl CodexMessageProcessor {
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
+                            analytics_events_client.clone(),
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),

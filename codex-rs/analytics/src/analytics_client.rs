@@ -9,6 +9,15 @@ use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
@@ -21,6 +30,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -28,6 +39,41 @@ pub struct TrackEventsContext {
     pub model_slug: String,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Clone)]
+pub struct TurnResolvedConfigFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub num_input_images: usize,
+    pub submission_type: Option<TurnSubmissionType>,
+    pub model: String,
+    pub model_provider: String,
+    pub sandbox_policy: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
+    pub service_tier: Option<ServiceTier>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_network_access: bool,
+    pub collaboration_mode: ModeKind,
+    pub personality: Option<Personality>,
+    pub is_first_turn: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSubmissionType {
+    Default,
+    Queued,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStatus {
+    Completed,
+    Failed,
+    Interrupted,
 }
 
 #[derive(Clone)]
@@ -103,6 +149,7 @@ pub enum AnalyticsFact {
 }
 
 pub enum CustomAnalyticsFact {
+    TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -145,6 +192,8 @@ pub enum PluginState {
 
 #[derive(Default)]
 pub struct AnalyticsReducer {
+    requests: HashMap<(u64, RequestId), RequestState>,
+    turns: HashMap<String, TurnState>,
     connections: HashMap<u64, ConnectionState>,
 }
 
@@ -153,6 +202,32 @@ struct ConnectionState {
     client_name: Option<String>,
     client_version: Option<String>,
     experimental_api_enabled: Option<bool>,
+}
+
+enum RequestState {
+    TurnStart(PendingTurnStartState),
+}
+
+struct PendingTurnStartState {
+    thread_id: String,
+    num_input_images: usize,
+}
+
+#[derive(Clone)]
+struct CompletedTurnState {
+    status: Option<TurnStatus>,
+    turn_error: Option<CodexErrorInfo>,
+    completed_at_secs: u64,
+    duration_ms: Option<u64>,
+}
+
+struct TurnState {
+    connection_id: Option<u64>,
+    thread_id: Option<String>,
+    num_input_images: Option<usize>,
+    resolved_config: Option<TurnResolvedConfigFact>,
+    started_at_ms: Option<u64>,
+    completed: Option<CompletedTurnState>,
 }
 
 #[derive(Clone)]
@@ -258,6 +333,14 @@ impl AnalyticsEventsClient {
         });
     }
 
+    pub fn track_request(&self, connection_id: u64, request_id: RequestId, request: ClientRequest) {
+        self.record_fact(AnalyticsFact::Request {
+            connection_id,
+            request_id,
+            request: Box::new(request),
+        });
+    }
+
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         if mentions.is_empty() {
             return;
@@ -283,6 +366,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(
             PluginUsedInput { tracking, plugin },
         )));
+    }
+
+    pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
+        ));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
@@ -334,6 +423,10 @@ impl AnalyticsEventsClient {
             response: Box::new(response),
         });
     }
+
+    pub fn track_notification(&self, notification: ServerNotification) {
+        self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
+    }
 }
 
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
@@ -352,6 +445,7 @@ enum TrackEventRequest {
     ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    TurnEvent(Box<CodexTurnEventRequest>),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -423,6 +517,52 @@ struct CodexAppUsedEventRequest {
 }
 
 #[derive(Serialize)]
+struct CodexTurnEventParams {
+    thread_id: String,
+    turn_id: String,
+    product_client_id: Option<String>,
+    submission_type: Option<TurnSubmissionType>,
+    model: Option<String>,
+    model_provider: String,
+    sandbox_policy: Option<&'static str>,
+    reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
+    service_tier: String,
+    approval_policy: String,
+    approvals_reviewer: String,
+    sandbox_network_access: bool,
+    collaboration_mode: Option<&'static str>,
+    personality: Option<String>,
+    num_input_images: usize,
+    is_first_turn: bool,
+    status: Option<TurnStatus>,
+    turn_error: Option<CodexErrorInfo>,
+    steer_count: Option<usize>,
+    total_tool_call_count: Option<usize>,
+    shell_command_count: Option<usize>,
+    file_change_count: Option<usize>,
+    mcp_tool_call_count: Option<usize>,
+    dynamic_tool_call_count: Option<usize>,
+    subagent_tool_call_count: Option<usize>,
+    web_search_count: Option<usize>,
+    image_generation_count: Option<usize>,
+    input_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    reasoning_output_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    duration_ms: Option<u64>,
+    started_at: Option<u64>,
+    completed_at: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct CodexTurnEventRequest {
+    event_type: &'static str,
+    event_params: CodexTurnEventParams,
+}
+
+#[derive(Serialize)]
 struct CodexPluginMetadata {
     plugin_id: Option<String>,
     plugin_name: Option<String>,
@@ -461,21 +601,28 @@ impl AnalyticsReducer {
                 connection_id,
                 params,
             } => {
-                self.ingest_initialize(connection_id, params);
+                self.ingest_initialize(connection_id, params, out);
             }
             AnalyticsFact::Request {
-                connection_id: _connection_id,
-                request_id: _request_id,
-                request: _request,
-            } => {}
+                connection_id,
+                request_id,
+                request,
+            } => {
+                self.ingest_request(connection_id, request_id, *request);
+            }
             AnalyticsFact::Response {
                 connection_id,
                 response,
             } => {
                 self.ingest_response(connection_id, *response, out);
             }
-            AnalyticsFact::Notification(_notification) => {}
+            AnalyticsFact::Notification(notification) => {
+                self.ingest_notification(*notification, out);
+            }
             AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::TurnResolvedConfig(input) => {
+                    self.ingest_turn_resolved_config(*input, out);
+                }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
                 }
@@ -495,7 +642,12 @@ impl AnalyticsReducer {
         }
     }
 
-    fn ingest_initialize(&mut self, connection_id: u64, params: InitializeParams) {
+    fn ingest_initialize(
+        &mut self,
+        connection_id: u64,
+        params: InitializeParams,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
         self.connections.insert(
             connection_id,
             ConnectionState {
@@ -507,6 +659,19 @@ impl AnalyticsReducer {
                     .map(|capabilities| capabilities.experimental_api),
             },
         );
+        let ready_turn_ids = self
+            .turns
+            .iter()
+            .filter_map(|(turn_id, state)| {
+                (state.connection_id == Some(connection_id)
+                    && state.resolved_config.is_some()
+                    && state.completed.is_some())
+                .then_some(turn_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for turn_id in ready_turn_ids {
+            self.maybe_emit_turn_event(&turn_id, out);
+        }
     }
 
     fn ingest_thread_initialized(
@@ -522,36 +687,220 @@ impl AnalyticsReducer {
         ));
     }
 
+    fn ingest_request(
+        &mut self,
+        connection_id: u64,
+        request_id: RequestId,
+        request: ClientRequest,
+    ) {
+        let ClientRequest::TurnStart { params, .. } = request else {
+            return;
+        };
+        self.requests.insert(
+            (connection_id, request_id),
+            RequestState::TurnStart(PendingTurnStartState {
+                thread_id: params.thread_id,
+                num_input_images: params
+                    .input
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item,
+                            codex_app_server_protocol::UserInput::Image { .. }
+                                | codex_app_server_protocol::UserInput::LocalImage { .. }
+                        )
+                    })
+                    .count(),
+            }),
+        );
+    }
+
+    fn ingest_turn_resolved_config(
+        &mut self,
+        input: TurnResolvedConfigFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let turn_id = input.turn_id.clone();
+        let thread_id = input.thread_id.clone();
+        let num_input_images = input.num_input_images;
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at_ms: None,
+            completed: None,
+        });
+        turn_state.thread_id = Some(thread_id);
+        turn_state.num_input_images = Some(num_input_images);
+        turn_state.resolved_config = Some(input);
+        self.maybe_emit_turn_event(&turn_id, out);
+    }
+
     fn ingest_response(
         &mut self,
         connection_id: u64,
         response: ClientResponse,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let (thread, model, initialization_mode) = match response {
+        match response {
             ClientResponse::ThreadStart { response, .. } => {
-                (response.thread, response.model, InitializationMode::New)
+                let thread = response.thread;
+                self.ingest_thread_initialized(
+                    ThreadInitializedInput {
+                        connection_id,
+                        thread_id: thread.id,
+                        model: response.model,
+                        ephemeral: thread.ephemeral,
+                        session_source: thread.source.into(),
+                        initialization_mode: InitializationMode::New,
+                        created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    },
+                    out,
+                );
             }
             ClientResponse::ThreadResume { response, .. } => {
-                (response.thread, response.model, InitializationMode::Resumed)
+                let thread = response.thread;
+                self.ingest_thread_initialized(
+                    ThreadInitializedInput {
+                        connection_id,
+                        thread_id: thread.id,
+                        model: response.model,
+                        ephemeral: thread.ephemeral,
+                        session_source: thread.source.into(),
+                        initialization_mode: InitializationMode::Resumed,
+                        created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    },
+                    out,
+                );
             }
             ClientResponse::ThreadFork { response, .. } => {
-                (response.thread, response.model, InitializationMode::Forked)
+                let thread = response.thread;
+                self.ingest_thread_initialized(
+                    ThreadInitializedInput {
+                        connection_id,
+                        thread_id: thread.id,
+                        model: response.model,
+                        ephemeral: thread.ephemeral,
+                        session_source: thread.source.into(),
+                        initialization_mode: InitializationMode::Forked,
+                        created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    },
+                    out,
+                );
             }
-            _ => return,
+            ClientResponse::TurnStart {
+                request_id,
+                response,
+            } => {
+                let turn_id = response.turn.id;
+                let Some(RequestState::TurnStart(pending_request)) =
+                    self.requests.remove(&(connection_id, request_id))
+                else {
+                    return;
+                };
+                let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+                    connection_id: None,
+                    thread_id: None,
+                    num_input_images: None,
+                    resolved_config: None,
+                    started_at_ms: None,
+                    completed: None,
+                });
+                turn_state.connection_id = Some(connection_id);
+                turn_state.thread_id = Some(pending_request.thread_id);
+                turn_state.num_input_images = Some(pending_request.num_input_images);
+                self.maybe_emit_turn_event(&turn_id, out);
+            }
+            _ => {}
+        }
+    }
+
+    fn ingest_notification(
+        &mut self,
+        notification: ServerNotification,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        match notification {
+            ServerNotification::TurnStarted(notification) => {
+                let turn_state = self.turns.entry(notification.turn.id).or_insert(TurnState {
+                    connection_id: None,
+                    thread_id: None,
+                    num_input_images: None,
+                    resolved_config: None,
+                    started_at_ms: None,
+                    completed: None,
+                });
+                turn_state.started_at_ms = Some(now_unix_timestamp_millis());
+            }
+            ServerNotification::TurnCompleted(notification) => {
+                let turn_state =
+                    self.turns
+                        .entry(notification.turn.id.clone())
+                        .or_insert(TurnState {
+                            connection_id: None,
+                            thread_id: None,
+                            num_input_images: None,
+                            resolved_config: None,
+                            started_at_ms: None,
+                            completed: None,
+                        });
+                let completed_at_secs = now_unix_timestamp_secs();
+                let completed_at_ms = completed_at_secs.saturating_mul(1000);
+                turn_state.completed = Some(CompletedTurnState {
+                    status: analytics_turn_status(notification.turn.status),
+                    turn_error: notification.turn.error.and_then(|error| {
+                        error
+                            .codex_error_info
+                            .map(app_server_codex_error_info_to_core)
+                    }),
+                    completed_at_secs,
+                    duration_ms: turn_state
+                        .started_at_ms
+                        .map(|started_at_ms| completed_at_ms.saturating_sub(started_at_ms)),
+                });
+                let turn_id = notification.turn.id;
+                self.maybe_emit_turn_event(&turn_id, out);
+            }
+            _ => {}
+        }
+    }
+
+    fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
+        let Some(turn_state) = self.turns.get(turn_id) else {
+            return;
         };
-        self.ingest_thread_initialized(
-            ThreadInitializedInput {
-                connection_id,
-                thread_id: thread.id,
-                model,
-                ephemeral: thread.ephemeral,
-                session_source: thread.source.into(),
-                initialization_mode,
-                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+        let Some(thread_id) = turn_state.thread_id.clone() else {
+            return;
+        };
+        let Some(num_input_images) = turn_state.num_input_images else {
+            return;
+        };
+        let Some(resolved_config) = turn_state.resolved_config.clone() else {
+            return;
+        };
+        let Some(completed) = turn_state.completed.clone() else {
+            return;
+        };
+        out.push(TrackEventRequest::TurnEvent(Box::new(
+            CodexTurnEventRequest {
+                event_type: "codex_turn_event",
+                event_params: codex_turn_event_params(
+                    turn_state
+                        .connection_id
+                        .and_then(|connection_id| self.connections.get(&connection_id))
+                        .map(|connection_state| connection_state.product_client_id.clone())
+                        .unwrap_or_else(|| originator().value),
+                    thread_id,
+                    turn_id.to_string(),
+                    num_input_images,
+                    resolved_config,
+                    completed,
+                    turn_state.started_at_ms.map(|value| value / 1000),
+                ),
             },
-            out,
-        );
+        )));
+        self.turns.remove(turn_id);
     }
 
     async fn ingest_skill_invoked(
@@ -601,7 +950,6 @@ impl AnalyticsReducer {
             ));
         }
     }
-
     fn ingest_app_mentioned(&mut self, input: AppMentionedInput, out: &mut Vec<TrackEventRequest>) {
         let AppMentionedInput { tracking, mentions } = input;
         out.extend(mentions.into_iter().map(|mention| {
@@ -667,6 +1015,105 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
         product_client_id: Some(originator().value),
         invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
+    }
+}
+
+fn codex_turn_event_params(
+    product_client_id: String,
+    thread_id: String,
+    turn_id: String,
+    num_input_images: usize,
+    resolved_config: TurnResolvedConfigFact,
+    completed: CompletedTurnState,
+    started_at: Option<u64>,
+) -> CodexTurnEventParams {
+    let TurnResolvedConfigFact {
+        turn_id: _resolved_turn_id,
+        thread_id: _resolved_thread_id,
+        num_input_images: _resolved_num_input_images,
+        submission_type,
+        model,
+        model_provider,
+        sandbox_policy,
+        reasoning_effort,
+        reasoning_summary,
+        service_tier,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_network_access,
+        collaboration_mode,
+        personality,
+        is_first_turn,
+    } = resolved_config;
+    CodexTurnEventParams {
+        thread_id,
+        turn_id,
+        product_client_id: Some(product_client_id),
+        submission_type,
+        model: Some(model),
+        model_provider,
+        sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),
+        reasoning_effort: reasoning_effort.map(|value| value.to_string()),
+        reasoning_summary: reasoning_summary_mode(reasoning_summary),
+        service_tier: service_tier
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "default".to_string()),
+        approval_policy: approval_policy.to_string(),
+        approvals_reviewer: approvals_reviewer.to_string(),
+        sandbox_network_access,
+        collaboration_mode: Some(collaboration_mode_mode(collaboration_mode)),
+        personality: personality_mode(personality),
+        num_input_images,
+        is_first_turn,
+        status: completed.status,
+        turn_error: completed.turn_error,
+        steer_count: None,
+        total_tool_call_count: None,
+        shell_command_count: None,
+        file_change_count: None,
+        mcp_tool_call_count: None,
+        dynamic_tool_call_count: None,
+        subagent_tool_call_count: None,
+        web_search_count: None,
+        image_generation_count: None,
+        input_tokens: None,
+        cached_input_tokens: None,
+        output_tokens: None,
+        reasoning_output_tokens: None,
+        total_tokens: None,
+        duration_ms: completed.duration_ms,
+        started_at,
+        completed_at: Some(completed.completed_at_secs),
+    }
+}
+
+fn sandbox_policy_mode(sandbox_policy: &SandboxPolicy) -> &'static str {
+    match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => "full_access",
+        SandboxPolicy::ReadOnly { .. } => "read_only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace_write",
+        SandboxPolicy::ExternalSandbox { .. } => "external_sandbox",
+    }
+}
+
+fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
+    match mode {
+        ModeKind::Plan => "plan",
+        ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => "default",
+    }
+}
+
+fn reasoning_summary_mode(summary: Option<ReasoningSummary>) -> Option<String> {
+    match summary {
+        Some(ReasoningSummary::None) | None => None,
+        Some(summary) => Some(summary.to_string()),
+    }
+}
+
+fn personality_mode(personality: Option<Personality>) -> Option<String> {
+    match personality {
+        Some(Personality::None) | None => None,
+        Some(personality) => Some(personality.to_string()),
     }
 }
 
@@ -742,6 +1189,79 @@ fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
         | SessionSource::Mcp
         | SessionSource::Custom(_)
         | SessionSource::Unknown => None,
+    }
+}
+
+fn now_unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn now_unix_timestamp_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn analytics_turn_status(status: codex_app_server_protocol::TurnStatus) -> Option<TurnStatus> {
+    match status {
+        codex_app_server_protocol::TurnStatus::Completed => Some(TurnStatus::Completed),
+        codex_app_server_protocol::TurnStatus::Failed => Some(TurnStatus::Failed),
+        codex_app_server_protocol::TurnStatus::Interrupted => Some(TurnStatus::Interrupted),
+        codex_app_server_protocol::TurnStatus::InProgress => None,
+    }
+}
+
+fn app_server_codex_error_info_to_core(
+    info: codex_app_server_protocol::CodexErrorInfo,
+) -> CodexErrorInfo {
+    match info {
+        codex_app_server_protocol::CodexErrorInfo::ContextWindowExceeded => {
+            CodexErrorInfo::ContextWindowExceeded
+        }
+        codex_app_server_protocol::CodexErrorInfo::UsageLimitExceeded => {
+            CodexErrorInfo::UsageLimitExceeded
+        }
+        codex_app_server_protocol::CodexErrorInfo::ServerOverloaded => {
+            CodexErrorInfo::ServerOverloaded
+        }
+        codex_app_server_protocol::CodexErrorInfo::HttpConnectionFailed { http_status_code } => {
+            CodexErrorInfo::HttpConnectionFailed { http_status_code }
+        }
+        codex_app_server_protocol::CodexErrorInfo::ResponseStreamConnectionFailed {
+            http_status_code,
+        } => CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code },
+        codex_app_server_protocol::CodexErrorInfo::InternalServerError => {
+            CodexErrorInfo::InternalServerError
+        }
+        codex_app_server_protocol::CodexErrorInfo::Unauthorized => CodexErrorInfo::Unauthorized,
+        codex_app_server_protocol::CodexErrorInfo::BadRequest => CodexErrorInfo::BadRequest,
+        codex_app_server_protocol::CodexErrorInfo::ThreadRollbackFailed => {
+            CodexErrorInfo::ThreadRollbackFailed
+        }
+        codex_app_server_protocol::CodexErrorInfo::SandboxError => CodexErrorInfo::SandboxError,
+        codex_app_server_protocol::CodexErrorInfo::ResponseStreamDisconnected {
+            http_status_code,
+        } => CodexErrorInfo::ResponseStreamDisconnected { http_status_code },
+        codex_app_server_protocol::CodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code,
+        } => CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code },
+        codex_app_server_protocol::CodexErrorInfo::ActiveTurnNotSteerable { turn_kind } => {
+            CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: match turn_kind {
+                    codex_app_server_protocol::NonSteerableTurnKind::Review => {
+                        codex_protocol::protocol::NonSteerableTurnKind::Review
+                    }
+                    codex_app_server_protocol::NonSteerableTurnKind::Compact => {
+                        codex_protocol::protocol::NonSteerableTurnKind::Compact
+                    }
+                },
+            }
+        }
+        codex_app_server_protocol::CodexErrorInfo::Other => CodexErrorInfo::Other,
     }
 }
 
