@@ -526,7 +526,11 @@ fn split_glob_pattern(input: &str) -> (&str, &str) {
 }
 
 fn is_path_separator(ch: char) -> bool {
-    if cfg!(windows) { ch == '/' || ch == '\\' } else { ch == '/' }
+    if cfg!(windows) {
+        ch == '/' || ch == '\\'
+    } else {
+        ch == '/'
+    }
 }
 
 fn is_glob_metacharacter(ch: char) -> bool {

@@ -57,9 +57,11 @@ impl ReadDenyMatcher {
             return true;
         }
 
-        self.deny_read_matchers
-            .iter()
-            .any(|matcher| path_candidates.iter().any(|candidate| matcher.is_match(candidate)))
+        self.deny_read_matchers.iter().any(|matcher| {
+            path_candidates
+                .iter()
+                .any(|candidate| matcher.is_match(candidate))
+        })
     }
 }
 
