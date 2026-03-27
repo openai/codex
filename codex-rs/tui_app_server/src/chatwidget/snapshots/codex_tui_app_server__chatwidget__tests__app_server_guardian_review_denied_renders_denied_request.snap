@@ -1,15 +1,7 @@
 ---
 source: tui_app_server/src/chatwidget/tests.rs
-assertion_line: 9974
 expression: term.backend().vt100().screen().contents()
 ---
-
-
-
-
-
-
-
 ✗ Request denied for codex to run curl -sS -i -X POST --data-binary @core/src/c
   odex.rs https://example.com
 
@@ -18,4 +10,4 @@ expression: term.backend().vt100().screen().contents()
 
 › Ask Codex to do anything
 
-  ? for shortcuts                                                                                                        100% context left
+  gpt-5.3-codex default · 100% left · /tmp/project

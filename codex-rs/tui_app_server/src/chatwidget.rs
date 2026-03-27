@@ -2979,7 +2979,7 @@ impl ChatWidget {
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
             self.update_collaboration_mode_indicator();
-            self.refresh_model_display();
+            self.refresh_model_dependent_surfaces();
             if let Some(composer) = input_state.composer {
                 let local_image_paths = composer
                     .local_images
@@ -9243,6 +9243,11 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
+    /// Override the reasoning effort used when Plan mode is active.
+    ///
+    /// When the active mask is already Plan, the override is applied immediately
+    /// so the footer reflects it without waiting for the next mode switch.
+    /// Passing `None` resets to the Plan-mode preset default.
     pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.plan_mode_reasoning_effort = effort;
         if self.collaboration_modes_enabled()
@@ -9257,9 +9262,13 @@ impl ChatWidget {
                 mask.reasoning_effort = plan_mask.reasoning_effort;
             }
         }
+        self.refresh_model_dependent_surfaces();
     }
 
-    /// Set the reasoning effort in the stored collaboration mode.
+    /// Set the reasoning effort for the non-Plan collaboration mode.
+    ///
+    /// Does not touch the active Plan mask — Plan reasoning is controlled
+    /// exclusively by the Plan preset and `set_plan_mode_reasoning_effort`.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             /*model*/ None,
@@ -9274,6 +9283,7 @@ impl ChatWidget {
             // Plan reasoning is controlled by the Plan preset and Plan-only override updates.
             mask.reasoning_effort = Some(effort);
         }
+        self.refresh_model_dependent_surfaces();
     }
 
     /// Set the personality in the widget's config copy.
@@ -9362,7 +9372,7 @@ impl ChatWidget {
         {
             mask.model = Some(model.to_string());
         }
-        self.refresh_model_display();
+        self.refresh_model_dependent_surfaces();
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
@@ -9539,6 +9549,20 @@ impl ChatWidget {
         self.session_header.set_model(effective.model());
         // Keep composer paste affordances aligned with the currently effective model.
         self.sync_image_paste_enabled();
+        self.refresh_terminal_title();
+    }
+
+    /// Refresh every UI surface that depends on the effective model, reasoning
+    /// effort, or collaboration mode.
+    ///
+    /// Call this at the end of any setter that mutates `current_collaboration_mode`,
+    /// `active_collaboration_mask`, or per-mode reasoning-effort overrides.
+    /// Consolidating both refreshes here prevents the bug where callers update the
+    /// header/title (`refresh_model_display`) but forget the footer status line
+    /// (`refresh_status_line`).
+    fn refresh_model_dependent_surfaces(&mut self) {
+        self.refresh_model_display();
+        self.refresh_status_line();
     }
 
     fn model_display_name(&self) -> &str {
@@ -9624,7 +9648,7 @@ impl ChatWidget {
         }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
-        self.refresh_model_display();
+        self.refresh_model_dependent_surfaces();
         let next_mode = self.active_mode_kind();
         let next_model = self.current_model();
         let next_effort = self.effective_reasoning_effort();
