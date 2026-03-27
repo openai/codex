@@ -2385,6 +2385,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-image",
  "codex-utils-string",
+ "codex-utils-template",
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
