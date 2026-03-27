@@ -15,9 +15,30 @@
 //!
 //! On non-Unix platforms these helpers are no-ops.
 
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::io;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 use tokio::process::Child;
+#[cfg(windows)]
+use winapi::um::sysinfoapi::GetSystemDirectoryW;
+
+#[cfg(windows)]
+fn trusted_taskkill_path() -> PathBuf {
+    let mut buffer = [0_u16; 260];
+    let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    if len > 0 && (len as usize) < buffer.len() {
+        let mut path = PathBuf::from(OsString::from_wide(&buffer[..len as usize]));
+        path.push("taskkill.exe");
+        return path;
+    }
+
+    PathBuf::from(r"C:\Windows\System32\taskkill.exe")
+}
 
 #[cfg(target_os = "linux")]
 /// Ensure the child receives SIGTERM when the original parent dies.
@@ -111,8 +132,25 @@ pub fn kill_process_group_by_pid(pid: u32) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-/// No-op on non-Unix platforms.
+#[cfg(windows)]
+/// Best-effort termination of a process tree rooted at `pid`.
+///
+/// Uses `taskkill /PID <pid> /T /F` so descendants are terminated as well.
+pub fn kill_process_group_by_pid(pid: u32) -> io::Result<()> {
+    use std::process::Command;
+
+    let command_result = Command::new(trusted_taskkill_path())
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output();
+
+    // Best-effort cleanup path: timeout/interrupt handling should continue to
+    // the direct-child kill path even if taskkill launch or execution fails.
+    let _ = command_result;
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+/// No-op on non-Unix platforms without a process-group primitive.
 pub fn kill_process_group_by_pid(_pid: u32) -> io::Result<()> {
     Ok(())
 }
@@ -161,8 +199,14 @@ pub fn kill_process_group(process_group_id: u32) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-/// No-op on non-Unix platforms.
+#[cfg(windows)]
+/// Best-effort termination for a process-tree root id.
+pub fn kill_process_group(process_group_id: u32) -> io::Result<()> {
+    kill_process_group_by_pid(process_group_id)
+}
+
+#[cfg(not(any(unix, windows)))]
+/// No-op on non-Unix platforms without a process-group primitive.
 pub fn kill_process_group(_process_group_id: u32) -> io::Result<()> {
     Ok(())
 }
@@ -177,8 +221,18 @@ pub fn kill_child_process_group(child: &mut Child) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-/// No-op on non-Unix platforms.
+#[cfg(windows)]
+/// Kill the Windows process tree rooted at a tokio child pid (best-effort).
+pub fn kill_child_process_group(child: &mut Child) -> io::Result<()> {
+    if let Some(pid) = child.id() {
+        return kill_process_group_by_pid(pid);
+    }
+
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+/// No-op on non-Unix platforms without a process-group primitive.
 pub fn kill_child_process_group(_child: &mut Child) -> io::Result<()> {
     Ok(())
 }
