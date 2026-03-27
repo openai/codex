@@ -39,10 +39,14 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const LOGIN_ISSUER_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
@@ -96,6 +100,58 @@ stream_max_retries = 0
 "#
     );
     std::fs::write(config_toml, contents)
+}
+
+async fn mock_device_code_usercode(server: &MockServer, interval_seconds: u64) {
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/deviceauth/usercode"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_auth_id": "device-auth-123",
+            "user_code": "CODE-12345",
+            "interval": interval_seconds.to_string(),
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mock_device_code_usercode_failure(server: &MockServer, status: u16) {
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/deviceauth/usercode"))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(server)
+        .await;
+}
+
+async fn mock_device_code_token_success(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/deviceauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_code": "poll-code-321",
+            "code_challenge": "code-challenge-321",
+            "code_verifier": "code-verifier-321",
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mock_device_code_token_failure(server: &MockServer, status: u16) {
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/deviceauth/token"))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(server)
+        .await;
+}
+
+async fn mock_device_code_oauth_token(server: &MockServer, id_token: &str) {
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id_token": id_token,
+            "access_token": "access-token-123",
+            "refresh_token": "refresh-token-123",
+        })))
+        .mount(server)
+        .await;
 }
 
 #[tokio::test]
@@ -908,6 +964,305 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
     assert_eq!(
         err.error.message,
         "ChatGPT login is disabled. Use API key login instead."
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    write_models_cache(codex_home.path())?;
+    mock_device_code_usercode_failure(&mock_server, 404).await;
+
+    let issuer = mock_server.uri();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        err.error
+            .message
+            .contains("device code login is not enabled"),
+        "unexpected error: {:?}",
+        err.error.message
+    );
+
+    let maybe_completed = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await;
+    assert!(
+        maybe_completed.is_err(),
+        "account/login/completed should not be emitted when device code start fails"
+    );
+    assert!(
+        !codex_home.path().join("auth.json").exists(),
+        "auth.json should not be created when device code start fails"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    write_models_cache(codex_home.path())?;
+
+    mock_device_code_usercode(&mock_server, 0).await;
+    mock_device_code_token_success(&mock_server).await;
+    let id_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .email("device@example.com")
+            .plan_type("pro")
+            .chatgpt_account_id("org-device"),
+    )?;
+    mock_device_code_oauth_token(&mock_server, &id_token).await;
+
+    let issuer = mock_server.uri();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::ChatgptDeviceCode {
+        login_id,
+        verification_url,
+        user_code,
+    } = login
+    else {
+        bail!("unexpected login response: {login:?}");
+    };
+    assert_eq!(verification_url, format!("{issuer}/codex/device"));
+    assert_eq!(user_code, "CODE-12345");
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    assert_eq!(payload.login_id, Some(login_id));
+    assert_eq!(payload.success, true);
+    assert_eq!(payload.error, None);
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountUpdated(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    assert_eq!(payload.auth_mode, Some(AuthMode::Chatgpt));
+    assert_eq!(payload.plan_type, Some(AccountPlanType::Pro));
+    assert!(
+        codex_home.path().join("auth.json").exists(),
+        "auth.json should be created when device code login succeeds"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_chatgpt_device_code_failure_notifies_without_account_update() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    write_models_cache(codex_home.path())?;
+
+    mock_device_code_usercode(&mock_server, 0).await;
+    mock_device_code_token_failure(&mock_server, 500).await;
+
+    let issuer = mock_server.uri();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    assert_eq!(payload.login_id, Some(login_id));
+    assert_eq!(payload.success, false);
+    assert!(
+        payload
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("device auth failed with status")),
+        "unexpected error: {:?}",
+        payload.error
+    );
+
+    let maybe_updated = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await;
+    assert!(
+        maybe_updated.is_err(),
+        "account/updated should not be emitted when device code login fails"
+    );
+    assert!(
+        !codex_home.path().join("auth.json").exists(),
+        "auth.json should not be created when device code login fails"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_chatgpt_device_code_can_be_cancelled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    write_models_cache(codex_home.path())?;
+
+    mock_device_code_usercode(&mock_server, 1).await;
+    mock_device_code_token_failure(&mock_server, 404).await;
+
+    let issuer = mock_server.uri();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+
+    let cancel_id = mcp
+        .send_cancel_login_account_request(CancelLoginAccountParams {
+            login_id: login_id.clone(),
+        })
+        .await?;
+    let cancel_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
+    )
+    .await??;
+    let cancel: CancelLoginAccountResponse = to_response(cancel_resp)?;
+    assert_eq!(cancel.status, CancelLoginAccountStatus::Canceled);
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    assert_eq!(payload.login_id, Some(login_id));
+    assert_eq!(payload.success, false);
+    assert!(
+        payload.error.is_some(),
+        "expected a non-empty error on device code cancel"
+    );
+
+    let maybe_updated = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await;
+    assert!(
+        maybe_updated.is_err(),
+        "account/updated should not be emitted when device code login is cancelled"
+    );
+    assert!(
+        !codex_home.path().join("auth.json").exists(),
+        "auth.json should not be created when device code login is cancelled"
     );
     Ok(())
 }

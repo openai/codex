@@ -306,7 +306,9 @@ enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
 allow_upstream_proxy = false
-allowed_domains = ["openai.com"]
+
+[permissions.workspace.network.domains]
+"openai.com" = "allow"
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
@@ -343,9 +345,13 @@ allowed_domains = ["openai.com"]
                         dangerously_allow_non_loopback_proxy: None,
                         dangerously_allow_all_unix_sockets: None,
                         mode: None,
-                        allowed_domains: Some(vec!["openai.com".to_string()]),
-                        denied_domains: None,
-                        allow_unix_sockets: None,
+                        domains: Some(NetworkDomainPermissionsToml {
+                            entries: BTreeMap::from([(
+                                "openai.com".to_string(),
+                                NetworkDomainPermissionToml::Allow,
+                            )]),
+                        }),
+                        unix_sockets: None,
                         allow_local_binding: None,
                     }),
                 },
@@ -421,7 +427,12 @@ fn permissions_profiles_network_disabled_by_default_does_not_start_proxy() -> st
                             )]),
                         }),
                         network: Some(NetworkToml {
-                            allowed_domains: Some(vec!["openai.com".to_string()]),
+                            domains: Some(NetworkDomainPermissionsToml {
+                                entries: BTreeMap::from([(
+                                    "openai.com".to_string(),
+                                    NetworkDomainPermissionToml::Allow,
+                                )]),
+                            }),
                             ..Default::default()
                         }),
                     },

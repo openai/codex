@@ -220,7 +220,7 @@ impl NetworkProxyBuilder {
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
             allow_local_binding: current_cfg.network.allow_local_binding,
-            allow_unix_sockets: current_cfg.network.allow_unix_sockets.clone(),
+            allow_unix_sockets: current_cfg.network.allow_unix_sockets(),
             dangerously_allow_all_unix_sockets: current_cfg
                 .network
                 .dangerously_allow_all_unix_sockets,

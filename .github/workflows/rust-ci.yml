@@ -547,7 +547,10 @@ jobs:
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'windows-arm64' && 35 || 30 }}
+    # Perhaps we can bring this back down to 30m once we finish the cutover
+    # from tui_app_server/ to tui/. Incidentally, windows-arm64 was the main
+    # offender for exceeding the timeout.
+    timeout-minutes: 45
     needs: changed
     if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     defaults:

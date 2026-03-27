@@ -3,9 +3,9 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use tokio::io::AsyncRead;
@@ -64,11 +64,7 @@ fn kill_process(pid: u32) -> io::Result<()> {
         let success = winapi::um::processthreadsapi::TerminateProcess(handle, 1);
         let err = io::Error::last_os_error();
         winapi::um::handleapi::CloseHandle(handle);
-        if success == 0 {
-            Err(err)
-        } else {
-            Ok(())
-        }
+        if success == 0 { Err(err) } else { Ok(()) }
     }
 }
 

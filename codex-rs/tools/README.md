@@ -4,12 +4,16 @@
 shared across multiple crates and does not need to stay coupled to
 `codex-core`.
 
-Today this crate is intentionally small. It only owns the shared tool input
-schema model and parser that were previously defined in `core/src/tools/spec.rs`:
+Today this crate is intentionally small. It currently owns the shared tool
+schema primitives that no longer need to live in `core/src/tools/spec.rs`:
 
 - `JsonSchema`
 - `AdditionalProperties`
+- `ParsedToolDefinition`
 - `parse_tool_input_schema()`
+- `parse_dynamic_tool()`
+- `parse_mcp_tool()`
+- `mcp_call_tool_result_output_schema()`
 
 That extraction is the first step in a longer migration. The goal is not to
 move all of `core/src/tools` into this crate in one shot. Instead, the plan is

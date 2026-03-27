@@ -512,6 +512,15 @@ pub enum Op {
     ListModels,
 }
 
+impl From<Vec<UserInput>> for Op {
+    fn from(value: Vec<UserInput>) -> Self {
+        Op::UserInput {
+            items: value,
+            final_output_json_schema: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct InterAgentCommunication {
     pub author: AgentPath,

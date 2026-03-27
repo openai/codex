@@ -8,6 +8,7 @@ use crate::tools::ToolRouter;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -61,139 +62,6 @@ fn search_capable_model_info() -> ModelInfo {
         ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     model_info.supports_search_tool = true;
     model_info
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_inserts_empty_properties() {
-    let mut schema = rmcp::model::JsonObject::new();
-    schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let tool = rmcp::model::Tool {
-        name: "no_props".to_string().into(),
-        title: None,
-        description: Some("No properties".to_string().into()),
-        input_schema: std::sync::Arc::new(schema),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool =
-        mcp_tool_to_openai_tool("server/no_props".to_string(), tool).expect("convert tool");
-    let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize schema");
-
-    assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
-    let mut input_schema = rmcp::model::JsonObject::new();
-    input_schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let mut output_schema = rmcp::model::JsonObject::new();
-    output_schema.insert(
-        "properties".to_string(),
-        serde_json::json!({
-            "result": {
-                "properties": {
-                    "nested": {}
-                }
-            }
-        }),
-    );
-    output_schema.insert("required".to_string(), serde_json::json!(["result"]));
-
-    let tool = rmcp::model::Tool {
-        name: "with_output".to_string().into(),
-        title: None,
-        description: Some("Has output schema".to_string().into()),
-        input_schema: std::sync::Arc::new(input_schema),
-        output_schema: Some(std::sync::Arc::new(output_schema)),
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), tool)
-        .expect("convert tool");
-
-    assert_eq!(
-        openai_tool.output_schema,
-        Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "array",
-                    "items": {}
-                },
-                "structuredContent": {
-                    "properties": {
-                        "result": {
-                            "properties": {
-                                "nested": {}
-                            }
-                        }
-                    },
-                    "required": ["result"]
-                },
-                "isError": {
-                    "type": "boolean"
-                },
-                "_meta": {}
-            },
-            "required": ["content"],
-            "additionalProperties": false
-        }))
-    );
-}
-
-#[test]
-fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
-    let mut input_schema = rmcp::model::JsonObject::new();
-    input_schema.insert("type".to_string(), serde_json::json!("object"));
-
-    let mut output_schema = rmcp::model::JsonObject::new();
-    output_schema.insert("enum".to_string(), serde_json::json!(["ok", "error"]));
-
-    let tool = rmcp::model::Tool {
-        name: "with_enum_output".to_string().into(),
-        title: None,
-        description: Some("Has enum output schema".to_string().into()),
-        input_schema: std::sync::Arc::new(input_schema),
-        output_schema: Some(std::sync::Arc::new(output_schema)),
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
-
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool)
-        .expect("convert tool");
-
-    assert_eq!(
-        openai_tool.output_schema,
-        Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "array",
-                    "items": {}
-                },
-                "structuredContent": {
-                    "enum": ["ok", "error"]
-                },
-                "isError": {
-                    "type": "boolean"
-                },
-                "_meta": {}
-            },
-            "required": ["content"],
-            "additionalProperties": false
-        }))
-    );
 }
 
 #[test]
@@ -256,6 +124,44 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
                 "additionalProperties": false,
             }
         })
+    );
+}
+
+#[test]
+fn dynamic_tool_preserves_defer_loading() {
+    let tool = DynamicToolSpec {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string"}
+            },
+            "required": ["order_id"],
+            "additionalProperties": false,
+        }),
+        defer_loading: true,
+    };
+
+    let openai_tool = dynamic_tool_to_openai_tool(&tool).expect("convert dynamic tool");
+
+    assert_eq!(
+        openai_tool,
+        ResponsesApiTool {
+            name: "lookup_order".to_string(),
+            description: "Look up an order".to_string(),
+            strict: false,
+            defer_loading: Some(true),
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([(
+                    "order_id".to_string(),
+                    JsonSchema::String { description: None },
+                )]),
+                required: Some(vec!["order_id".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+            output_schema: None,
+        }
     );
 }
 
@@ -587,7 +493,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("spawn_agent should use object params");
     };
     assert!(properties.contains_key("task_name"));
-    assert_eq!(required.as_ref(), None);
+    assert_eq!(required.as_ref(), Some(&vec!["task_name".to_string()]));
     let output_schema = output_schema
         .as_ref()
         .expect("spawn_agent should define output schema");
@@ -2375,6 +2281,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
     ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
+    assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
     let JsonSchema::Object { required, .. } = parameters else {
         panic!("expected object parameters");

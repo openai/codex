@@ -82,7 +82,6 @@ members = [
     "state",
     "terminal-detection",
     "codex-experimental-api-macros",
-    "package-manager",
     "plugin",
 ]
 resolver = "2"
@@ -103,7 +102,6 @@ codex-ansi-escape = { path = "ansi-escape" }
 codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
 codex-code-mode = { path = "code-mode" }
-codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
@@ -215,11 +213,9 @@ dirs = "6"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
 encoding_rs = "0.8.35"
-fd-lock = "4.0.4"
 env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
-flate2 = "1.1.4"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 globset = "0.4"
@@ -311,7 +307,6 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
-tar = "0.4.45"
 test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
@@ -397,7 +392,6 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
-    "codex-package-manager",
     "codex-utils-readiness",
     "codex-utils-template",
     "codex-v8-poc",

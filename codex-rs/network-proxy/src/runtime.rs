@@ -1,3 +1,4 @@
+use crate::config::NetworkDomainPermission;
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::ValidatedUnixSocketPath;
@@ -295,8 +296,8 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok((
-            guard.config.network.allowed_domains.clone(),
-            guard.config.network.denied_domains.clone(),
+            guard.config.network.allowed_domains().unwrap_or_default(),
+            guard.config.network.denied_domains().unwrap_or_default(),
         ))
     }
 
@@ -340,16 +341,18 @@ impl NetworkProxyState {
             Ok(host) => host,
             Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
         };
-        let (deny_set, allow_set, allow_local_binding, allowed_domains_empty, allowed_domains) = {
+        let (deny_set, allow_set, allow_local_binding, allowed_domains) = {
             let guard = self.state.read().await;
+            let allowed_domains = guard.config.network.allowed_domains();
             (
                 guard.deny_set.clone(),
                 guard.allow_set.clone(),
                 guard.config.network.allow_local_binding,
-                guard.config.network.allowed_domains.is_empty(),
-                guard.config.network.allowed_domains.clone(),
+                allowed_domains,
             )
         };
+        let allowed_domains_empty = allowed_domains.is_none();
+        let allowed_domains = allowed_domains.unwrap_or_default();
 
         let host_str = host.as_str();
 
@@ -481,7 +484,7 @@ impl NetworkProxyState {
             Err(_) => return Ok(false),
         };
         let requested_canonical = std::fs::canonicalize(requested_abs.as_path()).ok();
-        for allowed in &guard.config.network.allow_unix_sockets {
+        for allowed in &guard.config.network.allow_unix_sockets() {
             let allowed_path = match ValidatedUnixSocketPath::parse(allowed) {
                 Ok(ValidatedUnixSocketPath::Native(path)) => path,
                 Ok(ValidatedUnixSocketPath::UnixStyleAbsolute(_)) => continue,
@@ -585,7 +588,8 @@ impl NetworkProxyState {
             };
 
             let mut candidate = previous_cfg.clone();
-            let (target_entries, opposite_entries) = candidate.split_domain_lists_mut(target);
+            let target_entries = target.entries(&candidate.network);
+            let opposite_entries = target.opposite_entries(&candidate.network);
             let target_contains = target_entries
                 .iter()
                 .any(|entry| normalize_host(entry) == normalized_host);
@@ -596,9 +600,11 @@ impl NetworkProxyState {
                 return Ok(());
             }
 
-            target_entries.retain(|entry| normalize_host(entry) != normalized_host);
-            target_entries.push(normalized_host.clone());
-            opposite_entries.retain(|entry| normalize_host(entry) != normalized_host);
+            candidate.network.upsert_domain_permission(
+                normalized_host.clone(),
+                target.permission(),
+                normalize_host,
+            );
 
             validate_policy_against_constraints(&candidate, &constraints)
                 .map_err(NetworkProxyConstraintError::into_anyhow)
@@ -669,22 +675,25 @@ impl DomainListKind {
             Self::Deny => "network.denied_domains",
         }
     }
-}
 
-impl NetworkProxyConfig {
-    fn split_domain_lists_mut(
-        &mut self,
-        target: DomainListKind,
-    ) -> (&mut Vec<String>, &mut Vec<String>) {
-        match target {
-            DomainListKind::Allow => (
-                &mut self.network.allowed_domains,
-                &mut self.network.denied_domains,
-            ),
-            DomainListKind::Deny => (
-                &mut self.network.denied_domains,
-                &mut self.network.allowed_domains,
-            ),
+    fn permission(self) -> NetworkDomainPermission {
+        match self {
+            Self::Allow => NetworkDomainPermission::Allow,
+            Self::Deny => NetworkDomainPermission::Deny,
+        }
+    }
+
+    fn entries(self, network: &crate::config::NetworkProxySettings) -> Vec<String> {
+        match self {
+            Self::Allow => network.allowed_domains().unwrap_or_default(),
+            Self::Deny => network.denied_domains().unwrap_or_default(),
+        }
+    }
+
+    fn opposite_entries(self, network: &crate::config::NetworkProxySettings) -> Vec<String> {
+        match self {
+            Self::Allow => network.denied_domains().unwrap_or_default(),
+            Self::Deny => network.allowed_domains().unwrap_or_default(),
         }
     }
 }
@@ -726,16 +735,16 @@ async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
 }
 
 fn log_policy_changes(previous: &NetworkProxyConfig, next: &NetworkProxyConfig) {
+    let previous_allowed_domains = previous.network.allowed_domains().unwrap_or_default();
+    let next_allowed_domains = next.network.allowed_domains().unwrap_or_default();
     log_domain_list_changes(
         "allowlist",
-        &previous.network.allowed_domains,
-        &next.network.allowed_domains,
+        &previous_allowed_domains,
+        &next_allowed_domains,
     );
-    log_domain_list_changes(
-        "denylist",
-        &previous.network.denied_domains,
-        &next.network.denied_domains,
-    );
+    let previous_denied_domains = previous.network.denied_domains().unwrap_or_default();
+    let next_denied_domains = next.network.denied_domains().unwrap_or_default();
+    log_domain_list_changes("denylist", &previous_denied_domains, &next_denied_domains);
 }
 
 fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]) {
@@ -836,13 +845,37 @@ mod tests {
     use crate::state::validate_policy_against_constraints;
     use pretty_assertions::assert_eq;
 
+    fn strings(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|entry| (*entry).to_string()).collect()
+    }
+
+    fn network_settings(allowed_domains: &[&str], denied_domains: &[&str]) -> NetworkProxySettings {
+        let mut network = NetworkProxySettings::default();
+        if !allowed_domains.is_empty() {
+            network.set_allowed_domains(strings(allowed_domains));
+        }
+        if !denied_domains.is_empty() {
+            network.set_denied_domains(strings(denied_domains));
+        }
+        network
+    }
+
+    fn network_settings_with_unix_sockets(
+        allowed_domains: &[&str],
+        denied_domains: &[&str],
+        unix_sockets: &[String],
+    ) -> NetworkProxySettings {
+        let mut network = network_settings(allowed_domains, denied_domains);
+        if !unix_sockets.is_empty() {
+            network.set_allow_unix_sockets(unix_sockets.to_vec());
+        }
+        network
+    }
+
     #[tokio::test]
     async fn host_blocked_denied_wins_over_allowed() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            denied_domains: vec!["example.com".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state =
+            network_proxy_state_for_policy(network_settings(&["example.com"], &["example.com"]));
 
         assert_eq!(
             state.host_blocked("example.com", 80).await.unwrap(),
@@ -852,10 +885,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_requires_allowlist_match() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
             state.host_blocked("example.com", 80).await.unwrap(),
@@ -871,10 +901,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_allowed_domain_removes_matching_deny_entry() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            denied_domains: vec!["example.com".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&[], &["example.com"]));
 
         state.add_allowed_domain("ExAmPlE.CoM").await.unwrap();
 
@@ -889,10 +916,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_denied_domain_removes_matching_allow_entry() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         state.add_denied_domain("EXAMPLE.COM").await.unwrap();
 
@@ -907,10 +931,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_denied_domain_forces_block_with_global_wildcard_allowlist() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["*".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["*"], &[]));
 
         assert_eq!(
             // Use a public IP literal to avoid relying on ambient DNS behavior.
@@ -932,10 +953,10 @@ mod tests {
     #[tokio::test]
     async fn add_allowed_domain_succeeds_when_managed_baseline_allows_expansion() {
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["managed.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["managed.example.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
         let constraints = NetworkProxyConstraints {
@@ -964,10 +985,10 @@ mod tests {
     #[tokio::test]
     async fn add_allowed_domain_rejects_expansion_when_managed_baseline_is_fixed() {
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["managed.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["managed.example.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
         let constraints = NetworkProxyConstraints {
@@ -994,10 +1015,10 @@ mod tests {
     #[tokio::test]
     async fn add_denied_domain_rejects_expansion_when_managed_baseline_is_fixed() {
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                denied_domains: vec!["managed.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&[], &["managed.example.com"]);
+                network.enabled = true;
+                network
             },
         };
         let constraints = NetworkProxyConstraints {
@@ -1109,10 +1130,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_subdomain_wildcards_exclude_apex() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["*.openai.com".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["*.openai.com"], &[]));
 
         assert_eq!(
             state.host_blocked("api.openai.com", 80).await.unwrap(),
@@ -1126,11 +1144,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_global_wildcard_allowlist_allows_public_hosts_except_denylist() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["*".to_string()],
-            denied_domains: vec!["evil.example".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["*"], &["evil.example"]));
 
         assert_eq!(
             state.host_blocked("example.com", 80).await.unwrap(),
@@ -1148,11 +1162,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_rejects_loopback_when_local_binding_disabled() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
             state.host_blocked("127.0.0.1", 80).await.unwrap(),
@@ -1166,11 +1176,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_allows_loopback_when_explicitly_allowlisted_and_local_binding_disabled() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["localhost".to_string()],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["localhost"], &[]));
 
         assert_eq!(
             state.host_blocked("localhost", 80).await.unwrap(),
@@ -1180,11 +1186,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_allows_private_ip_literal_when_explicitly_allowlisted() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["10.0.0.1".to_string()],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["10.0.0.1"], &[]));
 
         assert_eq!(
             state.host_blocked("10.0.0.1", 80).await.unwrap(),
@@ -1194,11 +1196,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_rejects_scoped_ipv6_literal_when_not_allowlisted() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
             state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
@@ -1208,11 +1206,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_allows_scoped_ipv6_literal_when_explicitly_allowlisted() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["fe80::1%lo0".to_string()],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["fe80::1%lo0"], &[]));
 
         assert_eq!(
             state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
@@ -1222,11 +1216,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_rejects_private_ip_literals_when_local_binding_disabled() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
             state.host_blocked("10.0.0.1", 80).await.unwrap(),
@@ -1236,11 +1226,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_rejects_loopback_when_allowlist_empty() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec![],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
 
         assert_eq!(
             state.host_blocked("127.0.0.1", 80).await.unwrap(),
@@ -1250,11 +1236,9 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_rejects_allowlisted_hostname_when_dns_lookup_fails() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["does-not-resolve.invalid".to_string()],
-            allow_local_binding: false,
-            ..NetworkProxySettings::default()
-        });
+        let mut network = NetworkProxySettings::default();
+        network.set_allowed_domains(vec!["does-not-resolve.invalid".to_string()]);
+        let state = network_proxy_state_for_policy(network);
 
         assert_eq!(
             state
@@ -1273,10 +1257,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["example.com".to_string(), "evil.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["example.com", "evil.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1292,10 +1276,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["example.com".to_string(), "api.openai.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["example.com", "api.openai.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1328,10 +1312,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["api.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["api.example.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1346,10 +1330,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["**.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["**.example.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1364,10 +1348,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["api.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["api.example.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1383,10 +1367,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["api.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["api.example.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1402,10 +1386,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["api.example.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["api.example.com"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1422,7 +1406,6 @@ mod tests {
         let config = NetworkProxyConfig {
             network: NetworkProxySettings {
                 enabled: true,
-                denied_domains: vec![],
                 ..NetworkProxySettings::default()
             },
         };
@@ -1439,10 +1422,10 @@ mod tests {
         };
 
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                denied_domains: vec!["evil.com".to_string(), "more-evil.com".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&[], &["evil.com", "more-evil.com"]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1626,10 +1609,10 @@ mod tests {
     #[test]
     fn build_config_state_allows_global_wildcard_allowed_domains() {
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["*".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["*"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1639,10 +1622,10 @@ mod tests {
     #[test]
     fn build_config_state_allows_bracketed_global_wildcard_allowed_domains() {
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["[*]".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["[*]"], &[]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1652,11 +1635,10 @@ mod tests {
     #[test]
     fn build_config_state_rejects_global_wildcard_denied_domains() {
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["example.com".to_string()],
-                denied_domains: vec!["*".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["example.com"], &["*"]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1666,11 +1648,10 @@ mod tests {
     #[test]
     fn build_config_state_rejects_bracketed_global_wildcard_denied_domains() {
         let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                allowed_domains: vec!["example.com".to_string()],
-                denied_domains: vec!["[*]".to_string()],
-                ..NetworkProxySettings::default()
+            network: {
+                let mut network = network_settings(&["example.com"], &["[*]"]);
+                network.enabled = true;
+                network
             },
         };
 
@@ -1681,11 +1662,11 @@ mod tests {
     #[tokio::test]
     async fn unix_socket_allowlist_is_respected_on_macos() {
         let socket_path = "/tmp/example.sock".to_string();
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            allow_unix_sockets: vec![socket_path.clone()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings_with_unix_sockets(
+            &["example.com"],
+            &[],
+            std::slice::from_ref(&socket_path),
+        ));
 
         assert!(state.is_unix_socket_allowed(&socket_path).await.unwrap());
         assert!(
@@ -1716,11 +1697,11 @@ mod tests {
         let real_s = real.to_str().unwrap().to_string();
         let link_s = link.to_str().unwrap().to_string();
 
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            allow_unix_sockets: vec![real_s],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings_with_unix_sockets(
+            &["example.com"],
+            &[],
+            std::slice::from_ref(&real_s),
+        ));
 
         assert!(state.is_unix_socket_allowed(&link_s).await.unwrap());
     }
@@ -1728,10 +1709,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn unix_socket_allow_all_flag_bypasses_allowlist() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            dangerously_allow_all_unix_sockets: true,
-            ..NetworkProxySettings::default()
+        let state = network_proxy_state_for_policy({
+            let mut network = network_settings(&["example.com"], &[]);
+            network.dangerously_allow_all_unix_sockets = true;
+            network
         });
 
         assert!(state.is_unix_socket_allowed("/tmp/any.sock").await.unwrap());
@@ -1742,11 +1723,14 @@ mod tests {
     #[tokio::test]
     async fn unix_socket_allowlist_is_rejected_on_non_macos() {
         let socket_path = "/tmp/example.sock".to_string();
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            allow_unix_sockets: vec![socket_path.clone()],
-            dangerously_allow_all_unix_sockets: true,
-            ..NetworkProxySettings::default()
+        let state = network_proxy_state_for_policy({
+            let mut network = network_settings_with_unix_sockets(
+                &["example.com"],
+                &[],
+                std::slice::from_ref(&socket_path),
+            );
+            network.dangerously_allow_all_unix_sockets = true;
+            network
         });
 
         assert!(!state.is_unix_socket_allowed(&socket_path).await.unwrap());

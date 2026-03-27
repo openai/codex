@@ -1,8 +1,12 @@
 use super::*;
 use crate::agent::control::SpawnAgentOptions;
+use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use codex_protocol::AgentPath;
+use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::Op;
 
 pub(crate) struct Handler;
 
@@ -33,8 +37,10 @@ impl ToolHandler for Handler {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
-        let input_items = parse_collab_input(args.message, args.items)?;
-        let prompt = input_preview(&input_items);
+
+        let initial_operation = parse_collab_input(args.message, args.items)?;
+        let prompt = render_input_preview(&initial_operation);
+
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
@@ -72,19 +78,39 @@ impl ToolHandler for Handler {
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
 
+        let spawn_source = thread_spawn_source(
+            session.conversation_id,
+            &turn.session_source,
+            child_depth,
+            role_name,
+            Some(args.task_name.clone()),
+        )?;
         let result = session
             .services
             .agent_control
             .spawn_agent_with_metadata(
                 config,
-                input_items,
-                Some(thread_spawn_source(
-                    session.conversation_id,
-                    &turn.session_source,
-                    child_depth,
-                    role_name,
-                    args.task_name.clone(),
-                )?),
+                match (spawn_source.get_agent_path(), initial_operation) {
+                    (Some(recipient), Op::UserInput { items, .. })
+                        if items
+                            .iter()
+                            .all(|item| matches!(item, UserInput::Text { .. })) =>
+                    {
+                        Op::InterAgentCommunication {
+                            communication: InterAgentCommunication::new(
+                                turn.session_source
+                                    .get_agent_path()
+                                    .unwrap_or_else(AgentPath::root),
+                                recipient,
+                                Vec::new(),
+                                prompt.clone(),
+                                /*trigger_turn*/ true,
+                            ),
+                        }
+                    }
+                    (_, initial_operation) => initial_operation,
+                },
+                Some(spawn_source),
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
                 },
@@ -132,7 +158,6 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
-        let task_name = new_agent_path.clone();
         session
             .send_event(
                 &turn,
@@ -150,16 +175,21 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let new_thread_id = result?.thread_id;
+        let _ = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.session_telemetry.counter(
             "codex.multi_agent.spawn",
             /*inc*/ 1,
             &[("role", role_tag)],
         );
+        let task_name = new_agent_path.ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "spawned agent is missing a canonical task name".to_string(),
+            )
+        })?;
 
         Ok(SpawnAgentResult {
-            agent_id: task_name.is_none().then(|| new_thread_id.to_string()),
+            agent_id: None,
             task_name,
             nickname,
         })
@@ -170,7 +200,7 @@ impl ToolHandler for Handler {
 struct SpawnAgentArgs {
     message: Option<String>,
     items: Option<Vec<UserInput>>,
-    task_name: Option<String>,
+    task_name: String,
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
@@ -181,7 +211,7 @@ struct SpawnAgentArgs {
 #[derive(Debug, Serialize)]
 pub(crate) struct SpawnAgentResult {
     agent_id: Option<String>,
-    task_name: Option<String>,
+    task_name: String,
     nickname: Option<String>,
 }
 

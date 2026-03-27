@@ -8,6 +8,13 @@ version.workspace = true
 workspace = true
 
 [dependencies]
+codex-protocol = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
