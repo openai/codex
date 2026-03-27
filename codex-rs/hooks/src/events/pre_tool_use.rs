@@ -488,11 +488,26 @@ mod tests {
     async fn higher_precedence_block_skips_lower_precedence_handlers() -> std::io::Result<()> {
         let temp = tempfile::tempdir()?;
         let marker_path = temp.path().join("project-ran");
+        let (shell_program, shell_args, blocking_command, project_command) = if cfg!(windows) {
+            (
+                "cmd".to_string(),
+                vec!["/C".to_string()],
+                "echo blocked by policy 1>&2 && exit /b 2".to_string(),
+                "type nul > project-ran".to_string(),
+            )
+        } else {
+            (
+                "/bin/sh".to_string(),
+                vec!["-c".to_string()],
+                "printf 'blocked by policy' >&2; exit 2".to_string(),
+                "touch project-ran".to_string(),
+            )
+        };
         let handlers = vec![
             ConfiguredHandler {
                 event_name: HookEventName::PreToolUse,
                 matcher: Some("^Bash$".to_string()),
-                command: "printf 'blocked by policy' >&2; exit 2".to_string(),
+                command: blocking_command,
                 timeout_sec: 5,
                 status_message: None,
                 source_path: PathBuf::from("/tmp/home/.codex/hooks.json"),
@@ -502,7 +517,7 @@ mod tests {
             ConfiguredHandler {
                 event_name: HookEventName::PreToolUse,
                 matcher: Some("^Bash$".to_string()),
-                command: "touch project-ran".to_string(),
+                command: project_command,
                 timeout_sec: 5,
                 status_message: None,
                 source_path: PathBuf::from("/tmp/project/.codex/hooks.json"),
@@ -514,8 +529,8 @@ mod tests {
         let outcome = super::run(
             &handlers,
             &CommandShell {
-                program: "/bin/sh".to_string(),
-                args: vec!["-c".to_string()],
+                program: shell_program,
+                args: shell_args,
             },
             PreToolUseRequest {
                 session_id: ThreadId::new(),
