@@ -1,8 +1,8 @@
 use super::*;
-use crate::plugins::AppConnectorId;
-use crate::plugins::PluginCapabilitySummary;
 use codex_config::Constrained;
 use codex_login::AuthCredentialsStoreMode;
+use codex_plugin::AppConnectorId;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;

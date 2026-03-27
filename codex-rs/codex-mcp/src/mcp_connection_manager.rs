@@ -85,9 +85,8 @@ use url::Url;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_login::CodexAuth;
-
-use crate::plugins::is_connector_id_allowed;
-use crate::plugins::sanitize_name;
+use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
+use codex_utils_plugins::mcp_connector::sanitize_name;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.

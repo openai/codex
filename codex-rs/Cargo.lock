@@ -2260,6 +2260,7 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-plugins",
  "futures",
  "pretty_assertions",
  "regex-lite",
@@ -2965,6 +2966,7 @@ dependencies = [
 name = "codex-utils-plugins"
 version = "0.0.0"
 dependencies = [
+ "codex-login",
  "serde",
  "serde_json",
  "tempfile",
