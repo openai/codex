@@ -1329,8 +1329,12 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
 }
 
 #[tokio::test]
-async fn custom_auto_mode_skips_when_annotations_are_missing() {
-    let (session, turn_context) = make_session_and_context().await;
+async fn custom_auto_mode_declines_when_annotations_are_missing_in_never_mode() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("test setup should allow updating approval policy");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let invocation = McpInvocation {
@@ -1349,7 +1353,7 @@ async fn custom_auto_mode_skips_when_annotations_are_missing() {
     )
     .await;
 
-    assert_eq!(decision, None);
+    assert_eq!(decision, Some(McpToolApprovalDecision::Decline));
 }
 
 #[tokio::test]
