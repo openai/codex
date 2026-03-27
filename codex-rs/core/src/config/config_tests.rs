@@ -5699,6 +5699,11 @@ shell_tool = true
     Ok(())
 }
 
+#[test]
+fn system_bwrap_warning_skips_danger_full_access() {
+    assert_eq!(system_bwrap_warning(&SandboxPolicy::DangerFullAccess), None);
+}
+
 #[tokio::test]
 async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
 {

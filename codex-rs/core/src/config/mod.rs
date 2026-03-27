@@ -101,6 +101,7 @@ use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_from_profile_network;
 use crate::config::profile::ConfigProfile;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_sandboxing::system_bwrap_warning as linux_system_bwrap_warning;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
@@ -117,7 +118,6 @@ pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
-pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
@@ -153,6 +153,14 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
+
+pub fn system_bwrap_warning(sandbox_policy: &SandboxPolicy) -> Option<String> {
+    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        return None;
+    }
+
+    linux_system_bwrap_warning()
+}
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
