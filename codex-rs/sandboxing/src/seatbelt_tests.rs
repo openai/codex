@@ -2,17 +2,13 @@ use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
-use super::create_seatbelt_command_args_for_policies_with_extensions;
-use super::create_seatbelt_command_args_with_extensions;
+use super::create_seatbelt_command_args;
+use super::create_seatbelt_command_args_for_policies;
 use super::dynamic_network_policy;
 use super::macos_dir_params;
 use super::normalize_path_for_sandbox;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
-use codex_protocol::models::MacOsAutomationPermission;
-use codex_protocol::models::MacOsContactsPermission;
-use codex_protocol::models::MacOsPreferencesPermission;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -115,13 +111,12 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         },
     ]);
 
-    let args = create_seatbelt_command_args_for_policies_with_extensions(
+    let args = create_seatbelt_command_args_for_policies(
         vec!["/bin/true".to_string()],
         &file_system_policy,
         NetworkSandboxPolicy::Restricted,
         Path::new("/"),
         false,
-        None,
         None,
     );
 
@@ -129,22 +124,40 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
     let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
     let unreadable_root = unreadable_roots.first().expect("expected unreadable root");
     assert!(
-        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (literal (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
+        "expected exact read carveout in policy:\n{policy}"
+    );
+    assert!(
+        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected read carveout in policy:\n{policy}"
     );
     assert!(
-        policy.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (literal (param \"WRITABLE_ROOT_0_EXCLUDED_0\")))"),
+        "expected exact write carveout in policy:\n{policy}"
+    );
+    assert!(
+        policy.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected write carveout in policy:\n{policy}"
     );
     assert!(
-        args.iter()
-            .any(|arg| arg == &format!("-DREADABLE_ROOT_0_RO_0={}", unreadable_root.display())),
+        args.iter().any(
+            |arg| arg == &format!("-DREADABLE_ROOT_0_EXCLUDED_0={}", unreadable_root.display())
+        ),
         "expected read carveout parameter in args: {args:#?}"
     );
-    assert!(
-        args.iter()
-            .any(|arg| arg == &format!("-DWRITABLE_ROOT_0_RO_0={}", unreadable_root.display())),
-        "expected write carveout parameter in args: {args:#?}"
+    let writable_definitions: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.starts_with("-DWRITABLE_ROOT_"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        writable_definitions,
+        vec![
+            "-DWRITABLE_ROOT_0=/".to_string(),
+            "-DWRITABLE_ROOT_0_EXCLUDED_0=/.codex".to_string(),
+            format!("-DWRITABLE_ROOT_0_EXCLUDED_1={}", unreadable_root.display()),
+        ],
+        "unexpected write carveout parameters in args: {args:#?}"
     );
 }
 
@@ -163,13 +176,12 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         },
     ]);
 
-    let args = create_seatbelt_command_args_for_policies_with_extensions(
+    let args = create_seatbelt_command_args_for_policies(
         vec!["/bin/true".to_string()],
         &file_system_policy,
         NetworkSandboxPolicy::Restricted,
         Path::new("/"),
         false,
-        None,
         None,
     );
 
@@ -179,7 +191,11 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
     let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
     let unreadable_root = unreadable_roots.first().expect("expected unreadable root");
     assert!(
-        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (literal (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
+        "expected exact read carveout in policy:\n{policy}"
+    );
+    assert!(
+        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected read carveout in policy:\n{policy}"
     );
     assert!(
@@ -188,102 +204,22 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         "expected readable root parameter in args: {args:#?}"
     );
     assert!(
-        args.iter()
-            .any(|arg| arg == &format!("-DREADABLE_ROOT_0_RO_0={}", unreadable_root.display())),
+        args.iter().any(
+            |arg| arg == &format!("-DREADABLE_ROOT_0_EXCLUDED_0={}", unreadable_root.display())
+        ),
         "expected read carveout parameter in args: {args:#?}"
-    );
-}
-
-#[test]
-fn seatbelt_args_include_macos_permission_extensions() {
-    let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_with_extensions(
-        vec!["echo".to_string(), "ok".to_string()],
-        &SandboxPolicy::new_read_only_policy(),
-        cwd.as_path(),
-        false,
-        None,
-        Some(&MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]),
-            macos_launch_services: true,
-            macos_accessibility: true,
-            macos_calendar: true,
-            macos_reminders: false,
-            macos_contacts: MacOsContactsPermission::None,
-        }),
-    );
-    let policy = &args[1];
-
-    assert!(policy.contains("(allow user-preference-write)"));
-    assert!(policy.contains("(appleevent-destination \"com.apple.Notes\")"));
-    assert!(policy.contains("com.apple.axserver"));
-    assert!(policy.contains("com.apple.CalendarAgent"));
-}
-
-#[test]
-fn bundle_id_automation_keeps_lsopen_denied() {
-    let tmp = TempDir::new().expect("tempdir");
-    let cwd = tmp.path().join("cwd");
-    fs::create_dir_all(&cwd).expect("create cwd");
-
-    let args = create_seatbelt_command_args_with_extensions(
-        vec![
-            "/usr/bin/python3".to_string(),
-            "-c".to_string(),
-            r#"import ctypes
-import os
-import sys
-lib = ctypes.CDLL("/usr/lib/libsandbox.1.dylib")
-lib.sandbox_check.restype = ctypes.c_int
-allowed = lib.sandbox_check(os.getpid(), b"lsopen", 0) == 0
-sys.exit(0 if allowed else 13)
-"#
-            .to_string(),
-        ],
-        &SandboxPolicy::new_read_only_policy(),
-        cwd.as_path(),
-        false,
-        None,
-        Some(&MacOsSeatbeltProfileExtensions {
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]),
-            ..Default::default()
-        }),
-    );
-
-    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
-        .args(&args)
-        .current_dir(&cwd)
-        .output()
-        .expect("execute seatbelt command");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted") {
-        return;
-    }
-
-    assert_eq!(
-        Some(13),
-        output.status.code(),
-        "lsopen should remain denied even with bundle-scoped automation\nstdout: {}\nstderr: {stderr}",
-        String::from_utf8_lossy(&output.stdout),
     );
 }
 
 #[test]
 fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access() {
     let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         vec!["echo".to_string(), "ok".to_string()],
         &SandboxPolicy::new_read_only_policy(),
         cwd.as_path(),
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let policy = &args[1];
     assert!(policy.contains("(allow user-preference-read)"));
@@ -296,7 +232,7 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(cwd.join("docs")).expect("create docs");
     let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs");
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         vec!["/bin/true".to_string()],
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
@@ -311,37 +247,20 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
         cwd.as_path(),
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
-    let docs_param = format!("-DWRITABLE_ROOT_0_RO_0={}", docs.as_path().display());
     assert!(
-        !seatbelt_policy_arg(&args).contains("WRITABLE_ROOT_0_RO_0"),
-        "legacy workspace-write readable roots under cwd should not become seatbelt carveouts:\n{args:#?}"
+        !args
+            .iter()
+            .any(|arg| arg.ends_with(&format!("={}", docs.as_path().display()))),
+        "legacy workspace-write readable roots under cwd should not become seatbelt carveouts:\n{args:#?}",
     );
     assert!(
-        !args.iter().any(|arg| arg == &docs_param),
-        "unexpected seatbelt carveout parameter for redundant legacy readable root: {args:#?}"
+        args.iter()
+            .any(|arg| arg.starts_with("-DWRITABLE_ROOT_0_EXCLUDED_")
+                && arg.ends_with("/workspace/.codex")),
+        "expected proactive .codex carveout for cwd root: {args:#?}",
     );
-}
-
-#[test]
-fn seatbelt_args_default_extension_profile_keeps_preferences_read_access() {
-    let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_with_extensions(
-        vec!["echo".to_string(), "ok".to_string()],
-        &SandboxPolicy::new_read_only_policy(),
-        cwd.as_path(),
-        false,
-        None,
-        Some(&MacOsSeatbeltProfileExtensions::default()),
-    );
-    let policy = &args[1];
-    assert!(!policy.contains("appleevent-send"));
-    assert!(!policy.contains("com.apple.axserver"));
-    assert!(!policy.contains("com.apple.CalendarAgent"));
-    assert!(policy.contains("(allow user-preference-read)"));
-    assert!(!policy.contains("user-preference-write"));
 }
 
 #[test]
@@ -638,39 +557,32 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command.clone(),
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
-    // Build the expected policy text using a raw string for readability.
-    // Note that the policy includes:
-    // - the base policy,
-    // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
-    let expected_policy = format!(
-        r#"{MACOS_SEATBELT_BASE_POLICY}
-; allow read-only file operations
-(allow file-read*)
-(allow file-write*
-(subpath (param "WRITABLE_ROOT_0")) (require-all (subpath (param "WRITABLE_ROOT_1")) (require-not (subpath (param "WRITABLE_ROOT_1_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_1_RO_1"))) ) (subpath (param "WRITABLE_ROOT_2"))
-)
-
-; macOS permission profile extensions
-(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
-(allow mach-lookup
-    (global-name "com.apple.cfprefsd.daemon")
-    (global-name "com.apple.cfprefsd.agent")
-    (local-name "com.apple.cfprefsd.agent"))
-(allow user-preference-read)
-"#,
+    let policy_text = seatbelt_policy_arg(&args);
+    assert!(
+        policy_text.contains("(require-all (subpath (param \"WRITABLE_ROOT_0\"))"),
+        "expected cwd writable root to carry protected carveouts:\n{policy_text}",
     );
-
-    assert_eq!(seatbelt_policy_arg(&args), expected_policy);
+    assert!(
+        policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_0"),
+        "expected cwd .codex carveout in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_0")
+            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_1"),
+        "expected explicit writable root .git/.codex carveouts in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains("(subpath (param \"WRITABLE_ROOT_2\"))"),
+        "expected second explicit writable root grant in policy:\n{policy_text}",
+    );
 
     let expected_definitions = [
         format!(
@@ -680,15 +592,22 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
                 .to_string_lossy()
         ),
         format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".codex")
+                .display()
+        ),
+        format!(
             "-DWRITABLE_ROOT_1={}",
             vulnerable_root_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_1_RO_0={}",
+            "-DWRITABLE_ROOT_1_EXCLUDED_0={}",
             dot_git_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_1_RO_1={}",
+            "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
@@ -696,12 +615,15 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             empty_root_canonical.to_string_lossy()
         ),
     ];
-    for expected_definition in expected_definitions {
-        assert!(
-            args.contains(&expected_definition),
-            "expected definition arg `{expected_definition}` in {args:#?}"
-        );
-    }
+    let writable_definitions: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.starts_with("-DWRITABLE_ROOT_"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        writable_definitions, expected_definitions,
+        "unexpected writable-root parameter definitions in {args:#?}"
+    );
     for (key, value) in macos_dir_params() {
         let expected_definition = format!("-D{key}={}", value.to_string_lossy());
         assert!(
@@ -749,13 +671,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_hooks_file_args = create_seatbelt_command_args_with_extensions(
+    let write_hooks_file_args = create_seatbelt_command_args(
         shell_command_git,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&write_hooks_file_args)
@@ -786,13 +707,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_allowed_file_args = create_seatbelt_command_args_with_extensions(
+    let write_allowed_file_args = create_seatbelt_command_args(
         shell_command_allowed,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&write_allowed_file_args)
@@ -815,6 +735,59 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         String::from_utf8_lossy(&fs::read(&allowed_file).expect("read allowed.txt")),
         "{} should contain the written text",
         allowed_file.display()
+    );
+}
+
+#[test]
+fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_descendant_carveouts() {
+    let tmp = TempDir::new().expect("tempdir");
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+
+    Command::new("git")
+        .arg("init")
+        .arg(".")
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init .");
+
+    let dot_codex = repo_root.join(".codex");
+    let config_toml = dot_codex.join("config.toml");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![repo_root.as_path().try_into().expect("absolute repo root")],
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+
+    let shell_command: Vec<String> = [
+        "bash",
+        "-c",
+        "mkdir -p \"$1\" && echo 'sandbox_mode = \"danger-full-access\"' > \"$2\"",
+        "bash",
+        dot_codex.to_string_lossy().as_ref(),
+        config_toml.to_string_lossy().as_ref(),
+    ]
+    .iter()
+    .map(std::string::ToString::to_string)
+    .collect();
+    let args = create_seatbelt_command_args(
+        shell_command,
+        &policy,
+        repo_root.as_path(),
+        /*enforce_managed_network*/ false,
+        /*network*/ None,
+    );
+
+    let policy_text = seatbelt_policy_arg(&args);
+    assert!(
+        policy_text.contains("(require-not (literal (param \"WRITABLE_ROOT_0_EXCLUDED_1\")))"),
+        "expected exact .codex carveout in policy:\n{policy_text}"
+    );
+    assert!(
+        policy_text.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_EXCLUDED_1\")))"),
+        "expected descendant .codex carveout in policy:\n{policy_text}"
     );
 }
 
@@ -854,13 +827,12 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
@@ -891,13 +863,12 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let gitdir_args = create_seatbelt_command_args_with_extensions(
+    let gitdir_args = create_seatbelt_command_args(
         shell_command_gitdir,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&gitdir_args)
@@ -955,13 +926,12 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command.clone(),
         &policy,
         vulnerable_root.as_path(),
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
     let tmpdir_env_var = std::env::var("TMPDIR")
@@ -971,7 +941,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .map(|p| p.to_string_lossy().to_string());
 
     let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (subpath (param "WRITABLE_ROOT_2"))"#
+        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
     } else {
         ""
     };
@@ -983,19 +953,19 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
     let expected_policy = format!(
         r#"{MACOS_SEATBELT_BASE_POLICY}
-; allow read-only file operations
-(allow file-read*)
-(allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
-)
-
-; macOS permission profile extensions
+; allow readonly user preferences
 (allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
 (allow mach-lookup
     (global-name "com.apple.cfprefsd.daemon")
     (global-name "com.apple.cfprefsd.agent")
     (local-name "com.apple.cfprefsd.agent"))
 (allow user-preference-read)
+
+; allow read-only file operations
+(allow file-read*)
+(allow file-write*
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+)
 "#,
     );
 
@@ -1007,11 +977,11 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
             vulnerable_root_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_0_RO_0={}",
+            "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
             dot_git_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_0_RO_1={}",
+            "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
@@ -1025,6 +995,14 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
 
     if let Some(p) = tmpdir_env_var {
         expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
+        expected_args.push(format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_0={}",
+            dot_git_canonical.to_string_lossy()
+        ));
+        expected_args.push(format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
+            dot_codex_canonical.to_string_lossy()
+        ));
     }
 
     expected_args.extend(

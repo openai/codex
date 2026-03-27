@@ -792,7 +792,9 @@ impl TestCodexHarness {
     }
 
     pub async fn submit(&self, prompt: &str) -> Result<()> {
-        self.test.submit_turn(prompt).await
+        // Box the submit-and-wait path so callers do not inline the full turn
+        // future into their own async state.
+        Box::pin(self.test.submit_turn(prompt)).await
     }
 
     pub async fn submit_with_policy(
@@ -844,13 +846,17 @@ impl TestCodexHarness {
         call_id: &str,
         output_type: ApplyPatchModelOutput,
     ) -> String {
+        // Box the awaited output helpers so callers do not inline request
+        // capture and response parsing into their own async state.
         match output_type {
-            ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
+            ApplyPatchModelOutput::Freeform => {
+                Box::pin(self.custom_tool_call_output(call_id)).await
+            }
             ApplyPatchModelOutput::Function
             | ApplyPatchModelOutput::Shell
             | ApplyPatchModelOutput::ShellViaHeredoc
             | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                self.function_call_stdout(call_id).await
+                Box::pin(self.function_call_stdout(call_id)).await
             }
         }
     }

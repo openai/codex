@@ -264,7 +264,7 @@ impl FileSystemSandboxPolicy {
     /// into split filesystem policy.
     pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
         let mut file_system_policy = Self::from(sandbox_policy);
-        if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox_policy {
             let legacy_writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
             file_system_policy.entries.retain(|entry| {
                 if entry.access != FileSystemAccessMode::Read {
@@ -278,6 +278,28 @@ impl FileSystemSandboxPolicy {
                     FileSystemPath::Special { .. } => true,
                 }
             });
+
+            if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
+                for protected_path in default_read_only_subpaths_for_writable_root(
+                    &cwd_root, /*protect_missing_dot_codex*/ true,
+                ) {
+                    append_default_read_only_path_if_no_explicit_rule(
+                        &mut file_system_policy.entries,
+                        protected_path,
+                    );
+                }
+            }
+            for writable_root in writable_roots {
+                for protected_path in default_read_only_subpaths_for_writable_root(
+                    writable_root,
+                    /*protect_missing_dot_codex*/ false,
+                ) {
+                    append_default_read_only_path_if_no_explicit_rule(
+                        &mut file_system_policy.entries,
+                        protected_path,
+                    );
+                }
+            }
         }
 
         file_system_policy
@@ -454,7 +476,14 @@ impl FileSystemSandboxPolicy {
                 .iter()
                 .filter(|path| normalize_effective_absolute_path((*path).clone()) == root)
                 .collect();
-            let mut read_only_subpaths = default_read_only_subpaths_for_writable_root(&root);
+            let protect_missing_dot_codex = AbsolutePathBuf::from_absolute_path(cwd)
+                .ok()
+                .is_some_and(|cwd| normalize_effective_absolute_path(cwd) == root);
+            let mut read_only_subpaths: Vec<AbsolutePathBuf> =
+                default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex)
+                    .into_iter()
+                    .filter(|path| !has_explicit_resolved_path_entry(&resolved_entries, path))
+                    .collect();
             // Narrower explicit non-write entries carve out broader writable roots.
             // More specific write entries still remain writable because they appear
             // as separate WritableRoot values and are checked independently.
@@ -1068,6 +1097,7 @@ fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
 
 fn default_read_only_subpaths_for_writable_root(
     writable_root: &AbsolutePathBuf,
+    protect_missing_dot_codex: bool,
 ) -> Vec<AbsolutePathBuf> {
     let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
     #[allow(clippy::expect_used)]
@@ -1089,17 +1119,67 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_git);
     }
 
-    // Make .agents/skills and .codex/config.toml and related files read-only
-    // to the agent, by default.
-    for subdir in &[".agents", ".codex"] {
-        #[allow(clippy::expect_used)]
-        let top_level_codex = writable_root.join(subdir).expect("valid relative path");
-        if top_level_codex.as_path().is_dir() {
-            subpaths.push(top_level_codex);
-        }
+    #[allow(clippy::expect_used)]
+    let top_level_agents = writable_root.join(".agents").expect("valid relative path");
+    if top_level_agents.as_path().is_dir() {
+        subpaths.push(top_level_agents);
+    }
+
+    // Keep top-level project metadata under .codex read-only to the agent by
+    // default. For the workspace root itself, protect it even before the
+    // directory exists so first-time creation still goes through the
+    // protected-path approval flow.
+    #[allow(clippy::expect_used)]
+    let top_level_codex = writable_root.join(".codex").expect("valid relative path");
+    if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
+        subpaths.push(top_level_codex);
     }
 
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
+}
+
+fn append_path_entry_if_missing(
+    entries: &mut Vec<FileSystemSandboxEntry>,
+    path: AbsolutePathBuf,
+    access: FileSystemAccessMode,
+) {
+    if entries.iter().any(|entry| {
+        entry.access == access
+            && matches!(
+                &entry.path,
+                FileSystemPath::Path { path: existing } if existing == &path
+            )
+    }) {
+        return;
+    }
+
+    entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::Path { path },
+        access,
+    });
+}
+
+fn append_default_read_only_path_if_no_explicit_rule(
+    entries: &mut Vec<FileSystemSandboxEntry>,
+    path: AbsolutePathBuf,
+) {
+    if entries.iter().any(|entry| {
+        matches!(
+            &entry.path,
+            FileSystemPath::Path { path: existing } if existing == &path
+        )
+    }) {
+        return;
+    }
+
+    append_path_entry_if_missing(entries, path, FileSystemAccessMode::Read);
+}
+
+fn has_explicit_resolved_path_entry(
+    entries: &[ResolvedFileSystemEntry],
+    path: &AbsolutePathBuf,
+) -> bool {
+    entries.iter().any(|entry| &entry.path == path)
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -1209,6 +1289,148 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_proactively_protect_missing_dot_codex() {
+        let cwd = TempDir::new().expect("tempdir");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            cwd.path().canonicalize().expect("canonicalize cwd"),
+        )
+        .expect("absolute canonical root");
+        let expected_dot_codex = expected_root.join(".codex").expect("expected .codex path");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, expected_root);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_dot_codex)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_skip_default_dot_codex_when_explicit_user_rule_exists() {
+        let cwd = TempDir::new().expect("tempdir");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            cwd.path().canonicalize().expect("canonicalize cwd"),
+        )
+        .expect("absolute canonical root");
+        let explicit_dot_codex = expected_root.join(".codex").expect("expected .codex path");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: explicit_dot_codex.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        let workspace_root = writable_roots
+            .iter()
+            .find(|root| root.root == expected_root)
+            .expect("workspace writable root");
+        assert!(
+            !workspace_root
+                .read_only_subpaths
+                .contains(&explicit_dot_codex),
+            "explicit .codex rule should win over the default protected carveout"
+        );
+        assert!(
+            policy.can_write_path_with_cwd(
+                explicit_dot_codex
+                    .join("config.toml")
+                    .expect("config.toml")
+                    .as_path(),
+                cwd.path()
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_workspace_write_projection_blocks_missing_dot_codex_writes() {
+        let cwd = TempDir::new().expect("tempdir");
+        let dot_codex_config = cwd.path().join(".codex").join("config.toml");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let file_system_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path());
+
+        assert!(!file_system_policy.can_write_path_with_cwd(&dot_codex_config, cwd.path()));
+    }
+
+    #[test]
+    fn legacy_workspace_write_projection_accepts_relative_cwd() {
+        let relative_cwd = Path::new("workspace");
+        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(
+            std::env::current_dir()
+                .expect("current dir")
+                .join(relative_cwd)
+                .join(".codex"),
+        )
+        .expect("absolute dot codex");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let file_system_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, relative_cwd);
+
+        assert_eq!(
+            file_system_policy,
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: expected_dot_codex,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+            ])
+        );
+        assert!(
+            !file_system_policy
+                .can_write_path_with_cwd(Path::new(".codex/config.toml"), relative_cwd,)
+        );
     }
 
     #[cfg(unix)]
@@ -1695,8 +1917,10 @@ mod tests {
             policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
         );
 
-        let legacy_workspace_write =
-            FileSystemSandboxPolicy::from(&SandboxPolicy::new_workspace_write_policy());
+        let legacy_workspace_write = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+            cwd.path(),
+        );
         assert!(
             !legacy_workspace_write
                 .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)

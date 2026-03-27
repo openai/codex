@@ -12,8 +12,6 @@ fn skill_with_tools(tools: Vec<SkillToolDependency>) -> SkillMetadata {
         interface: None,
         dependencies: Some(SkillDependencies { tools }),
         policy: None,
-        permission_profile: None,
-        managed_network_override: None,
         path_to_skills_md: PathBuf::from("skill"),
         scope: SkillScope::User,
     }

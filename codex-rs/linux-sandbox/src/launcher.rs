@@ -8,9 +8,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::vendored_bwrap::exec_vendored_bwrap;
+use codex_sandboxing::find_system_bwrap_in_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
-
-const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BubblewrapLauncher {
@@ -36,7 +35,10 @@ pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
 fn preferred_bwrap_launcher() -> BubblewrapLauncher {
     static LAUNCHER: OnceLock<BubblewrapLauncher> = OnceLock::new();
     LAUNCHER
-        .get_or_init(|| preferred_bwrap_launcher_for_path(Path::new(SYSTEM_BWRAP_PATH)))
+        .get_or_init(|| match find_system_bwrap_in_path() {
+            Some(path) => preferred_bwrap_launcher_for_path(&path),
+            None => BubblewrapLauncher::Vendored,
+        })
         .clone()
 }
 

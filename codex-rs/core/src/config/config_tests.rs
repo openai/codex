@@ -1991,28 +1991,19 @@ approval_mode = "approve"
 }
 
 #[test]
-fn mcp_servers_toml_parses_legacy_flattened_per_tool_approval_overrides() {
+fn mcp_servers_toml_ignores_unknown_server_fields() {
     let config = toml::from_str::<ConfigToml>(
         r#"
 [mcp_servers.docs]
 command = "docs-server"
-
-[mcp_servers.docs.search]
-approval_mode = "approve"
+trust_level = "trusted"
 "#,
     )
-    .expect("legacy TOML deserialization should succeed");
-    let tool = config
-        .mcp_servers
-        .get("docs")
-        .and_then(|server| server.tools.get("search"))
-        .expect("docs/search tool config exists");
+    .expect("unknown MCP server fields should be ignored");
 
     assert_eq!(
-        tool,
-        &McpServerToolConfig {
-            approval_mode: Some(AppToolApproval::Approve),
-        }
+        config.mcp_servers.get("docs"),
+        Some(&stdio_mcp("docs-server"))
     );
 }
 
@@ -4388,7 +4379,6 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 windows_sandbox_private_desktop: true,
-                macos_seatbelt_profile_extensions: None,
             },
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(None),
@@ -4531,7 +4521,6 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
-            macos_seatbelt_profile_extensions: None,
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
@@ -4672,7 +4661,6 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
-            macos_seatbelt_profile_extensions: None,
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
@@ -4799,7 +4787,6 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
-            macos_seatbelt_profile_extensions: None,
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
@@ -5699,63 +5686,6 @@ shell_tool = true
     );
 
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn system_bwrap_warning_reports_missing_system_bwrap() {
-    let warning = system_bwrap_warning_for_path(Path::new("/definitely/not/a/bwrap"))
-        .expect("missing system bwrap should emit a warning");
-
-    assert!(warning.contains("could not find system bubblewrap"));
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn system_bwrap_warning_skips_too_old_system_bwrap() {
-    let fake_bwrap = write_fake_bwrap(
-        r#"#!/bin/sh
-if [ "$1" = "--help" ]; then
-  echo 'usage: bwrap [OPTION...] COMMAND'
-  exit 0
-fi
-exit 1
-"#,
-    );
-    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
-
-    assert_eq!(
-        system_bwrap_warning_for_path(fake_bwrap_path),
-        None,
-        "Do not warn even if bwrap does not support `--argv0`",
-    );
-}
-
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn system_bwrap_warning_is_disabled_off_linux() {
-    assert!(system_bwrap_warning().is_none());
-}
-
-#[cfg(target_os = "linux")]
-fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use tempfile::NamedTempFile;
-
-    // Bazel can mount the OS temp directory `noexec`, so prefer the current
-    // working directory for fake executables and fall back to the default temp
-    // dir outside that environment.
-    let temp_file = std::env::current_dir()
-        .ok()
-        .and_then(|dir| NamedTempFile::new_in(dir).ok())
-        .unwrap_or_else(|| NamedTempFile::new().expect("temp file"));
-    // Linux rejects exec-ing a file that is still open for writing.
-    let path = temp_file.into_temp_path();
-    fs::write(&path, contents).expect("write fake bwrap");
-    let permissions = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
-    path
 }
 
 #[tokio::test]

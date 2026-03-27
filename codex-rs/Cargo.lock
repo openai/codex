@@ -410,6 +410,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "codex-features",
+ "codex-login",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "core_test_support",
@@ -1416,6 +1417,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
+ "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1594,6 +1596,7 @@ dependencies = [
  "codex-connectors",
  "codex-core",
  "codex-git-utils",
+ "codex-login",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "pretty_assertions",
@@ -1846,7 +1849,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-state",
  "codex-terminal-detection",
- "codex-test-macros",
+ "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
@@ -2502,7 +2505,6 @@ dependencies = [
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
- "dirs",
  "dunce",
  "libc",
  "pretty_assertions",
@@ -2510,6 +2512,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "url",
+ "which 8.0.0",
 ]
 
 [[package]]
@@ -2626,12 +2629,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-test-macros"
+name = "codex-tools"
 version = "0.0.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

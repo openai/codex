@@ -2,7 +2,6 @@ use crate::model::SkillDependencies;
 use crate::model::SkillError;
 use crate::model::SkillInterface;
 use crate::model::SkillLoadOutcome;
-use crate::model::SkillManagedNetworkOverride;
 use crate::model::SkillMetadata;
 use crate::model::SkillPolicy;
 use crate::model::SkillToolDependency;
@@ -13,10 +12,6 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
-use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
-use codex_protocol::models::NetworkPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -59,8 +54,6 @@ struct SkillMetadataFile {
     dependencies: Option<Dependencies>,
     #[serde(default)]
     policy: Option<Policy>,
-    #[serde(default)]
-    permissions: Option<SkillPermissionProfile>,
 }
 
 #[derive(Default)]
@@ -68,28 +61,6 @@ struct LoadedSkillMetadata {
     interface: Option<SkillInterface>,
     dependencies: Option<SkillDependencies>,
     policy: Option<SkillPolicy>,
-    permission_profile: Option<PermissionProfile>,
-    managed_network_override: Option<SkillManagedNetworkOverride>,
-}
-
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
-struct SkillPermissionProfile {
-    #[serde(default)]
-    network: Option<SkillNetworkPermissions>,
-    #[serde(default)]
-    file_system: Option<FileSystemPermissions>,
-    #[serde(default)]
-    macos: Option<MacOsSeatbeltProfileExtensions>,
-}
-
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
-struct SkillNetworkPermissions {
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    allowed_domains: Option<Vec<String>>,
-    #[serde(default)]
-    denied_domains: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -551,8 +522,6 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         interface,
         dependencies,
         policy,
-        permission_profile,
-        managed_network_override,
     } = load_skill_metadata(path);
 
     validate_len(&name, MAX_NAME_LEN, "name")?;
@@ -574,8 +543,6 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         interface,
         dependencies,
         policy,
-        permission_profile,
-        managed_network_override,
         path_to_skills_md: resolved_path,
         scope,
     })
@@ -639,52 +606,12 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         interface,
         dependencies,
         policy,
-        permissions,
     } = parsed;
-    let (permission_profile, managed_network_override) = normalize_permissions(permissions);
     LoadedSkillMetadata {
         interface: resolve_interface(interface, skill_dir),
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
-        permission_profile,
-        managed_network_override,
     }
-}
-
-fn normalize_permissions(
-    permissions: Option<SkillPermissionProfile>,
-) -> (
-    Option<PermissionProfile>,
-    Option<SkillManagedNetworkOverride>,
-) {
-    let Some(permissions) = permissions else {
-        return (None, None);
-    };
-    let managed_network_override = permissions
-        .network
-        .as_ref()
-        .map(|network| SkillManagedNetworkOverride {
-            allowed_domains: network.allowed_domains.clone(),
-            denied_domains: network.denied_domains.clone(),
-        })
-        .filter(SkillManagedNetworkOverride::has_domain_overrides);
-    let permission_profile = PermissionProfile {
-        network: permissions.network.and_then(|network| {
-            let network = NetworkPermissions {
-                enabled: network.enabled,
-            };
-            (!network.is_empty()).then_some(network)
-        }),
-        file_system: permissions
-            .file_system
-            .filter(|file_system| !file_system.is_empty()),
-        macos: permissions.macos,
-    };
-
-    (
-        (!permission_profile.is_empty()).then_some(permission_profile),
-        managed_network_override,
-    )
 }
 
 fn resolve_interface(interface: Option<Interface>, skill_dir: &Path) -> Option<SkillInterface> {

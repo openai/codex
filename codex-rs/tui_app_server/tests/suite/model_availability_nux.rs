@@ -112,6 +112,8 @@ trust_level = "trusted"
         "resume".to_string(),
         "--last".to_string(),
         "--no-alt-screen".to_string(),
+        "--enable".to_string(),
+        "tui_app_server".to_string(),
         "-C".to_string(),
         repo_root.display().to_string(),
         "-c".to_string(),

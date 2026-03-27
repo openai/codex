@@ -4,6 +4,7 @@ use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -193,7 +194,7 @@ async fn submit_turn(
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy,
-            approvals_reviewer: None,
+            approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy,
             model: session_model,
             effort: None,
@@ -1579,7 +1580,6 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         .clone()
         .unwrap_or_else(|| panic!("expected merged additional permissions"));
     assert_eq!(approval_permissions.network, None);
-    assert_eq!(approval_permissions.macos, None);
 
     let approval_file_system = approval_permissions
         .file_system

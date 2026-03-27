@@ -12,6 +12,7 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-connectors = { workspace = true }
 codex-core = { workspace = true }
+codex-login = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

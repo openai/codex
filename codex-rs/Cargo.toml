@@ -51,6 +51,7 @@ members = [
     "otel",
     "tui",
     "tui_app_server",
+    "tools",
     "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
@@ -80,7 +81,6 @@ members = [
     "state",
     "terminal-detection",
     "codex-experimental-api-macros",
-    "test-macros",
     "package-manager",
     "plugin",
 ]
@@ -150,8 +150,8 @@ codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
-codex-test-macros = { path = "test-macros" }
 codex-terminal-detection = { path = "terminal-detection" }
+codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
 codex-v8-poc = { path = "v8-poc" }

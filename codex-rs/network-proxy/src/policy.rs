@@ -368,6 +368,16 @@ mod tests {
     }
 
     #[test]
+    fn compile_globset_supports_mid_label_wildcards() {
+        let set = compile_denylist_globset(&["region*.v2.argotunnel.com".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("region1.v2.argotunnel.com"));
+        assert_eq!(true, set.is_match("region.v2.argotunnel.com"));
+        assert_eq!(false, set.is_match("xregion1.v2.argotunnel.com"));
+        assert_eq!(false, set.is_match("foo.region1.v2.argotunnel.com"));
+    }
+
+    #[test]
     fn compile_globset_normalizes_apex_and_subdomains() {
         let set = compile_denylist_globset(&["**.Example.COM.".to_string()]).unwrap();
 
