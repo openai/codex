@@ -264,6 +264,7 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+use crate::mcp_openai_file::mask_model_visible_tool_input_schema;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -6593,14 +6594,19 @@ pub(crate) async fn built_tools(
     } else {
         app_tools
     };
-
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
             mcp_tools: has_mcp_servers.then(|| {
                 mcp_tools
                     .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
+                    .map(|(name, tool_info)| {
+                        let mut tool = tool_info.tool;
+                        if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                            mask_model_visible_tool_input_schema(&mut tool);
+                        }
+                        (name, tool)
+                    })
                     .collect()
             }),
             app_tools,

@@ -1,5 +1,6 @@
 use crate::client_common::tools::FreeformTool;
 use crate::config::test_config;
+use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
 use crate::shell::Shell;
@@ -31,6 +32,79 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
         icons: None,
         meta: None,
     }
+}
+
+fn codex_apps_file_bridge_tool() -> ToolInfo {
+    ToolInfo {
+        server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool_name: "echo_file_inputs".to_string(),
+        tool_namespace: "mcp__codex_apps__file_meta_test".to_string(),
+        tool: rmcp::model::Tool {
+            name: "echo_file_inputs".to_string().into(),
+            title: None,
+            description: Some("Echo file inputs".to_string().into()),
+            input_schema: std::sync::Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"}
+                        }
+                    }
+                }
+            }))),
+            output_schema: Some(std::sync::Arc::new(rmcp::model::object(
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "outputFile": {
+                            "type": "object",
+                            "properties": {
+                                "file_id": {"type": "string"}
+                            }
+                        }
+                    }
+                }),
+            ))),
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: Some(rmcp::model::Meta(
+                serde_json::json!({
+                    "openai/fileParams": ["file"],
+                    "openai/fileOutputs": ["outputFile"]
+                })
+                .as_object()
+                .expect("meta object")
+                .clone(),
+            )),
+        },
+        connector_id: Some("file_meta_test".to_string()),
+        connector_name: Some("File Meta Test".to_string()),
+        plugin_display_names: Vec::new(),
+        connector_description: Some("TinyMCP file bridge test tool.".to_string()),
+    }
+}
+
+fn app_tool_info(tool: rmcp::model::Tool) -> ToolInfo {
+    ToolInfo {
+        server_name: "server".to_string(),
+        tool_name: tool.name.to_string(),
+        tool_namespace: "server/".to_string(),
+        tool,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
+}
+
+fn mcp_tools_map<const N: usize>(
+    entries: [(String, rmcp::model::Tool); N],
+) -> HashMap<String, rmcp::model::Tool> {
+    entries.into_iter().collect()
 }
 
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
@@ -65,6 +139,293 @@ fn search_capable_model_info() -> ModelInfo {
 }
 
 #[test]
+fn mcp_tool_to_openai_tool_inserts_empty_properties() {
+    let mut schema = rmcp::model::JsonObject::new();
+    schema.insert("type".to_string(), serde_json::json!("object"));
+
+    let tool = rmcp::model::Tool {
+        name: "no_props".to_string().into(),
+        title: None,
+        description: Some("No properties".to_string().into()),
+        input_schema: std::sync::Arc::new(schema),
+        output_schema: None,
+        annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
+    };
+
+    let openai_tool = mcp_tool_to_openai_tool("server/no_props".to_string(), app_tool_info(tool))
+        .expect("convert tool");
+    let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize schema");
+
+    assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
+}
+
+#[test]
+fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
+    let mut input_schema = rmcp::model::JsonObject::new();
+    input_schema.insert("type".to_string(), serde_json::json!("object"));
+
+    let mut output_schema = rmcp::model::JsonObject::new();
+    output_schema.insert(
+        "properties".to_string(),
+        serde_json::json!({
+            "result": {
+                "properties": {
+                    "nested": {}
+                }
+            }
+        }),
+    );
+    output_schema.insert("required".to_string(), serde_json::json!(["result"]));
+
+    let tool = rmcp::model::Tool {
+        name: "with_output".to_string().into(),
+        title: None,
+        description: Some("Has output schema".to_string().into()),
+        input_schema: std::sync::Arc::new(input_schema),
+        output_schema: Some(std::sync::Arc::new(output_schema)),
+        annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
+    };
+
+    let openai_tool =
+        mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), app_tool_info(tool))
+            .expect("convert tool");
+
+    assert_eq!(
+        openai_tool.output_schema,
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {}
+                },
+                "structuredContent": {
+                    "properties": {
+                        "result": {
+                            "properties": {
+                                "nested": {}
+                            }
+                        }
+                    },
+                    "required": ["result"]
+                },
+                "isError": {
+                    "type": "boolean"
+                },
+                "_meta": {}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    );
+}
+
+#[test]
+fn mcp_tool_to_openai_tool_does_not_mask_non_codex_apps_file_fields() {
+    let tool = app_tool_info(codex_apps_file_bridge_tool().tool);
+    let openai_tool =
+        mcp_tool_to_openai_tool("mcp__codex_apps__echo_file_inputs".to_string(), tool)
+            .expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "object",
+                    "properties": {
+                        "download_url": {"type": "string"},
+                        "file_id": {"type": "string"}
+                    }
+                }
+            }
+        })
+    );
+    assert_eq!(
+        openai_tool.output_schema,
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {}
+                },
+                "structuredContent": {
+                    "type": "object",
+                    "properties": {
+                        "outputFile": {
+                            "type": "object",
+                            "properties": {
+                                "file_id": {"type": "string"}
+                            }
+                        }
+                    }
+                },
+                "isError": {
+                    "type": "boolean"
+                },
+                "_meta": {}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    );
+}
+
+#[test]
+fn mcp_tool_to_openai_tool_masks_codex_apps_file_fields() {
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__codex_apps__echo_file_inputs".to_string(),
+        codex_apps_file_bridge_tool(),
+    )
+    .expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                }
+            }
+        })
+    );
+    assert_eq!(
+        openai_tool.output_schema,
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {}
+                },
+                "structuredContent": {
+                    "type": "object",
+                    "properties": {
+                        "outputFile": {
+                            "type": "object",
+                            "properties": {
+                                "file_id": {"type": "string"}
+                            }
+                        }
+                    }
+                },
+                "isError": {
+                    "type": "boolean"
+                },
+                "_meta": {}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    );
+}
+
+#[test]
+fn mcp_tool_to_openai_tool_normalizes_null_properties_to_empty_object() {
+    let tool = app_tool_info(mcp_tool(
+        "null_props",
+        "Null properties",
+        serde_json::json!({
+            "type": "object",
+            "properties": null
+        }),
+    ));
+
+    let openai_tool =
+        mcp_tool_to_openai_tool("mcp__server__null_props".to_string(), tool).expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
+    );
+}
+
+#[test]
+fn plain_mcp_tool_to_openai_tool_normalizes_null_properties_to_empty_object() {
+    let tool = mcp_tool(
+        "null_props",
+        "Null properties",
+        serde_json::json!({
+            "type": "object",
+            "properties": null
+        }),
+    );
+
+    let openai_tool = plain_mcp_tool_to_openai_tool("mcp__server__null_props".to_string(), tool)
+        .expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
+    );
+}
+
+#[test]
+fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
+    let mut input_schema = rmcp::model::JsonObject::new();
+    input_schema.insert("type".to_string(), serde_json::json!("object"));
+
+    let mut output_schema = rmcp::model::JsonObject::new();
+    output_schema.insert("enum".to_string(), serde_json::json!(["ok", "error"]));
+
+    let tool = rmcp::model::Tool {
+        name: "with_enum_output".to_string().into(),
+        title: None,
+        description: Some("Has enum output schema".to_string().into()),
+        input_schema: std::sync::Arc::new(input_schema),
+        output_schema: Some(std::sync::Arc::new(output_schema)),
+        annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
+    };
+
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__server__with_enum_output".to_string(),
+        app_tool_info(tool),
+    )
+    .expect("convert tool");
+
+    assert_eq!(
+        openai_tool.output_schema,
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {}
+                },
+                "structuredContent": {
+                    "enum": ["ok", "error"]
+                },
+                "isError": {
+                    "type": "boolean"
+                },
+                "_meta": {}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    );
+}
+
+#[test]
 fn search_tool_deferred_tools_always_set_defer_loading_true() {
     let tool = mcp_tool(
         "lookup_order",
@@ -79,9 +440,11 @@ fn search_tool_deferred_tools_always_set_defer_loading_true() {
         }),
     );
 
-    let openai_tool =
-        mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
-            .expect("convert deferred tool");
+    let openai_tool = mcp_tool_to_deferred_openai_tool(
+        "mcp__codex_apps__lookup_order".to_string(),
+        &app_tool_info(tool),
+    )
+    .expect("convert deferred tool");
 
     assert_eq!(openai_tool.defer_loading, Some(true));
 }
@@ -102,8 +465,11 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
     );
 
     let serialized = serde_json::to_value(ToolSpec::Function(
-        mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
-            .expect("convert deferred tool"),
+        mcp_tool_to_deferred_openai_tool(
+            "mcp__codex_apps__lookup_order".to_string(),
+            &app_tool_info(tool),
+        )
+        .expect("convert deferred tool"),
     ))
     .expect("serialize deferred tool");
 
@@ -1605,7 +1971,7 @@ fn test_build_specs_mcp_tools_converted() {
     });
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "test_server/do_something_cool".to_string(),
             mcp_tool(
                 "do_something_cool",
@@ -1698,7 +2064,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
     });
 
     // Intentionally construct a map with keys that would sort alphabetically.
-    let tools_map: HashMap<String, rmcp::model::Tool> = HashMap::from([
+    let tools_map = mcp_tools_map([
         (
             "test_server/do".to_string(),
             mcp_tool("a", "a", serde_json::json!({"type": "object"})),
@@ -1748,7 +2114,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([
+        Some(mcp_tools_map([
             (
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 mcp_tool(
@@ -2316,7 +2682,7 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/search".to_string(),
             mcp_tool(
                 "search",
@@ -2376,7 +2742,7 @@ fn test_mcp_tool_integer_normalized_to_number() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/paginate".to_string(),
             mcp_tool(
                 "paginate",
@@ -2433,7 +2799,7 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/tags".to_string(),
             mcp_tool(
                 "tags",
@@ -2492,7 +2858,7 @@ fn test_mcp_tool_anyof_defaults_to_string() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/value".to_string(),
             mcp_tool(
                 "value",
@@ -2716,7 +3082,7 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
     });
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "test_server/do_something_cool".to_string(),
             mcp_tool(
                 "do_something_cool",
@@ -2859,7 +3225,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "mcp__sample__echo".to_string(),
             mcp_tool(
                 "echo",

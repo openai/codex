@@ -27,6 +27,8 @@ use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp_openai_file::declared_openai_file_input_param_names;
+use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::protocol::EventMsg;
@@ -178,14 +180,18 @@ pub(crate) async fn handle_mcp_tool_call(
 
                 let start = Instant::now();
                 let result = async {
-                    sess.call_tool(
-                        &server,
-                        &tool_name,
-                        arguments_value.clone(),
-                        request_meta.clone(),
+                    execute_mcp_tool_call(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
+                        McpToolExecutionInvocation {
+                            server: &server,
+                            tool_name: &tool_name,
+                            arguments_value: arguments_value.clone(),
+                            metadata: metadata.as_ref(),
+                            request_meta: request_meta.clone(),
+                        },
                     )
                     .await
-                    .map_err(|e| format!("tool call error: {e:?}"))
                 }
                 .instrument(mcp_tool_call_span(
                     sess.as_ref(),
@@ -200,13 +206,6 @@ pub(crate) async fn handle_mcp_tool_call(
                     },
                 ))
                 .await;
-                let result = sanitize_mcp_tool_result_for_model(
-                    turn_context
-                        .model_info
-                        .input_modalities
-                        .contains(&InputModality::Image),
-                    result,
-                );
                 if let Err(error) = &result {
                     tracing::warn!("MCP tool call error: {error:?}");
                 }
@@ -294,11 +293,19 @@ pub(crate) async fn handle_mcp_tool_call(
     maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
     let start = Instant::now();
-    // Perform the tool call.
     let result = async {
-        sess.call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
-            .await
-            .map_err(|e| format!("tool call error: {e:?}"))
+        execute_mcp_tool_call(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            McpToolExecutionInvocation {
+                server: &server,
+                tool_name: &tool_name,
+                arguments_value: arguments_value.clone(),
+                metadata: metadata.as_ref(),
+                request_meta,
+            },
+        )
+        .await
     }
     .instrument(mcp_tool_call_span(
         sess.as_ref(),
@@ -313,13 +320,6 @@ pub(crate) async fn handle_mcp_tool_call(
         },
     ))
     .await;
-    let result = sanitize_mcp_tool_result_for_model(
-        turn_context
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image),
-        result,
-    );
     if let Err(error) = &result {
         tracing::warn!("MCP tool call error: {error:?}");
     }
@@ -453,6 +453,46 @@ fn record_server_fields(span: &Span, url: Option<&str>) {
     }
 }
 
+async fn execute_mcp_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    invocation: McpToolExecutionInvocation<'_>,
+) -> Result<CallToolResult, String> {
+    let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
+        sess,
+        turn_context,
+        invocation.arguments_value,
+        invocation
+            .metadata
+            .and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+    )
+    .await?;
+    let result = sess
+        .call_tool(
+            invocation.server,
+            invocation.tool_name,
+            rewritten_arguments,
+            invocation.request_meta,
+        )
+        .await
+        .map_err(|e| format!("tool call error: {e:?}"))?;
+    sanitize_mcp_tool_result_for_model(
+        turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image),
+        Ok(result),
+    )
+}
+
+struct McpToolExecutionInvocation<'a> {
+    server: &'a str,
+    tool_name: &'a str,
+    arguments_value: Option<serde_json::Value>,
+    metadata: Option<&'a McpToolApprovalMetadata>,
+    request_meta: Option<serde_json::Value>,
+}
+
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
     if !turn_context
         .config
@@ -566,6 +606,7 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_title: Option<String>,
     tool_description: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
+    openai_file_input_params: Option<Vec<String>>,
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
@@ -985,10 +1026,17 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .await
         .list_all_tools()
         .await;
-
     let tool_info = tools
         .into_values()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
+    mcp_tool_approval_metadata_from_tool_info(turn_context, server, tool_info).await
+}
+
+async fn mcp_tool_approval_metadata_from_tool_info(
+    turn_context: &TurnContext,
+    server: &str,
+    tool_info: crate::mcp_connection_manager::ToolInfo,
+) -> Option<McpToolApprovalMetadata> {
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
@@ -1027,6 +1075,10 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
             .and_then(serde_json::Value::as_object)
             .cloned(),
+        openai_file_input_params: Some(declared_openai_file_input_param_names(
+            tool_info.tool.meta.as_deref(),
+        ))
+        .filter(|params| !params.is_empty()),
     })
 }
 

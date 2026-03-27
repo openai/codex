@@ -1,21 +1,41 @@
 use super::*;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp_connection_manager::ToolInfo;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
 use serde_json::json;
 use std::sync::Arc;
 
+fn app_tool_info(
+    tool_name: &str,
+    tool_namespace: &str,
+    connector_name: Option<&str>,
+    connector_description: Option<&str>,
+    tool: Tool,
+) -> ToolInfo {
+    ToolInfo {
+        server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool_name: tool_name.to_string(),
+        tool_namespace: tool_namespace.to_string(),
+        tool,
+        connector_id: None,
+        connector_name: connector_name.map(str::to_string),
+        plugin_display_names: Vec::new(),
+        connector_description: connector_description.map(str::to_string),
+    }
+}
+
 #[test]
 fn serialize_tool_search_output_tools_groups_results_by_namespace() {
     let entries = [
         (
             "mcp__codex_apps__calendar_create_event".to_string(),
-            ToolInfo {
-                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "_create_event".to_string(),
-                tool_namespace: "mcp__codex_apps__calendar".to_string(),
-                tool: Tool {
+            app_tool_info(
+                "_create_event",
+                "mcp__codex_apps__calendar",
+                Some("Calendar"),
+                Some("Plan events"),
+                Tool {
                     name: "calendar-create-event".to_string().into(),
                     title: None,
                     description: Some("Create a calendar event.".into()),
@@ -29,19 +49,16 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
                     icons: None,
                     meta: None,
                 },
-                connector_id: Some("calendar".to_string()),
-                connector_name: Some("Calendar".to_string()),
-                plugin_display_names: Vec::new(),
-                connector_description: Some("Plan events".to_string()),
-            },
+            ),
         ),
         (
             "mcp__codex_apps__gmail_read_email".to_string(),
-            ToolInfo {
-                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "_read_email".to_string(),
-                tool_namespace: "mcp__codex_apps__gmail".to_string(),
-                tool: Tool {
+            app_tool_info(
+                "_read_email",
+                "mcp__codex_apps__gmail",
+                Some("Gmail"),
+                Some("Read mail"),
+                Tool {
                     name: "gmail-read-email".to_string().into(),
                     title: None,
                     description: Some("Read an email.".into()),
@@ -55,19 +72,16 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
                     icons: None,
                     meta: None,
                 },
-                connector_id: Some("gmail".to_string()),
-                connector_name: Some("Gmail".to_string()),
-                plugin_display_names: Vec::new(),
-                connector_description: Some("Read mail".to_string()),
-            },
+            ),
         ),
         (
             "mcp__codex_apps__calendar_list_events".to_string(),
-            ToolInfo {
-                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "_list_events".to_string(),
-                tool_namespace: "mcp__codex_apps__calendar".to_string(),
-                tool: Tool {
+            app_tool_info(
+                "_list_events",
+                "mcp__codex_apps__calendar",
+                Some("Calendar"),
+                Some("Plan events"),
+                Tool {
                     name: "calendar-list-events".to_string().into(),
                     title: None,
                     description: Some("List calendar events.".into()),
@@ -81,11 +95,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
                     icons: None,
                     meta: None,
                 },
-                connector_id: Some("calendar".to_string()),
-                connector_name: Some("Calendar".to_string()),
-                plugin_display_names: Vec::new(),
-                connector_description: Some("Plan events".to_string()),
-            },
+            ),
         ),
     ];
 
@@ -149,11 +159,12 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
 fn serialize_tool_search_output_tools_falls_back_to_connector_name_description() {
     let entries = [(
         "mcp__codex_apps__gmail_batch_read_email".to_string(),
-        ToolInfo {
-            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool_name: "_batch_read_email".to_string(),
-            tool_namespace: "mcp__codex_apps__gmail".to_string(),
-            tool: Tool {
+        app_tool_info(
+            "_batch_read_email",
+            "mcp__codex_apps__gmail",
+            Some("Gmail"),
+            None,
+            Tool {
                 name: "gmail-batch-read-email".to_string().into(),
                 title: None,
                 description: Some("Read multiple emails.".into()),
@@ -167,11 +178,7 @@ fn serialize_tool_search_output_tools_falls_back_to_connector_name_description()
                 icons: None,
                 meta: None,
             },
-            connector_id: Some("connector_gmail_456".to_string()),
-            connector_name: Some("Gmail".to_string()),
-            plugin_display_names: Vec::new(),
-            connector_description: None,
-        },
+        ),
     )];
 
     let tools = serialize_tool_search_output_tools(&[&entries[0]]).expect("serialize");

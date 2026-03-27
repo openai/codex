@@ -4847,7 +4847,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             mcp_tools: Some(
                 tools
                     .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
+                    .map(|(name, tool_info)| (name, tool_info.tool))
                     .collect(),
             ),
             app_tools,

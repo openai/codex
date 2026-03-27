@@ -5,6 +5,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::mcp_openai_file::mask_model_visible_tool_input_schema;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
@@ -2382,7 +2383,18 @@ fn push_tool_spec(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn mcp_tool_to_openai_tool(
+    fully_qualified_name: String,
+    tool_info: ToolInfo,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    Ok(parsed_tool_to_openai_tool(
+        fully_qualified_name,
+        parse_tool_info(tool_info)?,
+    ))
+}
+
+fn plain_mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
@@ -2394,9 +2406,9 @@ pub(crate) fn mcp_tool_to_openai_tool(
 
 pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
-    tool: rmcp::model::Tool,
+    tool_info: &ToolInfo,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let parsed_tool = parse_mcp_tool(&tool)?;
+    let parsed_tool = parse_tool_info(tool_info.clone())?;
 
     Ok(parsed_tool_to_openai_tool(
         name,
@@ -2428,6 +2440,13 @@ fn parsed_tool_to_openai_tool(name: String, parsed_tool: ParsedToolDefinition) -
     }
 }
 
+fn parse_tool_info(tool_info: ToolInfo) -> Result<ParsedToolDefinition, serde_json::Error> {
+    let mut tool = tool_info.tool.clone();
+    if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+        mask_model_visible_tool_input_schema(&mut tool);
+    }
+    parse_mcp_tool(&tool)
+}
 /// Builds the tool registry builder while collecting tool specs for later serialization.
 #[cfg(test)]
 pub(crate) fn build_specs(
@@ -2921,8 +2940,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (name, tool) in entries.into_iter() {
-            match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
+        for (name, tool) in entries {
+            match plain_mcp_tool_to_openai_tool(name.clone(), tool) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,

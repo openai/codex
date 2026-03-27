@@ -57,6 +57,7 @@ pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
 pub use mcp_connection_manager::SandboxState;
 pub use text_encoding::bytes_to_string_smart;
+mod mcp_openai_file;
 mod mcp_tool_call;
 mod memories;
 pub mod mention_syntax;
