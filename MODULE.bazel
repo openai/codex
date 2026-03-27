@@ -3,6 +3,20 @@ module(name = "codex")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.6.8")
+single_version_override(
+    module_name = "llvm",
+    patch_strip = 1,
+    patches = [
+        "//patches:llvm_windows_symlink_extract.patch",
+    ],
+)
+single_version_override(
+    module_name = "abseil-cpp",
+    patch_strip = 1,
+    patches = [
+        "//patches:abseil_windows_gnullvm_thread_identity.patch",
+    ],
+)
 
 register_toolchains("@llvm//toolchain:all")
 
@@ -44,6 +58,13 @@ bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.43")
+single_version_override(
+    module_name = "rules_rs",
+    patch_strip = 1,
+    patches = [
+        "//patches:rules_rs_windows_gnullvm_exec.patch",
+    ],
+)
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
 use_repo(rules_rust, "rules_rust")
@@ -65,10 +86,12 @@ crate.from_cargo(
         "aarch64-unknown-linux-gnu",
         "aarch64-unknown-linux-musl",
         "aarch64-apple-darwin",
+        "aarch64-pc-windows-msvc",
         "aarch64-pc-windows-gnullvm",
         "x86_64-unknown-linux-gnu",
         "x86_64-unknown-linux-musl",
         "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
         "x86_64-pc-windows-gnullvm",
     ],
     use_experimental_platforms = True,

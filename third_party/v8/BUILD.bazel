@@ -64,12 +64,12 @@ alias(
 
 alias(
     name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
-    actual = ":v8_146_4_0_aarch64_pc_windows_msvc",
+    actual = ":v8_146_4_0_aarch64_pc_windows_gnullvm_bazel",
 )
 
 alias(
     name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
-    actual = ":v8_146_4_0_x86_64_pc_windows_msvc",
+    actual = ":v8_146_4_0_x86_64_pc_windows_gnullvm_bazel",
 )
 
 filegroup(
@@ -114,12 +114,12 @@ filegroup(
 
 alias(
     name = "src_binding_release_x86_64_pc_windows_gnullvm",
-    actual = ":src_binding_release_x86_64_pc_windows_msvc",
+    actual = ":src_binding_release_x86_64_unknown_linux_gnu",
 )
 
 alias(
     name = "src_binding_release_aarch64_pc_windows_gnullvm",
-    actual = ":src_binding_release_aarch64_pc_windows_msvc",
+    actual = ":src_binding_release_aarch64_unknown_linux_gnu",
 )
 
 alias(
@@ -167,16 +167,16 @@ genrule(
     name = "binding_cc",
     srcs = ["@v8_crate_146_4_0//:binding_cc"],
     outs = ["binding.cc"],
-    cmd = """
-      sed \
-        -e '/#include "v8\\/src\\/flags\\/flags.h"/d' \
-        -e 's|"v8/src/libplatform/default-platform.h"|"src/libplatform/default-platform.h"|' \
-        -e 's|  namespace i = v8::internal;|  (void)usage;|' \
-        -e '/using HelpOptions = i::FlagList::HelpOptions;/d' \
-        -e '/HelpOptions help_options = HelpOptions(HelpOptions::kExit, usage);/d' \
-        -e 's|  i::FlagList::SetFlagsFromCommandLine(argc, argv, true, help_options);|  v8::V8::SetFlagsFromCommandLine(argc, argv, true);|' \
-        $(location @v8_crate_146_4_0//:binding_cc) > "$@"
-    """,
+    cmd = (
+        "sed "
+        + "-e '/#include \"v8\\\\/src\\\\/flags\\\\/flags.h\"/d' "
+        + "-e 's|\"v8/src/libplatform/default-platform.h\"|\"src/libplatform/default-platform.h\"|' "
+        + "-e 's|  namespace i = v8::internal;|  (void)usage;|' "
+        + "-e '/using HelpOptions = i::FlagList::HelpOptions;/d' "
+        + "-e '/HelpOptions help_options = HelpOptions(HelpOptions::kExit, usage);/d' "
+        + "-e 's|  i::FlagList::SetFlagsFromCommandLine(argc, argv, true, help_options);|  v8::V8::SetFlagsFromCommandLine(argc, argv, true);|' "
+        + "$(location @v8_crate_146_4_0//:binding_cc) > \"$@\""
+    ),
 )
 
 copy_file(
@@ -209,7 +209,19 @@ cc_static_library(
 )
 
 cc_static_library(
+    name = "v8_146_4_0_aarch64_pc_windows_gnullvm_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
     name = "v8_146_4_0_x86_64_apple_darwin_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_pc_windows_gnullvm_bazel",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
 )

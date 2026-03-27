@@ -13,6 +13,14 @@ PLATFORMS = [
     "windows_arm64",
 ]
 
+WINDOWS_GNULLVM_RUSTC_STACK_FLAGS = select({
+    "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
+        "-C",
+        "link-arg=-Wl,--stack,8388608",
+    ],
+    "//conditions:default": [],
+})
+
 def multiplatform_binaries(name, platforms = PLATFORMS):
     for platform in platforms:
         platform_data(
@@ -192,7 +200,7 @@ def codex_rust_crate(
             # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
             # prefix so the workspace-root launcher sees Cargo-like metadata
             # such as `tui/src/...`.
-            rustc_flags = rustc_flags_extra + [
+            rustc_flags = rustc_flags_extra + WINDOWS_GNULLVM_RUSTC_STACK_FLAGS + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],
@@ -224,7 +232,7 @@ def codex_rust_crate(
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
             edition = crate_edition,
-            rustc_flags = rustc_flags_extra,
+            rustc_flags = rustc_flags_extra + WINDOWS_GNULLVM_RUSTC_STACK_FLAGS,
             srcs = native.glob(["src/**/*.rs"]),
             visibility = ["//visibility:public"],
         )
@@ -252,7 +260,7 @@ def codex_rust_crate(
             # Bazel has emitted both `codex-rs/<crate>/...` and
             # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
             # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
-            rustc_flags = rustc_flags_extra + [
+            rustc_flags = rustc_flags_extra + WINDOWS_GNULLVM_RUSTC_STACK_FLAGS + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],
