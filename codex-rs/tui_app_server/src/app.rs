@@ -2655,18 +2655,21 @@ impl App {
                     );
                 }
                 Err(err) => {
-                    let terminal_not_loaded = Self::is_terminal_thread_read_error(&err);
+                    let is_closed = Self::closed_state_for_thread_read_error(
+                        &err,
+                        existing_entry.as_ref().map(|entry| entry.is_closed),
+                    );
                     if let Some(entry) = existing_entry {
                         self.upsert_agent_picker_thread(
                             thread_id,
                             entry.agent_nickname,
                             entry.agent_role,
-                            terminal_not_loaded || entry.is_closed,
+                            is_closed,
                         );
                     } else {
                         self.upsert_agent_picker_thread(
                             thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
-                            /*is_closed*/ true,
+                            is_closed,
                         );
                     }
                 }
@@ -2733,6 +2736,13 @@ impl App {
     fn is_terminal_thread_read_error(err: &color_eyre::Report) -> bool {
         err.chain()
             .any(|cause| cause.to_string().contains("thread not loaded:"))
+    }
+
+    fn closed_state_for_thread_read_error(
+        err: &color_eyre::Report,
+        existing_is_closed: Option<bool>,
+    ) -> bool {
+        Self::is_terminal_thread_read_error(err) || existing_is_closed.unwrap_or(false)
     }
 
     /// Updates cached picker metadata and then mirrors any visible-label change into the footer.
@@ -6991,6 +7001,28 @@ mod tests {
         );
 
         assert!(!App::is_terminal_thread_read_error(&err));
+    }
+
+    #[test]
+    fn closed_state_for_thread_read_error_preserves_live_state_without_cache_on_transient_error() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"
+        );
+
+        assert!(!App::closed_state_for_thread_read_error(
+            &err, /*existing_is_closed*/ None
+        ));
+    }
+
+    #[test]
+    fn closed_state_for_thread_read_error_marks_terminal_uncached_threads_closed() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: thread not loaded: thr_123"
+        );
+
+        assert!(App::closed_state_for_thread_read_error(
+            &err, /*existing_is_closed*/ None
+        ));
     }
 
     #[tokio::test]
