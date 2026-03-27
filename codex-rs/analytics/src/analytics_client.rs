@@ -36,7 +36,7 @@ struct ThreadInitializedInput {
     pub thread_id: String,
     pub model: String,
     pub ephemeral: bool,
-    pub session_source: SessionSource,
+    pub thread_source: SessionSource,
     pub initialization_mode: InitializationMode,
     pub created_at: u64,
 }
@@ -386,7 +386,7 @@ struct ThreadInitializedEventParams {
     experimental_api_enabled: Option<bool>,
     model: String,
     ephemeral: bool,
-    session_source: Option<&'static str>,
+    thread_source: Option<&'static str>,
     initialization_mode: InitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
@@ -546,7 +546,7 @@ impl AnalyticsReducer {
                 thread_id: thread.id,
                 model,
                 ephemeral: thread.ephemeral,
-                session_source: thread.source.into(),
+                thread_source: thread.source.into(),
                 initialization_mode,
                 created_at: u64::try_from(thread.created_at).unwrap_or_default(),
             },
@@ -692,7 +692,7 @@ fn thread_initialized_event_params(
         experimental_api_enabled: connection_state.experimental_api_enabled,
         model: input.model,
         ephemeral: input.ephemeral,
-        session_source: session_source_name(&input.session_source),
+        thread_source: thread_source_name(&input.thread_source),
         initialization_mode: input.initialization_mode,
         subagent_source: None,
         parent_thread_id: None,
@@ -735,8 +735,8 @@ fn codex_plugin_used_metadata(
     }
 }
 
-fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
-    match session_source {
+fn thread_source_name(thread_source: &SessionSource) -> Option<&'static str> {
+    match thread_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
         SessionSource::SubAgent(_)
         | SessionSource::Mcp

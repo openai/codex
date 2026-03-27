@@ -274,7 +274,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: true,
-            session_source: SessionSource::Exec,
+            thread_source: SessionSource::Exec,
             initialization_mode: InitializationMode::New,
             created_at: 1,
         },
@@ -294,7 +294,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "experimental_api_enabled": true,
                 "model": "gpt-5",
                 "ephemeral": true,
-                "session_source": "user",
+                "thread_source": "user",
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
@@ -366,7 +366,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         false
     );
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
-    assert_eq!(payload[0]["event_params"]["session_source"], "user");
+    assert_eq!(payload[0]["event_params"]["thread_source"], "user");
     assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
     assert_eq!(payload[0]["event_params"]["parent_thread_id"], json!(null));
 }
