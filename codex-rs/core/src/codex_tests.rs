@@ -5310,7 +5310,6 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
 }
 
 #[tokio::test]
-<<<<<<< HEAD
 async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io::Result<()> {
     let temp = tempfile::tempdir()?;
     let codex_home = temp.path().join("home");
