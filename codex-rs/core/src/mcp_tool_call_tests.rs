@@ -1495,8 +1495,12 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
 }
 
 #[tokio::test]
-async fn custom_auto_mode_skips_when_annotations_are_missing() {
-    let (session, turn_context) = make_session_and_context().await;
+async fn custom_auto_mode_declines_when_annotations_are_missing_in_never_mode() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("test setup should allow updating approval policy");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let invocation = McpInvocation {
@@ -1515,7 +1519,7 @@ async fn custom_auto_mode_skips_when_annotations_are_missing() {
     )
     .await;
 
-    assert_eq!(decision, None);
+    assert_eq!(decision, Some(McpToolApprovalDecision::Decline));
 }
 
 #[tokio::test]
@@ -1546,7 +1550,7 @@ async fn custom_approve_mode_without_metadata_still_uses_arc_monitor() {
 
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
-        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();

@@ -699,12 +699,6 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
-    if invocation.server != CODEX_APPS_MCP_SERVER_NAME
-        && approval_mode == AppToolApproval::Auto
-        && annotations.is_none()
-    {
-        return None;
-    }
     let approval_required = requires_mcp_tool_approval(annotations);
     if !approval_required && approval_mode != AppToolApproval::Prompt {
         return None;
@@ -735,6 +729,9 @@ async fn maybe_request_mcp_tool_approval(
         }
     }
 
+    if matches!(turn_context.approval_policy.value(), AskForApproval::Never) {
+        return Some(McpToolApprovalDecision::Decline);
+    }
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
     let persistent_approval_key =
         persistent_mcp_tool_approval_key(invocation, metadata, approval_mode);
