@@ -5,7 +5,6 @@ export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedN
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AdditionalFileSystemPermissions } from "./AdditionalFileSystemPermissions";
-export type { AdditionalMacOsPermissions } from "./AdditionalMacOsPermissions";
 export type { AdditionalNetworkPermissions } from "./AdditionalNetworkPermissions";
 export type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";
 export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotification";

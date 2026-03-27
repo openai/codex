@@ -7568,7 +7568,6 @@ guardian_approval = true
                 enabled: Some(true),
             }),
             file_system: None,
-            macos: None,
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
             host: "example.com".to_string(),
@@ -7601,7 +7600,6 @@ guardian_approval = true
                     enabled: Some(true),
                 }),
                 file_system: None,
-                macos: None,
             })
         );
         assert_eq!(

@@ -32,10 +32,6 @@ use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
-use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
-use codex_protocol::models::MacOsContactsPermission as CoreMacOsContactsPermission;
-use codex_protocol::models::MacOsPreferencesPermission as CoreMacOsPreferencesPermission;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions as CoreMacOsSeatbeltProfileExtensions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
@@ -1088,47 +1084,6 @@ impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct AdditionalMacOsPermissions {
-    pub preferences: CoreMacOsPreferencesPermission,
-    pub automations: CoreMacOsAutomationPermission,
-    pub launch_services: bool,
-    pub accessibility: bool,
-    pub calendar: bool,
-    pub reminders: bool,
-    pub contacts: CoreMacOsContactsPermission,
-}
-
-impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
-    fn from(value: CoreMacOsSeatbeltProfileExtensions) -> Self {
-        Self {
-            preferences: value.macos_preferences,
-            automations: value.macos_automation,
-            launch_services: value.macos_launch_services,
-            accessibility: value.macos_accessibility,
-            calendar: value.macos_calendar,
-            reminders: value.macos_reminders,
-            contacts: value.macos_contacts,
-        }
-    }
-}
-
-impl From<AdditionalMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
-    fn from(value: AdditionalMacOsPermissions) -> Self {
-        Self {
-            macos_preferences: value.preferences,
-            macos_automation: value.automations,
-            macos_launch_services: value.launch_services,
-            macos_accessibility: value.accessibility,
-            macos_calendar: value.calendar,
-            macos_reminders: value.reminders,
-            macos_contacts: value.contacts,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct AdditionalNetworkPermissions {
     pub enabled: Option<bool>,
 }
@@ -1182,7 +1137,6 @@ impl From<RequestPermissionProfile> for CoreRequestPermissionProfile {
 pub struct AdditionalPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
-    pub macos: Option<AdditionalMacOsPermissions>,
 }
 
 impl From<CorePermissionProfile> for AdditionalPermissionProfile {
@@ -1190,7 +1144,6 @@ impl From<CorePermissionProfile> for AdditionalPermissionProfile {
         Self {
             network: value.network.map(AdditionalNetworkPermissions::from),
             file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
-            macos: value.macos.map(AdditionalMacOsPermissions::from),
         }
     }
 }
@@ -1200,7 +1153,6 @@ impl From<AdditionalPermissionProfile> for CorePermissionProfile {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
-            macos: value.macos.map(CoreMacOsSeatbeltProfileExtensions::from),
         }
     }
 }
@@ -1222,7 +1174,6 @@ impl From<GrantedPermissionProfile> for CorePermissionProfile {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
-            macos: None,
         }
     }
 }
@@ -6075,8 +6026,7 @@ mod tests {
                 "fileSystem": {
                     "read": ["relative/path"],
                     "write": null
-                },
-                "macos": null
+                }
             },
             "proposedExecpolicyAmendment": null,
             "proposedNetworkPolicyAmendments": null,
@@ -6087,90 +6037,6 @@ mod tests {
             err.to_string()
                 .contains("AbsolutePathBuf deserialized without a base path"),
             "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn command_execution_request_approval_accepts_macos_automation_bundle_ids_object() {
-        let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
-            "threadId": "thr_123",
-            "turnId": "turn_123",
-            "itemId": "call_123",
-            "command": "cat file",
-            "cwd": "/tmp",
-            "commandActions": null,
-            "reason": null,
-            "networkApprovalContext": null,
-            "additionalPermissions": {
-                "network": null,
-                "fileSystem": null,
-                "macos": {
-                    "preferences": "read_only",
-                    "automations": {
-                        "bundle_ids": ["com.apple.Notes"]
-                    },
-                    "launchServices": false,
-                    "accessibility": false,
-                    "calendar": false,
-                    "reminders": false,
-                    "contacts": "read_only"
-                }
-            },
-            "proposedExecpolicyAmendment": null,
-            "proposedNetworkPolicyAmendments": null,
-            "availableDecisions": null
-        }))
-        .expect("bundle_ids object should deserialize");
-
-        assert_eq!(
-            params
-                .additional_permissions
-                .and_then(|permissions| permissions.macos)
-                .map(|macos| (macos.automations, macos.launch_services, macos.contacts)),
-            Some((
-                CoreMacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),]),
-                false,
-                CoreMacOsContactsPermission::ReadOnly,
-            ))
-        );
-    }
-
-    #[test]
-    fn command_execution_request_approval_accepts_macos_reminders_permission() {
-        let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
-            "threadId": "thr_123",
-            "turnId": "turn_123",
-            "itemId": "call_123",
-            "command": "cat file",
-            "cwd": "/tmp",
-            "commandActions": null,
-            "reason": null,
-            "networkApprovalContext": null,
-            "additionalPermissions": {
-                "network": null,
-                "fileSystem": null,
-                "macos": {
-                    "preferences": "read_only",
-                    "automations": "none",
-                    "launchServices": false,
-                    "accessibility": false,
-                    "calendar": false,
-                    "reminders": true,
-                    "contacts": "none"
-                }
-            },
-            "proposedExecpolicyAmendment": null,
-            "proposedNetworkPolicyAmendments": null,
-            "availableDecisions": null
-        }))
-        .expect("reminders permission should deserialize");
-
-        assert_eq!(
-            params
-                .additional_permissions
-                .and_then(|permissions| permissions.macos)
-                .map(|macos| macos.reminders),
-            Some(true)
         );
     }
 
@@ -6331,7 +6197,6 @@ mod tests {
                             .expect("path must be absolute"),
                     ]),
                 }),
-                macos: None,
             }
         );
     }

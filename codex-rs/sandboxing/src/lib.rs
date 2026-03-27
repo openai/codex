@@ -1,13 +1,10 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
 pub mod landlock;
-pub mod macos_permissions;
 mod manager;
 pub mod policy_transforms;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
-#[cfg(target_os = "macos")]
-mod seatbelt_permissions;
 
 #[cfg(target_os = "linux")]
 pub use bwrap::find_system_bwrap_in_path;

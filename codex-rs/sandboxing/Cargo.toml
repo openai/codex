@@ -15,7 +15,6 @@ workspace = true
 codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-dirs = { workspace = true }
 dunce = { workspace = true }
 libc = { workspace = true }
 serde_json = { workspace = true }

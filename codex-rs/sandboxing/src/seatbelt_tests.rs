@@ -2,17 +2,13 @@ use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
-use super::create_seatbelt_command_args_for_policies_with_extensions;
-use super::create_seatbelt_command_args_with_extensions;
+use super::create_seatbelt_command_args;
+use super::create_seatbelt_command_args_for_policies;
 use super::dynamic_network_policy;
 use super::macos_dir_params;
 use super::normalize_path_for_sandbox;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
-use codex_protocol::models::MacOsAutomationPermission;
-use codex_protocol::models::MacOsContactsPermission;
-use codex_protocol::models::MacOsPreferencesPermission;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -115,13 +111,12 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         },
     ]);
 
-    let args = create_seatbelt_command_args_for_policies_with_extensions(
+    let args = create_seatbelt_command_args_for_policies(
         vec!["/bin/true".to_string()],
         &file_system_policy,
         NetworkSandboxPolicy::Restricted,
         Path::new("/"),
         false,
-        None,
         None,
     );
 
@@ -181,13 +176,12 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         },
     ]);
 
-    let args = create_seatbelt_command_args_for_policies_with_extensions(
+    let args = create_seatbelt_command_args_for_policies(
         vec!["/bin/true".to_string()],
         &file_system_policy,
         NetworkSandboxPolicy::Restricted,
         Path::new("/"),
         false,
-        None,
         None,
     );
 
@@ -218,95 +212,14 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
 }
 
 #[test]
-fn seatbelt_args_include_macos_permission_extensions() {
-    let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_with_extensions(
-        vec!["echo".to_string(), "ok".to_string()],
-        &SandboxPolicy::new_read_only_policy(),
-        cwd.as_path(),
-        false,
-        None,
-        Some(&MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]),
-            macos_launch_services: true,
-            macos_accessibility: true,
-            macos_calendar: true,
-            macos_reminders: false,
-            macos_contacts: MacOsContactsPermission::None,
-        }),
-    );
-    let policy = &args[1];
-
-    assert!(policy.contains("(allow user-preference-write)"));
-    assert!(policy.contains("(appleevent-destination \"com.apple.Notes\")"));
-    assert!(policy.contains("com.apple.axserver"));
-    assert!(policy.contains("com.apple.CalendarAgent"));
-}
-
-#[test]
-fn bundle_id_automation_keeps_lsopen_denied() {
-    let tmp = TempDir::new().expect("tempdir");
-    let cwd = tmp.path().join("cwd");
-    fs::create_dir_all(&cwd).expect("create cwd");
-
-    let args = create_seatbelt_command_args_with_extensions(
-        vec![
-            "/usr/bin/python3".to_string(),
-            "-c".to_string(),
-            r#"import ctypes
-import os
-import sys
-lib = ctypes.CDLL("/usr/lib/libsandbox.1.dylib")
-lib.sandbox_check.restype = ctypes.c_int
-allowed = lib.sandbox_check(os.getpid(), b"lsopen", 0) == 0
-sys.exit(0 if allowed else 13)
-"#
-            .to_string(),
-        ],
-        &SandboxPolicy::new_read_only_policy(),
-        cwd.as_path(),
-        false,
-        None,
-        Some(&MacOsSeatbeltProfileExtensions {
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]),
-            ..Default::default()
-        }),
-    );
-
-    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
-        .args(&args)
-        .current_dir(&cwd)
-        .output()
-        .expect("execute seatbelt command");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted") {
-        return;
-    }
-
-    assert_eq!(
-        Some(13),
-        output.status.code(),
-        "lsopen should remain denied even with bundle-scoped automation\nstdout: {}\nstderr: {stderr}",
-        String::from_utf8_lossy(&output.stdout),
-    );
-}
-
-#[test]
 fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access() {
     let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         vec!["echo".to_string(), "ok".to_string()],
         &SandboxPolicy::new_read_only_policy(),
         cwd.as_path(),
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let policy = &args[1];
     assert!(policy.contains("(allow user-preference-read)"));
@@ -319,7 +232,7 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(cwd.join("docs")).expect("create docs");
     let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs");
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         vec!["/bin/true".to_string()],
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
@@ -334,7 +247,6 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
         cwd.as_path(),
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
     assert!(
@@ -349,25 +261,6 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
                 && arg.ends_with("/workspace/.codex")),
         "expected proactive .codex carveout for cwd root: {args:#?}",
     );
-}
-
-#[test]
-fn seatbelt_args_default_extension_profile_keeps_preferences_read_access() {
-    let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_with_extensions(
-        vec!["echo".to_string(), "ok".to_string()],
-        &SandboxPolicy::new_read_only_policy(),
-        cwd.as_path(),
-        false,
-        None,
-        Some(&MacOsSeatbeltProfileExtensions::default()),
-    );
-    let policy = &args[1];
-    assert!(!policy.contains("appleevent-send"));
-    assert!(!policy.contains("com.apple.axserver"));
-    assert!(!policy.contains("com.apple.CalendarAgent"));
-    assert!(policy.contains("(allow user-preference-read)"));
-    assert!(!policy.contains("user-preference-write"));
 }
 
 #[test]
@@ -664,13 +557,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command.clone(),
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
     let policy_text = seatbelt_policy_arg(&args);
@@ -779,13 +671,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_hooks_file_args = create_seatbelt_command_args_with_extensions(
+    let write_hooks_file_args = create_seatbelt_command_args(
         shell_command_git,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&write_hooks_file_args)
@@ -816,13 +707,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_allowed_file_args = create_seatbelt_command_args_with_extensions(
+    let write_allowed_file_args = create_seatbelt_command_args(
         shell_command_allowed,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&write_allowed_file_args)
@@ -882,13 +772,12 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_desce
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command,
         &policy,
         repo_root.as_path(),
         /*enforce_managed_network*/ false,
         /*network*/ None,
-        /*extensions*/ None,
     );
 
     let policy_text = seatbelt_policy_arg(&args);
@@ -938,13 +827,12 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
@@ -975,13 +863,12 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let gitdir_args = create_seatbelt_command_args_with_extensions(
+    let gitdir_args = create_seatbelt_command_args(
         shell_command_gitdir,
         &policy,
         &cwd,
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&gitdir_args)
@@ -1039,13 +926,12 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command.clone(),
         &policy,
         vulnerable_root.as_path(),
         /*enforce_managed_network*/ false,
         None,
-        /*extensions*/ None,
     );
 
     let tmpdir_env_var = std::env::var("TMPDIR")
@@ -1072,14 +958,6 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
 (allow file-write*
 (require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
-
-; macOS permission profile extensions
-(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
-(allow mach-lookup
-    (global-name "com.apple.cfprefsd.daemon")
-    (global-name "com.apple.cfprefsd.agent")
-    (local-name "com.apple.cfprefsd.agent"))
-(allow user-preference-read)
 "#,
     );
 

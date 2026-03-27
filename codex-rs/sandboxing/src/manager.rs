@@ -8,11 +8,9 @@ use crate::policy_transforms::should_require_platform_sandbox;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 #[cfg(target_os = "macos")]
-use crate::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
+use crate::seatbelt::create_seatbelt_command_args_for_policies;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
-#[cfg(target_os = "macos")]
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -102,8 +100,6 @@ pub struct SandboxTransformRequest<'a> {
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
-    #[cfg(target_os = "macos")]
-    pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -181,27 +177,15 @@ impl SandboxManager {
             enforce_managed_network,
             network,
             sandbox_policy_cwd,
-            #[cfg(target_os = "macos")]
-            macos_seatbelt_profile_extensions,
             codex_linux_sandbox_exe,
             use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         } = request;
-        #[cfg(not(target_os = "macos"))]
-        let macos_seatbelt_profile_extensions = None;
         let additional_permissions = command.additional_permissions.take();
         let EffectiveSandboxPermissions {
             sandbox_policy: effective_policy,
-            #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions: effective_macos_seatbelt_profile_extensions,
-            #[cfg(not(target_os = "macos"))]
-                macos_seatbelt_profile_extensions: _,
-        } = EffectiveSandboxPermissions::new(
-            policy,
-            macos_seatbelt_profile_extensions,
-            additional_permissions.as_ref(),
-        );
+        } = EffectiveSandboxPermissions::new(policy, additional_permissions.as_ref());
         let effective_file_system_policy = effective_file_system_sandbox_policy(
             file_system_policy,
             additional_permissions.as_ref(),
@@ -216,14 +200,13 @@ impl SandboxManager {
             SandboxType::None => (os_argv_to_strings(argv), None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
-                let mut args = create_seatbelt_command_args_for_policies_with_extensions(
+                let mut args = create_seatbelt_command_args_for_policies(
                     os_argv_to_strings(argv),
                     &effective_file_system_policy,
                     effective_network_policy,
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
-                    effective_macos_seatbelt_profile_extensions.as_ref(),
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());

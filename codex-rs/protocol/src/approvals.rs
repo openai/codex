@@ -1,5 +1,4 @@
 use crate::mcp::RequestId;
-use crate::models::MacOsSeatbeltProfileExtensions;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
 use crate::permissions::FileSystemSandboxPolicy;
@@ -20,7 +19,6 @@ pub struct Permissions {
     pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
-    pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
 }
 
 #[allow(clippy::large_enum_variant)]

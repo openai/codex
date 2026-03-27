@@ -801,7 +801,6 @@ mod tests {
                                         write: None,
                                     },
                                 ),
-                                macos: None,
                             },
                         ),
                         proposed_execpolicy_amendment: None,
@@ -864,7 +863,6 @@ mod tests {
                                         write: None,
                                     },
                                 ),
-                                macos: None,
                             },
                         ),
                         proposed_execpolicy_amendment: None,
@@ -891,7 +889,6 @@ mod tests {
                     "read": [allowed_path],
                 "write": null,
                 },
-                "macos": null,
             })
         );
     }
