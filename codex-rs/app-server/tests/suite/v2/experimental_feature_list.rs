@@ -165,6 +165,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         &mut mcp,
         BTreeMap::from([
             ("plugins".to_string(), true),
+            ("selection_quote_replies".to_string(), true),
             ("tool_search".to_string(), true),
             ("tool_suggest".to_string(), true),
             ("tool_call_mcp_elicitation".to_string(), false),
@@ -177,6 +178,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         ExperimentalFeatureEnablementSetResponse {
             enablement: BTreeMap::from([
                 ("plugins".to_string(), true),
+                ("selection_quote_replies".to_string(), true),
                 ("tool_search".to_string(), true),
                 ("tool_suggest".to_string(), true),
                 ("tool_call_mcp_elicitation".to_string(), false),
@@ -198,6 +200,13 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .additional
             .get("features")
             .and_then(|features| features.get("plugins")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("selection_quote_replies")),
         Some(&json!(true))
     );
     assert_eq!(
@@ -283,7 +292,9 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
     assert!(
         error
             .message
-            .contains("apps, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"),
+            .contains(
+                "apps, plugins, selection_quote_replies, tool_search, tool_suggest, tool_call_mcp_elicitation"
+            ),
         "{}",
         error.message
     );

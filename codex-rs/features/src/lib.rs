@@ -176,6 +176,8 @@ pub enum Feature {
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
+    /// Enable selection-based quote replies in app-server clients.
+    SelectionQuoteReplies,
     /// Route interactive startup to the app-server-backed TUI implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
@@ -817,6 +819,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SelectionQuoteReplies,
+        key: "selection_quote_replies",
+        stage: Stage::Experimental {
+            name: "Selection quote replies",
+            menu_description: "Show a quote-reply action when you select text in a conversation and insert the selection into the composer as a quoted reply.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

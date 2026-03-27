@@ -151,6 +151,26 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn selection_quote_replies_is_experimental_and_user_toggleable() {
+    let spec = Feature::SelectionQuoteReplies.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(
+        stage.experimental_menu_name(),
+        Some("Selection quote replies")
+    );
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "Show a quote-reply action when you select text in a conversation and insert the selection into the composer as a quoted reply."
+        )
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(Feature::SelectionQuoteReplies.default_enabled(), false);
+}
+
+#[test]
 fn image_detail_original_feature_is_under_development() {
     assert_eq!(
         Feature::ImageDetailOriginal.stage(),

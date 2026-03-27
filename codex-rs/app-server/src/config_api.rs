@@ -45,6 +45,7 @@ use tracing::warn;
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "apps",
     "plugins",
+    "selection_quote_replies",
     "tool_search",
     "tool_suggest",
     "tool_call_mcp_elicitation",

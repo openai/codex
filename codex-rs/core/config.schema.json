@@ -458,6 +458,9 @@
             "search_tool": {
               "type": "boolean"
             },
+            "selection_quote_replies": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -2101,6 +2104,9 @@
           "type": "boolean"
         },
         "search_tool": {
+          "type": "boolean"
+        },
+        "selection_quote_replies": {
           "type": "boolean"
         },
         "shell_snapshot": {
