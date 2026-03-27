@@ -202,10 +202,24 @@ async fn test_config() -> Config {
     let codex_home = std::env::temp_dir();
     ConfigBuilder::default()
         .codex_home(codex_home.clone())
-        .fallback_cwd(Some(PathBuf::from("/tmp/project")))
+        .fallback_cwd(Some(PathBuf::from(test_path_display("/tmp/project"))))
         .build()
         .await
         .expect("config")
+}
+
+fn normalize_snapshot_paths(text: impl Into<String>) -> String {
+    let text = text.into();
+    let platform_test_cwd = test_path_display("/tmp/project");
+    if platform_test_cwd == "/tmp/project" {
+        text
+    } else {
+        text.replace(&platform_test_cwd, "/tmp/project")
+    }
+}
+
+fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> String {
+    normalize_snapshot_paths(format!("{value}"))
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
@@ -4289,7 +4303,10 @@ async fn preamble_keeps_working_status_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw preamble + status widget");
-    assert_snapshot!("preamble_keeps_working_status", terminal.backend());
+    assert_snapshot!(
+        "preamble_keeps_working_status",
+        normalized_backend_snapshot(terminal.backend())
+    );
 }
 
 #[tokio::test]
@@ -4330,7 +4347,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
         .expect("draw chatwidget");
     assert_snapshot!(
         "unified_exec_begin_restores_working_status",
-        terminal.backend()
+        normalized_backend_snapshot(terminal.backend())
     );
 }
 
@@ -6499,7 +6516,7 @@ async fn unified_exec_wait_status_renders_command_in_single_details_row_snapshot
     let rendered = render_bottom_popup(&chat, 48);
     assert_snapshot!(
         "unified_exec_wait_status_renders_command_in_single_details_row",
-        rendered
+        normalize_snapshot_paths(rendered)
     );
 }
 
@@ -11122,7 +11139,7 @@ async fn ui_snapshots_small_heights_idle() {
         terminal
             .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat idle");
-        assert_snapshot!(name, terminal.backend());
+        assert_snapshot!(name, normalized_backend_snapshot(terminal.backend()));
     }
 }
 
@@ -11154,7 +11171,7 @@ async fn ui_snapshots_small_heights_task_running() {
         terminal
             .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat running");
-        assert_snapshot!(name, terminal.backend());
+        assert_snapshot!(name, normalized_backend_snapshot(terminal.backend()));
     }
 }
 
@@ -11217,7 +11234,10 @@ async fn status_widget_and_approval_modal_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status + approval modal");
-    assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
+    assert_snapshot!(
+        "status_widget_and_approval_modal",
+        normalized_backend_snapshot(terminal.backend())
+    );
 }
 
 #[tokio::test]
@@ -11281,7 +11301,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
 
     assert_snapshot!(
         "guardian_denied_exec_renders_warning_and_denied_request",
-        term.backend().vt100().screen().contents()
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
 
@@ -11327,7 +11347,7 @@ async fn guardian_approved_exec_renders_approved_request() {
 
     assert_snapshot!(
         "guardian_approved_exec_renders_approved_request",
-        term.backend().vt100().screen().contents()
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
 
@@ -11434,7 +11454,7 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
 
     assert_snapshot!(
         "app_server_guardian_review_denied_renders_denied_request",
-        term.backend().vt100().screen().contents()
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
 
@@ -11466,7 +11486,10 @@ async fn status_widget_active_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
-    assert_snapshot!("status_widget_active", terminal.backend());
+    assert_snapshot!(
+        "status_widget_active",
+        normalized_backend_snapshot(terminal.backend())
+    );
 }
 
 #[tokio::test]
@@ -11488,7 +11511,10 @@ async fn mcp_startup_header_booting_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw chat widget");
-    assert_snapshot!("mcp_startup_header_booting", terminal.backend());
+    assert_snapshot!(
+        "mcp_startup_header_booting",
+        normalized_backend_snapshot(terminal.backend())
+    );
 }
 
 #[tokio::test]
@@ -11564,7 +11590,7 @@ async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
     let rendered = render_bottom_popup(&chat, 72);
     assert_snapshot!(
         "guardian_parallel_reviews_render_aggregate_status",
-        rendered
+        normalize_snapshot_paths(rendered)
     );
 }
 
@@ -12467,7 +12493,10 @@ async fn status_line_fast_mode_footer_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw fast-mode footer");
-    assert_snapshot!("status_line_fast_mode_footer", terminal.backend());
+    assert_snapshot!(
+        "status_line_fast_mode_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
 }
 
 #[tokio::test]
@@ -12566,15 +12595,11 @@ async fn status_line_model_with_reasoning_plan_mode_footer_snapshot() {
         .expect("draw plan-mode footer");
     assert_snapshot!(
         "status_line_model_with_reasoning_plan_mode_footer",
-        terminal.backend()
+        normalized_backend_snapshot(terminal.backend())
     );
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "snapshot path rendering differs on Windows"
-)]
 async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -12600,7 +12625,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
         .expect("draw model-with-reasoning footer");
     assert_snapshot!(
         "status_line_model_with_reasoning_fast_footer",
-        terminal.backend()
+        normalized_backend_snapshot(terminal.backend())
     );
 }
 
@@ -13087,7 +13112,9 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     })
     .unwrap();
 
-    assert_snapshot!(term.backend().vt100().screen().contents());
+    assert_snapshot!(normalize_snapshot_paths(
+        term.backend().vt100().screen().contents()
+    ));
 }
 
 // E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks
@@ -13182,7 +13209,9 @@ printf 'fenced within fenced\n'
             .expect("Failed to insert history lines in test");
     }
 
-    assert_snapshot!(term.backend().vt100().screen().contents());
+    assert_snapshot!(normalize_snapshot_paths(
+        term.backend().vt100().screen().contents()
+    ));
 }
 
 #[tokio::test]
@@ -13210,7 +13239,9 @@ async fn chatwidget_tall() {
         chat.render(f.area(), f.buffer_mut());
     })
     .unwrap();
-    assert_snapshot!(term.backend().vt100().screen().contents());
+    assert_snapshot!(normalize_snapshot_paths(
+        term.backend().vt100().screen().contents()
+    ));
 }
 
 #[tokio::test]
@@ -13306,7 +13337,9 @@ async fn review_queues_user_messages_snapshot() {
         chat.render(f.area(), f.buffer_mut());
     })
     .unwrap();
-    assert_snapshot!(term.backend().vt100().screen().contents());
+    assert_snapshot!(normalize_snapshot_paths(
+        term.backend().vt100().screen().contents()
+    ));
 }
 
 #[tokio::test]
@@ -13345,5 +13378,7 @@ async fn compact_queues_user_messages_snapshot() {
         chat.render(f.area(), f.buffer_mut());
     })
     .unwrap();
-    assert_snapshot!(term.backend().vt100().screen().contents());
+    assert_snapshot!(normalize_snapshot_paths(
+        term.backend().vt100().screen().contents()
+    ));
 }
