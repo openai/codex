@@ -6531,6 +6531,21 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
+async fn slash_recall_without_query_shows_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Recall);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected usage error for bare /recall");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Usage: /recall <query>"),
+        "expected recall usage message: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn slash_fork_requests_current_fork() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
