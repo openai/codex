@@ -68,9 +68,9 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
     });
 
     let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd);
-    let expected_outside = AbsolutePathBuf::from_absolute_path(
-        outside.canonicalize().expect("canonicalize outside dir"),
-    )
+    let expected_outside = AbsolutePathBuf::from_absolute_path(dunce::simplified(
+        &outside.canonicalize().expect("canonicalize outside dir"),
+    ))
     .expect("outside dir should be absolute");
 
     assert_eq!(
