@@ -471,6 +471,7 @@ mod tests {
             timeout_sec: 5,
             status_message: Some("running post tool use hook".to_string()),
             source_path: PathBuf::from("/tmp/hooks.json"),
+            is_project: false,
             display_order: 0,
         }
     }
