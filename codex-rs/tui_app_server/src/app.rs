@@ -2627,18 +2627,43 @@ impl App {
     /// refreshes from the backend. Refresh failures are treated as "thread is only inspectable by
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
-    async fn open_agent_picker(&mut self) {
+    async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
         let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
         for thread_id in thread_ids {
-            if self.thread_event_listener_tasks.contains_key(&thread_id) {
-                if self.agent_navigation.get(&thread_id).is_none() {
+            let existing_entry = self.agent_navigation.get(&thread_id).cloned();
+            match app_server
+                .thread_read(thread_id, /*include_turns*/ false)
+                .await
+            {
+                Ok(thread) => {
                     self.upsert_agent_picker_thread(
-                        thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
-                        /*is_closed*/ false,
+                        thread_id,
+                        thread.agent_nickname.or_else(|| {
+                            existing_entry
+                                .as_ref()
+                                .and_then(|entry| entry.agent_nickname.clone())
+                        }),
+                        thread.agent_role.or_else(|| {
+                            existing_entry
+                                .as_ref()
+                                .and_then(|entry| entry.agent_role.clone())
+                        }),
+                        matches!(
+                            thread.status,
+                            codex_app_server_protocol::ThreadStatus::NotLoaded
+                        ),
                     );
                 }
-            } else {
-                self.mark_agent_picker_thread_closed(thread_id);
+                Err(_) => {
+                    if self.agent_navigation.get(&thread_id).is_none() {
+                        self.upsert_agent_picker_thread(
+                            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                            /*is_closed*/ true,
+                        );
+                    } else {
+                        self.mark_agent_picker_thread_closed(thread_id);
+                    }
+                }
             }
         }
 
@@ -4816,7 +4841,7 @@ impl App {
                 self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenAgentPicker => {
-                self.open_agent_picker().await;
+                self.open_agent_picker(app_server).await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, app_server, thread_id).await?;
@@ -6855,11 +6880,15 @@ mod tests {
     #[tokio::test]
     async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
         let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
         let thread_id = ThreadId::new();
         app.thread_event_channels
             .insert(thread_id, ThreadEventChannel::new(1));
 
-        app.open_agent_picker().await;
+        app.open_agent_picker(&mut app_server).await;
 
         assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
         assert_eq!(
@@ -6875,8 +6904,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_agent_picker_keeps_cached_closed_threads() -> Result<()> {
+    async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
         let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
         let thread_id = ThreadId::new();
         app.thread_event_channels
             .insert(thread_id, ThreadEventChannel::new(1));
@@ -6884,10 +6917,10 @@ mod tests {
             thread_id,
             Some("Robie".to_string()),
             Some("explorer".to_string()),
-            false,
+            true,
         );
 
-        app.open_agent_picker().await;
+        app.open_agent_picker(&mut app_server).await;
 
         assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
         assert_eq!(
@@ -6902,11 +6935,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let thread_id = started.session.thread_id;
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(1));
+
+        app.open_agent_picker(&mut app_server).await;
+
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                is_closed: false,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
         let _ = app.config.features.disable(Feature::Collab);
 
-        app.open_agent_picker().await;
+        app.open_agent_picker(&mut app_server).await;
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -7461,11 +7525,15 @@ guardian_approval = true
     async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()>
     {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
         let thread_id = ThreadId::new();
         app.thread_event_channels
             .insert(thread_id, ThreadEventChannel::new(1));
 
-        app.open_agent_picker().await;
+        app.open_agent_picker(&mut app_server).await;
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
