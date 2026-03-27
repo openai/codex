@@ -68,11 +68,13 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
     });
 
     let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd);
+    let expected_outside = AbsolutePathBuf::from_absolute_path(
+        outside.canonicalize().expect("canonicalize outside dir"),
+    )
+    .expect("outside dir should be absolute");
 
     assert_eq!(
         permissions.and_then(|profile| profile.file_system.and_then(|fs| fs.write)),
-        Some(vec![
-            AbsolutePathBuf::try_from(outside).expect("outside dir should be absolute")
-        ])
+        Some(vec![expected_outside])
     );
 }
