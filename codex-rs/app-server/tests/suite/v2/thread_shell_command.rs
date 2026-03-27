@@ -15,6 +15,10 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadDependencyEnvSetParams;
+use codex_app_server_protocol::ThreadDependencyEnvSetResponse;
+use codex_app_server_protocol::ThreadEnvContainsParams;
+use codex_app_server_protocol::ThreadEnvContainsResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -30,11 +34,232 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEPENDENCY_ENV_KEY: &str = "CODEX_TEST_DEPENDENCY_ENV_KEY";
+const DEPENDENCY_ENV_VALUE: &str = "codex-test-dependency-env-value";
+const PROCESS_ENV_KEY: &str = "CODEX_TEST_PROCESS_ENV_KEY";
+const PROCESS_ENV_VALUE: &str = "codex-test-process-env-value";
+
+#[tokio::test]
+async fn thread_env_contains_checks_process_env() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+
+    let server = create_mock_responses_server_sequence(vec![]).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.as_path(),
+        &[(PROCESS_ENV_KEY, Some(PROCESS_ENV_VALUE))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            persist_extended_history: true,
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let contains_id = mcp
+        .send_thread_env_contains_request(ThreadEnvContainsParams {
+            thread_id: thread.id.clone(),
+            key: PROCESS_ENV_KEY.to_string(),
+        })
+        .await?;
+    let contains_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(contains_id)),
+    )
+    .await??;
+    let contains = to_response::<ThreadEnvContainsResponse>(contains_resp)?;
+    assert_eq!(contains, ThreadEnvContainsResponse { contains: true });
+
+    let set_id = mcp
+        .send_thread_dependency_env_set_request(ThreadDependencyEnvSetParams {
+            thread_id: thread.id.clone(),
+            values: HashMap::from([(PROCESS_ENV_KEY.to_string(), String::new())]),
+        })
+        .await?;
+    let set_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+    )
+    .await??;
+    let _: ThreadDependencyEnvSetResponse = to_response(set_resp)?;
+
+    let contains_id = mcp
+        .send_thread_env_contains_request(ThreadEnvContainsParams {
+            thread_id: thread.id,
+            key: PROCESS_ENV_KEY.to_string(),
+        })
+        .await?;
+    let contains_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(contains_id)),
+    )
+    .await??;
+    let contains = to_response::<ThreadEnvContainsResponse>(contains_resp)?;
+    assert_eq!(contains, ThreadEnvContainsResponse { contains: false });
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_dependency_env_set_is_inherited_by_shell_commands() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+
+    let server = create_mock_responses_server_sequence(vec![]).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            persist_extended_history: true,
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let contains_id = mcp
+        .send_thread_env_contains_request(ThreadEnvContainsParams {
+            thread_id: thread.id.clone(),
+            key: DEPENDENCY_ENV_KEY.to_string(),
+        })
+        .await?;
+    let contains_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(contains_id)),
+    )
+    .await??;
+    let contains = to_response::<ThreadEnvContainsResponse>(contains_resp)?;
+    assert_eq!(contains, ThreadEnvContainsResponse { contains: false });
+
+    let set_id = mcp
+        .send_thread_dependency_env_set_request(ThreadDependencyEnvSetParams {
+            thread_id: thread.id.clone(),
+            values: HashMap::from([(DEPENDENCY_ENV_KEY.to_string(), String::new())]),
+        })
+        .await?;
+    let set_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+    )
+    .await??;
+    let _: ThreadDependencyEnvSetResponse = to_response(set_resp)?;
+
+    let contains_id = mcp
+        .send_thread_env_contains_request(ThreadEnvContainsParams {
+            thread_id: thread.id.clone(),
+            key: DEPENDENCY_ENV_KEY.to_string(),
+        })
+        .await?;
+    let contains_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(contains_id)),
+    )
+    .await??;
+    let contains = to_response::<ThreadEnvContainsResponse>(contains_resp)?;
+    assert_eq!(contains, ThreadEnvContainsResponse { contains: false });
+
+    let set_id = mcp
+        .send_thread_dependency_env_set_request(ThreadDependencyEnvSetParams {
+            thread_id: thread.id.clone(),
+            values: HashMap::from([(
+                DEPENDENCY_ENV_KEY.to_string(),
+                DEPENDENCY_ENV_VALUE.to_string(),
+            )]),
+        })
+        .await?;
+    let set_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+    )
+    .await??;
+    let _: ThreadDependencyEnvSetResponse = to_response(set_resp)?;
+
+    let contains_id = mcp
+        .send_thread_env_contains_request(ThreadEnvContainsParams {
+            thread_id: thread.id.clone(),
+            key: DEPENDENCY_ENV_KEY.to_string(),
+        })
+        .await?;
+    let contains_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(contains_id)),
+    )
+    .await??;
+    let contains = to_response::<ThreadEnvContainsResponse>(contains_resp)?;
+    assert_eq!(contains, ThreadEnvContainsResponse { contains: true });
+
+    let shell_id = mcp
+        .send_thread_shell_command_request(ThreadShellCommandParams {
+            thread_id: thread.id,
+            command: format!("printf '%s\\n' \"${DEPENDENCY_ENV_KEY}\""),
+        })
+        .await?;
+    let shell_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(shell_id)),
+    )
+    .await??;
+    let _: ThreadShellCommandResponse = to_response(shell_resp)?;
+
+    let completed = wait_for_command_execution_completed(&mut mcp, None).await?;
+    let ThreadItem::CommandExecution {
+        aggregated_output,
+        exit_code,
+        ..
+    } = &completed.item
+    else {
+        unreachable!("helper returns command execution item");
+    };
+    assert_eq!(
+        aggregated_output.as_deref(),
+        Some(format!("{DEPENDENCY_ENV_VALUE}\n").as_str())
+    );
+    assert_eq!(*exit_code, Some(0));
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> Result<()> {

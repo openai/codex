@@ -119,6 +119,10 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
+use codex_app_server_protocol::ThreadDependencyEnvSetParams;
+use codex_app_server_protocol::ThreadDependencyEnvSetResponse;
+use codex_app_server_protocol::ThreadEnvContainsParams;
+use codex_app_server_protocol::ThreadEnvContainsResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
@@ -697,6 +701,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadSetName { request_id, params } => {
                 self.thread_set_name(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadDependencyEnvSet { request_id, params } => {
+                self.thread_dependency_env_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadEnvContains { request_id, params } => {
+                self.thread_env_contains(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
@@ -2599,6 +2611,74 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_response(request_id, ThreadMetadataUpdateResponse { thread })
+            .await;
+    }
+
+    async fn thread_dependency_env_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadDependencyEnvSetParams,
+    ) {
+        let ThreadDependencyEnvSetParams { thread_id, values } = params;
+
+        let thread_uuid = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let Ok(thread) = self.thread_manager.get_thread(thread_uuid).await else {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread not loaded: {thread_uuid}"),
+            )
+            .await;
+            return;
+        };
+
+        thread.set_dependency_env(values).await;
+        self.outgoing
+            .send_response(request_id, ThreadDependencyEnvSetResponse {})
+            .await;
+    }
+
+    async fn thread_env_contains(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadEnvContainsParams,
+    ) {
+        let ThreadEnvContainsParams { thread_id, key } = params;
+
+        let thread_uuid = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let Ok(thread) = self.thread_manager.get_thread(thread_uuid).await else {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread not loaded: {thread_uuid}"),
+            )
+            .await;
+            return;
+        };
+
+        let dependency_env = thread.dependency_env().await;
+        let contains = match dependency_env.get(&key) {
+            Some(value) => !value.trim().is_empty(),
+            None => std::env::var(&key)
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty()),
+        };
+        self.outgoing
+            .send_response(request_id, ThreadEnvContainsResponse { contains })
             .await;
     }
 

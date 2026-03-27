@@ -139,6 +139,8 @@ Example with notification opt-out:
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
+- `thread/dependencyEnv/set` — merge session-scoped environment variables into a loaded thread so future spawned commands can inherit them; returns `{}` on success.
+- `thread/env/contains` — check whether a loaded thread has an environment variable available via the app-server process environment or a session-scoped dependency override; returns `{ "contains": true | false }`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
@@ -389,6 +391,24 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
         "gitInfo": null
     }
 } }
+```
+
+### Example: Set thread dependency environment
+
+Use `thread/dependencyEnv/set` to merge session-scoped environment variables into a loaded thread. These values are inherited by future spawned commands for that thread. Use `thread/env/contains` to check whether a key is already available in the app-server process environment or the thread's dependency environment.
+
+```json
+{ "method": "thread/dependencyEnv/set", "id": 26, "params": {
+    "threadId": "thr_123",
+    "values": { "OPENAI_API_KEY": "sk-..." }
+} }
+{ "id": 26, "result": {} }
+
+{ "method": "thread/env/contains", "id": 27, "params": {
+    "threadId": "thr_123",
+    "key": "OPENAI_API_KEY"
+} }
+{ "id": 27, "result": { "contains": true } }
 ```
 
 ### Example: Archive a thread

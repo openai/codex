@@ -245,6 +245,14 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
+    ThreadDependencyEnvSet => "thread/dependencyEnv/set" {
+        params: v2::ThreadDependencyEnvSetParams,
+        response: v2::ThreadDependencyEnvSetResponse,
+    },
+    ThreadEnvContains => "thread/env/contains" {
+        params: v2::ThreadEnvContainsParams,
+        response: v2::ThreadEnvContainsResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,

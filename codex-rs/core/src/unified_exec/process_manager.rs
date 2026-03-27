@@ -12,6 +12,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::exec_env::apply_dependency_env;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
@@ -654,15 +655,8 @@ impl UnifiedExecProcessManager {
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
         ));
-        if !dependency_env.is_empty() {
-            env.extend(dependency_env.clone());
-        }
         let mut explicit_env_overrides = context.turn.shell_environment_policy.r#set.clone();
-        for key in dependency_env.keys() {
-            if let Some(value) = env.get(key) {
-                explicit_env_overrides.insert(key.clone(), value.clone());
-            }
-        }
+        apply_dependency_env(&mut env, &mut explicit_env_overrides, &dependency_env);
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(
             self,

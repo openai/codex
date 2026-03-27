@@ -101,6 +101,7 @@ mod clipboard_paste;
 mod clipboard_text;
 mod collaboration_modes;
 mod color;
+mod create_api_key;
 pub mod custom_terminal;
 mod cwd_prompt;
 mod debug_config;

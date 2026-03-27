@@ -3869,6 +3869,13 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::StartCreateApiKey { thread_id } => {
+                crate::create_api_key::start_command(
+                    self.app_event_tx.clone(),
+                    app_server.request_handle(),
+                    thread_id,
+                );
+            }
             AppEvent::OpenAppLink {
                 app_id,
                 title,

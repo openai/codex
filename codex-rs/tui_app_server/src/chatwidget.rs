@@ -5060,6 +5060,16 @@ impl ChatWidget {
                     tx.send(AppEvent::DiffResult(text));
                 });
             }
+            SlashCommand::CreateApiKey => {
+                let Some(thread_id) = self.thread_id() else {
+                    self.add_error_message(
+                        "No active Codex thread for API key creation.".to_string(),
+                    );
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::StartCreateApiKey { thread_id });
+            }
             SlashCommand::Copy => {
                 let Some(text) = self.last_copyable_output.as_deref() else {
                     self.add_info_message(

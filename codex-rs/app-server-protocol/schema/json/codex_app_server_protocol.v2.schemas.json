@@ -968,6 +968,54 @@
             },
             "method": {
               "enum": [
+                "thread/dependencyEnv/set"
+              ],
+              "title": "Thread/dependencyEnv/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadDependencyEnvSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/dependencyEnv/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/env/contains"
+              ],
+              "title": "Thread/env/containsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadEnvContainsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/env/containsRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -9904,6 +9952,61 @@
     "ThreadCompactStartResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadCompactStartResponse",
+      "type": "object"
+    },
+    "ThreadDependencyEnvSetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "threadId",
+        "values"
+      ],
+      "title": "ThreadDependencyEnvSetParams",
+      "type": "object"
+    },
+    "ThreadDependencyEnvSetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadDependencyEnvSetResponse",
+      "type": "object"
+    },
+    "ThreadEnvContainsParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "threadId"
+      ],
+      "title": "ThreadEnvContainsParams",
+      "type": "object"
+    },
+    "ThreadEnvContainsResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "contains": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contains"
+      ],
+      "title": "ThreadEnvContainsResponse",
       "type": "object"
     },
     "ThreadForkParams": {
