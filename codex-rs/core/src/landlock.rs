@@ -5,6 +5,7 @@ use crate::spawn::spawn_child_async;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::LinuxSandboxDetachedChildren;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
@@ -48,6 +49,7 @@ where
         sandbox_policy_cwd,
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),
+        LinuxSandboxDetachedChildren::Disallow,
     );
     let codex_linux_sandbox_exe = codex_linux_sandbox_exe.as_ref();
     // Preserve the helper alias when we already have it; otherwise force argv0

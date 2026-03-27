@@ -1,6 +1,8 @@
 #[cfg(test)]
 use super::*;
 #[cfg(test)]
+use crate::bwrap::BwrapProcessLifetime;
+#[cfg(test)]
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::NetworkSandboxPolicy;
@@ -48,6 +50,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
         },
     )
     .args;
@@ -61,7 +64,6 @@ fn inserts_bwrap_argv0_before_command_separator() {
         vec![
             "bwrap".to_string(),
             "--new-session".to_string(),
-            "--die-with-parent".to_string(),
             "--ro-bind".to_string(),
             "/".to_string(),
             "/".to_string(),
@@ -69,6 +71,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "/dev".to_string(),
             "--unshare-user".to_string(),
             "--unshare-pid".to_string(),
+            "--die-with-parent".to_string(),
             "--proc".to_string(),
             "/proc".to_string(),
             "--argv0".to_string(),
@@ -157,6 +160,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::Isolated,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
         },
     )
     .args;
@@ -174,10 +178,30 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::ProxyOnly,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
         },
     )
     .args;
     assert!(argv.contains(&"--unshare-net".to_string()));
+}
+
+#[test]
+fn omits_die_with_parent_when_detached_children_are_allowed() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let argv = build_bwrap_argv(
+        vec!["/bin/true".to_string()],
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        Path::new("/"),
+        Path::new("/"),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+            process_lifetime: BwrapProcessLifetime::AllowDetachedChildren,
+        },
+    )
+    .args;
+
+    assert!(!argv.contains(&"--die-with-parent".to_string()));
 }
 
 #[test]

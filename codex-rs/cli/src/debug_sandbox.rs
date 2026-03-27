@@ -16,6 +16,7 @@ use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::LinuxSandboxDetachedChildren;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args_for_policies;
@@ -289,6 +290,7 @@ async fn run_command_under_sandbox(
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 /*allow_network_for_proxy*/ false,
+                LinuxSandboxDetachedChildren::Disallow,
             );
             let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
@@ -498,7 +500,7 @@ mod tests {
         let legacy_config = build_debug_sandbox_config(
             Vec::new(),
             ConfigOverrides {
-                sandbox_mode: Some(create_sandbox_mode(false)),
+                sandbox_mode: Some(create_sandbox_mode(/*full_auto*/ false)),
                 ..Default::default()
             },
             Some(codex_home_path.clone()),
@@ -508,7 +510,7 @@ mod tests {
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
             None,
-            false,
+            /*full_auto*/ false,
             Some(codex_home_path),
         )
         .await?;
@@ -542,7 +544,7 @@ mod tests {
         let err = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
             None,
-            true,
+            /*full_auto*/ true,
             Some(codex_home.path().to_path_buf()),
         )
         .await
