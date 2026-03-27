@@ -1660,6 +1660,8 @@ pub struct AgentRoleConfig {
     pub config_file: Option<PathBuf>,
     /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
     pub spawn_mode: Option<AgentRoleSpawnMode>,
+    /// Optional watchdog interval for roles that should spawn as idle-time watchdog handles.
+    pub watchdog_interval_s: Option<i64>,
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
 }
@@ -1680,6 +1682,10 @@ pub struct AgentRoleToml {
 
     /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
     pub spawn_mode: Option<AgentRoleSpawnMode>,
+
+    /// Optional watchdog interval in seconds for roles that should behave as watchdogs.
+    #[schemars(range(min = 1))]
+    pub watchdog_interval_s: Option<i64>,
 
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,

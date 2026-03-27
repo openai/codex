@@ -537,6 +537,7 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
                         model: None,
                         config_file: Some(role_path),
                         spawn_mode: None,
+                        watchdog_interval_s: None,
                         nickname_candidates: None,
                     },
                 );
@@ -587,6 +588,7 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
                 model: None,
                 config_file: Some(role_path),
                 spawn_mode: None,
+                watchdog_interval_s: None,
                 nickname_candidates: None,
             },
         );

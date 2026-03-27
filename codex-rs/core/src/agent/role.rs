@@ -40,7 +40,9 @@ pub(crate) fn default_spawn_mode_for_role(
 
 pub(crate) fn watchdog_interval_for_role(config: &Config, role_name: Option<&str>) -> Option<i64> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    (role_name == "watchdog").then_some(config.watchdog_interval_s)
+    resolve_role_config(config, role_name)
+        .and_then(|role| role.watchdog_interval_s)
+        .or_else(|| (role_name == "watchdog").then_some(config.watchdog_interval_s))
 }
 
 /// Applies a named role layer to `config` while preserving caller-owned model selection.
@@ -378,6 +380,7 @@ mod built_in {
                         model: None,
                         config_file: None,
                         spawn_mode: None,
+                        watchdog_interval_s: None,
                         nickname_candidates: None,
                     }
                 ),
@@ -394,6 +397,7 @@ Rules:
                         model: None,
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
                         spawn_mode: None,
+                        watchdog_interval_s: None,
                         nickname_candidates: None,
                     }
                 ),
@@ -411,6 +415,23 @@ Rules:
                         model: None,
                         config_file: None,
                         spawn_mode: None,
+                        watchdog_interval_s: None,
+                        nickname_candidates: None,
+                    }
+                ),
+                (
+                    "watchdog".to_string(),
+                    AgentRoleConfig {
+                        description: Some(r#"Use `watchdog` for long-running work that needs periodic oversight.
+This role creates an idle-time watchdog handle instead of a conversational worker.
+Rules:
+- Watchdog check-ins are asynchronous and only happen after the current turn ends and the owner thread is idle.
+- Do not call `wait` or `send_input` on the watchdog handle.
+- Close the watchdog handle only when it is no longer needed or when replacing it with a new watchdog."#.to_string()),
+                        model: None,
+                        config_file: None,
+                        spawn_mode: None,
+                        watchdog_interval_s: Some(crate::config::DEFAULT_WATCHDOG_INTERVAL_S),
                         nickname_candidates: None,
                     }
                 ),

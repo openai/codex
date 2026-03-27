@@ -46,6 +46,12 @@
             }
           ],
           "description": "Optional default spawn mode when `spawn_agent` omits `spawn_mode`."
+        },
+        "watchdog_interval_s": {
+          "description": "Optional watchdog interval in seconds for roles that should behave as watchdogs.",
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
         }
       },
       "type": "object"

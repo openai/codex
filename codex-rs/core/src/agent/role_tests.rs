@@ -97,6 +97,7 @@ async fn apply_role_returns_unavailable_for_missing_user_role_file() {
             model: None,
             config_file: Some(PathBuf::from("/path/does/not/exist.toml")),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -119,6 +120,7 @@ async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -152,6 +154,7 @@ model = "role-model"
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -185,6 +188,7 @@ async fn apply_role_preserves_unspecified_keys() {
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -246,6 +250,7 @@ model_provider = "test-provider"
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -302,6 +307,7 @@ model_verbosity = "high"
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -370,6 +376,7 @@ model_provider = "role-provider"
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -430,6 +437,7 @@ model_provider = "base-provider"
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -496,6 +504,7 @@ model_reasoning_effort = "high"
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -542,6 +551,7 @@ writable_roots = ["./sandbox-root"]
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -606,6 +616,7 @@ async fn apply_role_takes_precedence_over_existing_session_flags_for_same_key() 
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -651,6 +662,7 @@ enabled = false
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -677,6 +689,17 @@ enabled = false
     assert_eq!(outcome.is_skill_enabled(skill), false);
 }
 
+#[tokio::test]
+async fn watchdog_interval_for_role_returns_built_in_watchdog_interval() {
+    let (_home, config) = test_config_with_cli_overrides(Vec::new()).await;
+
+    assert_eq!(
+        watchdog_interval_for_role(&config, Some("watchdog")),
+        Some(crate::config::DEFAULT_WATCHDOG_INTERVAL_S)
+    );
+    assert_eq!(watchdog_interval_for_role(&config, Some("default")), None);
+}
+
 #[test]
 fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
     let user_defined_roles = BTreeMap::from([
@@ -687,6 +710,7 @@ fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
                 model: None,
                 config_file: None,
                 spawn_mode: None,
+                watchdog_interval_s: None,
                 nickname_candidates: None,
             },
         ),
@@ -710,6 +734,7 @@ fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
             model: None,
             config_file: None,
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     )]);
@@ -739,6 +764,7 @@ fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     )]);
@@ -766,6 +792,7 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
             model: None,
             config_file: Some(role_path),
             spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     )]);
