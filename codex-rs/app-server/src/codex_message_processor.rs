@@ -6649,9 +6649,10 @@ impl CodexMessageProcessor {
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::UserInput {
+                Op::UserInputWithClientMetadata {
                     items: mapped_items,
                     final_output_json_schema: params.output_schema,
+                    client_metadata: params.client_metadata,
                 },
             )
             .await;
@@ -6732,7 +6733,11 @@ impl CodexMessageProcessor {
             .collect();
 
         match thread
-            .steer_input(mapped_items, Some(&params.expected_turn_id))
+            .steer_input(
+                mapped_items,
+                Some(&params.expected_turn_id),
+                params.client_metadata,
+            )
             .await
         {
             Ok(turn_id) => {

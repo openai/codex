@@ -149,8 +149,8 @@ Example with notification opt-out:
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
-- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Optional `clientMetadata` is merged into Codex’s existing turn-metadata payload for that turn. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Optional `clientMetadata` updates the extra fields merged into that turn-scoped metadata for the next outbound request. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
@@ -464,7 +464,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
+You can optionally specify turn-scoped `clientMetadata` plus config overrides on the new turn. Config overrides become the default for subsequent turns on the same thread. `outputSchema` and `clientMetadata` apply only to the current turn, and `clientMetadata` is merged into the existing turn-metadata payload that Codex forwards downstream.
 
 `approvalsReviewer` accepts:
 
@@ -475,6 +475,9 @@ You can optionally specify config overrides on the new turn. If specified, these
 { "method": "turn/start", "id": 30, "params": {
     "threadId": "thr_123",
     "input": [ { "type": "text", "text": "Run tests" } ],
+    "clientMetadata": {
+        "fiber_run_id": "fiber_123"
+    },
     // Below are optional config overrides
     "cwd": "/Users/me/project",
     "approvalPolicy": "unlessTrusted",
@@ -645,6 +648,9 @@ not emit `turn/started` and does not accept turn context overrides.
 { "method": "turn/steer", "id": 32, "params": {
     "threadId": "thr_123",
     "input": [ { "type": "text", "text": "Actually focus on failing tests first." } ],
+    "clientMetadata": {
+        "fiber_run_id": "fiber_456"
+    },
     "expectedTurnId": "turn_456"
 } }
 { "id": 32, "result": { "turnId": "turn_456" } }
