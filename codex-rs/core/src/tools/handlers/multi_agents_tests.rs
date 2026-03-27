@@ -322,6 +322,40 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_spawn_requires_task_name() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo"
+        })),
+    );
+    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+        panic!("missing task_name should be rejected");
+    };
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("missing task_name should surface as a model-facing error");
+    };
+    assert!(message.contains("missing field `task_name`"));
+}
+
+#[tokio::test]
 async fn spawn_agent_errors_when_manager_dropped() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(

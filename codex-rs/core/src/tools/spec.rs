@@ -157,10 +157,10 @@ fn spawn_agent_output_schema_v2() -> JsonValue {
         "properties": {
             "agent_id": {
                 "type": ["string", "null"],
-                "description": "Thread identifier for the spawned agent when no task name was assigned."
+                "description": "Legacy thread identifier for the spawned agent."
             },
             "task_name": {
-                "type": ["string", "null"],
+                "type": "string",
                 "description": "Canonical task name for the spawned agent."
             },
             "nickname": {
@@ -1215,13 +1215,13 @@ fn create_spawn_agent_tool_v1(config: &ToolsConfig) -> ToolSpec {
 
 fn create_spawn_agent_tool_v2(config: &ToolsConfig) -> ToolSpec {
     let available_models_description = spawn_agent_models_description(&config.available_models);
-    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
+    let return_value_description = "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available.";
     let mut properties = spawn_agent_common_properties(config);
     properties.insert(
         "task_name".to_string(),
         JsonSchema::String {
             description: Some(
-                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
+                "Task name for the new agent. Use lowercase letters, digits, and underscores."
                     .to_string(),
             ),
         },
@@ -1237,7 +1237,7 @@ fn create_spawn_agent_tool_v2(config: &ToolsConfig) -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: None,
+            required: Some(vec!["task_name".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(spawn_agent_output_schema_v2()),
