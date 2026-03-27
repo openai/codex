@@ -776,6 +776,46 @@ fn file_link_uses_target_path_for_hash_range() {
 }
 
 #[test]
+fn file_link_decodes_percent_encoded_path_text() {
+    let text = render_markdown_text_for_cwd(
+        "[random](/Users/example/code/codex/docs/random_%C3%9F.md:1)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter(["docs/random_ß.md:1".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_preserves_invalid_percent_sequences() {
+    let text = render_markdown_text_for_cwd(
+        "[bad](/Users/example/code/codex/docs/%E6%ZZ.md)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter(["docs/%E6%ZZ.md".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_preserves_percent_encoded_separator_escapes() {
+    let text = render_markdown_text_for_cwd(
+        "[encoded](/Users/example/code/codex/docs/%2E%2E%2Fsecret.md)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter(["docs/%2E%2E%2Fsecret.md".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_preserves_invalid_utf8_percent_sequences() {
+    let text = render_markdown_text_for_cwd(
+        "[bad](/Users/example/code/codex/docs/%E2%28.md)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter(["docs/%E2%28.md".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn url_link_shows_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
