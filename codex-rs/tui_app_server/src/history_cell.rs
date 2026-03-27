@@ -45,6 +45,8 @@ use codex_core::config::types::McpServerTransportConfig;
 #[cfg(test)]
 use codex_core::mcp::McpManager;
 #[cfg(test)]
+use codex_core::mcp::qualified_mcp_tool_name_prefix;
+#[cfg(test)]
 use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
@@ -1831,7 +1833,7 @@ pub(crate) fn new_mcp_tools_output(
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     for (server, cfg) in servers {
-        let prefix = format!("mcp__{server}__");
+        let prefix = qualified_mcp_tool_name_prefix(server);
         let mut names: Vec<String> = tools
             .keys()
             .filter(|k| k.starts_with(&prefix))
@@ -3203,6 +3205,63 @@ mod tests {
                 meta: None,
             },
         );
+
+        let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
+        let cell = new_mcp_tools_output(
+            &config,
+            tools,
+            HashMap::new(),
+            HashMap::new(),
+            &auth_statuses,
+        );
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_lists_tools_for_hyphenated_server_names() {
+        let mut config = test_config().await;
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "some-server".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: vec!["--stdio".to_string()],
+                    env: None,
+                    env_vars: vec![],
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: None,
+            },
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+
+        let tools = HashMap::from([(
+            "mcp__some_server__lookup".to_string(),
+            Tool {
+                description: None,
+                name: "lookup".to_string(),
+                title: None,
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
+            },
+        )]);
 
         let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
         let cell = new_mcp_tools_output(

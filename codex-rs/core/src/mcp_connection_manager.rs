@@ -22,6 +22,7 @@ use std::time::Instant;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::mcp::auth::McpAuthStatusEntry;
+use crate::mcp::sanitize_responses_api_tool_name;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -103,26 +104,6 @@ const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
 const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
-
-/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
-/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
-/// name we expose to the model by replacing any disallowed character with `_`.
-fn sanitize_responses_api_tool_name(name: &str) -> String {
-    let mut sanitized = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            sanitized.push(c);
-        } else {
-            sanitized.push('_');
-        }
-    }
-
-    if sanitized.is_empty() {
-        "_".to_string()
-    } else {
-        sanitized
-    }
-}
 
 fn sha1_hex(s: &str) -> String {
     let mut hasher = Sha1::new();
