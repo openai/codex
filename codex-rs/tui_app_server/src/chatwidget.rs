@@ -1275,6 +1275,57 @@ where
         .and_then(|value| serde_json::from_value(value).ok())
 }
 
+fn hook_output_entry_from_notification(
+    entry: codex_app_server_protocol::HookOutputEntry,
+) -> codex_protocol::protocol::HookOutputEntry {
+    codex_protocol::protocol::HookOutputEntry {
+        kind: entry.kind.to_core(),
+        text: entry.text,
+    }
+}
+
+fn hook_run_summary_from_notification(
+    run: codex_app_server_protocol::HookRunSummary,
+) -> codex_protocol::protocol::HookRunSummary {
+    codex_protocol::protocol::HookRunSummary {
+        id: run.id,
+        event_name: run.event_name.to_core(),
+        handler_type: run.handler_type.to_core(),
+        execution_mode: run.execution_mode.to_core(),
+        scope: run.scope.to_core(),
+        source_path: run.source_path,
+        display_order: run.display_order,
+        status: run.status.to_core(),
+        status_message: run.status_message,
+        started_at: run.started_at,
+        completed_at: run.completed_at,
+        duration_ms: run.duration_ms,
+        entries: run
+            .entries
+            .into_iter()
+            .map(hook_output_entry_from_notification)
+            .collect(),
+    }
+}
+
+fn hook_started_event_from_notification(
+    notification: codex_app_server_protocol::HookStartedNotification,
+) -> codex_protocol::protocol::HookStartedEvent {
+    codex_protocol::protocol::HookStartedEvent {
+        turn_id: notification.turn_id,
+        run: hook_run_summary_from_notification(notification.run),
+    }
+}
+
+fn hook_completed_event_from_notification(
+    notification: codex_app_server_protocol::HookCompletedNotification,
+) -> codex_protocol::protocol::HookCompletedEvent {
+    codex_protocol::protocol::HookCompletedEvent {
+        turn_id: notification.turn_id,
+        run: hook_run_summary_from_notification(notification.run),
+    }
+}
+
 fn app_server_request_id_to_mcp_request_id(
     request_id: &codex_app_server_protocol::RequestId,
 ) -> codex_protocol::mcp::RequestId {
@@ -6210,20 +6261,10 @@ impl ChatWidget {
                 })
             }
             ServerNotification::HookStarted(notification) => {
-                if let Some(run) = convert_via_json(notification.run) {
-                    self.on_hook_started(codex_protocol::protocol::HookStartedEvent {
-                        turn_id: notification.turn_id,
-                        run,
-                    });
-                }
+                self.on_hook_started(hook_started_event_from_notification(notification));
             }
             ServerNotification::HookCompleted(notification) => {
-                if let Some(run) = convert_via_json(notification.run) {
-                    self.on_hook_completed(codex_protocol::protocol::HookCompletedEvent {
-                        turn_id: notification.turn_id,
-                        run,
-                    });
-                }
+                self.on_hook_completed(hook_completed_event_from_notification(notification));
             }
             ServerNotification::Error(notification) => {
                 if notification.will_retry {

@@ -518,7 +518,12 @@ struct ThreadEventStore {
 
 impl ThreadEventStore {
     fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
-        matches!(event, ThreadBufferedEvent::Request(_))
+        matches!(
+            event,
+            ThreadBufferedEvent::Request(_)
+                | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
+                | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
+        )
     }
 
     fn new(capacity: usize) -> Self {
@@ -5727,6 +5732,16 @@ mod tests {
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
     use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::HookCompletedNotification;
+    use codex_app_server_protocol::HookEventName as AppServerHookEventName;
+    use codex_app_server_protocol::HookExecutionMode as AppServerHookExecutionMode;
+    use codex_app_server_protocol::HookHandlerType as AppServerHookHandlerType;
+    use codex_app_server_protocol::HookOutputEntry as AppServerHookOutputEntry;
+    use codex_app_server_protocol::HookOutputEntryKind as AppServerHookOutputEntryKind;
+    use codex_app_server_protocol::HookRunStatus as AppServerHookRunStatus;
+    use codex_app_server_protocol::HookRunSummary as AppServerHookRunSummary;
+    use codex_app_server_protocol::HookScope as AppServerHookScope;
+    use codex_app_server_protocol::HookStartedNotification;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
@@ -8336,6 +8351,59 @@ guardian_approval = true
         })
     }
 
+    fn hook_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::HookStarted(HookStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Running,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: None,
+                duration_ms: None,
+                entries: Vec::new(),
+            },
+        })
+    }
+
+    fn hook_completed_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::HookCompleted(HookCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Stopped,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: Some(11),
+                duration_ms: Some(10),
+                entries: vec![
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Warning,
+                        text: "go-workflow must start from PlanMode".to_string(),
+                    },
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Stop,
+                        text: "prompt blocked".to_string(),
+                    },
+                ],
+            },
+        })
+    }
+
     fn agent_message_delta_notification(
         thread_id: ThreadId,
         turn_id: &str,
@@ -8450,6 +8518,27 @@ guardian_approval = true
         let snapshot = store.snapshot();
         assert!(snapshot.events.is_empty());
         assert_eq!(store.has_pending_thread_approvals(), false);
+    }
+
+    #[test]
+    fn thread_event_store_rebase_preserves_hook_notifications() {
+        let thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(8);
+        store.push_notification(hook_started_notification(thread_id, "turn-hook"));
+        store.push_notification(hook_completed_notification(thread_id, "turn-hook"));
+
+        store.rebase_buffer_after_session_refresh();
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.events.len(), 2);
+        assert!(matches!(
+            snapshot.events.first(),
+            Some(ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_)))
+        ));
+        assert!(matches!(
+            snapshot.events.get(1),
+            Some(ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_)))
+        ));
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
