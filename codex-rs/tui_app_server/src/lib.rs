@@ -520,7 +520,10 @@ async fn lookup_session_target_by_name_with_app_server(
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 cwd: None,
-                search_term: Some(name.to_string()),
+                // Thread names are hydrated after `thread/list` resolves rollout metadata, so
+                // name-based resume must scan the filtered list client-side instead of relying on
+                // the backend search index.
+                search_term: None,
             })
             .await?;
         if let Some(thread) = response
@@ -1862,6 +1865,61 @@ mod tests {
             .await
             .expect("thread/start should succeed");
         assert!(!response.thread.id.is_empty());
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lookup_session_target_by_name_ignores_backend_search_term_mismatch()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let thread_id = ThreadId::new();
+        let rollout_path = temp_dir
+            .path()
+            .join("sessions/2025/02/01")
+            .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
+        let rollout_dir = rollout_path.parent().expect("rollout parent");
+        std::fs::create_dir_all(rollout_dir)?;
+        std::fs::write(&rollout_path, "")?;
+
+        let state_runtime = codex_state::StateRuntime::init(
+            config.codex_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await?;
+        state_runtime.mark_backfill_complete(None).await?;
+
+        let session_cwd = temp_dir.path().join("project");
+        std::fs::create_dir_all(&session_cwd)?;
+        let created_at = chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")
+            .expect("timestamp should parse")
+            .with_timezone(&chrono::Utc);
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path.clone(),
+            created_at,
+            SessionSource::Cli,
+        );
+        builder.cwd = session_cwd;
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.title = "Different rollout title".to_string();
+        metadata.first_user_message = Some("preview text".to_string());
+        state_runtime.upsert_thread(&metadata).await?;
+
+        codex_core::append_thread_name(&config.codex_home, thread_id, "saved-session").await?;
+
+        let mut app_server = AppServerSession::new(start_test_embedded_app_server(config).await?);
+        let target =
+            lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session").await?;
+        assert_eq!(
+            target,
+            Some(crate::resume_picker::SessionTarget {
+                path: Some(rollout_path),
+                thread_id,
+            })
+        );
 
         app_server.shutdown().await?;
         Ok(())
