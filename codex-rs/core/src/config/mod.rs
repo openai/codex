@@ -66,6 +66,7 @@ use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_mcp::mcp::McpConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -683,6 +684,36 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn to_mcp_config(
+        &self,
+        auth: Option<&crate::auth::CodexAuth>,
+        plugins_manager: &crate::plugins::PluginsManager,
+    ) -> McpConfig {
+        let loaded_plugins = plugins_manager.plugins_for_config(self);
+        let mut configured_mcp_servers = self.mcp_servers.get().clone();
+        for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
+            configured_mcp_servers.entry(name).or_insert(plugin_server);
+        }
+
+        McpConfig {
+            chatgpt_base_url: self.chatgpt_base_url.clone(),
+            codex_home: self.codex_home.clone(),
+            cli_auth_credentials_store_mode: self.cli_auth_credentials_store_mode,
+            mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
+            mcp_oauth_callback_port: self.mcp_oauth_callback_port,
+            mcp_oauth_callback_url: self.mcp_oauth_callback_url.clone(),
+            skill_mcp_dependency_install_enabled: self
+                .features
+                .enabled(Feature::SkillMcpDependencyInstall),
+            approval_policy: self.permissions.approval_policy.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            use_legacy_landlock: self.features.use_legacy_landlock(),
+            connectors_enabled: self.features.apps_enabled_for_auth(auth),
+            configured_mcp_servers,
+            plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
+        }
+    }
+
     /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
