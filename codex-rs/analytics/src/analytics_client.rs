@@ -1,4 +1,5 @@
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -31,13 +32,14 @@ pub struct TrackEventsContext {
 }
 
 #[derive(Clone)]
-pub struct ThreadInitializedInput {
+struct ThreadInitializedInput {
     pub connection_id: u64,
     pub thread_id: String,
     pub model: String,
     pub ephemeral: bool,
     pub session_source: SessionSource,
     pub initialization_mode: InitializationMode,
+    pub created_at: u64,
 }
 
 #[derive(Clone)]
@@ -98,21 +100,19 @@ pub enum AnalyticsFact {
     Request {
         connection_id: u64,
         request_id: RequestId,
-        request: ClientRequest,
+        request: Box<ClientRequest>,
     },
-    Notification {
+    Response {
         connection_id: u64,
-        notification: ServerNotification,
+        response: Box<ClientResponse>,
     },
+    Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or
     // would require non-trivial protocol reshaping on this branch.
     Custom(CustomAnalyticsFact),
 }
 
 pub enum CustomAnalyticsFact {
-    // This remains custom on this branch because app-server-protocol does not
-    // yet expose a generic client response enum we can reduce over directly.
-    ThreadInitialized(ThreadInitializedInput),
     // Subagent thread/session starts are not fully represented on the
     // app-server request/response surface, so core emits this custom fact.
     SubagentSessionStarted(SubagentSessionStartedInput),
@@ -158,11 +158,14 @@ pub enum PluginState {
 
 #[derive(Default)]
 pub struct AnalyticsReducer {
-    clients: HashMap<u64, ClientState>,
+    connections: HashMap<u64, ConnectionState>,
 }
 
-struct ClientState {
+struct ConnectionState {
     product_client_id: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
+    experimental_api_enabled: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -268,18 +271,11 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_thread_initialized(&self, input: ThreadInitializedInput) {
-        self.record_fact(AnalyticsFact::Custom(
-            CustomAnalyticsFact::ThreadInitialized(input),
-        ));
-    }
-
     pub fn track_subagent_session_started(&self, input: SubagentSessionStartedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::SubagentSessionStarted(input),
         ));
     }
-
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         if mentions.is_empty() {
             return;
@@ -349,6 +345,13 @@ impl AnalyticsEventsClient {
         }
         self.queue.try_send(input);
     }
+
+    pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
+        self.record_fact(AnalyticsFact::Response {
+            connection_id,
+            response: Box::new(response),
+        });
+    }
 }
 
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
@@ -364,7 +367,7 @@ struct TrackEventsRequest {
 #[serde(untagged)]
 enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
-    CodexThreadInitialized(CodexThreadInitializedEvent),
+    ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
@@ -393,9 +396,12 @@ struct SkillInvocationEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadInitializedEventParams {
+struct ThreadInitializedEventParams {
     thread_id: String,
     product_client_id: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
+    experimental_api_enabled: Option<bool>,
     model: String,
     ephemeral: bool,
     session_source: Option<&'static str>,
@@ -406,9 +412,9 @@ struct CodexThreadInitializedEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadInitializedEvent {
+struct ThreadInitializedEvent {
     event_type: &'static str,
-    event_params: CodexThreadInitializedEventParams,
+    event_params: ThreadInitializedEventParams,
 }
 
 #[derive(Serialize)]
@@ -480,14 +486,14 @@ impl AnalyticsReducer {
                 request_id: _request_id,
                 request: _request,
             } => {}
-            AnalyticsFact::Notification {
-                connection_id: _connection_id,
-                notification: _notification,
-            } => {}
+            AnalyticsFact::Response {
+                connection_id,
+                response,
+            } => {
+                self.ingest_response(connection_id, *response, out);
+            }
+            AnalyticsFact::Notification(_notification) => {}
             AnalyticsFact::Custom(input) => match input {
-                CustomAnalyticsFact::ThreadInitialized(input) => {
-                    self.ingest_thread_initialized(input, out);
-                }
                 CustomAnalyticsFact::SubagentSessionStarted(input) => {
                     self.ingest_subagent_session_started(input, out);
                 }
@@ -511,10 +517,15 @@ impl AnalyticsReducer {
     }
 
     fn ingest_initialize(&mut self, connection_id: u64, params: InitializeParams) {
-        self.clients.insert(
+        self.connections.insert(
             connection_id,
-            ClientState {
-                product_client_id: params.client_info.name,
+            ConnectionState {
+                product_client_id: params.client_info.name.clone(),
+                client_name: Some(params.client_info.name),
+                client_version: Some(params.client_info.version),
+                experimental_api_enabled: params
+                    .capabilities
+                    .map(|capabilities| capabilities.experimental_api),
             },
         );
     }
@@ -524,11 +535,11 @@ impl AnalyticsReducer {
         input: ThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let Some(client_state) = self.clients.get(&input.connection_id) else {
+        let Some(connection_state) = self.connections.get(&input.connection_id) else {
             return;
         };
-        out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_thread_initialized_event_request(client_state.product_client_id.clone(), input),
+        out.push(TrackEventRequest::ThreadInitialized(
+            thread_initialized_event_request(connection_state, input),
         ));
     }
 
@@ -537,9 +548,41 @@ impl AnalyticsReducer {
         input: SubagentSessionStartedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_subagent_session_started_event_request(input),
+        out.push(TrackEventRequest::ThreadInitialized(
+            subagent_session_started_event_request(input),
         ));
+    }
+
+    fn ingest_response(
+        &mut self,
+        connection_id: u64,
+        response: ClientResponse,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let (thread, model, initialization_mode) = match response {
+            ClientResponse::ThreadStart { response, .. } => {
+                (response.thread, response.model, InitializationMode::New)
+            }
+            ClientResponse::ThreadResume { response, .. } => {
+                (response.thread, response.model, InitializationMode::Resumed)
+            }
+            ClientResponse::ThreadFork { response, .. } => {
+                (response.thread, response.model, InitializationMode::Forked)
+            }
+            _ => return,
+        };
+        self.ingest_thread_initialized(
+            ThreadInitializedInput {
+                connection_id,
+                thread_id: thread.id,
+                model,
+                ephemeral: thread.ephemeral,
+                session_source: thread.source.into(),
+                initialization_mode,
+                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+            },
+            out,
+        );
     }
 
     async fn ingest_skill_invoked(
@@ -658,39 +701,45 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
     }
 }
 
-fn codex_thread_initialized_event_request(
-    product_client_id: String,
+fn thread_initialized_event_request(
+    connection_state: &ConnectionState,
     input: ThreadInitializedInput,
-) -> CodexThreadInitializedEvent {
-    CodexThreadInitializedEvent {
+) -> ThreadInitializedEvent {
+    ThreadInitializedEvent {
         event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(product_client_id, input),
+        event_params: thread_initialized_event_params(connection_state, input),
     }
 }
 
-fn codex_thread_initialized_event_params(
-    product_client_id: String,
+fn thread_initialized_event_params(
+    connection_state: &ConnectionState,
     input: ThreadInitializedInput,
-) -> CodexThreadInitializedEventParams {
-    CodexThreadInitializedEventParams {
+) -> ThreadInitializedEventParams {
+    ThreadInitializedEventParams {
         thread_id: input.thread_id,
-        product_client_id,
+        product_client_id: connection_state.product_client_id.clone(),
+        client_name: connection_state.client_name.clone(),
+        client_version: connection_state.client_version.clone(),
+        experimental_api_enabled: connection_state.experimental_api_enabled,
         model: input.model,
         ephemeral: input.ephemeral,
         session_source: session_source_name(&input.session_source),
         initialization_mode: input.initialization_mode,
         subagent_source: None,
         parent_thread_id: None,
-        created_at: now_unix_timestamp_secs(),
+        created_at: input.created_at,
     }
 }
 
-fn codex_subagent_session_started_event_request(
+fn subagent_session_started_event_request(
     input: SubagentSessionStartedInput,
-) -> CodexThreadInitializedEvent {
-    let event_params = CodexThreadInitializedEventParams {
+) -> ThreadInitializedEvent {
+    let event_params = ThreadInitializedEventParams {
         thread_id: input.thread_id,
         product_client_id: input.product_client_id,
+        client_name: None,
+        client_version: None,
+        experimental_api_enabled: None,
         model: input.model,
         ephemeral: input.ephemeral,
         session_source: Some("subagent"),
@@ -699,7 +748,7 @@ fn codex_subagent_session_started_event_request(
         parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
         created_at: now_unix_timestamp_secs(),
     };
-    CodexThreadInitializedEvent {
+    ThreadInitializedEvent {
         event_type: "codex_thread_initialized",
         event_params,
     }
@@ -775,7 +824,6 @@ fn now_unix_timestamp_secs() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
-
 async fn send_track_events(
     auth_manager: &AuthManager,
     base_url: &str,
