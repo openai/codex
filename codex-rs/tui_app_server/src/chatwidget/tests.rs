@@ -7197,8 +7197,10 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Copied latest Codex output to clipboard."),
-        "expected successful copy message, got {rendered:?}"
+        !rendered.contains(
+            "`/copy` is unavailable before the first Codex output or right after a rollback."
+        ),
+        "expected copy state to be available, got {rendered:?}"
     );
     assert_eq!(
         chat.last_copyable_output,
