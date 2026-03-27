@@ -1055,6 +1055,12 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
+            deny_read_paths: self
+                .file_system_sandbox_policy
+                .get_unreadable_roots_with_cwd(&self.cwd)
+                .into_iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),

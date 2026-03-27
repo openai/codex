@@ -76,7 +76,7 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
-        let before_deny_read_paths = Vec::new();
+        let before_deny_read_paths = before.deny_read_paths.clone();
         let after_deny_read_paths = deny_read_paths(&after.file_system_sandbox_policy, &after.cwd);
         let cwd = if before.cwd.as_path() != after.cwd.as_path() {
             Some(after.cwd.to_path_buf())
@@ -125,7 +125,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
-            Vec::new(),
+            turn_context_item.deny_read_paths.clone(),
             /*subagents*/ None,
         )
     }
