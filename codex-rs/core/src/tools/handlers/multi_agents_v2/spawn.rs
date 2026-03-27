@@ -132,11 +132,6 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
-        let task_name = new_agent_path.ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "spawned agent is missing a canonical task name".to_string(),
-            )
-        })?;
         session
             .send_event(
                 &turn,
@@ -154,13 +149,18 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let _new_thread_id = result?.thread_id;
+        let _ = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.session_telemetry.counter(
             "codex.multi_agent.spawn",
             /*inc*/ 1,
             &[("role", role_tag)],
         );
+        let task_name = new_agent_path.ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "spawned agent is missing a canonical task name".to_string(),
+            )
+        })?;
 
         Ok(SpawnAgentResult {
             agent_id: None,
