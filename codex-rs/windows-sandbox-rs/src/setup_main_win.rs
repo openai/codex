@@ -11,6 +11,7 @@ use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
+use codex_windows_sandbox::add_deny_write_ace;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
@@ -85,6 +86,7 @@ struct Payload {
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     #[serde(default)]
+    deny_write_paths: Vec<PathBuf>,
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
@@ -644,6 +646,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
 
+    let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
     let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
 
@@ -760,6 +763,36 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             }
         }
     });
+
+    for path in &payload.deny_write_paths {
+        if !path.exists() || !seen_deny_paths.insert(path.clone()) {
+            continue;
+        }
+
+        let canonical_path = canonicalize_path(path);
+        let deny_psid = if canonical_path.starts_with(&canonical_command_cwd) {
+            workspace_psid
+        } else {
+            cap_psid
+        };
+
+        match unsafe { add_deny_write_ace(path, deny_psid) } {
+            Ok(true) => {
+                log_line(
+                    log,
+                    &format!("applied deny ACE to protect {}", path.display()),
+                )?;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                refresh_errors.push(format!("deny ACE failed on {}: {err}", path.display()));
+                log_line(
+                    log,
+                    &format!("deny ACE failed on {}: {err}", path.display()),
+                )?;
+            }
+        }
+    }
 
     lock_sandbox_dir(
         &sandbox_bin_dir(&payload.codex_home),

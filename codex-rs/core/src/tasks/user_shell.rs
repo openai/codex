@@ -176,6 +176,7 @@ pub(crate) async fn execute_user_shell_command(
         file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
         windows_restricted_token_filesystem_overlay: None,
+        windows_elevated_filesystem_overrides: None,
         arg0: None,
     };
 

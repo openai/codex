@@ -174,6 +174,9 @@ async fn run_command_under_sandbox(
                             timeout_ms: None,
                             use_private_desktop: config.permissions.windows_sandbox_private_desktop,
                             proxy_enforced: false,
+                            read_roots_override: None,
+                            write_roots_override: None,
+                            deny_write_paths_override: &[],
                         },
                     )
                 } else {
