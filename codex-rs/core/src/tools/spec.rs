@@ -49,6 +49,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_tools::parse_mcp_tool;
 pub use codex_tools::parse_tool_input_schema;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -56,16 +57,27 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 pub type JsonSchema = codex_tools::JsonSchema;
 
 #[cfg(test)]
 pub(crate) use codex_tools::mcp_call_tool_result_output_schema;
 
-const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
+const TOOL_SEARCH_DESCRIPTION_TEMPLATE_SOURCE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
-const TOOL_SUGGEST_DESCRIPTION_TEMPLATE: &str =
+const TOOL_SEARCH_DESCRIPTION_TEMPLATE_KEY: &str = "app_descriptions";
+static TOOL_SEARCH_DESCRIPTION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(TOOL_SEARCH_DESCRIPTION_TEMPLATE_SOURCE)
+        .unwrap_or_else(|err| panic!("tool_search description template must parse: {err}"))
+});
+const TOOL_SUGGEST_DESCRIPTION_TEMPLATE_SOURCE: &str =
     include_str!("../../templates/search_tool/tool_suggest_description.md");
+const TOOL_SUGGEST_DESCRIPTION_TEMPLATE_KEY: &str = "discoverable_tools";
+static TOOL_SUGGEST_DESCRIPTION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(TOOL_SUGGEST_DESCRIPTION_TEMPLATE_SOURCE)
+        .unwrap_or_else(|err| panic!("tool_suggest description template must parse: {err}"))
+});
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 
 fn unified_exec_output_schema() -> JsonValue {
@@ -1950,8 +1962,12 @@ fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
             .join("\n")
     };
 
-    let description =
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_descriptions}}", app_descriptions.as_str());
+    let description = TOOL_SEARCH_DESCRIPTION_TEMPLATE
+        .render([(
+            TOOL_SEARCH_DESCRIPTION_TEMPLATE_KEY,
+            app_descriptions.as_str(),
+        )])
+        .unwrap_or_else(|err| panic!("tool_search description template must render: {err}"));
 
     ToolSpec::ToolSearch {
         execution: "client".to_string(),
@@ -2006,10 +2022,13 @@ fn create_tool_suggest_tool(discoverable_tools: &[DiscoverableTool]) -> ToolSpec
             },
         ),
     ]);
-    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE.replace(
-        "{{discoverable_tools}}",
-        format_discoverable_tools(discoverable_tools).as_str(),
-    );
+    let discoverable_tools = format_discoverable_tools(discoverable_tools);
+    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE
+        .render([(
+            TOOL_SUGGEST_DESCRIPTION_TEMPLATE_KEY,
+            discoverable_tools.as_str(),
+        )])
+        .unwrap_or_else(|err| panic!("tool_suggest description template must render: {err}"));
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_SUGGEST_TOOL_NAME.to_string(),

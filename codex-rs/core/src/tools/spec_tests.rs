@@ -2242,6 +2242,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
     ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
+    assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
     let JsonSchema::Object { required, .. } = parameters else {
         panic!("expected object parameters");
