@@ -1,5 +1,5 @@
-use super::common::finish_driver_spawn;
-use super::common::normalize_windows_tty_input;
+use super::windows_common::finish_driver_spawn;
+use super::windows_common::normalize_windows_tty_input;
 use crate::acl::revoke_ace;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;

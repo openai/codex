@@ -4,7 +4,8 @@
 //! Backend-specific mechanics live in sibling modules:
 //! - `backends::legacy` adapts the direct restricted-token spawn path into a live session.
 //! - `backends::elevated` adapts the elevated command-runner IPC path into the same session API.
-//! - `backends::common` holds the small shared ProcessDriver helpers used by both.
+//! - `backends::windows_common` holds the small shared Windows backend helpers
+//!   used by both.
 
 mod backends;
 
@@ -70,13 +71,13 @@ pub async fn spawn_windows_sandbox_session_elevated(
 }
 
 #[cfg(test)]
-pub(crate) use backends::common::finish_driver_spawn;
+pub(crate) use backends::windows_common::finish_driver_spawn;
 #[cfg(test)]
-pub(crate) use backends::common::make_runner_resizer;
+pub(crate) use backends::windows_common::make_runner_resizer;
 #[cfg(test)]
-pub(crate) use backends::common::start_runner_pipe_writer;
+pub(crate) use backends::windows_common::start_runner_pipe_writer;
 #[cfg(test)]
-pub(crate) use backends::common::start_runner_stdin_writer;
+pub(crate) use backends::windows_common::start_runner_stdin_writer;
 
 #[cfg(test)]
 mod tests;
