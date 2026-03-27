@@ -1,0 +1,10 @@
+---
+source: tui_app_server/src/chatwidget/tests.rs
+assertion_line: 12789
+expression: combined
+---
+• Running UserPromptSubmit hook: checking go-workflow input policy
+
+UserPromptSubmit hook (stopped)
+  warning: go-workflow must start from PlanMode
+  stop: prompt blocked
