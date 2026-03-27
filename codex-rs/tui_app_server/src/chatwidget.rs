@@ -6380,6 +6380,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_thread_rolled_back(&mut self) {
         self.last_copyable_output = None;
+        self.pending_turn_copyable_output = None;
     }
 
     fn on_mcp_server_elicitation_request(

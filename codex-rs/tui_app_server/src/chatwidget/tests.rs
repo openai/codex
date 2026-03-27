@@ -7214,9 +7214,19 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    complete_assistant_message(&mut chat, "msg-1", "Reply that will be rolled back", None);
+    let _ = drain_insert_history(&mut rx);
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Reply that will be rolled back".to_string()),
+            last_agent_message: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
