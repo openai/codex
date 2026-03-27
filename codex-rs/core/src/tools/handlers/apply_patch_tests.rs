@@ -64,7 +64,7 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
         read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: false,
+        exclude_slash_tmp: true,
     });
 
     let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd);
