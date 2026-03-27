@@ -14,5 +14,6 @@ pub use analytics_client::PluginStateChangedInput;
 pub use analytics_client::PluginUsedInput;
 pub use analytics_client::SkillInvocation;
 pub use analytics_client::SkillInvokedInput;
+pub use analytics_client::SubagentSessionStartedInput;
 pub use analytics_client::TrackEventsContext;
 pub use analytics_client::build_track_events_context;

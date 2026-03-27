@@ -50,6 +50,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
+use codex_analytics::SubagentSessionStartedInput;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
@@ -1206,6 +1207,15 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
+    pub(crate) async fn analytics_product_client_id(&self) -> String {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .app_server_client_name
+            .clone()
+            .unwrap_or_else(|| crate::default_client::originator().value)
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -4249,6 +4259,22 @@ impl Session {
             .await
             .cancel();
     }
+}
+
+pub(crate) fn emit_subagent_session_started(
+    analytics_events_client: &crate::AnalyticsEventsClient,
+    product_client_id: String,
+    thread_id: ThreadId,
+    thread_config: ThreadConfigSnapshot,
+    subagent_source: SubAgentSource,
+) {
+    analytics_events_client.track_subagent_session_started(SubagentSessionStartedInput {
+        thread_id: thread_id.to_string(),
+        product_client_id,
+        model: thread_config.model,
+        ephemeral: thread_config.ephemeral,
+        subagent_source,
+    });
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {

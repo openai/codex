@@ -6,8 +6,10 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
+use super::CustomAnalyticsFact;
 use super::InitializationMode;
 use super::InvocationType;
+use super::SubagentSessionStartedInput;
 use super::ThreadInitializedInput;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
@@ -15,6 +17,7 @@ use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::normalize_path_for_skill_id;
+use super::subagent_session_started_event_request;
 use super::thread_initialized_event_request;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
@@ -35,6 +38,7 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -369,6 +373,120 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(payload[0]["event_params"]["session_source"], "user");
     assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
     assert_eq!(payload[0]["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[test]
+fn subagent_session_started_review_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+        SubagentSessionStartedInput {
+            thread_id: "thread-review".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: false,
+            subagent_source: SubAgentSource::Review,
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize review subagent event");
+    assert_eq!(payload["event_params"]["session_source"], "subagent");
+    assert_eq!(payload["event_params"]["initialization_mode"], "new");
+    assert_eq!(payload["event_params"]["subagent_source"], "review");
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[test]
+fn subagent_session_started_thread_spawn_serializes_parent_thread_id() {
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
+            .expect("valid thread id");
+    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+        SubagentSessionStartedInput {
+            thread_id: "thread-spawn".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: true,
+            subagent_source: SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            },
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize thread spawn subagent event");
+    assert_eq!(payload["event_params"]["session_source"], "subagent");
+    assert_eq!(payload["event_params"]["subagent_source"], "thread_spawn");
+    assert_eq!(
+        payload["event_params"]["parent_thread_id"],
+        "11111111-1111-1111-1111-111111111111"
+    );
+}
+
+#[test]
+fn subagent_session_started_memory_consolidation_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+        SubagentSessionStartedInput {
+            thread_id: "thread-memory".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: false,
+            subagent_source: SubAgentSource::MemoryConsolidation,
+        },
+    ));
+
+    let payload =
+        serde_json::to_value(&event).expect("serialize memory consolidation subagent event");
+    assert_eq!(
+        payload["event_params"]["subagent_source"],
+        "memory_consolidation"
+    );
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[test]
+fn subagent_session_started_other_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+        SubagentSessionStartedInput {
+            thread_id: "thread-guardian".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: false,
+            subagent_source: SubAgentSource::Other("guardian".to_string()),
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize other subagent event");
+    assert_eq!(payload["event_params"]["subagent_source"], "guardian");
+}
+
+#[tokio::test]
+async fn subagent_session_started_publishes_without_initialize() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SubagentSessionStarted(
+                SubagentSessionStartedInput {
+                    thread_id: "thread-review".to_string(),
+                    product_client_id: "codex-tui".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: false,
+                    subagent_source: SubAgentSource::Review,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
+    assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
+    assert_eq!(payload[0]["event_params"]["session_source"], "subagent");
+    assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
 }
 
 #[test]

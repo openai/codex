@@ -11,6 +11,7 @@ use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -39,6 +40,15 @@ struct ThreadInitializedInput {
     pub session_source: SessionSource,
     pub initialization_mode: InitializationMode,
     pub created_at: u64,
+}
+
+#[derive(Clone)]
+pub struct SubagentSessionStartedInput {
+    pub thread_id: String,
+    pub product_client_id: String,
+    pub model: String,
+    pub ephemeral: bool,
+    pub subagent_source: SubAgentSource,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -103,6 +113,9 @@ pub enum AnalyticsFact {
 }
 
 pub enum CustomAnalyticsFact {
+    // Subagent thread/session starts are not fully represented on the
+    // app-server request/response surface, so core emits this custom fact.
+    SubagentSessionStarted(SubagentSessionStartedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -258,6 +271,11 @@ impl AnalyticsEventsClient {
         });
     }
 
+    pub fn track_subagent_session_started(&self, input: SubagentSessionStartedInput) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::SubagentSessionStarted(input),
+        ));
+    }
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         if mentions.is_empty() {
             return;
@@ -476,6 +494,9 @@ impl AnalyticsReducer {
             }
             AnalyticsFact::Notification(_notification) => {}
             AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::SubagentSessionStarted(input) => {
+                    self.ingest_subagent_session_started(input, out);
+                }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
                 }
@@ -519,6 +540,16 @@ impl AnalyticsReducer {
         };
         out.push(TrackEventRequest::ThreadInitialized(
             thread_initialized_event_request(connection_state, input),
+        ));
+    }
+
+    fn ingest_subagent_session_started(
+        &mut self,
+        input: SubagentSessionStartedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::ThreadInitialized(
+            subagent_session_started_event_request(input),
         ));
     }
 
@@ -700,6 +731,29 @@ fn thread_initialized_event_params(
     }
 }
 
+fn subagent_session_started_event_request(
+    input: SubagentSessionStartedInput,
+) -> ThreadInitializedEvent {
+    let event_params = ThreadInitializedEventParams {
+        thread_id: input.thread_id,
+        product_client_id: input.product_client_id,
+        client_name: None,
+        client_version: None,
+        experimental_api_enabled: None,
+        model: input.model,
+        ephemeral: input.ephemeral,
+        session_source: Some("subagent"),
+        initialization_mode: InitializationMode::New,
+        subagent_source: Some(subagent_source_name(&input.subagent_source)),
+        parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
+        created_at: now_unix_timestamp_secs(),
+    };
+    ThreadInitializedEvent {
+        event_type: "codex_thread_initialized",
+        event_params,
+    }
+}
+
 fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
     let capability_summary = plugin.capability_summary;
     CodexPluginMetadata {
@@ -745,6 +799,31 @@ fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
     }
 }
 
+fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
+    match subagent_source {
+        SubAgentSource::Review => "review".to_string(),
+        SubAgentSource::Compact => "compact".to_string(),
+        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
+        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
+        SubAgentSource::Other(other) => other.clone(),
+    }
+}
+
+fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
+    match subagent_source {
+        SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        } => Some(parent_thread_id.to_string()),
+        _ => None,
+    }
+}
+
+fn now_unix_timestamp_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 async fn send_track_events(
     auth_manager: &AuthManager,
     base_url: &str,
