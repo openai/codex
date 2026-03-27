@@ -88,10 +88,12 @@ pub(crate) fn compose_account_display(
 }
 
 pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
-    match plan_type {
-        PlanType::Team => "Business".to_string(),
-        PlanType::Business => "Enterprise".to_string(),
-        _ => title_case(format!("{plan_type:?}").as_str()),
+    if plan_type.is_team_like() {
+        "Business".to_string()
+    } else if plan_type.is_business_like() {
+        "Enterprise".to_string()
+    } else {
+        title_case(format!("{plan_type:?}").as_str())
     }
 }
 
@@ -193,7 +195,9 @@ mod tests {
             (PlanType::Plus, "Plus"),
             (PlanType::Pro, "Pro"),
             (PlanType::Team, "Business"),
+            (PlanType::SelfServeBusinessUsageBased, "Business"),
             (PlanType::Business, "Enterprise"),
+            (PlanType::EnterpriseCbpUsageBased, "Enterprise"),
             (PlanType::Enterprise, "Enterprise"),
             (PlanType::Edu, "Edu"),
             (PlanType::Unknown, "Unknown"),

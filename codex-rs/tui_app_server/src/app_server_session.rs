@@ -1257,7 +1257,7 @@ mod tests {
     fn status_account_display_from_auth_mode_uses_remapped_plan_labels() {
         let business = status_account_display_from_auth_mode(
             Some(AuthMode::Chatgpt),
-            Some(codex_protocol::account::PlanType::Business),
+            Some(codex_protocol::account::PlanType::EnterpriseCbpUsageBased),
         );
         assert!(matches!(
             business,
@@ -1269,7 +1269,7 @@ mod tests {
 
         let team = status_account_display_from_auth_mode(
             Some(AuthMode::Chatgpt),
-            Some(codex_protocol::account::PlanType::Team),
+            Some(codex_protocol::account::PlanType::SelfServeBusinessUsageBased),
         );
         assert!(matches!(
             team,

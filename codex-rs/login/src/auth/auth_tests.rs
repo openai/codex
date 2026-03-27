@@ -459,6 +459,52 @@ fn plan_type_maps_known_plan() {
 }
 
 #[test]
+fn plan_type_maps_self_serve_business_usage_based_plan() {
+    let codex_home = tempdir().unwrap();
+    let _jwt = write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("self_serve_business_usage_based".to_string()),
+            chatgpt_account_id: None,
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+        .expect("load auth")
+        .expect("auth available");
+
+    pretty_assertions::assert_eq!(
+        auth.account_plan_type(),
+        Some(AccountPlanType::SelfServeBusinessUsageBased)
+    );
+}
+
+#[test]
+fn plan_type_maps_enterprise_cbp_usage_based_plan() {
+    let codex_home = tempdir().unwrap();
+    let _jwt = write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("enterprise_cbp_usage_based".to_string()),
+            chatgpt_account_id: None,
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+        .expect("load auth")
+        .expect("auth available");
+
+    pretty_assertions::assert_eq!(
+        auth.account_plan_type(),
+        Some(AccountPlanType::EnterpriseCbpUsageBased)
+    );
+}
+
+#[test]
 fn plan_type_maps_unknown_to_unknown() {
     let codex_home = tempdir().unwrap();
     let _jwt = write_auth_file(
