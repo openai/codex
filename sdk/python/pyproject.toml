@@ -30,7 +30,12 @@ Repository = "https://github.com/openai/codex"
 Issues = "https://github.com/openai/codex/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "datamodel-code-generator==0.31.2", "ruff>=0.11"]
+dev = [
+  "pytest>=8.0",
+  "datamodel-code-generator==0.31.2",
+  "ruff>=0.11",
+  "tomli>=2.0; python_version < '3.11'",
+]
 
 [tool.hatch.build]
 exclude = [

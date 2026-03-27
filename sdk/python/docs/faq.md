@@ -65,7 +65,7 @@ platform wheels only; do not publish an sdist:
 
 ```bash
 cd sdk/python
-python scripts/update_sdk_artifacts.py generate-types
+python scripts/update_sdk_artifacts.py generate-types-for-pinned-runtime
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
   /tmp/codex-python-release/codex-app-server-sdk \

@@ -66,7 +66,7 @@ notebook bootstrap the pinned runtime package automatically.
 
 ```bash
 cd sdk/python
-python scripts/update_sdk_artifacts.py generate-types
+python scripts/update_sdk_artifacts.py generate-types-for-pinned-runtime
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
   /tmp/codex-python-release/codex-app-server-sdk \
@@ -80,7 +80,7 @@ python scripts/update_sdk_artifacts.py \
 
 This supports the CI release flow:
 
-- run `generate-types` before packaging
+- run `generate-types-for-pinned-runtime` before packaging
 - stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
 - stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
 - build and publish `codex-cli-bin` as platform wheels only; do not publish an sdist

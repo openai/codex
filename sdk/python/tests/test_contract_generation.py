@@ -33,20 +33,24 @@ def _snapshot_targets(root: Path) -> dict[str, dict[str, bytes] | bytes | None]:
     }
 
 
-def test_generated_files_are_up_to_date():
+def test_pinned_runtime_generated_files_are_up_to_date() -> None:
     before = _snapshot_targets(ROOT)
 
-    # Regenerate contract artifacts via single maintenance entrypoint.
+    # Regenerate checked-in artifacts from the pinned runtime schema.
     env = os.environ.copy()
     python_bin = str(Path(sys.executable).parent)
     env["PATH"] = f"{python_bin}{os.pathsep}{env.get('PATH', '')}"
 
     subprocess.run(
-        [sys.executable, "scripts/update_sdk_artifacts.py", "generate-types"],
+        [
+            sys.executable,
+            "scripts/update_sdk_artifacts.py",
+            "generate-types-for-pinned-runtime",
+        ],
         cwd=ROOT,
         check=True,
         env=env,
     )
 
     after = _snapshot_targets(ROOT)
-    assert before == after, "Generated files drifted after regeneration"
+    assert before == after, "Generated files drifted after pinned-runtime regeneration"
