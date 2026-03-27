@@ -121,8 +121,14 @@ enum InitialOperation {
 }
 
 enum StdinPromptBehavior {
+    /// Read stdin only when there is no positional prompt, which is the legacy
+    /// `codex exec` behavior for `codex exec` with piped input.
     RequiredIfPiped,
+    /// Always treat stdin as the prompt, used for the explicit `codex exec -`
+    /// sentinel and similar forced-stdin call sites.
     Forced,
+    /// If stdin is piped alongside a positional prompt, treat stdin as
+    /// additional context to append rather than as the primary prompt.
     OptionalAppend,
 }
 
