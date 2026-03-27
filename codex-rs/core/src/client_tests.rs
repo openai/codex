@@ -2,6 +2,7 @@ use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
@@ -23,6 +24,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
     ModelClient::new(
         /*auth_manager*/ None,
         ThreadId::new(),
+        "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         session_source,
         /*model_verbosity*/ None,
@@ -107,6 +109,10 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     assert_eq!(
         client_metadata,
         std::collections::HashMap::from([
+            (
+                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+                "11111111-1111-4111-8111-111111111111".to_string(),
+            ),
             (
                 X_CODEX_WINDOW_ID_HEADER.to_string(),
                 format!("{conversation_id}:1"),

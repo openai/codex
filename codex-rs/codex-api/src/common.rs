@@ -169,6 +169,8 @@ pub struct ResponsesApiRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata: Option<HashMap<String, String>>,
 }
 
 impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
@@ -189,7 +191,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
             generate: None,
-            client_metadata: None,
+            client_metadata: request.client_metadata.clone(),
         }
     }
 }
