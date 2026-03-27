@@ -8,8 +8,8 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
 
+use crate::filesystem_deny_read::ReadDenyMatcher;
 use crate::filesystem_deny_read::ensure_read_allowed;
-use crate::filesystem_deny_read::is_read_denied;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -99,15 +99,11 @@ impl ToolHandler for ListDirHandler {
             ));
         }
         ensure_read_allowed(&path, &turn.file_system_sandbox_policy, &turn.cwd)?;
+        let read_deny_matcher = ReadDenyMatcher::new(&turn.file_system_sandbox_policy, &turn.cwd);
 
-        let entries = list_dir_slice_with_policy(
-            &path,
-            offset,
-            limit,
-            depth,
-            Some((&turn.file_system_sandbox_policy, &turn.cwd)),
-        )
-        .await?;
+        let entries =
+            list_dir_slice_with_policy(&path, offset, limit, depth, read_deny_matcher.as_ref())
+                .await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -130,10 +126,10 @@ async fn list_dir_slice_with_policy(
     offset: usize,
     limit: usize,
     depth: usize,
-    sandbox_policy: Option<(&codex_protocol::permissions::FileSystemSandboxPolicy, &Path)>,
+    read_deny_matcher: Option<&ReadDenyMatcher>,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, sandbox_policy, &mut entries).await?;
+    collect_entries(path, Path::new(""), depth, read_deny_matcher, &mut entries).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -169,7 +165,7 @@ async fn collect_entries(
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
-    sandbox_policy: Option<(&codex_protocol::permissions::FileSystemSandboxPolicy, &Path)>,
+    read_deny_matcher: Option<&ReadDenyMatcher>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
@@ -186,8 +182,8 @@ async fn collect_entries(
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })? {
             let entry_path = entry.path();
-            if let Some((policy, cwd)) = sandbox_policy
-                && is_read_denied(&entry_path, policy, cwd)
+            if let Some(read_deny_matcher) = read_deny_matcher
+                && read_deny_matcher.is_read_denied(&entry_path)
             {
                 continue;
             }

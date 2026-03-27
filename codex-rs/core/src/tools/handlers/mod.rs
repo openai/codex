@@ -34,6 +34,7 @@ pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
 pub use js_repl::JsReplHandler;
@@ -172,7 +173,7 @@ pub(super) fn reject_explicit_escalation_if_deny_read_present(
         && file_system_sandbox_policy.has_denied_read_restrictions()
     {
         return Err(FunctionCallError::RespondToModel(
-            "filesystem deny_read policy is enforced; reject command — you cannot ask for escalated permissions because managed read restrictions must remain sandboxed".to_string(),
+            "filesystem deny_read policy is enforced; reject command — you cannot ask for escalated permissions because deny_read restrictions must remain sandboxed".to_string(),
         ));
     }
 

@@ -9,12 +9,47 @@ use crate::function_tool::FunctionCallError;
 const DENY_READ_POLICY_MESSAGE: &str =
     "access denied: reading this path is blocked by filesystem deny_read policy";
 
+pub(crate) struct ReadDenyMatcher {
+    denied_candidates: Vec<Vec<PathBuf>>,
+}
+
+impl ReadDenyMatcher {
+    pub(crate) fn new(
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        cwd: &Path,
+    ) -> Option<Self> {
+        if !file_system_sandbox_policy.has_denied_read_restrictions() {
+            return None;
+        }
+
+        let denied_candidates = file_system_sandbox_policy
+            .get_unreadable_roots_with_cwd(cwd)
+            .into_iter()
+            .map(|path| normalized_and_canonical_candidates(path.as_path()))
+            .collect();
+        Some(Self { denied_candidates })
+    }
+
+    pub(crate) fn is_read_denied(&self, path: &Path) -> bool {
+        let path_candidates = normalized_and_canonical_candidates(path);
+        self.denied_candidates.iter().any(|denied_candidates| {
+            path_candidates.iter().any(|candidate| {
+                denied_candidates.iter().any(|denied_candidate| {
+                    candidate == denied_candidate || candidate.starts_with(denied_candidate)
+                })
+            })
+        })
+    }
+}
+
 pub(crate) fn ensure_read_allowed(
     path: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> Result<(), FunctionCallError> {
-    if is_read_denied(path, file_system_sandbox_policy, cwd) {
+    if ReadDenyMatcher::new(file_system_sandbox_policy, cwd)
+        .is_some_and(|matcher| matcher.is_read_denied(path))
+    {
         return Err(FunctionCallError::RespondToModel(format!(
             "{DENY_READ_POLICY_MESSAGE}: `{}`",
             path.display()
@@ -23,52 +58,14 @@ pub(crate) fn ensure_read_allowed(
     Ok(())
 }
 
-pub(crate) fn ensure_search_root_does_not_overlap_deny_read(
-    search_root: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-) -> Result<(), FunctionCallError> {
-    if overlaps_deny_read(search_root, file_system_sandbox_policy, cwd) {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "access denied: grep_files path `{}` overlaps a filesystem deny_read path; narrow the search path",
-            search_root.display()
-        )));
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 pub(crate) fn is_read_denied(
     path: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> bool {
-    let denied_paths = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
-    let path_candidates = normalized_and_canonical_candidates(path);
-    denied_paths.iter().any(|denied| {
-        let denied_candidates = normalized_and_canonical_candidates(denied.as_path());
-        path_candidates.iter().any(|candidate| {
-            denied_candidates.iter().any(|denied_candidate| {
-                candidate == denied_candidate || candidate.starts_with(denied_candidate)
-            })
-        })
-    })
-}
-
-pub(crate) fn overlaps_deny_read(
-    path: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-) -> bool {
-    let denied_paths = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
-    let path_candidates = normalized_and_canonical_candidates(path);
-    denied_paths.iter().any(|denied| {
-        let denied_candidates = normalized_and_canonical_candidates(denied.as_path());
-        path_candidates.iter().any(|candidate| {
-            denied_candidates.iter().any(|denied_candidate| {
-                candidate.starts_with(denied_candidate) || denied_candidate.starts_with(candidate)
-            })
-        })
-    })
+    ReadDenyMatcher::new(file_system_sandbox_policy, cwd)
+        .is_some_and(|matcher| matcher.is_read_denied(path))
 }
 
 fn normalized_and_canonical_candidates(path: &Path) -> Vec<PathBuf> {
@@ -104,7 +101,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::is_read_denied;
-    use super::overlaps_deny_read;
     use super::*;
 
     fn deny_policy(path: &std::path::Path) -> FileSystemSandboxPolicy {
@@ -150,25 +146,5 @@ mod tests {
 
         let policy = deny_policy(&real_dir);
         assert_eq!(is_read_denied(&alias_secret, &policy, temp.path()), true);
-    }
-
-    #[test]
-    fn overlap_detects_parent_and_child_relationships() {
-        let temp = tempdir().expect("temp dir");
-        let denied = temp.path().join("private");
-        let search_root = temp.path();
-        let nested_search_root = denied.join("nested");
-        std::fs::create_dir_all(&nested_search_root).expect("create nested");
-
-        let policy = deny_policy(&denied);
-        assert_eq!(overlaps_deny_read(search_root, &policy, temp.path()), true);
-        assert_eq!(
-            overlaps_deny_read(&nested_search_root, &policy, temp.path()),
-            true
-        );
-        assert_eq!(
-            overlaps_deny_read(&temp.path().join("public"), &policy, temp.path()),
-            false
-        );
     }
 }

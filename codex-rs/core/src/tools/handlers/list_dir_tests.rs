@@ -1,4 +1,5 @@
 use super::*;
+use crate::filesystem_deny_read::ReadDenyMatcher;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -303,7 +304,8 @@ async fn hides_denied_entries_and_prunes_denied_subtrees() {
         },
     ]);
 
-    let entries = list_dir_slice_with_policy(dir_path, 1, 20, 3, Some((&policy, dir_path)))
+    let read_deny_matcher = ReadDenyMatcher::new(&policy, dir_path);
+    let entries = list_dir_slice_with_policy(dir_path, 1, 20, 3, read_deny_matcher.as_ref())
         .await
         .expect("list directory");
 
