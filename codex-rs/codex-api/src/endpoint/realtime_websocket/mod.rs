@@ -13,6 +13,7 @@ pub use methods::RealtimeWebsocketClient;
 pub use methods::RealtimeWebsocketConnection;
 pub use methods::RealtimeWebsocketEvents;
 pub use methods::RealtimeWebsocketWriter;
+pub(crate) use methods_common::session_update_session_json;
 pub use protocol::RealtimeEventParser;
 pub use protocol::RealtimeSessionConfig;
 pub use protocol::RealtimeSessionMode;

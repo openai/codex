@@ -216,6 +216,13 @@ pub(crate) struct CoreAuthProvider {
 }
 
 impl CoreAuthProvider {
+    pub(crate) fn from_auth(auth: &CodexAuth) -> crate::error::Result<Self> {
+        Ok(Self {
+            token: Some(auth.get_token()?),
+            account_id: auth.get_account_id(),
+        })
+    }
+
     pub(crate) fn auth_header_attached(&self) -> bool {
         self.token
             .as_ref()

@@ -1,7 +1,9 @@
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::encode_id_token;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -27,6 +29,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use core_test_support::responses::mount_realtime_client_secret;
+use core_test_support::responses::start_chatgpt_mock_server;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -36,6 +40,7 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::ResponseTemplate;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
@@ -99,6 +104,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
+        None,
         true,
     )?;
 
@@ -306,6 +312,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
+        None,
         true,
     )?;
 
@@ -367,6 +374,93 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
 }
 
 #[tokio::test]
+async fn realtime_conversation_uses_client_secret_with_external_chatgpt_auth() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let chatgpt_server = start_chatgpt_mock_server().await;
+    mount_realtime_client_secret(
+        &chatgpt_server,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "value": "ek-app-server"
+        })),
+    )
+    .await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_external", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        Some(chatgpt_server.uri().as_str()),
+        true,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    mcp.initialize().await?;
+    login_with_chatgpt_auth_tokens(&mut mcp).await?;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            thread_id: thread_start.thread.id.clone(),
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+
+    let started =
+        read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+            .await?;
+    assert_eq!(started.thread_id, thread_start.thread.id);
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
+    let requests = chatgpt_server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/codex/realtime/client_secrets");
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("chatgpt-account-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("org-siwc")
+    );
+    let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(request_body["session"]["type"], json!("realtime"));
+
+    assert_eq!(
+        realtime_server.handshakes()[0]
+            .header("authorization")
+            .as_deref(),
+        Some("Bearer ek-app-server")
+    );
+
+    realtime_server.shutdown().await;
+    drop(chatgpt_server);
+    Ok(())
+}
+
+#[tokio::test]
 async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -378,6 +472,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
+        None,
         false,
     )?;
 
@@ -443,10 +538,40 @@ async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
     Ok(())
 }
 
+async fn login_with_chatgpt_auth_tokens(mcp: &mut McpProcess) -> Result<()> {
+    let access_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .email("siwc@example.com")
+            .plan_type("business")
+            .chatgpt_account_id("org-siwc"),
+    )?;
+    let request_id = mcp
+        .send_chatgpt_auth_tokens_login_request(
+            access_token,
+            "org-siwc".to_string(),
+            Some("business".to_string()),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(response)?;
+    assert_eq!(login, LoginAccountResponse::ChatgptAuthTokens {});
+    let _updated = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    Ok(())
+}
+
 fn create_config_toml(
     codex_home: &Path,
     responses_server_uri: &str,
     realtime_server_uri: &str,
+    chatgpt_base_url: Option<&str>,
     realtime_enabled: bool,
 ) -> std::io::Result<()> {
     let realtime_feature_key = FEATURES
@@ -454,6 +579,9 @@ fn create_config_toml(
         .find(|spec| spec.id == Feature::RealtimeConversation)
         .map(|spec| spec.key)
         .unwrap_or("realtime_conversation");
+    let chatgpt_base_url = chatgpt_base_url
+        .map(|url| format!("chatgpt_base_url = \"{url}\"\n"))
+        .unwrap_or_default();
 
     std::fs::write(
         codex_home.join("config.toml"),
@@ -462,7 +590,7 @@ fn create_config_toml(
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
-model_provider = "mock_provider"
+{chatgpt_base_url}model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
 
 [realtime]
