@@ -4889,6 +4889,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         allowed_web_search_modes: Some(vec![
             crate::config_loader::WebSearchModeRequirement::Cached,
         ]),
+        allow_managed_hooks_only: None,
         feature_requirements: None,
         mcp_servers: None,
         apps: None,
@@ -5489,6 +5490,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_approval_policies: None,
         allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
         allowed_web_search_modes: None,
+        allow_managed_hooks_only: None,
         feature_requirements: None,
         mcp_servers: None,
         apps: None,

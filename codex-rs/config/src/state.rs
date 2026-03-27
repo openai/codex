@@ -74,6 +74,17 @@ impl ConfigLayerEntry {
         self.disabled_reason.is_some()
     }
 
+    /// Returns true for config layers controlled by managed policy sources.
+    pub fn is_managed(&self) -> bool {
+        matches!(
+            self.name,
+            ConfigLayerSource::Mdm { .. }
+                | ConfigLayerSource::System { .. }
+                | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+                | ConfigLayerSource::LegacyManagedConfigTomlFromMdm
+        )
+    }
+
     pub fn raw_toml(&self) -> Option<&str> {
         self.raw_toml.as_deref()
     }
