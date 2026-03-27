@@ -46,8 +46,9 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::ParsedToolDefinition;
+use codex_tools::parse_dynamic_tool;
 use codex_tools::parse_mcp_tool;
-pub use codex_tools::parse_tool_input_schema;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_template::Template;
 use serde::Deserialize;
@@ -2385,16 +2386,10 @@ pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let parsed_tool = parse_mcp_tool(&tool)?;
-
-    Ok(ResponsesApiTool {
-        name: fully_qualified_name,
-        description: parsed_tool.description,
-        strict: false,
-        defer_loading: None,
-        parameters: parsed_tool.input_schema,
-        output_schema: Some(parsed_tool.output_schema),
-    })
+    Ok(parsed_tool_to_openai_tool(
+        fully_qualified_name,
+        parse_mcp_tool(&tool)?,
+    ))
 }
 
 pub(crate) fn mcp_tool_to_deferred_openai_tool(
@@ -2403,29 +2398,34 @@ pub(crate) fn mcp_tool_to_deferred_openai_tool(
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     let parsed_tool = parse_mcp_tool(&tool)?;
 
-    Ok(ResponsesApiTool {
+    Ok(parsed_tool_to_openai_tool(
         name,
-        description: parsed_tool.description,
-        strict: false,
-        defer_loading: Some(true),
-        parameters: parsed_tool.input_schema,
-        output_schema: None,
-    })
+        ParsedToolDefinition {
+            output_schema: None,
+            defer_loading: true,
+            ..parsed_tool
+        },
+    ))
 }
 
 fn dynamic_tool_to_openai_tool(
     tool: &DynamicToolSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+    Ok(parsed_tool_to_openai_tool(
+        tool.name.clone(),
+        parse_dynamic_tool(tool)?,
+    ))
+}
 
-    Ok(ResponsesApiTool {
-        name: tool.name.clone(),
-        description: tool.description.clone(),
+fn parsed_tool_to_openai_tool(name: String, parsed_tool: ParsedToolDefinition) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name,
+        description: parsed_tool.description,
         strict: false,
-        defer_loading: None,
-        parameters: input_schema,
-        output_schema: None,
-    })
+        defer_loading: parsed_tool.defer_loading.then_some(true),
+        parameters: parsed_tool.input_schema,
+        output_schema: parsed_tool.output_schema,
+    }
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
