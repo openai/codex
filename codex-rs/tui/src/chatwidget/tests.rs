@@ -4272,6 +4272,49 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 }
 
 #[tokio::test]
+async fn single_line_final_answer_hides_working_status_in_transcript_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_user_message_event(UserMessageEvent {
+        message: "count to 1".to_string(),
+        images: None,
+        local_images: Vec::new(),
+        text_elements: Vec::new(),
+    });
+    chat.on_task_started();
+    complete_assistant_message(
+        &mut chat,
+        "msg-final-single-line",
+        "1",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    assert!(!chat.bottom_pane.status_indicator_visible());
+
+    let width: u16 = 40;
+    let vt_height: u16 = 10;
+    let ui_height: u16 = chat.desired_height(width);
+    let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
+
+    let backend = VT100Backend::new(width, vt_height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(viewport);
+
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .expect("draw chatwidget");
+
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
 async fn steer_enter_queues_while_plan_stream_is_active() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
