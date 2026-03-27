@@ -5,6 +5,8 @@ use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::NetworkConstraints;
+use crate::config_loader::NetworkDomainPermissionToml;
+use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
@@ -471,8 +473,8 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(
-        current_cfg.network.allowed_domains,
-        vec!["example.com".to_string()]
+        current_cfg.network.allowed_domains(),
+        Some(vec!["example.com".to_string()])
     );
     Ok(())
 }
@@ -483,7 +485,12 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
         Some(NetworkConstraints {
-            allowed_domains: Some(vec!["managed.example.com".to_string()]),
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([(
+                    "managed.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                )]),
+            }),
             managed_allowed_domains_only: Some(true),
             ..Default::default()
         }),
@@ -510,8 +517,8 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(
-        current_cfg.network.allowed_domains,
-        vec!["managed.example.com".to_string()]
+        current_cfg.network.allowed_domains(),
+        Some(vec!["managed.example.com".to_string()])
     );
     Ok(())
 }
@@ -1162,35 +1169,10 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-    // The parent rollout writer drains asynchronously after turn completion.
-    // Wait until the persisted JSONL includes the source user turn before forking from it.
-    let mut source_history_persisted = false;
-    for _ in 0..100 {
-        let history = RolloutRecorder::get_rollout_history(&rollout_path).await;
-        source_history_persisted = history.ok().is_some_and(|history| {
-            history.get_rollout_items().into_iter().any(|item| {
-                matches!(
-                        item,
-                        RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                            if role == "user"
-                                && content.iter().any(|content_item| {
-                                    matches!(
-                                        content_item,
-                                        ContentItem::InputText { text } if text == "fork seed"
-                                    )
-                                })
-                )
-            })
-        });
-        if source_history_persisted {
-            break;
-        }
-        sleep(StdDuration::from_millis(10)).await;
-    }
-    assert!(
-        source_history_persisted,
-        "source rollout should contain the completed pre-fork user turn before forking"
-    );
+    // Forking reads the persisted rollout JSONL, so force the completed source turn to disk
+    // before snapshotting from it.
+    initial.codex.ensure_rollout_materialized().await;
+    initial.codex.flush_rollout().await;
 
     let mut fork_config = initial.config.clone();
     fork_config.permissions.approval_policy =
@@ -2683,7 +2665,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
-        execve_session_approvals: RwLock::new(HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -3521,7 +3502,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
-        execve_session_approvals: RwLock::new(HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -3714,8 +3694,18 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
     let mut requirements = config.config_layer_stack.requirements().clone();
     requirements.network = Some(Sourced::new(
         NetworkConstraints {
-            allowed_domains: Some(vec!["api.example.com".to_string()]),
-            denied_domains: Some(vec!["blocked.example.com".to_string()]),
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([
+                    (
+                        "api.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "blocked.example.com".to_string(),
+                        NetworkDomainPermissionToml::Deny,
+                    ),
+                ]),
+            }),
             ..Default::default()
         },
         RequirementSource::CloudRequirements,

@@ -4,6 +4,7 @@
 //! whether the resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
+use crate::agent::control::render_input_preview;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy)]
@@ -83,7 +84,7 @@ fn text_content(
         .iter()
         .all(|item| matches!(item, UserInput::Text { .. }))
     {
-        return Ok(input_preview(items));
+        return Ok(render_input_preview(&(items.to_vec().into())));
     }
     Err(FunctionCallError::RespondToModel(
         mode.unsupported_items_error().to_string(),

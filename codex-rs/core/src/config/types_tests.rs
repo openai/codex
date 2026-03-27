@@ -244,6 +244,40 @@ fn deserialize_server_config_with_tool_filters() {
 }
 
 #[test]
+fn deserialize_ignores_unknown_server_fields() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            trust_level = "trusted"
+        "#,
+    )
+    .expect("should ignore unknown server fields");
+
+    assert_eq!(
+        cfg,
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            enabled: true,
+            required: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        }
+    );
+}
+
+#[test]
 fn deserialize_skill_config_with_name_selector() {
     let cfg: SkillConfig = toml::from_str(
         r#"

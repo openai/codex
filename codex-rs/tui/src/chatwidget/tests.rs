@@ -1049,8 +1049,6 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
-            permission_profile: None,
-            managed_network_override: None,
             path_to_skills_md: repo_skill_path,
             scope: SkillScope::Repo,
         },
@@ -1061,8 +1059,6 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
-            permission_profile: None,
-            managed_network_override: None,
             path_to_skills_md: user_skill_path.clone(),
             scope: SkillScope::User,
         },
@@ -3460,7 +3456,6 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -3511,7 +3506,6 @@ async fn exec_approval_uses_approval_id_when_present() {
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             additional_permissions: None,
-            skill_metadata: None,
             available_decisions: None,
             parsed_cmd: vec![],
         }),
@@ -3553,7 +3547,6 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -3609,7 +3602,6 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -9970,7 +9962,6 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -10032,7 +10023,6 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -10081,7 +10071,6 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -10449,7 +10438,6 @@ async fn status_widget_and_approval_modal_snapshot() {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
-        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };

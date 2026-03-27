@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -9,22 +10,22 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 
-use crate::allow::compute_allow_paths;
 use crate::allow::AllowDenyPaths;
+use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
+use crate::setup_error::SetupErrorCode;
+use crate::setup_error::SetupFailure;
 use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::failure;
 use crate::setup_error::read_setup_error_report;
-use crate::setup_error::SetupErrorCode;
-use crate::setup_error::SetupFailure;
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use anyhow::anyhow;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -78,21 +79,39 @@ pub fn sandbox_users_path(codex_home: &Path) -> PathBuf {
     sandbox_secrets_dir(codex_home).join("sandbox_users.json")
 }
 
+pub struct SandboxSetupRequest<'a> {
+    pub policy: &'a SandboxPolicy,
+    pub policy_cwd: &'a Path,
+    pub command_cwd: &'a Path,
+    pub env_map: &'a HashMap<String, String>,
+    pub codex_home: &'a Path,
+    pub proxy_enforced: bool,
+}
+
+#[derive(Default)]
+pub struct SetupRootOverrides {
+    pub read_roots: Option<Vec<PathBuf>>,
+    pub write_roots: Option<Vec<PathBuf>>,
+}
+
 pub fn run_setup_refresh(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
+    proxy_enforced: bool,
 ) -> Result<()> {
     run_setup_refresh_inner(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        /*read_roots_override*/ None,
-        /*write_roots_override*/ None,
+        SandboxSetupRequest {
+            policy,
+            policy_cwd,
+            command_cwd,
+            env_map,
+            codex_home,
+            proxy_enforced,
+        },
+        SetupRootOverrides::default(),
     )
 }
 
@@ -103,53 +122,51 @@ pub fn run_setup_refresh_with_extra_read_roots(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
     extra_read_roots: Vec<PathBuf>,
+    proxy_enforced: bool,
 ) -> Result<()> {
     let mut read_roots = gather_read_roots(command_cwd, policy, codex_home);
     read_roots.extend(extra_read_roots);
     run_setup_refresh_inner(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        Some(read_roots),
-        Some(Vec::new()),
+        SandboxSetupRequest {
+            policy,
+            policy_cwd,
+            command_cwd,
+            env_map,
+            codex_home,
+            proxy_enforced,
+        },
+        SetupRootOverrides {
+            read_roots: Some(read_roots),
+            write_roots: Some(Vec::new()),
+        },
     )
 }
 
 fn run_setup_refresh_inner(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<Vec<PathBuf>>,
-    write_roots_override: Option<Vec<PathBuf>>,
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
 ) -> Result<()> {
     // Skip in danger-full-access.
     if matches!(
-        policy,
+        request.policy,
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
     ) {
         return Ok(());
     }
-    let (read_roots, write_roots) = build_payload_roots(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        read_roots_override,
-        write_roots_override,
-    );
+    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let network_identity =
+        SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
-        codex_home: codex_home.to_path_buf(),
-        command_cwd: command_cwd.to_path_buf(),
+        codex_home: request.codex_home.to_path_buf(),
+        command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        proxy_ports: offline_proxy_settings.proxy_ports,
+        allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: true,
     };
@@ -159,7 +176,7 @@ fn run_setup_refresh_inner(
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| codex_home.to_path_buf());
+    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
@@ -167,14 +184,14 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(codex_home)),
+        Some(&sandbox_dir(request.codex_home)),
     );
     let status = cmd
         .status()
         .map_err(|e| {
             log_note(
                 &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(codex_home)),
+                Some(&sandbox_dir(request.codex_home)),
             );
             e
         })
@@ -182,7 +199,7 @@ fn run_setup_refresh_inner(
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(codex_home)),
+            Some(&sandbox_dir(request.codex_home)),
         );
         return Err(anyhow!("setup refresh failed with status {}", status));
     }
@@ -196,11 +213,37 @@ pub struct SetupMarker {
     pub online_username: String,
     #[serde(default)]
     pub created_at: Option<String>,
+    #[serde(default)]
+    pub proxy_ports: Vec<u16>,
+    #[serde(default)]
+    pub allow_local_binding: bool,
 }
 
 impl SetupMarker {
     pub fn version_matches(&self) -> bool {
         self.version == SETUP_VERSION
+    }
+
+    pub(crate) fn request_mismatch_reason(
+        &self,
+        network_identity: SandboxNetworkIdentity,
+        offline_proxy_settings: &OfflineProxySettings,
+    ) -> Option<String> {
+        if !network_identity.uses_offline_identity() {
+            return None;
+        }
+        if self.proxy_ports == offline_proxy_settings.proxy_ports
+            && self.allow_local_binding == offline_proxy_settings.allow_local_binding
+        {
+            return None;
+        }
+        Some(format!(
+            "offline firewall settings changed (stored_ports={:?}, desired_ports={:?}, stored_allow_local_binding={}, desired_allow_local_binding={})",
+            self.proxy_ports,
+            offline_proxy_settings.proxy_ports,
+            self.allow_local_binding,
+            offline_proxy_settings.allow_local_binding
+        ))
     }
 }
 
@@ -289,10 +332,10 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
 
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            roots.push(dir.to_path_buf());
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        roots.push(dir.to_path_buf());
     }
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
@@ -390,9 +433,104 @@ struct ElevationPayload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    #[serde(default)]
+    proxy_ports: Vec<u16>,
+    #[serde(default)]
+    allow_local_binding: bool,
     real_user: String,
     #[serde(default)]
     refresh_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OfflineProxySettings {
+    pub proxy_ports: Vec<u16>,
+    pub allow_local_binding: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SandboxNetworkIdentity {
+    Offline,
+    Online,
+}
+
+impl SandboxNetworkIdentity {
+    pub(crate) fn from_policy(policy: &SandboxPolicy, proxy_enforced: bool) -> Self {
+        if proxy_enforced || !policy.has_full_network_access() {
+            Self::Offline
+        } else {
+            Self::Online
+        }
+    }
+
+    pub(crate) fn uses_offline_identity(self) -> bool {
+        matches!(self, Self::Offline)
+    }
+}
+
+const PROXY_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "ws_proxy",
+    "wss_proxy",
+];
+const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
+
+pub(crate) fn offline_proxy_settings_from_env(
+    env_map: &HashMap<String, String>,
+    network_identity: SandboxNetworkIdentity,
+) -> OfflineProxySettings {
+    if !network_identity.uses_offline_identity() {
+        return OfflineProxySettings {
+            proxy_ports: vec![],
+            allow_local_binding: false,
+        };
+    }
+    OfflineProxySettings {
+        proxy_ports: proxy_ports_from_env(env_map),
+        allow_local_binding: env_map
+            .get(ALLOW_LOCAL_BINDING_ENV_KEY)
+            .is_some_and(|value| value == "1"),
+    }
+}
+
+pub(crate) fn proxy_ports_from_env(env_map: &HashMap<String, String>) -> Vec<u16> {
+    let mut ports = BTreeSet::new();
+    for key in PROXY_ENV_KEYS {
+        if let Some(value) = env_map.get(*key)
+            && let Some(port) = loopback_proxy_port_from_url(value)
+        {
+            ports.insert(port);
+        }
+    }
+    ports.into_iter().collect()
+}
+
+fn loopback_proxy_port_from_url(url: &str) -> Option<u16> {
+    let authority = url.trim().split_once("://")?.1.split('/').next()?;
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
+
+    if let Some(host) = host_port.strip_prefix('[') {
+        let (host, rest) = host.split_once(']')?;
+        if host != "::1" {
+            return None;
+        }
+        let port = rest.strip_prefix(':')?.parse::<u16>().ok()?;
+        return (port != 0).then_some(port);
+    }
+
+    let (host, port) = host_port.rsplit_once(':')?;
+    if !(host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1") {
+        return None;
+    }
+    let port = port.parse::<u16>().ok()?;
+    (port != 0).then_some(port)
 }
 
 fn quote_arg(arg: &str) -> String {
@@ -432,12 +570,12 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("codex-windows-sandbox-setup.exe");
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("codex-windows-sandbox-setup.exe");
+        if candidate.exists() {
+            return candidate;
         }
     }
     PathBuf::from("codex-windows-sandbox-setup.exe")
@@ -468,11 +606,11 @@ fn run_setup_exe(
     codex_home: &Path,
 ) -> Result<()> {
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::Win32::System::Threading::INFINITE;
-    use windows_sys::Win32::UI::Shell::ShellExecuteExW;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
+    use windows_sys::Win32::UI::Shell::ShellExecuteExW;
     let exe = find_setup_exe();
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
@@ -574,39 +712,31 @@ fn run_setup_exe(
 }
 
 pub fn run_elevated_setup(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<Vec<PathBuf>>,
-    write_roots_override: Option<Vec<PathBuf>>,
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
 ) -> Result<()> {
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
-    let sbx_dir = sandbox_dir(codex_home);
+    let sbx_dir = sandbox_dir(request.codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorSandboxDirCreateFailed,
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    let (read_roots, write_roots) = build_payload_roots(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        read_roots_override,
-        write_roots_override,
-    );
+    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let network_identity =
+        SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
-        codex_home: codex_home.to_path_buf(),
-        command_cwd: command_cwd.to_path_buf(),
+        codex_home: request.codex_home.to_path_buf(),
+        command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        proxy_ports: offline_proxy_settings.proxy_ports,
+        allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: false,
     };
@@ -616,28 +746,28 @@ pub fn run_elevated_setup(
             format!("failed to determine elevation state: {err}"),
         )
     })?;
-    run_setup_exe(&payload, needs_elevation, codex_home)
+    run_setup_exe(&payload, needs_elevation, request.codex_home)
 }
 
 fn build_payload_roots(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<Vec<PathBuf>>,
-    write_roots_override: Option<Vec<PathBuf>>,
+    request: &SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = if let Some(roots) = write_roots_override {
+    let write_roots = if let Some(roots) = overrides.write_roots {
         canonical_existing(&roots)
     } else {
-        gather_write_roots(policy, policy_cwd, command_cwd, env_map)
+        gather_write_roots(
+            request.policy,
+            request.policy_cwd,
+            request.command_cwd,
+            request.env_map,
+        )
     };
-    let write_roots = filter_sensitive_write_roots(write_roots, codex_home);
-    let mut read_roots = if let Some(roots) = read_roots_override {
+    let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
+    let mut read_roots = if let Some(roots) = overrides.read_roots {
         canonical_existing(&roots)
     } else {
-        gather_read_roots(command_cwd, policy, codex_home)
+        gather_read_roots(request.command_cwd, request.policy, request.codex_home)
     };
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
@@ -671,15 +801,19 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::loopback_proxy_port_from_url;
+    use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
-    use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use super::proxy_ports_from_env;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
@@ -690,6 +824,143 @@ mod tests {
             .iter()
             .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             .collect()
+    }
+
+    #[test]
+    fn loopback_proxy_url_parsing_supports_common_forms() {
+        assert_eq!(
+            loopback_proxy_port_from_url("http://localhost:3128"),
+            Some(3128)
+        );
+        assert_eq!(
+            loopback_proxy_port_from_url("https://127.0.0.1:8080"),
+            Some(8080)
+        );
+        assert_eq!(
+            loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
+            Some(1080)
+        );
+    }
+
+    #[test]
+    fn loopback_proxy_url_parsing_rejects_non_loopback_and_zero_port() {
+        assert_eq!(
+            loopback_proxy_port_from_url("http://example.com:3128"),
+            None
+        );
+        assert_eq!(loopback_proxy_port_from_url("http://127.0.0.1:0"), None);
+        assert_eq!(loopback_proxy_port_from_url("localhost:8080"), None);
+    }
+
+    #[test]
+    fn proxy_ports_from_env_dedupes_and_sorts() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        );
+        env.insert(
+            "http_proxy".to_string(),
+            "http://localhost:8080".to_string(),
+        );
+        env.insert("ALL_PROXY".to_string(), "socks5h://[::1]:1081".to_string());
+        env.insert(
+            "HTTPS_PROXY".to_string(),
+            "https://example.com:9999".to_string(),
+        );
+
+        assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
+    }
+
+    #[test]
+    fn offline_proxy_settings_ignore_proxy_env_when_online_identity_selected() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        );
+        env.insert(
+            "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+            "1".to_string(),
+        );
+
+        assert_eq!(
+            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Online),
+            super::OfflineProxySettings {
+                proxy_ports: vec![],
+                allow_local_binding: false,
+            }
+        );
+    }
+
+    #[test]
+    fn offline_proxy_settings_capture_proxy_ports_and_local_binding_for_offline_identity() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        );
+        env.insert(
+            "ALL_PROXY".to_string(),
+            "socks5h://127.0.0.1:1081".to_string(),
+        );
+        env.insert(
+            "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+            "1".to_string(),
+        );
+
+        assert_eq!(
+            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Offline),
+            super::OfflineProxySettings {
+                proxy_ports: vec![1081, 8080],
+                allow_local_binding: true,
+            }
+        );
+    }
+
+    #[test]
+    fn setup_marker_request_mismatch_reason_ignores_proxy_drift_for_online_identity() {
+        let marker = super::SetupMarker {
+            version: super::SETUP_VERSION,
+            offline_username: "offline".to_string(),
+            online_username: "online".to_string(),
+            created_at: None,
+            proxy_ports: vec![3128],
+            allow_local_binding: false,
+        };
+        let desired = super::OfflineProxySettings {
+            proxy_ports: vec![1081, 8080],
+            allow_local_binding: true,
+        };
+
+        assert_eq!(
+            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Online, &desired),
+            None
+        );
+    }
+
+    #[test]
+    fn setup_marker_request_mismatch_reason_reports_offline_firewall_drift() {
+        let marker = super::SetupMarker {
+            version: super::SETUP_VERSION,
+            offline_username: "offline".to_string(),
+            online_username: "online".to_string(),
+            created_at: None,
+            proxy_ports: vec![3128],
+            allow_local_binding: false,
+        };
+        let desired = super::OfflineProxySettings {
+            proxy_ports: vec![1081, 8080],
+            allow_local_binding: true,
+        };
+
+        assert_eq!(
+            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Offline, &desired),
+            Some(
+                "offline firewall settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
+                    .to_string()
+            )
+        );
     }
 
     #[test]
@@ -749,8 +1020,10 @@ mod tests {
         let policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: false,
-                readable_roots: vec![AbsolutePathBuf::from_absolute_path(&readable_root)
-                    .expect("absolute readable root")],
+                readable_roots: vec![
+                    AbsolutePathBuf::from_absolute_path(&readable_root)
+                        .expect("absolute readable root"),
+                ],
             },
             network_access: false,
         };
@@ -765,9 +1038,11 @@ mod tests {
         assert!(roots.contains(&expected_helper));
         assert!(roots.contains(&expected_cwd));
         assert!(roots.contains(&expected_readable));
-        assert!(canonical_windows_platform_default_roots()
-            .into_iter()
-            .all(|path| !roots.contains(&path)));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| !roots.contains(&path))
+        );
     }
 
     #[test]
@@ -786,9 +1061,11 @@ mod tests {
 
         let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
 
-        assert!(canonical_windows_platform_default_roots()
-            .into_iter()
-            .all(|path| roots.contains(&path)));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| roots.contains(&path))
+        );
     }
 
     #[test]
@@ -800,8 +1077,10 @@ mod tests {
         fs::create_dir_all(&command_cwd).expect("create workspace");
         fs::create_dir_all(&writable_root).expect("create writable root");
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![AbsolutePathBuf::from_absolute_path(&writable_root)
-                .expect("absolute writable root")],
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path(&writable_root)
+                    .expect("absolute writable root"),
+            ],
             read_only_access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: false,
                 readable_roots: Vec::new(),
@@ -828,8 +1107,10 @@ mod tests {
 
         let roots = gather_legacy_full_read_roots(&command_cwd, &policy, &codex_home);
 
-        assert!(canonical_windows_platform_default_roots()
-            .into_iter()
-            .all(|path| roots.contains(&path)));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| roots.contains(&path))
+        );
     }
 }

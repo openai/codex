@@ -19,6 +19,7 @@ workspace = true
 clap = { workspace = true, features = ["derive"] }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }

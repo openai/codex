@@ -167,6 +167,7 @@ mod voice {
     pub(crate) enum RealtimeInputBehavior {
         Ungated,
         PlaybackAware {
+            #[allow(dead_code)]
             playback_queued_samples: Arc<AtomicUsize>,
         },
     }
@@ -418,6 +419,7 @@ pub async fn run_main(
         cwd,
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
+        codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),

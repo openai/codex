@@ -41,7 +41,7 @@ pub(crate) fn load_local_chatgpt_auth(
 
     let chatgpt_plan_type = tokens
         .id_token
-        .get_chatgpt_plan_type()
+        .get_chatgpt_plan_type_raw()
         .map(|plan_type| plan_type.to_ascii_lowercase());
 
     Ok(LocalChatgptAuth {
@@ -60,8 +60,8 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_core::auth::AuthDotJson;
     use codex_core::auth::save_auth;
-    use codex_core::token_data::TokenData;
     use codex_login::auth::login_with_chatgpt_auth_tokens;
+    use codex_login::token_data::TokenData;
     use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde_json::json;
@@ -92,14 +92,14 @@ mod tests {
         format!("{header_b64}.{payload_b64}.{signature_b64}")
     }
 
-    fn write_chatgpt_auth(codex_home: &Path) {
-        let id_token = fake_jwt("user@example.com", "workspace-1", "business");
-        let access_token = fake_jwt("user@example.com", "workspace-1", "business");
+    fn write_chatgpt_auth(codex_home: &Path, plan_type: &str) {
+        let id_token = fake_jwt("user@example.com", "workspace-1", plan_type);
+        let access_token = fake_jwt("user@example.com", "workspace-1", plan_type);
         let auth = AuthDotJson {
             auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
-                id_token: codex_core::token_data::parse_chatgpt_jwt_claims(&id_token)
+                id_token: codex_login::token_data::parse_chatgpt_jwt_claims(&id_token)
                     .expect("id token should parse"),
                 access_token,
                 refresh_token: "refresh-token".to_string(),
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn loads_local_chatgpt_auth_from_managed_auth() {
         let codex_home = TempDir::new().expect("tempdir");
-        write_chatgpt_auth(codex_home.path());
+        write_chatgpt_auth(codex_home.path(), "business");
 
         let auth = load_local_chatgpt_auth(
             codex_home.path(),
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn prefers_managed_auth_over_external_ephemeral_tokens() {
         let codex_home = TempDir::new().expect("tempdir");
-        write_chatgpt_auth(codex_home.path());
+        write_chatgpt_auth(codex_home.path(), "business");
         login_with_chatgpt_auth_tokens(
             codex_home.path(),
             &fake_jwt("user@example.com", "workspace-2", "enterprise"),
@@ -180,5 +180,23 @@ mod tests {
 
         assert_eq!(auth.chatgpt_account_id, "workspace-1");
         assert_eq!(auth.chatgpt_plan_type.as_deref(), Some("business"));
+    }
+
+    #[test]
+    fn preserves_usage_based_plan_type_wire_name() {
+        let codex_home = TempDir::new().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "self_serve_business_usage_based");
+
+        let auth = load_local_chatgpt_auth(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            Some("workspace-1"),
+        )
+        .expect("chatgpt auth should load");
+
+        assert_eq!(
+            auth.chatgpt_plan_type.as_deref(),
+            Some("self_serve_business_usage_based")
+        );
     }
 }

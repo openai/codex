@@ -252,3 +252,37 @@ fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
         SafetyCheck::AskUser,
     );
 }
+
+#[test]
+fn missing_project_dot_codex_config_requires_approval() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().to_path_buf();
+    let action =
+        ApplyPatchAction::new_add_for_test(&cwd.join(".codex").join("config.toml"), "".to_string());
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, &cwd);
+
+    assert!(!is_write_patch_constrained_to_writable_paths(
+        &action,
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert_eq!(
+        assess_patch_safety(
+            &action,
+            AskForApproval::OnRequest,
+            &sandbox_policy,
+            &file_system_sandbox_policy,
+            &cwd,
+            WindowsSandboxLevel::Disabled,
+        ),
+        SafetyCheck::AskUser,
+    );
+}

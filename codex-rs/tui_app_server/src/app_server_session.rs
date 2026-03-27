@@ -1,3 +1,6 @@
+use crate::bottom_pane::FeedbackAudience;
+use crate::status::StatusAccountDisplay;
+use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
@@ -84,10 +87,6 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::debug;
-
-use crate::bottom_pane::FeedbackAudience;
-use crate::status::StatusAccountDisplay;
 
 pub(crate) struct AppServerBootstrap {
     pub(crate) account_auth_mode: Option<AuthMode>,
@@ -230,7 +229,7 @@ impl AppServerSession {
                     Some(TelemetryAuthMode::Chatgpt),
                     Some(StatusAccountDisplay::ChatGpt {
                         email: Some(email),
-                        plan: Some(title_case(format!("{plan_type:?}").as_str())),
+                        plan: Some(plan_type_display_name(plan_type)),
                     }),
                     Some(plan_type),
                     feedback_audience,
@@ -258,8 +257,8 @@ impl AppServerSession {
                 .await
             {
                 Ok(rate_limits) => app_server_rate_limit_snapshots_to_core(rate_limits),
-                Err(error) => {
-                    debug!(error = ?error, "failed to fetch rate limits during TUI bootstrap");
+                Err(err) => {
+                    tracing::warn!("account/rateLimits/read failed during TUI bootstrap: {err}");
                     Vec::new()
                 }
             }
@@ -735,19 +734,6 @@ impl AppServerSession {
     }
 }
 
-fn title_case(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-    let rest = chars.as_str().to_ascii_lowercase();
-    first.to_uppercase().collect::<String>() + &rest
-}
-
 pub(crate) fn status_account_display_from_auth_mode(
     auth_mode: Option<AuthMode>,
     plan_type: Option<codex_protocol::account::PlanType>,
@@ -757,7 +743,7 @@ pub(crate) fn status_account_display_from_auth_mode(
         Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens) => {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
-                plan: plan_type.map(|plan_type| title_case(format!("{plan_type:?}").as_str())),
+                plan: plan_type.map(plan_type_display_name),
             })
         }
         None => None,
@@ -1265,5 +1251,32 @@ mod tests {
 
         assert_ne!(session.history_log_id, 0);
         assert_eq!(session.history_entry_count, 2);
+    }
+
+    #[test]
+    fn status_account_display_from_auth_mode_uses_remapped_plan_labels() {
+        let business = status_account_display_from_auth_mode(
+            Some(AuthMode::Chatgpt),
+            Some(codex_protocol::account::PlanType::EnterpriseCbpUsageBased),
+        );
+        assert!(matches!(
+            business,
+            Some(StatusAccountDisplay::ChatGpt {
+                email: None,
+                plan: Some(ref plan),
+            }) if plan == "Enterprise"
+        ));
+
+        let team = status_account_display_from_auth_mode(
+            Some(AuthMode::Chatgpt),
+            Some(codex_protocol::account::PlanType::SelfServeBusinessUsageBased),
+        );
+        assert!(matches!(
+            team,
+            Some(StatusAccountDisplay::ChatGpt {
+                email: None,
+                plan: Some(ref plan),
+            }) if plan == "Business"
+        ));
     }
 }

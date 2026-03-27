@@ -3,22 +3,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
-use serde::Deserialize;
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct SkillManagedNetworkOverride {
-    pub allowed_domains: Option<Vec<String>>,
-    pub denied_domains: Option<Vec<String>>,
-}
-
-impl SkillManagedNetworkOverride {
-    pub fn has_domain_overrides(&self) -> bool {
-        self.allowed_domains.is_some() || self.denied_domains.is_some()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillMetadata {
@@ -28,8 +14,6 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
-    pub permission_profile: Option<PermissionProfile>,
-    pub managed_network_override: Option<SkillManagedNetworkOverride>,
     /// Path to the SKILLS.md file that declares this skill.
     pub path_to_skills_md: PathBuf,
     pub scope: SkillScope,

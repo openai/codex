@@ -384,7 +384,6 @@ impl NetworkApprovalService {
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,
                     /*additional_permissions*/ None,
-                    /*skill_metadata*/ None,
                     available_decisions,
                 )
                 .await

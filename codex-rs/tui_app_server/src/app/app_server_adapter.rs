@@ -16,6 +16,8 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
+#[cfg(test)]
+use crate::exec_command::split_command_string;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -954,23 +956,6 @@ fn command_execution_snapshot_events(turn_id: &str, item: &ThreadItem) -> Option
         events.extend(end_events);
     }
     Some(events)
-}
-
-#[cfg(test)]
-fn split_command_string(command: &str) -> Vec<String> {
-    let Some(parts) = shlex::split(command) else {
-        return vec![command.to_string()];
-    };
-    match shlex::try_join(parts.iter().map(String::as_str)) {
-        Ok(round_trip)
-            if round_trip == command
-                || (!command.contains(":\\")
-                    && shlex::split(&round_trip).as_ref() == Some(&parts)) =>
-        {
-            parts
-        }
-        _ => vec![command.to_string()],
-    }
 }
 
 #[cfg(test)]

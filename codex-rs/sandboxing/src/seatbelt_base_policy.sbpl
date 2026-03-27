@@ -106,3 +106,11 @@
 ; PTYs created before entering seatbelt may lack the extension; allow ioctl
 ; on those slave ttys so interactive shells detect a TTY and remain functional.
 (allow file-ioctl (regex #"^/dev/ttys[0-9]+"))
+
+; allow readonly user preferences
+(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
+(allow mach-lookup
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.cfprefsd.agent")
+  (local-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read)

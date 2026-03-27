@@ -1,7 +1,5 @@
 use crate::exec::ExecToolCallOutput;
 use crate::network_policy_decision::NetworkPolicyDecisionPayload;
-use crate::token_data::KnownPlan;
-use crate::token_data::PlanType;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -9,6 +7,8 @@ use chrono::Utc;
 use codex_async_utils::CancelErr;
 pub use codex_login::auth::RefreshTokenFailedError;
 pub use codex_login::auth::RefreshTokenFailedReason;
+use codex_login::token_data::KnownPlan;
+use codex_login::token_data::PlanType;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -439,7 +439,12 @@ impl std::fmt::Display for UsageLimitReachedError {
                 "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
-            Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
+            Some(PlanType::Known(
+                KnownPlan::Team
+                | KnownPlan::SelfServeBusinessUsageBased
+                | KnownPlan::Business
+                | KnownPlan::EnterpriseCbpUsageBased,
+            )) => {
                 format!(
                     "You've hit your usage limit. To get more access now, send a request to your admin{}",
                     retry_suffix_after_or(self.resets_at.as_ref())
@@ -460,21 +465,6 @@ impl std::fmt::Display for UsageLimitReachedError {
                 "You've hit your usage limit.{}",
                 retry_suffix(self.resets_at.as_ref())
             ),
-            Some(PlanType::Unknown(plan))
-                if plan.eq_ignore_ascii_case("self_serve_business_usage_based") =>
-            {
-                match self
-                    .rate_limits
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.credits.as_ref())
-                    .map(|credits| credits.has_credits)
-                {
-                    Some(true) => "You've hit your usage limit. Contact your admin to increase spend limits to continue."
-                        .to_string(),
-                    Some(false) | None => "You've hit your usage limit. Contact your admin to add credits to continue."
-                        .to_string(),
-                }
-            }
             Some(PlanType::Unknown(_)) | None => format!(
                 "You've hit your usage limit.{}",
                 retry_suffix(self.resets_at.as_ref())

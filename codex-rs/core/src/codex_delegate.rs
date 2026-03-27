@@ -436,7 +436,6 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
-        skill_metadata,
         available_decisions,
         ..
     } = event;
@@ -480,7 +479,6 @@ async fn handle_exec_approval(
                 network_approval_context,
                 proposed_execpolicy_amendment,
                 additional_permissions,
-                skill_metadata,
                 available_decisions,
             ),
             parent_session,

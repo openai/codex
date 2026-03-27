@@ -45,6 +45,8 @@ use codex_core::config::types::McpServerTransportConfig;
 #[cfg(test)]
 use codex_core::mcp::McpManager;
 #[cfg(test)]
+use codex_core::mcp::qualified_mcp_tool_name_prefix;
+#[cfg(test)]
 use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
@@ -1831,7 +1833,7 @@ pub(crate) fn new_mcp_tools_output(
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     for (server, cfg) in servers {
-        let prefix = format!("mcp__{server}__");
+        let prefix = qualified_mcp_tool_name_prefix(server);
         let mut names: Vec<String> = tools
             .keys()
             .filter(|k| k.starts_with(&prefix))
@@ -2773,7 +2775,6 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerDisabledReason;
-    use codex_core::config::types::McpServerTransportConfig;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;
@@ -2809,6 +2810,88 @@ mod tests {
         // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
         // Windows-specific root semantics into the fixtures.
         std::env::temp_dir()
+    }
+
+    fn stdio_server_config(
+        command: &str,
+        args: Vec<&str>,
+        env: Option<HashMap<String, String>>,
+        env_vars: Vec<&str>,
+    ) -> McpServerConfig {
+        let mut table = toml::Table::new();
+        table.insert(
+            "command".to_string(),
+            toml::Value::String(command.to_string()),
+        );
+        if !args.is_empty() {
+            table.insert(
+                "args".to_string(),
+                toml::Value::Array(
+                    args.into_iter()
+                        .map(|arg| toml::Value::String(arg.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(env) = env {
+            table.insert("env".to_string(), string_map_to_toml_value(env));
+        }
+        if !env_vars.is_empty() {
+            table.insert(
+                "env_vars".to_string(),
+                toml::Value::Array(
+                    env_vars
+                        .into_iter()
+                        .map(|name| toml::Value::String(name.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+
+        toml::Value::Table(table)
+            .try_into()
+            .expect("test stdio MCP config should deserialize")
+    }
+
+    fn streamable_http_server_config(
+        url: &str,
+        bearer_token_env_var: Option<&str>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+    ) -> McpServerConfig {
+        let mut table = toml::Table::new();
+        table.insert("url".to_string(), toml::Value::String(url.to_string()));
+        if let Some(bearer_token_env_var) = bearer_token_env_var {
+            table.insert(
+                "bearer_token_env_var".to_string(),
+                toml::Value::String(bearer_token_env_var.to_string()),
+            );
+        }
+        if let Some(http_headers) = http_headers {
+            table.insert(
+                "http_headers".to_string(),
+                string_map_to_toml_value(http_headers),
+            );
+        }
+        if let Some(env_http_headers) = env_http_headers {
+            table.insert(
+                "env_http_headers".to_string(),
+                string_map_to_toml_value(env_http_headers),
+            );
+        }
+
+        toml::Value::Table(table)
+            .try_into()
+            .expect("test streamable_http MCP config should deserialize")
+    }
+
+    fn string_map_to_toml_value(entries: HashMap<String, String>) -> toml::Value {
+        toml::Value::Table(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key, toml::Value::String(value)))
+                .collect(),
+        )
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -3126,25 +3209,7 @@ mod tests {
         let mut config = test_config().await;
         let mut env = HashMap::new();
         env.insert("TOKEN".to_string(), "secret".to_string());
-        let stdio_config = McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command: "docs-server".to_string(),
-                args: vec![],
-                env: Some(env),
-                env_vars: vec!["APP_TOKEN".to_string()],
-                cwd: None,
-            },
-            enabled: true,
-            required: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        };
+        let stdio_config = stdio_server_config("docs-server", vec![], Some(env), vec!["APP_TOKEN"]);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
 
@@ -3152,24 +3217,12 @@ mod tests {
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
         let mut env_headers = HashMap::new();
         env_headers.insert("X-API-Key".to_string(), "API_KEY_ENV".to_string());
-        let http_config = McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
-                url: "https://example.com/mcp".to_string(),
-                bearer_token_env_var: Some("MCP_TOKEN".to_string()),
-                http_headers: Some(headers),
-                env_http_headers: Some(env_headers),
-            },
-            enabled: true,
-            required: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        };
+        let http_config = streamable_http_server_config(
+            "https://example.com/mcp",
+            Some("MCP_TOKEN"),
+            Some(headers),
+            Some(env_headers),
+        );
         servers.insert("http".to_string(), http_config);
         config
             .mcp_servers
@@ -3218,30 +3271,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
+    async fn mcp_tools_output_lists_tools_for_hyphenated_server_names() {
         let mut config = test_config().await;
-        let servers = HashMap::from([(
-            "plugin_docs".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
-                    command: "docs-server".to_string(),
-                    args: vec!["--stdio".to_string()],
-                    env: None,
-                    env_vars: vec![],
-                    cwd: None,
-                },
-                enabled: false,
-                required: false,
-                disabled_reason: Some(McpServerDisabledReason::Unknown),
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "some-server".to_string(),
+            stdio_server_config("docs-server", vec!["--stdio"], None, vec![]),
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+
+        let tools = HashMap::from([(
+            "mcp__some_server__lookup".to_string(),
+            Tool {
+                description: None,
+                name: "lookup".to_string(),
+                title: None,
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
             },
         )]);
+
+        let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
+        let cell = new_mcp_tools_output(
+            &config,
+            tools,
+            HashMap::new(),
+            HashMap::new(),
+            &auth_statuses,
+        );
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
+        let mut config = test_config().await;
+        let mut plugin_docs = stdio_server_config("docs-server", vec!["--stdio"], None, vec![]);
+        plugin_docs.enabled = false;
+        plugin_docs.disabled_reason = Some(McpServerDisabledReason::Unknown);
+        let servers = HashMap::from([("plugin_docs".to_string(), plugin_docs)]);
         config
             .mcp_servers
             .set(servers)

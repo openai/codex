@@ -108,8 +108,8 @@ jobs:
 
           bazel \
             --noexperimental_remote_repo_contents_cache \
-            --bazelrc=.github/workflows/v8-ci.bazelrc \
             "${bazel_args[@]}" \
+            --config=ci-v8 \
             "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
 
       - name: Stage release pair

@@ -60,8 +60,12 @@ fn extract_fds(control: &[u8]) -> Vec<OwnedFd> {
         if level == libc::SOL_SOCKET && ty == libc::SCM_RIGHTS {
             let data_ptr = unsafe { libc::CMSG_DATA(cmsg).cast::<RawFd>() };
             let fd_count: usize = {
-                let cmsg_data_len =
-                    unsafe { (*cmsg).cmsg_len as usize } - unsafe { libc::CMSG_LEN(0) as usize };
+                // `cmsghdr::cmsg_len` is not typed consistently across targets, so normalize it
+                // before doing the size arithmetic.
+                #[allow(clippy::useless_conversion)]
+                let cmsg_data_len = usize::try_from(unsafe { (*cmsg).cmsg_len })
+                    .expect("cmsghdr length fits")
+                    - unsafe { libc::CMSG_LEN(0) as usize };
                 cmsg_data_len / size_of::<RawFd>()
             };
             for i in 0..fd_count {

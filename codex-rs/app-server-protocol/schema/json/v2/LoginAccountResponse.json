@@ -44,6 +44,36 @@
     },
     {
       "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chatgptDeviceCode"
+          ],
+          "title": "ChatgptDeviceCodev2::LoginAccountResponseType",
+          "type": "string"
+        },
+        "userCode": {
+          "description": "One-time code the user must enter after signing in.",
+          "type": "string"
+        },
+        "verificationUrl": {
+          "description": "URL the client should open in a browser to complete device code authorization.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId",
+        "type",
+        "userCode",
+        "verificationUrl"
+      ],
+      "title": "ChatgptDeviceCodev2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "properties": {
         "type": {
           "enum": [
             "chatgptAuthTokens"

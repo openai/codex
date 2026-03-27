@@ -410,6 +410,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "codex-features",
+ "codex-login",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "core_test_support",
@@ -453,9 +454,9 @@ dependencies = [
 
 [[package]]
 name = "arc-swap"
-version = "1.8.2"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f3647c145568cec02c42054e07bdf9a5a698e15b466fb2341bfc393cd24aa5"
+checksum = "a07d1f37ff60921c83bdfc7407723bdefe89b44b98a9b772f225c8f9d67141a6"
 dependencies = [
  "rustversion",
 ]
@@ -479,58 +480,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8824ecca2e851cec16968d54a01dd372ef8f95b244fb84b84e70128be347c3c6"
 dependencies = [
  "term",
-]
-
-[[package]]
-name = "askama"
-version = "0.15.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08e1676b346cadfec169374f949d7490fd80a24193d37d2afce0c047cf695e57"
-dependencies = [
- "askama_macros",
- "itoa",
- "percent-encoding",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "askama_derive"
-version = "0.15.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7661ff56517787343f376f75db037426facd7c8d3049cef8911f1e75016f3a37"
-dependencies = [
- "askama_parser",
- "basic-toml",
- "memchr",
- "proc-macro2",
- "quote",
- "rustc-hash 2.1.1",
- "serde",
- "serde_derive",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "askama_macros"
-version = "0.15.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "713ee4dbfd1eb719c2dab859465b01fa1d21cb566684614a713a6b7a99a4e47b"
-dependencies = [
- "askama_derive",
-]
-
-[[package]]
-name = "askama_parser"
-version = "0.15.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d62d674238a526418b30c0def480d5beadb9d8964e7f38d635b03bf639c704c"
-dependencies = [
- "rustc-hash 2.1.1",
- "serde",
- "serde_derive",
- "unicode-ident",
- "winnow",
 ]
 
 [[package]]
@@ -1468,6 +1417,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
+ "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1595,32 +1545,12 @@ dependencies = [
  "anyhow",
  "codex-apply-patch",
  "codex-linux-sandbox",
+ "codex-sandboxing",
  "codex-shell-escalation",
  "codex-utils-home-dir",
  "dotenvy",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "codex-artifacts"
-version = "0.0.0"
-dependencies = [
- "codex-package-manager",
- "flate2",
- "pretty_assertions",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "which 8.0.0",
- "wiremock",
- "zip",
 ]
 
 [[package]]
@@ -1666,6 +1596,7 @@ dependencies = [
  "codex-connectors",
  "codex-core",
  "codex-git-utils",
+ "codex-login",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "pretty_assertions",
@@ -1880,7 +1811,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "askama",
  "assert_cmd",
  "assert_matches",
  "async-channel",
@@ -1895,7 +1825,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
- "codex-artifacts",
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",
@@ -1920,7 +1849,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-state",
  "codex-terminal-detection",
- "codex-test-macros",
+ "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
@@ -1933,6 +1862,7 @@ dependencies = [
  "codex-utils-readiness",
  "codex-utils-stream-parser",
  "codex-utils-string",
+ "codex-utils-template",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
@@ -2083,6 +2013,7 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "base64 0.22.1",
  "clap",
@@ -2252,6 +2183,7 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-protocol",
+ "codex-sandboxing",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
@@ -2292,6 +2224,7 @@ dependencies = [
  "codex-keyring-store",
  "codex-protocol",
  "codex-terminal-detection",
+ "codex-utils-template",
  "core_test_support",
  "keyring",
  "once_cell",
@@ -2427,26 +2360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-package-manager"
-version = "0.0.0"
-dependencies = [
- "fd-lock",
- "flate2",
- "pretty_assertions",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "wiremock",
- "zip",
-]
-
-[[package]]
 name = "codex-plugin"
 version = "0.0.0"
 dependencies = [
@@ -2473,6 +2386,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-image",
  "codex-utils-string",
+ "codex-utils-template",
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
@@ -2573,7 +2487,6 @@ dependencies = [
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
- "dirs",
  "dunce",
  "libc",
  "pretty_assertions",
@@ -2581,6 +2494,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "url",
+ "which 8.0.0",
 ]
 
 [[package]]
@@ -2697,12 +2611,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-test-macros"
+name = "codex-tools"
 version = "0.0.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
+ "codex-protocol",
+ "pretty_assertions",
+ "rmcp",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4353,17 +4269,6 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "winapi",
-]
-
-[[package]]
-name = "filetime"
-version = "0.2.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f98844151eee8917efc50bd9e8318cb963ae8b297431495d3f758616ea5c57db"
-dependencies = [
- "cfg-if",
- "libc",
- "libredox",
 ]
 
 [[package]]
@@ -9941,17 +9846,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
-name = "tar"
-version = "0.4.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
-dependencies = [
- "filetime",
- "libc",
- "xattr",
-]
-
-[[package]]
 name = "tempfile"
 version = "3.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12075,16 +11969,6 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.18",
  "time",
-]
-
-[[package]]
-name = "xattr"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
-dependencies = [
- "libc",
- "rustix 1.1.3",
 ]
 
 [[package]]

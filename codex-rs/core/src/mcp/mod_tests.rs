@@ -53,6 +53,14 @@ fn split_qualified_tool_name_returns_server_and_tool() {
 }
 
 #[test]
+fn qualified_mcp_tool_name_prefix_sanitizes_server_names_without_lowercasing() {
+    assert_eq!(
+        qualified_mcp_tool_name_prefix("Some-Server"),
+        "mcp__Some_Server__".to_string()
+    );
+}
+
+#[test]
 fn split_qualified_tool_name_rejects_invalid_names() {
     assert_eq!(split_qualified_tool_name("other__alpha__do_thing"), None);
     assert_eq!(split_qualified_tool_name("mcp__alpha__"), None);
