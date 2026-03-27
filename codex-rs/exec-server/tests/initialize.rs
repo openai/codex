@@ -4,6 +4,7 @@ mod common;
 
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_exec_server::ExecCapabilities;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use common::exec_server::exec_server;
@@ -27,7 +28,12 @@ async fn exec_server_accepts_initialize() -> anyhow::Result<()> {
     };
     assert_eq!(id, initialize_id);
     let initialize_response: InitializeResponse = serde_json::from_value(result)?;
-    assert_eq!(initialize_response, InitializeResponse {});
+    assert_eq!(
+        initialize_response,
+        InitializeResponse {
+            capabilities: ExecCapabilities::direct_only(),
+        }
+    );
 
     server.shutdown().await?;
     Ok(())

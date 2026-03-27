@@ -61,7 +61,12 @@ Request params:
 Response:
 
 ```json
-{}
+{
+  "capabilities": {
+    "direct": true,
+    "zshFork": false
+  }
+}
 ```
 
 ### `initialized`

@@ -89,6 +89,7 @@ async fn exec_command_with_tty(
                 process_id,
                 &request,
                 tty,
+                codex_exec_server::ExecLaunch::Direct,
                 Box::new(NoopSpawnLifecycle),
                 turn.environment.as_ref(),
             )
@@ -478,6 +479,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
             1234,
             &request,
             false,
+            codex_exec_server::ExecLaunch::Direct,
             Box::new(NoopSpawnLifecycle),
             &environment,
         )
@@ -520,6 +522,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
             1234,
             &request,
             true,
+            codex_exec_server::ExecLaunch::Direct,
             Box::new(NoopSpawnLifecycle),
             remote_test_env.environment(),
         )
@@ -574,6 +577,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             1234,
             &request,
             true,
+            codex_exec_server::ExecLaunch::ZshFork,
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),

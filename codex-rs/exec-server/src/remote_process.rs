@@ -5,18 +5,21 @@ use tokio::sync::watch;
 use tracing::trace;
 
 use crate::ExecBackend;
+use crate::ExecLaunch;
 use crate::ExecProcess;
 use crate::ExecServerError;
+use crate::ExecStartRequest;
 use crate::StartedExecProcess;
 use crate::client::ExecServerClient;
 use crate::client::Session;
-use crate::protocol::ExecParams;
+use crate::protocol::ExecCapabilities;
 use crate::protocol::ReadResponse;
 use crate::protocol::WriteResponse;
 
 #[derive(Clone)]
 pub(crate) struct RemoteProcess {
     client: ExecServerClient,
+    capabilities: ExecCapabilities,
 }
 
 struct RemoteExecProcess {
@@ -26,13 +29,31 @@ struct RemoteExecProcess {
 impl RemoteProcess {
     pub(crate) fn new(client: ExecServerClient) -> Self {
         trace!("remote process new");
-        Self { client }
+        let capabilities = client.capabilities();
+        Self {
+            client,
+            capabilities,
+        }
     }
 }
 
 #[async_trait]
 impl ExecBackend for RemoteProcess {
-    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
+    fn capabilities(&self) -> ExecCapabilities {
+        self.capabilities
+    }
+
+    async fn start(
+        &self,
+        request: ExecStartRequest,
+    ) -> Result<StartedExecProcess, ExecServerError> {
+        let ExecStartRequest { params, launch } = request;
+        if !matches!(launch, ExecLaunch::Direct) {
+            return Err(ExecServerError::Protocol(
+                "zsh-fork launch is not supported by remote exec-server yet".to_string(),
+            ));
+        }
+
         let process_id = params.process_id.clone();
         let session = self.client.register_session(&process_id).await?;
         if let Err(err) = self.client.exec(params).await {

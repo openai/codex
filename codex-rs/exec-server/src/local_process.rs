@@ -15,11 +15,14 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use crate::ExecBackend;
+use crate::ExecLaunch;
 use crate::ExecProcess;
 use crate::ExecServerError;
+use crate::ExecStartRequest;
 use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::protocol::EXEC_CLOSED_METHOD;
+use crate::protocol::ExecCapabilities;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
@@ -134,7 +137,9 @@ impl LocalProcess {
                 "initialize may only be sent once per connection".to_string(),
             ));
         }
-        Ok(InitializeResponse {})
+        Ok(InitializeResponse {
+            capabilities: ExecCapabilities::direct_only(),
+        })
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {
@@ -413,7 +418,21 @@ impl LocalProcess {
 
 #[async_trait]
 impl ExecBackend for LocalProcess {
-    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
+    fn capabilities(&self) -> ExecCapabilities {
+        ExecCapabilities::direct_only()
+    }
+
+    async fn start(
+        &self,
+        request: ExecStartRequest,
+    ) -> Result<StartedExecProcess, ExecServerError> {
+        let ExecStartRequest { params, launch } = request;
+        if !matches!(launch, ExecLaunch::Direct) {
+            return Err(ExecServerError::Protocol(
+                "zsh-fork launch is not supported by the local exec backend yet".to_string(),
+            ));
+        }
+
         let (response, wake_tx) = self
             .start_process(params)
             .await

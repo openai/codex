@@ -584,6 +584,7 @@ impl UnifiedExecProcessManager {
         process_id: i32,
         env: &ExecRequest,
         tty: bool,
+        launch: codex_exec_server::ExecLaunch,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
@@ -602,14 +603,17 @@ impl UnifiedExecProcessManager {
 
             let started = environment
                 .get_exec_backend()
-                .start(codex_exec_server::ExecParams {
-                    process_id: exec_server_process_id(process_id).into(),
-                    argv: env.command.clone(),
-                    cwd: env.cwd.clone(),
-                    env: env.env.clone(),
-                    tty,
-                    arg0: env.arg0.clone(),
-                })
+                .start(codex_exec_server::ExecStartRequest::new(
+                    codex_exec_server::ExecParams {
+                        process_id: exec_server_process_id(process_id).into(),
+                        argv: env.command.clone(),
+                        cwd: env.cwd.clone(),
+                        env: env.env.clone(),
+                        tty,
+                        arg0: env.arg0.clone(),
+                    },
+                    launch,
+                ))
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             return UnifiedExecProcess::from_remote_started(started, env.sandbox).await;

@@ -7,8 +7,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
+use codex_exec_server::ExecCapabilities;
+use codex_exec_server::ExecLaunch;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecStartRequest;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
@@ -43,18 +46,65 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
     }
 }
 
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_backend_reports_direct_only_capabilities(use_remote: bool) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+
+    assert_eq!(
+        context.backend.capabilities(),
+        ExecCapabilities::direct_only()
+    );
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_backend_rejects_zsh_fork_launches_until_supported(use_remote: bool) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+
+    let result = context
+        .backend
+        .start(ExecStartRequest::new(
+            ExecParams {
+                process_id: ProcessId::from("proc-zsh-fork"),
+                argv: vec!["true".to_string()],
+                cwd: std::env::current_dir()?,
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+            },
+            ExecLaunch::ZshFork,
+        ))
+        .await;
+    let Err(err) = result else {
+        panic!("zsh-fork launch should be rejected");
+    };
+
+    assert!(
+        err.to_string().contains("zsh-fork launch is not supported"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
 async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
     let session = context
         .backend
-        .start(ExecParams {
-            process_id: ProcessId::from("proc-1"),
-            argv: vec!["true".to_string()],
-            cwd: std::env::current_dir()?,
-            env: Default::default(),
-            tty: false,
-            arg0: None,
-        })
+        .start(
+            ExecParams {
+                process_id: ProcessId::from("proc-1"),
+                argv: vec!["true".to_string()],
+                cwd: std::env::current_dir()?,
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+            }
+            .into(),
+        )
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
     let wake_rx = session.process.subscribe_wake();
@@ -119,18 +169,21 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
     let process_id = "proc-stream".to_string();
     let session = context
         .backend
-        .start(ExecParams {
-            process_id: process_id.clone().into(),
-            argv: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "sleep 0.05; printf 'session output\\n'".to_string(),
-            ],
-            cwd: std::env::current_dir()?,
-            env: Default::default(),
-            tty: false,
-            arg0: None,
-        })
+        .start(
+            ExecParams {
+                process_id: process_id.clone().into(),
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "sleep 0.05; printf 'session output\\n'".to_string(),
+                ],
+                cwd: std::env::current_dir()?,
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+            }
+            .into(),
+        )
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
@@ -159,7 +212,8 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             env: Default::default(),
             tty: true,
             arg0: None,
-        })
+        }
+        .into())
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
@@ -184,18 +238,21 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
     let context = create_process_context(use_remote).await?;
     let session = context
         .backend
-        .start(ExecParams {
-            process_id: ProcessId::from("proc-queued"),
-            argv: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "printf 'queued output\\n'".to_string(),
-            ],
-            cwd: std::env::current_dir()?,
-            env: Default::default(),
-            tty: false,
-            arg0: None,
-        })
+        .start(
+            ExecParams {
+                process_id: ProcessId::from("proc-queued"),
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "printf 'queued output\\n'".to_string(),
+                ],
+                cwd: std::env::current_dir()?,
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+            }
+            .into(),
+        )
         .await?;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -214,18 +271,21 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
     let mut context = create_process_context(/*use_remote*/ true).await?;
     let session = context
         .backend
-        .start(ExecParams {
-            process_id: ProcessId::from("proc-disconnect"),
-            argv: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "sleep 10".to_string(),
-            ],
-            cwd: std::env::current_dir()?,
-            env: Default::default(),
-            tty: false,
-            arg0: None,
-        })
+        .start(
+            ExecParams {
+                process_id: ProcessId::from("proc-disconnect"),
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "sleep 10".to_string(),
+                ],
+                cwd: std::env::current_dir()?,
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+            }
+            .into(),
+        )
         .await?;
 
     let server = context

@@ -9,6 +9,7 @@ use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
+use crate::protocol::ExecCapabilities;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 
@@ -131,6 +132,17 @@ impl Environment {
         Arc::clone(&self.exec_backend)
     }
 
+    pub fn exec_capabilities(&self) -> ExecCapabilities {
+        if self.exec_server_url.is_some() {
+            self.exec_backend.capabilities()
+        } else {
+            // Local unified_exec still owns zsh-fork setup and passes inherited
+            // FDs directly, so the environment supports zsh-fork even though
+            // the in-process exec backend only starts direct launches.
+            ExecCapabilities::direct_and_zsh_fork()
+        }
+    }
+
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         if let Some(client) = self.remote_exec_server_client.clone() {
             Arc::new(RemoteFileSystem::new(client))
@@ -159,6 +171,7 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
+    use crate::ExecCapabilities;
     use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
@@ -169,6 +182,10 @@ mod tests {
             .expect("create environment");
 
         assert_eq!(environment.exec_server_url(), None);
+        assert_eq!(
+            environment.exec_capabilities(),
+            ExecCapabilities::direct_and_zsh_fork()
+        );
         assert!(environment.remote_exec_server_client.is_none());
     }
 
@@ -195,14 +212,17 @@ mod tests {
 
         let response = environment
             .get_exec_backend()
-            .start(crate::ExecParams {
-                process_id: ProcessId::from("default-env-proc"),
-                argv: vec!["true".to_string()],
-                cwd: std::env::current_dir().expect("read current dir"),
-                env: Default::default(),
-                tty: false,
-                arg0: None,
-            })
+            .start(
+                crate::ExecParams {
+                    process_id: ProcessId::from("default-env-proc"),
+                    argv: vec!["true".to_string()],
+                    cwd: std::env::current_dir().expect("read current dir"),
+                    env: Default::default(),
+                    tty: false,
+                    arg0: None,
+                }
+                .into(),
+            )
             .await
             .expect("start process");
 

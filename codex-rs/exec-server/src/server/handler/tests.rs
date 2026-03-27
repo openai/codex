@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 
 use super::ExecServerHandler;
 use crate::ProcessId;
+use crate::protocol::ExecCapabilities;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::TerminateParams;
@@ -39,7 +40,9 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
     )));
     assert_eq!(
         handler.initialize().expect("initialize"),
-        InitializeResponse {}
+        InitializeResponse {
+            capabilities: ExecCapabilities::direct_only(),
+        }
     );
     handler.initialized().expect("initialized");
     handler

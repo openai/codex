@@ -48,7 +48,32 @@ pub struct InitializeParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {}
+pub struct InitializeResponse {
+    pub capabilities: ExecCapabilities,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecCapabilities {
+    pub direct: bool,
+    pub zsh_fork: bool,
+}
+
+impl ExecCapabilities {
+    pub const fn direct_only() -> Self {
+        Self {
+            direct: true,
+            zsh_fork: false,
+        }
+    }
+
+    pub const fn direct_and_zsh_fork() -> Self {
+        Self {
+            direct: true,
+            zsh_fork: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

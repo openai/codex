@@ -37,6 +37,7 @@ use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
+use crate::protocol::ExecCapabilities;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
@@ -130,6 +131,7 @@ impl Drop for Inner {
 #[derive(Clone)]
 pub struct ExecServerClient {
     inner: Arc<Inner>,
+    capabilities: ExecCapabilities,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -392,9 +394,19 @@ impl ExecServerClient {
             }
         });
 
-        let client = Self { inner };
-        client.initialize(options).await?;
-        Ok(client)
+        let client = Self {
+            inner,
+            capabilities: ExecCapabilities::direct_only(),
+        };
+        let initialize_response = client.initialize(options).await?;
+        Ok(Self {
+            inner: Arc::clone(&client.inner),
+            capabilities: initialize_response.capabilities,
+        })
+    }
+
+    pub fn capabilities(&self) -> ExecCapabilities {
+        self.capabilities
     }
 
     async fn notify_initialized(&self) -> Result<(), ExecServerError> {
@@ -647,6 +659,7 @@ mod tests {
     use crate::connection::JsonRpcConnection;
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+    use crate::protocol::ExecCapabilities;
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecOutputDeltaNotification;
     use crate::protocol::ExecOutputStream;
@@ -693,8 +706,10 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
-                    result: serde_json::to_value(InitializeResponse {})
-                        .expect("initialize response should serialize"),
+                    result: serde_json::to_value(InitializeResponse {
+                        capabilities: ExecCapabilities::direct_only(),
+                    })
+                    .expect("initialize response should serialize"),
                 }),
             )
             .await;
