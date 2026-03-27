@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::control::render_input_preview;
 
 pub(crate) struct Handler;
 
@@ -26,7 +27,7 @@ impl ToolHandler for Handler {
         let args: SendInputArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = parse_agent_id_target(&args.target)?;
         let input_items = parse_collab_input(args.message, args.items)?;
-        let prompt = input_preview(&input_items);
+        let prompt = render_input_preview(&input_items);
         let receiver_agent = session
             .services
             .agent_control

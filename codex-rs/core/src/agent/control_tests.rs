@@ -54,11 +54,12 @@ async fn test_config() -> (TempDir, Config) {
     test_config_with_cli_overrides(Vec::new()).await
 }
 
-fn text_input(text: &str) -> Vec<UserInput> {
+fn text_input(text: &str) -> Op {
     vec![UserInput::Text {
         text: text.to_string(),
         text_elements: Vec::new(),
     }]
+    .into()
 }
 
 struct AgentControlHarness {
@@ -217,7 +218,8 @@ async fn send_input_errors_when_manager_dropped() {
             vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
         )
         .await
         .expect_err("send_input should fail without a manager");
@@ -321,7 +323,8 @@ async fn send_input_errors_when_thread_missing() {
             vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
         )
         .await
         .expect_err("send_input should fail for missing thread");
@@ -387,7 +390,8 @@ async fn send_input_submits_user_message() {
             vec![UserInput::Text {
                 text: "hello from tests".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
         )
         .await
         .expect("send_input should succeed");

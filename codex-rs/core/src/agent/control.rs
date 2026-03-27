@@ -5,10 +5,8 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
-use crate::context_manager::is_user_turn_boundary;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::event_mapping::parse_turn_item;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
 use crate::rollout::RolloutRecorder;
@@ -20,10 +18,7 @@ use crate::thread_manager::ThreadManagerState;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -118,30 +113,36 @@ impl AgentControl {
     pub(crate) async fn spawn_agent(
         &self,
         config: crate::config::Config,
-        items: Vec<UserInput>,
+        initial_operation: Op,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
         Ok(self
-            .spawn_agent_internal(config, items, session_source, SpawnAgentOptions::default())
+            .spawn_agent_internal(
+                config,
+                initial_operation,
+                session_source,
+                SpawnAgentOptions::default(),
+            )
             .await?
             .thread_id)
     }
 
+    /// Spawn an agent thread with some metadata.
     pub(crate) async fn spawn_agent_with_metadata(
         &self,
         config: crate::config::Config,
-        items: Vec<UserInput>,
+        initial_operation: Op,
         session_source: Option<SessionSource>,
-        options: SpawnAgentOptions,
+        options: SpawnAgentOptions, // TODO(jif) drop with new fork.
     ) -> CodexResult<LiveAgent> {
-        self.spawn_agent_internal(config, items, session_source, options)
+        self.spawn_agent_internal(config, initial_operation, session_source, options)
             .await
     }
 
     async fn spawn_agent_internal(
         &self,
         config: crate::config::Config,
-        items: Vec<UserInput>,
+        initial_operation: Op,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
@@ -270,7 +271,8 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input(new_thread.thread_id, items).await?;
+        self.send_input(new_thread.thread_id, initial_operation)
+            .await?;
         let child_reference = agent_metadata
             .agent_path
             .as_ref()
@@ -468,23 +470,15 @@ impl AgentControl {
     pub(crate) async fn send_input(
         &self,
         agent_id: ThreadId,
-        items: Vec<UserInput>,
+        initial_operation: Op,
     ) -> CodexResult<String> {
-        let last_task_message = render_input_preview(&items);
+        let last_task_message = render_input_preview(&initial_operation);
         let state = self.upgrade()?;
         let result = self
             .handle_thread_request_result(
                 agent_id,
                 &state,
-                state
-                    .send_op(
-                        agent_id,
-                        Op::UserInput {
-                            items,
-                            final_output_json_schema: None,
-                        },
-                    )
-                    .await,
+                state.send_op(agent_id, initial_operation).await,
             )
             .await;
         if result.is_ok() {
@@ -766,10 +760,7 @@ impl AgentControl {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| thread_id.to_string());
-            let last_task_message = match metadata.last_task_message.clone() {
-                Some(last_task_message) => Some(last_task_message),
-                None => last_task_message_for_thread(thread.as_ref()).await,
-            };
+            let last_task_message = metadata.last_task_message.clone();
             agents.push(ListedAgent {
                 agent_name,
                 agent_status: thread.agent_status().await,
@@ -1072,79 +1063,23 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
     })
 }
 
-async fn last_task_message_for_thread(thread: &crate::CodexThread) -> Option<String> {
-    let pending_input = thread.codex.session.pending_input_snapshot().await;
-    if let Some(message) = pending_input
-        .iter()
-        .rev()
-        .find_map(last_task_message_from_input_item)
-    {
-        return Some(message);
+pub(crate) fn render_input_preview(initial_operation: &Op) -> String {
+    match initial_operation {
+        Op::UserInput { items, .. } => items
+            .iter()
+            .map(|item| match item {
+                UserInput::Text { text, .. } => text.clone(),
+                UserInput::Image { .. } => "[image]".to_string(),
+                UserInput::LocalImage { path } => format!("[local_image:{}]", path.display()),
+                UserInput::Skill { name, path } => format!("[skill:${name}]({})", path.display()),
+                UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
+                _ => "[input]".to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Op::InterAgentCommunication { communication } => communication.content.clone(),
+        _ => String::new(),
     }
-
-    let queued_input = thread
-        .codex
-        .session
-        .queued_response_items_for_next_turn_snapshot()
-        .await;
-    if let Some(message) = queued_input
-        .iter()
-        .rev()
-        .find_map(last_task_message_from_input_item)
-    {
-        return Some(message);
-    }
-
-    let history = thread.codex.session.clone_history().await;
-    history
-        .raw_items()
-        .iter()
-        .rev()
-        .find_map(last_task_message_from_item)
-}
-
-fn last_task_message_from_input_item(item: &ResponseInputItem) -> Option<String> {
-    let response_item: ResponseItem = item.clone().into();
-    last_task_message_from_item(&response_item)
-}
-
-fn last_task_message_from_item(item: &ResponseItem) -> Option<String> {
-    if !is_user_turn_boundary(item) {
-        return None;
-    }
-
-    match item {
-        ResponseItem::Message { role, .. } if role == "user" => {
-            let Some(TurnItem::UserMessage(message)) = parse_turn_item(item) else {
-                return None;
-            };
-            Some(render_input_preview(&message.content))
-        }
-        ResponseItem::Message { content, .. } => match content.as_slice() {
-            [ContentItem::InputText { text }] | [ContentItem::OutputText { text }] => {
-                serde_json::from_str::<InterAgentCommunication>(text)
-                    .ok()
-                    .map(|communication| communication.content)
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn render_input_preview(items: &[UserInput]) -> String {
-    items
-        .iter()
-        .map(|item| match item {
-            UserInput::Text { text, .. } => text.clone(),
-            UserInput::Image { .. } => "[image]".to_string(),
-            UserInput::LocalImage { path } => format!("[local_image:{}]", path.display()),
-            UserInput::Skill { name, path } => format!("[skill:${name}]({})", path.display()),
-            UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
-            _ => "[input]".to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn thread_spawn_depth(session_source: &SessionSource) -> Option<i32> {
