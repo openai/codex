@@ -8,6 +8,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use codex_features::Feature;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -29,6 +30,7 @@ use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
+use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -499,13 +501,13 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = codex_state::StateRuntime::init(
+    let state_db = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
     )
     .await
-    .ok()
-    .map(log_db::start);
+    .ok();
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -548,6 +550,32 @@ pub async fn run_main_with_transport(
             .await?;
             transport_accept_handles.push(accept_handle);
         }
+        AppServerTransport::Off => {}
+    }
+
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+    );
+    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+
+    if config.features.enabled(Feature::RemoteControl) {
+        let accept_handle = start_remote_control(
+            config.chatgpt_base_url.clone(),
+            state_db.clone(),
+            auth_manager.clone(),
+            transport_event_tx.clone(),
+            transport_shutdown_token.clone(),
+        )
+        .await?;
+        transport_accept_handles.push(accept_handle);
+    }
+    if transport_accept_handles.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "no transport configured; use --listen or enable remote control",
+        ));
     }
 
     let outbound_handle = tokio::spawn(async move {
@@ -622,7 +650,7 @@ pub async fn run_main_with_transport(
             log_db,
             config_warnings,
             session_source,
-            enable_codex_api_key_env: false,
+            auth_manager,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();

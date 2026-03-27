@@ -74,6 +74,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -377,6 +378,14 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }
         });
 
+        let auth_manager = AuthManager::shared(
+            args.config.codex_home.clone(),
+            args.enable_codex_api_key_env,
+            args.config.cli_auth_credentials_store_mode,
+        );
+        auth_manager
+            .set_forced_chatgpt_workspace_id(args.config.forced_chatgpt_workspace_id.clone());
+
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
@@ -392,7 +401,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 log_db: None,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
-                enable_codex_api_key_env: args.enable_codex_api_key_env,
+                auth_manager,
             });
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();

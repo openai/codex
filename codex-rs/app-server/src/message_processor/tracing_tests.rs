@@ -20,6 +20,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -231,6 +232,13 @@ fn build_test_processor(
     MessageProcessor,
     mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
 ) {
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+    );
+    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
     let processor = MessageProcessor::new(MessageProcessorArgs {
@@ -245,7 +253,7 @@ fn build_test_processor(
         log_db: None,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
-        enable_codex_api_key_env: false,
+        auth_manager,
     });
     (processor, outgoing_rx)
 }

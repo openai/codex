@@ -176,6 +176,8 @@ pub enum Feature {
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
+    /// Connect app-server to the ChatGPT remote control service.
+    RemoteControl,
     /// Route interactive startup to the app-server-backed TUI implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
@@ -816,6 +818,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteControl,
+        key: "remote_control",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

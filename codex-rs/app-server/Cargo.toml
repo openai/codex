@@ -52,10 +52,12 @@ codex-state = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 constant_time_eq = { workspace = true }
 futures = { workspace = true }
+gethostname = { workspace = true }
 hmac = { workspace = true }
 jsonwebtoken = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
@@ -76,6 +78,7 @@ tokio-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
