@@ -4,18 +4,73 @@ use std::path::PathBuf;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobBuilder;
+use globset::GlobMatcher;
 
 use crate::function_tool::FunctionCallError;
 
 const DENY_READ_POLICY_MESSAGE: &str =
     "access denied: reading this path is blocked by filesystem deny_read policy";
 
+pub(crate) struct ReadDenyMatcher {
+    denied_candidates: Vec<Vec<PathBuf>>,
+    deny_read_matchers: Vec<GlobMatcher>,
+}
+
+impl ReadDenyMatcher {
+    pub(crate) fn new(
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        cwd: &Path,
+    ) -> Option<Self> {
+        if !file_system_sandbox_policy.has_denied_read_restrictions() {
+            return None;
+        }
+
+        let denied_candidates = file_system_sandbox_policy
+            .get_unreadable_roots_with_cwd(cwd)
+            .into_iter()
+            .map(|path| normalized_and_canonical_candidates(path.as_path()))
+            .collect();
+        let deny_read_matchers = if cfg!(target_os = "macos") {
+            file_system_sandbox_policy
+                .deny_read_patterns()
+                .iter()
+                .filter_map(|pattern| build_glob_matcher(pattern.as_str()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Some(Self {
+            denied_candidates,
+            deny_read_matchers,
+        })
+    }
+
+    pub(crate) fn is_read_denied(&self, path: &Path) -> bool {
+        let path_candidates = normalized_and_canonical_candidates(path);
+        if self.denied_candidates.iter().any(|denied_candidates| {
+            path_candidates.iter().any(|candidate| {
+                denied_candidates.iter().any(|denied_candidate| {
+                    candidate == denied_candidate || candidate.starts_with(denied_candidate)
+                })
+            })
+        }) {
+            return true;
+        }
+
+        self.deny_read_matchers
+            .iter()
+            .any(|matcher| path_candidates.iter().any(|candidate| matcher.is_match(candidate)))
+    }
+}
+
 pub(crate) fn ensure_read_allowed(
     path: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> Result<(), FunctionCallError> {
-    if is_read_denied(path, file_system_sandbox_policy, cwd) {
+    if ReadDenyMatcher::new(file_system_sandbox_policy, cwd)
+        .is_some_and(|matcher| matcher.is_read_denied(path))
+    {
         return Err(FunctionCallError::RespondToModel(format!(
             "{DENY_READ_POLICY_MESSAGE}: `{}`",
             path.display()
@@ -24,32 +79,14 @@ pub(crate) fn ensure_read_allowed(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn is_read_denied(
     path: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> bool {
-    let denied_paths = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
-    let path_candidates = normalized_and_canonical_candidates(path);
-    if denied_paths.iter().any(|denied| {
-        let denied_candidates = normalized_and_canonical_candidates(denied.as_path());
-        path_candidates.iter().any(|candidate| {
-            denied_candidates.iter().any(|denied_candidate| {
-                candidate == denied_candidate || candidate.starts_with(denied_candidate)
-            })
-        })
-    }) {
-        return true;
-    }
-
-    if !cfg!(target_os = "macos") {
-        return false;
-    }
-
-    file_system_sandbox_policy
-        .deny_read_patterns()
-        .iter()
-        .any(|pattern| glob_pattern_matches_any_candidate(&path_candidates, pattern))
+    ReadDenyMatcher::new(file_system_sandbox_policy, cwd)
+        .is_some_and(|matcher| matcher.is_read_denied(path))
 }
 
 fn normalized_and_canonical_candidates(path: &Path) -> Vec<PathBuf> {
@@ -76,14 +113,12 @@ fn push_unique(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
-fn glob_pattern_matches_any_candidate(path_candidates: &[PathBuf], pattern: &str) -> bool {
-    let Ok(glob) = GlobBuilder::new(pattern).literal_separator(true).build() else {
-        return false;
-    };
-    let matcher = glob.compile_matcher();
-    path_candidates
-        .iter()
-        .any(|candidate| matcher.is_match(candidate))
+fn build_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .ok()
+        .map(|glob| glob.compile_matcher())
 }
 
 #[cfg(test)]
