@@ -56,6 +56,7 @@ mod original_image_detail;
 pub use codex_mcp::MCP_SANDBOX_STATE_CAPABILITY;
 pub use codex_mcp::MCP_SANDBOX_STATE_METHOD;
 pub use codex_mcp::SandboxState;
+mod mcp_openai_file;
 mod mcp_tool_call;
 mod memories;
 pub(crate) mod mention_syntax;

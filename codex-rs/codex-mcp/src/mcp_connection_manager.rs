@@ -598,6 +598,18 @@ impl AsyncManagedClient {
 
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
 
+fn server_supports_experimental_capability(
+    initialize_result: &rmcp::model::InitializeResult,
+    capability: &str,
+) -> bool {
+    initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|experimental| experimental.get(capability))
+        .is_some()
+}
+
 /// Custom MCP request to push sandbox state updates.
 /// When used, the `params` field of the notification is [`SandboxState`].
 pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
@@ -1071,27 +1083,7 @@ impl McpConnectionManager {
             ));
         }
 
-        let result: rmcp::model::CallToolResult = client
-            .client
-            .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
-            .await
-            .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
-
-        let content = result
-            .content
-            .into_iter()
-            .map(|content| {
-                serde_json::to_value(content)
-                    .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
-            })
-            .collect();
-
-        Ok(CallToolResult {
-            content,
-            structured_content: result.structured_content,
-            is_error: result.is_error,
-            meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
-        })
+        call_tool_with_client(&client, server, tool, arguments, meta).await
     }
 
     /// List resources from the specified server.
@@ -1177,6 +1169,36 @@ impl McpConnectionManager {
 
         Ok(())
     }
+}
+
+async fn call_tool_with_client(
+    client: &ManagedClient,
+    server: &str,
+    tool: &str,
+    arguments: Option<serde_json::Value>,
+    meta: Option<serde_json::Value>,
+) -> Result<CallToolResult> {
+    let result: rmcp::model::CallToolResult = client
+        .client
+        .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
+        .await
+        .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
+
+    let content = result
+        .content
+        .into_iter()
+        .map(|content| {
+            serde_json::to_value(content)
+                .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
+        })
+        .collect();
+
+    Ok(CallToolResult {
+        content,
+        structured_content: result.structured_content,
+        is_error: result.is_error,
+        meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
+    })
 }
 
 async fn emit_update(
@@ -1419,6 +1441,8 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
+    let server_supports_sandbox_state_capability =
+        server_supports_experimental_capability(&initialize_result, MCP_SANDBOX_STATE_CAPABILITY);
     let list_start = Instant::now();
     let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(
@@ -1448,12 +1472,6 @@ async fn start_server_task(
     }
     let tools = filter_tools(tools, &tool_filter);
 
-    let server_supports_sandbox_state_capability = initialize_result
-        .capabilities
-        .experimental
-        .as_ref()
-        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
-        .is_some();
     let managed = ManagedClient {
         client: Arc::clone(&client),
         tools,

@@ -1,4 +1,5 @@
 use crate::function_tool::FunctionCallError;
+use crate::mcp_openai_file::mask_model_visible_tool_input_schema;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
@@ -7,6 +8,7 @@ use crate::tools::registry::ToolKind;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -62,6 +64,11 @@ impl ToolHandler for ToolSearchHandler {
 
         let mut entries: Vec<(String, ToolInfo)> = self.tools.clone().into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_name, tool) in &mut entries {
+            if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                mask_model_visible_tool_input_schema(&mut tool.tool);
+            }
+        }
 
         if entries.is_empty() {
             return Ok(ToolSearchOutput { tools: Vec::new() });
