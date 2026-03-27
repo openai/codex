@@ -83,6 +83,75 @@ fn group_tools_by_server_strips_prefix_and_groups() {
 }
 
 #[test]
+fn group_tools_by_known_server_names_matches_unique_sanitized_alias() {
+    let mut tools = HashMap::new();
+    tools.insert("mcp__autok_local__ping".to_string(), make_tool("ping"));
+
+    let grouped = group_tools_by_known_server_names(&tools, ["autok-local"]);
+    let expected = HashMap::from([(
+        "autok-local".to_string(),
+        HashMap::from([("ping".to_string(), make_tool("ping"))]),
+    )]);
+
+    assert_eq!(grouped, expected);
+}
+
+#[test]
+fn group_tools_by_known_server_names_skips_ambiguous_aliases() {
+    let mut tools = HashMap::new();
+    tools.insert("mcp__server_one__ping".to_string(), make_tool("ping"));
+
+    let grouped = group_tools_by_known_server_names(&tools, ["server-one", "server_one"]);
+
+    assert!(grouped.is_empty());
+}
+
+#[test]
+fn group_tools_by_known_server_names_matches_server_names_with_delimiters() {
+    let mut tools = HashMap::new();
+    tools.insert("mcp__foo__bar__ping".to_string(), make_tool("ping"));
+
+    let grouped = group_tools_by_known_server_names(&tools, ["foo__bar"]);
+    let expected = HashMap::from([(
+        "foo__bar".to_string(),
+        HashMap::from([("ping".to_string(), make_tool("ping"))]),
+    )]);
+
+    assert_eq!(grouped, expected);
+}
+
+#[test]
+fn group_tools_by_known_server_names_does_not_match_shorter_delimited_prefixes() {
+    let mut tools = HashMap::new();
+    tools.insert("mcp__foo__bar__beta".to_string(), make_tool("beta"));
+
+    let grouped = group_tools_by_known_server_names(&tools, ["foo", "foo__bar"]);
+    let expected = HashMap::from([(
+        "foo__bar".to_string(),
+        HashMap::from([("beta".to_string(), make_tool("beta"))]),
+    )]);
+
+    assert_eq!(grouped, expected);
+}
+
+#[test]
+fn group_tools_by_known_server_names_preserves_exposed_tool_suffixes() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "mcp__server_one__tool_two_three".to_string(),
+        make_tool("tool.two-three"),
+    );
+
+    let grouped = group_tools_by_known_server_names(&tools, ["server-one"]);
+    let expected = HashMap::from([(
+        "server-one".to_string(),
+        HashMap::from([("tool_two_three".to_string(), make_tool("tool.two-three"))]),
+    )]);
+
+    assert_eq!(grouped, expected);
+}
+
+#[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
     let provenance = ToolPluginProvenance::from_capability_summaries(&[
         PluginCapabilitySummary {

@@ -219,7 +219,7 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::mcp::auth::discover_supported_scopes;
 use codex_core::mcp::auth::resolve_oauth_scopes;
 use codex_core::mcp::collect_mcp_snapshot;
-use codex_core::mcp::group_tools_by_server;
+use codex_core::mcp::group_tools_by_known_server_names;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
@@ -268,6 +268,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
+use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
@@ -5013,80 +5014,14 @@ impl CodexMessageProcessor {
         config: Config,
     ) {
         let snapshot = collect_mcp_snapshot(&config).await;
-
-        let tools_by_server = group_tools_by_server(&snapshot.tools);
-
-        let mut server_names: Vec<String> = config
-            .mcp_servers
-            .keys()
-            .cloned()
-            .chain(snapshot.auth_statuses.keys().cloned())
-            .chain(snapshot.resources.keys().cloned())
-            .chain(snapshot.resource_templates.keys().cloned())
-            .collect();
-        server_names.sort();
-        server_names.dedup();
-
-        let total = server_names.len();
-        let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
-        let effective_limit = limit.min(total);
-        let start = match params.cursor {
-            Some(cursor) => match cursor.parse::<usize>() {
-                Ok(idx) => idx,
-                Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid cursor: {cursor}"),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            },
-            None => 0,
-        };
-
-        if start > total {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("cursor {start} exceeds total MCP servers {total}"),
-                data: None,
-            };
-            outgoing.send_error(request_id, error).await;
-            return;
+        match build_list_mcp_server_status_response(
+            &params,
+            config.mcp_servers.keys().cloned(),
+            &snapshot,
+        ) {
+            Ok(response) => outgoing.send_response(request_id, response).await,
+            Err(error) => outgoing.send_error(request_id, error).await,
         }
-
-        let end = start.saturating_add(effective_limit).min(total);
-
-        let data: Vec<McpServerStatus> = server_names[start..end]
-            .iter()
-            .map(|name| McpServerStatus {
-                name: name.clone(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
-                resource_templates: snapshot
-                    .resource_templates
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_default(),
-                auth_status: snapshot
-                    .auth_statuses
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                    .into(),
-            })
-            .collect();
-
-        let next_cursor = if end < total {
-            Some(end.to_string())
-        } else {
-            None
-        };
-
-        let response = ListMcpServerStatusResponse { data, next_cursor };
-
-        outgoing.send_response(request_id, response).await;
     }
 
     async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
@@ -7680,6 +7615,74 @@ enum ThreadTurnSource<'a> {
     HistoryItems(&'a [RolloutItem]),
 }
 
+fn build_list_mcp_server_status_response<I, S>(
+    params: &ListMcpServerStatusParams,
+    configured_server_names: I,
+    snapshot: &McpListToolsResponseEvent,
+) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut server_names: Vec<String> = configured_server_names
+        .into_iter()
+        .map(Into::into)
+        .chain(snapshot.auth_statuses.keys().cloned())
+        .chain(snapshot.resources.keys().cloned())
+        .chain(snapshot.resource_templates.keys().cloned())
+        .collect();
+    server_names.sort();
+    server_names.dedup();
+
+    let tools_by_server = group_tools_by_known_server_names(&snapshot.tools, server_names.iter());
+
+    let total = server_names.len();
+    let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
+    let effective_limit = limit.min(total);
+    let start = match params.cursor.as_ref() {
+        Some(cursor) => cursor.parse::<usize>().map_err(|_| JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: format!("invalid cursor: {cursor}"),
+            data: None,
+        })?,
+        None => 0,
+    };
+
+    if start > total {
+        return Err(JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: format!("cursor {start} exceeds total MCP servers {total}"),
+            data: None,
+        });
+    }
+
+    let end = start.saturating_add(effective_limit).min(total);
+
+    let data: Vec<McpServerStatus> = server_names[start..end]
+        .iter()
+        .map(|name| McpServerStatus {
+            name: name.clone(),
+            tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+            resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
+            resource_templates: snapshot
+                .resource_templates
+                .get(name)
+                .cloned()
+                .unwrap_or_default(),
+            auth_status: snapshot
+                .auth_statuses
+                .get(name)
+                .cloned()
+                .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                .into(),
+        })
+        .collect();
+
+    let next_cursor = (end < total).then(|| end.to_string());
+
+    Ok(ListMcpServerStatusResponse { data, next_cursor })
+}
+
 async fn populate_thread_turns(
     thread: &mut Thread,
     turn_source: ThreadTurnSource<'_>,
@@ -9197,6 +9200,46 @@ mod tests {
         );
         assert!(outgoing_rx.try_recv().is_err());
         Ok(())
+    }
+
+    #[test]
+    fn list_mcp_server_status_response_matches_hyphenated_server_names() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "mcp__autok_local__ping".to_string(),
+            codex_protocol::mcp::Tool {
+                description: None,
+                name: "ping".to_string(),
+                title: None,
+                input_schema: json!({"type": "object", "properties": {}}),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
+            },
+        );
+        let snapshot = McpListToolsResponseEvent {
+            tools,
+            resources: HashMap::new(),
+            resource_templates: HashMap::new(),
+            auth_statuses: HashMap::new(),
+        };
+
+        let response = build_list_mcp_server_status_response(
+            &ListMcpServerStatusParams {
+                cursor: None,
+                limit: None,
+            },
+            ["autok-local".to_string()],
+            &snapshot,
+        )
+        .expect("status response should build");
+
+        assert_eq!(response.next_cursor, None);
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].name, "autok-local");
+        assert_eq!(response.data[0].tools.len(), 1);
+        assert!(response.data[0].tools.contains_key("ping"));
     }
 
     #[test]

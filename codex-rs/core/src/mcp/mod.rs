@@ -3,6 +3,7 @@ mod skill_dependencies;
 pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +16,8 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use serde_json::Value;
+use sha1::Digest;
+use sha1::Sha1;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -30,6 +33,7 @@ use crate::plugins::PluginsManager;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
+const MAX_RESPONSES_API_TOOL_NAME_LENGTH: usize = 64;
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
@@ -304,6 +308,48 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     snapshot
 }
 
+/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
+/// name we expose to the model by replacing any disallowed character with `_`.
+pub(crate) fn sanitize_responses_api_tool_name(name: &str) -> String {
+    let mut sanitized = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            sanitized.push(c);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    if sanitized.is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
+    }
+}
+
+pub(crate) fn qualify_responses_api_tool_name_from_raw(raw_name: &str) -> String {
+    let mut qualified_name = sanitize_responses_api_tool_name(raw_name);
+    if qualified_name.len() > MAX_RESPONSES_API_TOOL_NAME_LENGTH {
+        let mut hasher = Sha1::new();
+        hasher.update(raw_name.as_bytes());
+        let sha1_str = format!("{:x}", hasher.finalize());
+        let prefix_len = MAX_RESPONSES_API_TOOL_NAME_LENGTH - sha1_str.len();
+        qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
+    }
+    qualified_name
+}
+
+pub(crate) fn qualify_mcp_tool_name_for_responses_api(
+    server_name: &str,
+    tool_name: &str,
+) -> String {
+    let raw_name = format!(
+        "{MCP_TOOL_NAME_PREFIX}{MCP_TOOL_NAME_DELIMITER}{server_name}{MCP_TOOL_NAME_DELIMITER}{tool_name}"
+    );
+    qualify_responses_api_tool_name_from_raw(&raw_name)
+}
+
 pub fn split_qualified_tool_name(qualified_name: &str) -> Option<(String, String)> {
     let mut parts = qualified_name.split(MCP_TOOL_NAME_DELIMITER);
     let prefix = parts.next()?;
@@ -331,6 +377,61 @@ pub fn group_tools_by_server(
         }
     }
     grouped
+}
+
+/// Associate grouped MCP tools back to known raw server names.
+///
+/// Resolve tool buckets only when a qualified tool key maps back to a single
+/// known raw server name. This avoids guessing when names like `server-one`
+/// and `server_one` collapse to the same exposed key while still supporting
+/// raw server and tool names that contain the delimiter.
+pub fn group_tools_by_known_server_names<I, S>(
+    tools: &HashMap<String, Tool>,
+    server_names: I,
+) -> HashMap<String, HashMap<String, Tool>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut seen = HashSet::new();
+    let server_names: Vec<String> = server_names
+        .into_iter()
+        .filter_map(|name| {
+            let name = name.as_ref().to_string();
+            if seen.insert(name.clone()) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut resolved = HashMap::new();
+    for (qualified_name, tool) in tools {
+        let matching_servers: Vec<&String> = server_names
+            .iter()
+            .filter(|server_name| {
+                qualify_mcp_tool_name_for_responses_api(server_name, &tool.name) == *qualified_name
+            })
+            .collect();
+
+        if let [server_name] = matching_servers.as_slice() {
+            let prefix = format!(
+                "{MCP_TOOL_NAME_PREFIX}{MCP_TOOL_NAME_DELIMITER}{}{MCP_TOOL_NAME_DELIMITER}",
+                sanitize_responses_api_tool_name(server_name)
+            );
+            if let Some(tool_key) = qualified_name.strip_prefix(&prefix)
+                && !tool_key.is_empty()
+            {
+                resolved
+                    .entry((*server_name).clone())
+                    .or_insert_with(HashMap::new)
+                    .insert(tool_key.to_string(), tool.clone());
+            }
+        }
+    }
+
+    resolved
 }
 
 pub(crate) async fn collect_mcp_snapshot_from_manager(

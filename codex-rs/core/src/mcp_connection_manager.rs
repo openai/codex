@@ -22,6 +22,7 @@ use std::time::Instant;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::mcp::auth::McpAuthStatusEntry;
+use crate::mcp::qualify_responses_api_tool_name_from_raw;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -90,7 +91,6 @@ use crate::connectors::sanitize_name;
 /// OpenAI requires tool names to conform to `^[a-zA-Z0-9_-]+$`, so we must
 /// choose a delimiter from this character set.
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Default timeout for initializing MCP server & initially listing tools.
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -103,26 +103,6 @@ const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
 const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
-
-/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
-/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
-/// name we expose to the model by replacing any disallowed character with `_`.
-fn sanitize_responses_api_tool_name(name: &str) -> String {
-    let mut sanitized = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            sanitized.push(c);
-        } else {
-            sanitized.push('_');
-        }
-    }
-
-    if sanitized.is_empty() {
-        "_".to_string()
-    } else {
-        sanitized
-    }
-}
 
 fn sha1_hex(s: &str) -> String {
     let mut hasher = Sha1::new();
@@ -176,15 +156,7 @@ where
         // Start from a "pretty" name (sanitized), then deterministically disambiguate on
         // collisions by appending a hash of the *raw* (unsanitized) qualified name. This
         // ensures tools like `foo.bar` and `foo_bar` don't collapse to the same key.
-        let mut qualified_name = sanitize_responses_api_tool_name(&qualified_name_raw);
-
-        // Enforce length constraints early; use the raw name for the hash input so the
-        // output remains stable even when sanitization changes.
-        if qualified_name.len() > MAX_TOOL_NAME_LENGTH {
-            let sha1_str = sha1_hex(&qualified_name_raw);
-            let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
-            qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
-        }
+        let qualified_name = qualify_responses_api_tool_name_from_raw(&qualified_name_raw);
 
         if used_names.contains(&qualified_name) {
             warn!("skipping duplicated tool {}", qualified_name);

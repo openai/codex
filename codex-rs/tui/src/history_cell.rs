@@ -42,6 +42,7 @@ use base64::Engine;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::mcp::McpManager;
+use codex_core::mcp::group_tools_by_known_server_names;
 use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
@@ -1822,13 +1823,16 @@ pub(crate) fn new_mcp_tools_output(
     let effective_servers = mcp_manager.effective_servers(config, /*auth*/ None);
     let mut servers: Vec<_> = effective_servers.iter().collect();
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let tools_by_server = group_tools_by_known_server_names(
+        &tools,
+        servers.iter().map(|(server, _)| server.as_str()),
+    );
 
     for (server, cfg) in servers {
-        let prefix = format!("mcp__{server}__");
-        let mut names: Vec<String> = tools
-            .keys()
-            .filter(|k| k.starts_with(&prefix))
-            .map(|k| k[prefix.len()..].to_string())
+        let mut names: Vec<String> = tools_by_server
+            .get(server.as_str())
+            .into_iter()
+            .flat_map(|server_tools| server_tools.keys().cloned())
             .collect();
         names.sort();
 
@@ -2986,6 +2990,67 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(120)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    async fn config_with_mcp_server(server_name: &str) -> Config {
+        let mut config = test_config().await;
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            server_name.to_string(),
+            McpServerConfig {
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: None,
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+            },
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+        config
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_matches_hyphenated_server_names() {
+        let config = config_with_mcp_server("autok-local").await;
+        let mut tools = HashMap::new();
+        tools.insert(
+            "mcp__autok_local__ping".to_string(),
+            Tool {
+                description: None,
+                name: "ping".to_string(),
+                title: None,
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
+            },
+        );
+
+        let cell = new_mcp_tools_output(
+            &config,
+            tools,
+            HashMap::new(),
+            HashMap::new(),
+            &HashMap::new(),
+        );
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+
+        assert!(rendered.contains("autok-local"));
+        assert!(rendered.contains("Tools: ping"), "{rendered}");
     }
 
     #[test]
