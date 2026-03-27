@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 
@@ -94,7 +95,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut warnings,
                 &mut display_order,
                 source_path.as_path(),
-                layer.is_project_layer(),
+                matches!(layer.name, ConfigLayerSource::Project { .. }),
                 event_name,
                 groups,
             );
