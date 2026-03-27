@@ -10,6 +10,11 @@ export type NetworkRequirements = { enabled: boolean | null, httpPort: number | 
  */
 domains: { [key in string]?: NetworkDomainPermission } | null, 
 /**
+ * When true, only managed allowlist entries are respected while managed
+ * network enforcement is active.
+ */
+managedAllowedDomainsOnly: boolean | null, 
+/**
  * Legacy compatibility view derived from `domains`.
  */
 allowedDomains: Array<string> | null, 

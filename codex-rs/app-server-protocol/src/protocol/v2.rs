@@ -873,6 +873,9 @@ pub struct NetworkRequirements {
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     /// Canonical network permission map for `experimental_network`.
     pub domains: Option<BTreeMap<String, NetworkDomainPermission>>,
+    /// When true, only managed allowlist entries are respected while managed
+    /// network enforcement is active.
+    pub managed_allowed_domains_only: Option<bool>,
     /// Legacy compatibility view derived from `domains`.
     pub allowed_domains: Option<Vec<String>>,
     /// Legacy compatibility view derived from `domains`.
@@ -7718,6 +7721,7 @@ mod tests {
                 dangerously_allow_non_loopback_proxy: None,
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
+                managed_allowed_domains_only: None,
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["blocked.example.com".to_string()]),
                 unix_sockets: None,
@@ -7743,6 +7747,7 @@ mod tests {
                     NetworkDomainPermission::Deny,
                 ),
             ])),
+            managed_allowed_domains_only: Some(true),
             allowed_domains: Some(vec!["api.openai.com".to_string()]),
             denied_domains: Some(vec!["blocked.example.com".to_string()]),
             unix_sockets: Some(BTreeMap::from([
@@ -7772,6 +7777,7 @@ mod tests {
                     "api.openai.com": "allow",
                     "blocked.example.com": "deny"
                 },
+                "managedAllowedDomainsOnly": true,
                 "allowedDomains": ["api.openai.com"],
                 "deniedDomains": ["blocked.example.com"],
                 "unixSockets": {

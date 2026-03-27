@@ -442,6 +442,7 @@ fn map_network_requirements_to_api(
                 })
                 .collect()
         }),
+        managed_allowed_domains_only: network.managed_allowed_domains_only,
         allowed_domains,
         denied_domains,
         unix_sockets: network.unix_sockets.map(|unix_sockets| {
@@ -633,6 +634,7 @@ mod tests {
                     ("api.openai.com".to_string(), NetworkDomainPermission::Allow,),
                     ("example.com".to_string(), NetworkDomainPermission::Deny),
                 ])),
+                managed_allowed_domains_only: Some(false),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -688,6 +690,7 @@ mod tests {
                 dangerously_allow_non_loopback_proxy: None,
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
+                managed_allowed_domains_only: None,
                 allowed_domains: None,
                 denied_domains: None,
                 unix_sockets: Some(std::collections::BTreeMap::from([(
