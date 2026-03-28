@@ -2753,6 +2753,14 @@ impl App {
         Self::is_terminal_thread_read_error(err) || existing_is_closed.unwrap_or(false)
     }
 
+    fn is_unmaterialized_include_turns_error(err: &color_eyre::Report) -> bool {
+        err.chain().any(|cause| {
+            cause
+                .to_string()
+                .contains("includeTurns is unavailable before first user message")
+        })
+    }
+
     /// Updates cached picker metadata and then mirrors any visible-label change into the footer.
     ///
     /// These two writes stay paired so the picker rows and contextual footer continue to describe
@@ -2783,6 +2791,48 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    async fn session_state_for_thread_read(
+        &self,
+        thread_id: ThreadId,
+        thread: &codex_app_server_protocol::Thread,
+    ) -> ThreadSessionState {
+        let mut session = self
+            .primary_session_configured
+            .clone()
+            .unwrap_or(ThreadSessionState {
+                thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: self.chat_widget.current_model().to_string(),
+                model_provider_id: self.config.model_provider_id.clone(),
+                service_tier: self.chat_widget.current_service_tier(),
+                approval_policy: self.config.permissions.approval_policy.value(),
+                approvals_reviewer: self.config.approvals_reviewer,
+                sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                cwd: thread.cwd.clone(),
+                reasoning_effort: self.chat_widget.current_reasoning_effort(),
+                history_log_id: 0,
+                history_entry_count: 0,
+                network_proxy: None,
+                rollout_path: thread.path.clone(),
+            });
+        session.thread_id = thread_id;
+        session.thread_name = thread.name.clone();
+        session.model_provider_id = thread.model_provider.clone();
+        session.cwd = thread.cwd.clone();
+        session.rollout_path = thread.path.clone();
+        if let Some(model) =
+            read_session_model(&self.config, thread_id, thread.path.as_deref()).await
+        {
+            session.model = model;
+        } else if thread.path.is_some() {
+            session.model.clear();
+        }
+        session.history_log_id = 0;
+        session.history_entry_count = 0;
+        session
+    }
+
     /// Materializes a live thread into local replay state when the picker knows about it but the
     /// TUI has not cached a local event channel yet.
     ///
@@ -2798,10 +2848,26 @@ impl App {
             return Ok(());
         }
 
-        let started = app_server.resume_thread(self.config.clone(), thread_id).await?;
+        let (thread, turns) = match app_server
+            .thread_read(thread_id, /*include_turns*/ true)
+            .await
+        {
+            Ok(thread) => {
+                let turns = thread.turns.clone();
+                (thread, turns)
+            }
+            Err(err) if Self::is_unmaterialized_include_turns_error(&err) => {
+                let thread = app_server
+                    .thread_read(thread_id, /*include_turns*/ false)
+                    .await?;
+                (thread, Vec::new())
+            }
+            Err(err) => return Err(err),
+        };
+        let session = self.session_state_for_thread_read(thread_id, &thread).await;
         let channel = self.ensure_thread_channel(thread_id);
         let mut store = channel.store.lock().await;
-        store.set_session(started.session, started.turns);
+        store.set_session(session, turns);
         Ok(())
     }
 
@@ -2841,13 +2907,15 @@ impl App {
             return Ok(());
         }
 
-        if !self.thread_event_channels.contains_key(&thread_id) {
-            if let Err(err) = self.attach_live_thread_for_selection(app_server, thread_id).await {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to attach to agent thread {thread_id}: {err}"
-                ));
-                return Ok(());
-            }
+        if !self.thread_event_channels.contains_key(&thread_id)
+            && let Err(err) = self
+                .attach_live_thread_for_selection(app_server, thread_id)
+                .await
+        {
+            self.chat_widget.add_error_message(format!(
+                "Failed to attach to agent thread {thread_id}: {err}"
+            ));
+            return Ok(());
         }
         let is_replay_only = self
             .agent_navigation
@@ -7138,7 +7206,9 @@ mod tests {
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
                 .await
                 .expect("embedded app server");
-        let started = app_server.start_thread(app.chat_widget.config_ref()).await?;
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
         let thread_id = started.session.thread_id;
         app.agent_navigation.upsert(
             thread_id,
