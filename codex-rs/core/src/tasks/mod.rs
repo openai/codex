@@ -30,6 +30,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
+use crate::protocol::TokenUsage;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;

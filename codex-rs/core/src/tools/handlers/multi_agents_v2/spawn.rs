@@ -5,6 +5,7 @@ use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use codex_protocol::AgentPath;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 
@@ -170,6 +171,11 @@ impl ToolHandler for Handler {
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
+                    spawn_mode: if args.fork_context {
+                        AgentSpawnMode::Fork
+                    } else {
+                        AgentSpawnMode::Spawn
+                    },
                     status,
                 }
                 .into(),
