@@ -42,6 +42,7 @@ pub use file_system::FileMetadata;
 pub use file_system::FileSystemResult;
 pub use file_system::ReadDirectoryEntry;
 pub use file_system::RemoveOptions;
+pub use local_file_system::LOCAL_FS;
 pub use process::ExecBackend;
 pub use process::ExecProcess;
 pub use process::StartedExecProcess;

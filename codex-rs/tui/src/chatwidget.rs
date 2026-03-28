@@ -7173,33 +7173,55 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
-        let default_usage = TokenUsage::default();
-        let token_info = self.token_info.as_ref();
+        let config = self.config.clone();
+        let account_display = self.status_account_display.clone();
+        let token_info = self.token_info.clone();
         let total_usage = token_info
-            .map(|ti| &ti.total_token_usage)
-            .unwrap_or(&default_usage);
-        let collaboration_mode = self.collaboration_mode_label();
+            .as_ref()
+            .map(|info| info.total_token_usage.clone())
+            .unwrap_or_default();
+        let collaboration_mode = self.collaboration_mode_label().map(str::to_owned);
         let reasoning_effort_override = Some(self.effective_reasoning_effort());
         let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
             .rate_limit_snapshots_by_limit_id
             .values()
             .cloned()
             .collect();
-        self.add_to_history(crate::status::new_status_output_with_rate_limits(
-            &self.config,
-            self.status_account_display.as_ref(),
-            token_info,
-            total_usage,
-            &self.thread_id,
-            self.thread_name.clone(),
-            self.forked_from,
-            rate_limit_snapshots.as_slice(),
-            self.plan_type,
-            Local::now(),
-            self.model_display_name(),
-            collaboration_mode,
-            reasoning_effort_override,
-        ));
+        let session_id = self.thread_id;
+        let thread_name = self.thread_name.clone();
+        let forked_from = self.forked_from;
+        let plan_type = self.plan_type;
+        let now = Local::now();
+        let model_name = self.model_display_name().to_string();
+        let tx = self.app_event_tx.clone();
+
+        tokio::spawn(async move {
+            let agents_summary = match crate::status::discover_agents_summary(&config).await {
+                Ok(summary) => summary,
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to discover project docs for /status");
+                    "<none>".to_string()
+                }
+            };
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                crate::status::new_status_output_with_rate_limits(
+                    &config,
+                    account_display.as_ref(),
+                    token_info.as_ref(),
+                    &total_usage,
+                    &session_id,
+                    thread_name,
+                    forked_from,
+                    rate_limit_snapshots.as_slice(),
+                    plan_type,
+                    now,
+                    &model_name,
+                    collaboration_mode.as_deref(),
+                    reasoning_effort_override,
+                    agents_summary,
+                ),
+            )));
+        });
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {
