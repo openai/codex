@@ -5296,10 +5296,11 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
 async fn root_agent_prompt_only_includes_watchdog_fragment_when_enabled() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
 
-    let without_watchdog = load_root_agent_prompt(codex_home.path(), false).await;
+    let without_watchdog =
+        load_root_agent_prompt(codex_home.path(), /*include_watchdog*/ false).await;
     assert!(!without_watchdog.contains("## Watchdogs"));
 
-    let with_watchdog = load_root_agent_prompt(codex_home.path(), true).await;
+    let with_watchdog = load_root_agent_prompt(codex_home.path(), /*include_watchdog*/ true).await;
     assert!(with_watchdog.contains("## Watchdogs"));
 }
 
@@ -5307,9 +5308,10 @@ async fn root_agent_prompt_only_includes_watchdog_fragment_when_enabled() {
 async fn subagent_prompt_only_includes_watchdog_fragment_when_enabled() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
 
-    let without_watchdog = load_subagent_prompt(codex_home.path(), false).await;
+    let without_watchdog =
+        load_subagent_prompt(codex_home.path(), /*include_watchdog*/ false).await;
     assert!(!without_watchdog.contains("## Watchdog-only Guidance"));
 
-    let with_watchdog = load_subagent_prompt(codex_home.path(), true).await;
+    let with_watchdog = load_subagent_prompt(codex_home.path(), /*include_watchdog*/ true).await;
     assert!(with_watchdog.contains("## Watchdog-only Guidance"));
 }
