@@ -1208,6 +1208,21 @@
         }
       ]
     },
+    "McpResourceReadParams": {
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "uri"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginParams": {
       "properties": {
         "name": {
@@ -4418,6 +4433,30 @@
         "params"
       ],
       "title": "McpServerStatus/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "mcpResource/read"
+          ],
+          "title": "McpResource/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpResourceReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "McpResource/readRequest",
       "type": "object"
     },
     {

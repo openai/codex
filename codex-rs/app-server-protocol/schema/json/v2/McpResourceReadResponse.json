@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "contents": {
+      "items": true,
+      "type": "array"
+    }
+  },
+  "required": [
+    "contents"
+  ],
+  "title": "McpResourceReadResponse",
+  "type": "object"
+}

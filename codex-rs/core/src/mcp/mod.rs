@@ -14,16 +14,20 @@ use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
+use rmcp::model::ReadResourceRequestParams;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::config::Config;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
+use crate::mcp::auth::McpAuthStatusEntry;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
+use crate::mcp_connection_manager::ToolInfo;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginsManager;
@@ -277,6 +281,52 @@ fn effective_mcp_servers(
 }
 
 pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent {
+    let (mcp_connection_manager, cancel_token, auth_status_entries) =
+        new_mcp_connection_manager(config).await;
+    if !mcp_connection_manager.has_servers() {
+        cancel_token.cancel();
+        return McpListToolsResponseEvent {
+            tools: HashMap::new(),
+            resources: HashMap::new(),
+            resource_templates: HashMap::new(),
+            auth_statuses: HashMap::new(),
+        };
+    }
+
+    let snapshot =
+        collect_mcp_snapshot_from_manager(&mcp_connection_manager, auth_status_entries).await;
+
+    cancel_token.cancel();
+
+    snapshot
+}
+
+pub async fn read_mcp_resource(config: &Config, server: &str, uri: &str) -> anyhow::Result<Value> {
+    let (mcp_connection_manager, cancel_token, _auth_status_entries) =
+        new_mcp_connection_manager(config).await;
+
+    let result = mcp_connection_manager
+        .read_resource(
+            server,
+            ReadResourceRequestParams {
+                meta: None,
+                uri: uri.to_string(),
+            },
+        )
+        .await;
+
+    cancel_token.cancel();
+
+    Ok(serde_json::to_value(result?)?)
+}
+
+async fn new_mcp_connection_manager(
+    config: &Config,
+) -> (
+    McpConnectionManager,
+    CancellationToken,
+    HashMap<String, McpAuthStatusEntry>,
+) {
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
         /*enable_codex_api_key_env*/ false,
@@ -287,12 +337,13 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let mcp_servers = mcp_manager.effective_servers(config, auth.as_ref());
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
-        return McpListToolsResponseEvent {
-            tools: HashMap::new(),
-            resources: HashMap::new(),
-            resource_templates: HashMap::new(),
-            auth_statuses: HashMap::new(),
-        };
+        let cancel_token = CancellationToken::new();
+        cancel_token.cancel();
+        return (
+            McpConnectionManager::new_uninitialized(&config.permissions.approval_policy),
+            cancel_token,
+            HashMap::new(),
+        );
     }
 
     let auth_status_entries =
@@ -301,7 +352,6 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    // Use ReadOnly sandbox policy for MCP snapshot collection (safest default)
     let sandbox_state = SandboxState {
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
@@ -322,12 +372,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     )
     .await;
 
-    let snapshot =
-        collect_mcp_snapshot_from_manager(&mcp_connection_manager, auth_status_entries).await;
-
-    cancel_token.cancel();
-
-    snapshot
+    (mcp_connection_manager, cancel_token, auth_status_entries)
 }
 
 pub fn split_qualified_tool_name(qualified_name: &str) -> Option<(String, String)> {
@@ -359,6 +404,21 @@ pub fn group_tools_by_server(
     grouped
 }
 
+fn get_mcp_snapshot_tool_name(tool: &ToolInfo) -> String {
+    if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+        format!(
+            "{}{}{}{}{}",
+            MCP_TOOL_NAME_PREFIX,
+            MCP_TOOL_NAME_DELIMITER,
+            tool.server_name,
+            MCP_TOOL_NAME_DELIMITER,
+            tool.tool_name
+        )
+    } else {
+        format!("{}{}", tool.tool_namespace, tool.tool_name)
+    }
+}
+
 pub(crate) async fn collect_mcp_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
@@ -376,16 +436,22 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
 
     let tools = tools
         .into_iter()
-        .filter_map(|(name, tool)| match serde_json::to_value(tool.tool) {
+        .filter_map(|(_name, tool)| match serde_json::to_value(&tool.tool) {
             Ok(value) => match Tool::from_mcp_value(value) {
-                Ok(tool) => Some((name, tool)),
+                Ok(tool_value) => Some((get_mcp_snapshot_tool_name(&tool), tool_value)),
                 Err(err) => {
-                    tracing::warn!("Failed to convert MCP tool '{name}': {err}");
+                    tracing::warn!(
+                        "Failed to convert MCP tool '{}': {err}",
+                        get_mcp_snapshot_tool_name(&tool)
+                    );
                     None
                 }
             },
             Err(err) => {
-                tracing::warn!("Failed to serialize MCP tool '{name}': {err}");
+                tracing::warn!(
+                    "Failed to serialize MCP tool '{}': {err}",
+                    get_mcp_snapshot_tool_name(&tool)
+                );
                 None
             }
         })

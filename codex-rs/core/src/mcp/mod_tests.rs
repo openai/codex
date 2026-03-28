@@ -50,6 +50,10 @@ fn split_qualified_tool_name_returns_server_and_tool() {
         split_qualified_tool_name("mcp__alpha__do_thing"),
         Some(("alpha".to_string(), "do_thing".to_string()))
     );
+    assert_eq!(
+        split_qualified_tool_name("mcp__basic-react__get-time"),
+        Some(("basic-react".to_string(), "get-time".to_string()))
+    );
 }
 
 #[test]
