@@ -147,7 +147,7 @@ impl CodeModeService {
         let inner = Arc::clone(&self.inner);
         let turn_message_rx = Arc::clone(&self.inner.turn_message_rx);
 
-        tokio::spawn(async move {
+        let worker_handle = tokio::spawn(async move {
             loop {
                 let next_message = tokio::select! {
                     _ = &mut shutdown_rx => break,
@@ -205,6 +205,7 @@ impl CodeModeService {
 
         CodeModeTurnWorker {
             shutdown_tx: Some(shutdown_tx),
+            worker_handle: Some(worker_handle),
         }
     }
 }
@@ -217,13 +218,29 @@ impl Default for CodeModeService {
 
 pub struct CodeModeTurnWorker {
     shutdown_tx: Option<oneshot::Sender<()>>,
+    worker_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl CodeModeTurnWorker {
+    fn signal_shutdown(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+    }
+
+    pub async fn shutdown(mut self) {
+        self.signal_shutdown();
+        if let Some(worker_handle) = self.worker_handle.take()
+            && let Err(err) = worker_handle.await
+        {
+            warn!("code mode turn worker task failed to join cleanly: {err}");
+        }
+    }
 }
 
 impl Drop for CodeModeTurnWorker {
     fn drop(&mut self) {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
+        self.signal_shutdown();
     }
 }
 
