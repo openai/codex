@@ -3619,8 +3619,8 @@ mod tests {
                 latest_update_at: Instant::now(),
             }],
         }));
-        let cell = SubagentStatusCell::new(state, true);
-        let lines = render_lines(&cell.display_lines(120));
+        let cell = SubagentStatusCell::new(state, /*animations_enabled*/ true);
+        let lines = render_lines(&cell.display_lines(/*width*/ 120));
 
         assert!(lines[0].contains("no subagents running"));
         assert!(lines[1].contains("[watchdog] watchdog-agent idle"));
@@ -3641,7 +3641,7 @@ mod tests {
                 latest_update_at: Instant::now(),
             }],
         }));
-        let cell = SubagentStatusCell::new(state, true);
+        let cell = SubagentStatusCell::new(state, /*animations_enabled*/ true);
 
         assert_eq!(cell.transcript_animation_tick(), None);
     }
@@ -3661,7 +3661,7 @@ mod tests {
                 latest_update_at: Instant::now(),
             }],
         }));
-        let cell = SubagentStatusCell::new(state, true);
+        let cell = SubagentStatusCell::new(state, /*animations_enabled*/ true);
 
         assert!(
             cell.transcript_animation_tick().is_some(),
@@ -3687,7 +3687,7 @@ mod tests {
                 latest_update_at: stale_update,
             }],
         }));
-        let cell = SubagentStatusCell::new(state, true);
+        let cell = SubagentStatusCell::new(state, /*animations_enabled*/ true);
 
         assert_eq!(cell.transcript_animation_tick(), None);
     }

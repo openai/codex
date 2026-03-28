@@ -426,7 +426,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
 
 #[tokio::test]
 async fn thread_snapshot_replay_deduplicates_agent_inbox_compatibility_items() {
-    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let sender =
         ThreadId::from_string("019cbff7-558b-77d3-8653-8238ab5361ec").expect("valid thread id");
