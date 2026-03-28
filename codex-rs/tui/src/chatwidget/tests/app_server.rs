@@ -28,6 +28,7 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             prompt: "Explore the repo".to_string(),
             model: "gpt-5".to_string(),
             reasoning_effort: ReasoningEffortConfig::High,
+            spawn_mode: codex_protocol::protocol::AgentSpawnMode::Spawn,
             status: AgentStatus::PendingInit,
         }),
     });

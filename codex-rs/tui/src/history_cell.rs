@@ -643,7 +643,7 @@ pub(crate) fn new_subagent_spawned_cell(name: &str, prompt_preview: &str) -> Pla
     if !preview.is_empty() {
         lines.push(Line::from(vec![
             "  └ ".dim(),
-            Span::from(format!("\"{preview}\"" )).dim(),
+            Span::from(format!("\"{preview}\"")).dim(),
         ]));
     }
 
@@ -689,7 +689,7 @@ fn status_span_for_panel(agent: &SubagentPanelAgent) -> Span<'static> {
     match &agent.status {
         AgentStatus::PendingInit if agent.is_watchdog => "idle".dim(),
         AgentStatus::PendingInit | AgentStatus::Running => "running".cyan().bold(),
-        AgentStatus::Interrupted => "interrupted".yellow(),
+        AgentStatus::Interrupted => "interrupted".magenta(),
         AgentStatus::Completed(_) => "completed".green(),
         AgentStatus::Errored(_) => "errored".red(),
         AgentStatus::Shutdown => "shutdown".dim(),
@@ -713,7 +713,7 @@ fn should_shimmer(agent: &SubagentPanelAgent, now: Instant) -> bool {
 fn status_label_span(status: &AgentStatus) -> Span<'static> {
     match status {
         AgentStatus::PendingInit | AgentStatus::Running => "running".cyan().bold(),
-        AgentStatus::Interrupted => "interrupted".yellow(),
+        AgentStatus::Interrupted => "interrupted".magenta(),
         AgentStatus::Completed(_) => "completed".green(),
         AgentStatus::Errored(_) => "errored".red(),
         AgentStatus::Shutdown => "shutdown".dim(),
