@@ -5,6 +5,19 @@ use std::fmt;
 use std::fmt::Debug;
 use tracing::trace;
 
+#[cfg(not(windows))]
+#[path = "json_store_full.rs"]
+mod json_store;
+
+#[cfg(windows)]
+#[path = "json_store_split.rs"]
+mod json_store;
+
+pub use json_store::JsonKeyringError;
+pub use json_store::delete_json_from_keyring;
+pub use json_store::load_json_from_keyring;
+pub use json_store::save_json_to_keyring;
+
 #[derive(Debug)]
 pub enum CredentialStoreError {
     Other(KeyringError),
@@ -41,7 +54,20 @@ impl Error for CredentialStoreError {}
 /// Shared credential store abstraction for keyring-backed implementations.
 pub trait KeyringStore: Debug + Send + Sync {
     fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError>;
+    fn load_secret(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<Vec<u8>>, CredentialStoreError>;
+
     fn save(&self, service: &str, account: &str, value: &str) -> Result<(), CredentialStoreError>;
+    fn save_secret(
+        &self,
+        service: &str,
+        account: &str,
+        value: &[u8],
+    ) -> Result<(), CredentialStoreError>;
+
     fn delete(&self, service: &str, account: &str) -> Result<bool, CredentialStoreError>;
 }
 
@@ -68,6 +94,31 @@ impl KeyringStore for DefaultKeyringStore {
         }
     }
 
+    fn load_secret(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<Vec<u8>>, CredentialStoreError> {
+        trace!("keyring.load_secret start, service={service}, account={account}");
+        let entry = Entry::new(service, account).map_err(CredentialStoreError::new)?;
+        match entry.get_secret() {
+            Ok(secret) => {
+                trace!("keyring.load_secret success, service={service}, account={account}");
+                Ok(Some(secret))
+            }
+            Err(keyring::Error::NoEntry) => {
+                trace!("keyring.load_secret no entry, service={service}, account={account}");
+                Ok(None)
+            }
+            Err(error) => {
+                trace!(
+                    "keyring.load_secret error, service={service}, account={account}, error={error}"
+                );
+                Err(CredentialStoreError::new(error))
+            }
+        }
+    }
+
     fn save(&self, service: &str, account: &str, value: &str) -> Result<(), CredentialStoreError> {
         trace!(
             "keyring.save start, service={service}, account={account}, value_len={}",
@@ -81,6 +132,31 @@ impl KeyringStore for DefaultKeyringStore {
             }
             Err(error) => {
                 trace!("keyring.save error, service={service}, account={account}, error={error}");
+                Err(CredentialStoreError::new(error))
+            }
+        }
+    }
+
+    fn save_secret(
+        &self,
+        service: &str,
+        account: &str,
+        value: &[u8],
+    ) -> Result<(), CredentialStoreError> {
+        trace!(
+            "keyring.save_secret start, service={service}, account={account}, value_len={}",
+            value.len()
+        );
+        let entry = Entry::new(service, account).map_err(CredentialStoreError::new)?;
+        match entry.set_secret(value) {
+            Ok(()) => {
+                trace!("keyring.save_secret success, service={service}, account={account}");
+                Ok(())
+            }
+            Err(error) => {
+                trace!(
+                    "keyring.save_secret error, service={service}, account={account}, error={error}"
+                );
                 Err(CredentialStoreError::new(error))
             }
         }
@@ -145,6 +221,22 @@ pub mod tests {
             credential.get_password().ok()
         }
 
+        pub fn saved_secret(&self, account: &str) -> Option<Vec<u8>> {
+            let credential = {
+                let guard = self
+                    .credentials
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                guard.get(account).cloned()
+            }?;
+            credential.get_secret().ok()
+        }
+
+        pub fn saved_secret_utf8(&self, account: &str) -> Option<String> {
+            let secret = self.saved_secret(account)?;
+            String::from_utf8(secret).ok()
+        }
+
         pub fn set_error(&self, account: &str, error: KeyringError) {
             let credential = self.credential(account);
             credential.set_error(error);
@@ -184,6 +276,30 @@ pub mod tests {
             }
         }
 
+        fn load_secret(
+            &self,
+            _service: &str,
+            account: &str,
+        ) -> Result<Option<Vec<u8>>, CredentialStoreError> {
+            let credential = {
+                let guard = self
+                    .credentials
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                guard.get(account).cloned()
+            };
+
+            let Some(credential) = credential else {
+                return Ok(None);
+            };
+
+            match credential.get_secret() {
+                Ok(secret) => Ok(Some(secret)),
+                Err(KeyringError::NoEntry) => Ok(None),
+                Err(error) => Err(CredentialStoreError::new(error)),
+            }
+        }
+
         fn save(
             &self,
             _service: &str,
@@ -193,6 +309,18 @@ pub mod tests {
             let credential = self.credential(account);
             credential
                 .set_password(value)
+                .map_err(CredentialStoreError::new)
+        }
+
+        fn save_secret(
+            &self,
+            _service: &str,
+            account: &str,
+            value: &[u8],
+        ) -> Result<(), CredentialStoreError> {
+            let credential = self.credential(account);
+            credential
+                .set_secret(value)
                 .map_err(CredentialStoreError::new)
         }
 

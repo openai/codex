@@ -9,7 +9,12 @@ workspace = true
 
 [dependencies]
 keyring = { workspace = true, features = ["crypto-rust"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
