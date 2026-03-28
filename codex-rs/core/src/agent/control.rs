@@ -374,8 +374,8 @@ impl AgentControl {
                         config,
                         self.clone(),
                         session_source,
-                        false,
-                        None,
+                        /*persist_extended_history*/ false,
+                        /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
                         inherited_exec_policy,
                     )
@@ -443,7 +443,7 @@ impl AgentControl {
                 initial_history,
                 self.clone(),
                 session_source,
-                false,
+                /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             )
