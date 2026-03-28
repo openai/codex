@@ -103,11 +103,15 @@ jobs:
       matrix:
         include:
           # Keep Linux lint coverage on x64 and add the arm64 macOS path that
-          # the Bazel test job already exercises.
+          # the Bazel test job already exercises. Add Windows gnullvm as well
+          # so PRs get Bazel-native lint signal on the same Windows toolchain
+          # that the Bazel test job uses.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os: macos-15-xlarge
             target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
 

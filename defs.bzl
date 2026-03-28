@@ -200,11 +200,14 @@ def codex_rust_crate(
             name = unit_test_binary,
             crate = name,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+            # Unit tests also compile to standalone Windows executables, so
+            # keep their stack reserve aligned with binaries and integration
+            # tests under gnullvm.
             # Bazel has emitted both `codex-rs/<crate>/...` and
             # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
             # prefix so the workspace-root launcher sees Cargo-like metadata
             # such as `tui/src/...`.
-            rustc_flags = rustc_flags_extra + [
+            rustc_flags = rustc_flags_extra + WINDOWS_GNULLVM_RUSTC_STACK_FLAGS + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],
