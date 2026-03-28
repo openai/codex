@@ -10715,12 +10715,14 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
         popup
             .lines()
             .any(|line| line.contains("Guardian Approvals") && line.contains('›')),
-        "expected one Down from Default to select Guardian Approvals: {popup}"
+        "expected permissions popup to select Guardian Approvals: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
