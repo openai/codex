@@ -24,6 +24,7 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
@@ -474,6 +475,25 @@ impl BottomPaneView for AppLinkView {
     fn is_complete(&self) -> bool {
         self.complete
     }
+
+    fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        let ResolvedAppServerRequest::McpElicitation {
+            server_name,
+            request_id,
+        } = request
+        else {
+            return false;
+        };
+        let Some(target) = self.elicitation_target.as_ref() else {
+            return false;
+        };
+        if target.server_name != *server_name || target.request_id != *request_id {
+            return false;
+        }
+
+        self.complete = true;
+        true
+    }
 }
 
 impl crate::render::renderable::Renderable for AppLinkView {
@@ -546,9 +566,11 @@ impl crate::render::renderable::Renderable for AppLinkView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::app_server_requests::ResolvedAppServerRequest;
     use crate::app_event::AppEvent;
     use crate::render::renderable::Renderable;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn suggestion_target() -> AppLinkElicitationTarget {
@@ -887,6 +909,64 @@ mod tests {
             Err(err) => panic!("missing app event: {err}"),
         }
         assert!(view.is_complete());
+    }
+
+    #[test]
+    fn resolved_tool_suggestion_dismisses_matching_view() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                instructions: "Enable this app to use it for the current request.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: true,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Enable),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        assert!(
+            view.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                server_name: "codex_apps".to_string(),
+                request_id: McpRequestId::String("request-1".to_string()),
+            })
+        );
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn resolved_tool_suggestion_ignores_non_matching_request() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                instructions: "Enable this app to use it for the current request.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: true,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Enable),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        assert!(
+            !view.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                server_name: "other_server".to_string(),
+                request_id: McpRequestId::String("request-1".to_string()),
+            })
+        );
+        assert!(!view.is_complete());
     }
 
     #[test]

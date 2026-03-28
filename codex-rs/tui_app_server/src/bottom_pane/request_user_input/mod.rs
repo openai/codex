@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -196,6 +197,17 @@ impl RequestUserInputOverlay {
 
     fn question_count(&self) -> usize {
         self.request.questions.len()
+    }
+
+    fn advance_queue_or_complete(&mut self) {
+        if let Some(next) = self.queue.pop_front() {
+            self.request = next;
+            self.reset_for_request();
+            self.ensure_focus_available();
+            self.restore_current_draft();
+        } else {
+            self.done = true;
+        }
     }
 
     fn has_options(&self) -> bool {
@@ -759,14 +771,23 @@ impl RequestUserInputOverlay {
                 interrupted: false,
             },
         )));
-        if let Some(next) = self.queue.pop_front() {
-            self.request = next;
-            self.reset_for_request();
-            self.ensure_focus_available();
-            self.restore_current_draft();
-        } else {
-            self.done = true;
+        self.advance_queue_or_complete();
+    }
+
+    fn dismiss_resolved_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        let ResolvedAppServerRequest::UserInput { id } = request else {
+            return false;
+        };
+
+        let queue_len = self.queue.len();
+        self.queue
+            .retain(|queued_request| queued_request.turn_id != *id);
+        if self.request.turn_id == *id {
+            self.advance_queue_or_complete();
+            return true;
         }
+
+        self.queue.len() != queue_len
     }
 
     fn open_unanswered_confirmation(&mut self) {
@@ -1273,6 +1294,10 @@ impl BottomPaneView for RequestUserInputOverlay {
         self.queue.push_back(request);
         None
     }
+
+    fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        self.dismiss_resolved_request(request)
+    }
 }
 
 #[cfg(test)]
@@ -1530,6 +1555,33 @@ mod tests {
 
         assert!(overlay.done, "expected overlay to be done");
         expect_interrupt_only(&mut rx);
+    }
+
+    #[test]
+    fn resolved_request_dismisses_overlay_without_emitting_events() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            RequestUserInputEvent {
+                call_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q1", "First")],
+            },
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        assert!(
+            overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                id: "turn-1".to_string(),
+            })
+        );
+        assert!(overlay.done, "resolved request should close the overlay");
+        assert!(
+            rx.try_recv().is_err(),
+            "dismissing a stale request should not emit an interrupt or answer"
+        );
     }
 
     #[test]

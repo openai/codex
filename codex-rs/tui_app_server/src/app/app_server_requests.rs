@@ -27,6 +27,26 @@ pub(super) struct UnsupportedAppServerRequest {
     pub(super) message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedAppServerRequest {
+    ExecApproval {
+        id: String,
+    },
+    FileChangeApproval {
+        id: String,
+    },
+    PermissionsApproval {
+        id: String,
+    },
+    UserInput {
+        id: String,
+    },
+    McpElicitation {
+        server_name: String,
+        request_id: McpRequestId,
+    },
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PendingAppServerRequests {
     exec_approvals: HashMap<String, AppServerRequestId>,
@@ -234,14 +254,59 @@ impl PendingAppServerRequests {
         Ok(resolution)
     }
 
-    pub(super) fn resolve_notification(&mut self, request_id: &AppServerRequestId) {
-        self.exec_approvals.retain(|_, value| value != request_id);
-        self.file_change_approvals
-            .retain(|_, value| value != request_id);
-        self.permissions_approvals
-            .retain(|_, value| value != request_id);
-        self.user_inputs.retain(|_, value| value != request_id);
-        self.mcp_requests.retain(|_, value| value != request_id);
+    pub(super) fn resolve_notification(
+        &mut self,
+        request_id: &AppServerRequestId,
+    ) -> Option<ResolvedAppServerRequest> {
+        if let Some(id) = self
+            .exec_approvals
+            .iter()
+            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
+        {
+            self.exec_approvals.remove(&id);
+            return Some(ResolvedAppServerRequest::ExecApproval { id });
+        }
+
+        if let Some(id) = self
+            .file_change_approvals
+            .iter()
+            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
+        {
+            self.file_change_approvals.remove(&id);
+            return Some(ResolvedAppServerRequest::FileChangeApproval { id });
+        }
+
+        if let Some(id) = self
+            .permissions_approvals
+            .iter()
+            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
+        {
+            self.permissions_approvals.remove(&id);
+            return Some(ResolvedAppServerRequest::PermissionsApproval { id });
+        }
+
+        if let Some(id) = self
+            .user_inputs
+            .iter()
+            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
+        {
+            self.user_inputs.remove(&id);
+            return Some(ResolvedAppServerRequest::UserInput { id });
+        }
+
+        if let Some(key) = self
+            .mcp_requests
+            .iter()
+            .find_map(|(key, value)| (value == request_id).then(|| key.clone()))
+        {
+            self.mcp_requests.remove(&key);
+            return Some(ResolvedAppServerRequest::McpElicitation {
+                server_name: key.server_name,
+                request_id: key.request_id,
+            });
+        }
+
+        None
     }
 }
 
@@ -276,6 +341,7 @@ fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalD
 #[cfg(test)]
 mod tests {
     use super::PendingAppServerRequests;
+    use super::ResolvedAppServerRequest;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
     use codex_app_server_protocol::McpElicitationObjectType;
@@ -545,6 +611,78 @@ mod tests {
         assert_eq!(
             error,
             "execpolicy amendment is not a valid file change approval decision"
+        );
+    }
+
+    #[test]
+    fn resolve_notification_returns_resolved_exec_request() {
+        let mut pending = PendingAppServerRequests::default();
+        assert_eq!(
+            pending.note_server_request(&ServerRequest::CommandExecutionRequestApproval {
+                request_id: AppServerRequestId::Integer(41),
+                params: CommandExecutionRequestApprovalParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-1".to_string(),
+                    approval_id: Some("approval-1".to_string()),
+                    reason: None,
+                    network_approval_context: None,
+                    command: Some("ls".to_string()),
+                    cwd: None,
+                    command_actions: None,
+                    additional_permissions: None,
+                    skill_metadata: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    available_decisions: None,
+                },
+            }),
+            None
+        );
+
+        assert_eq!(
+            pending.resolve_notification(&AppServerRequestId::Integer(41)),
+            Some(ResolvedAppServerRequest::ExecApproval {
+                id: "approval-1".to_string(),
+            })
+        );
+        assert_eq!(
+            pending.resolve_notification(&AppServerRequestId::Integer(41)),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_notification_returns_resolved_mcp_request() {
+        let mut pending = PendingAppServerRequests::default();
+        assert_eq!(
+            pending.note_server_request(&ServerRequest::McpServerElicitationRequest {
+                request_id: AppServerRequestId::Integer(12),
+                params: McpServerElicitationRequestParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    server_name: "example".to_string(),
+                    request: McpServerElicitationRequest::Form {
+                        meta: None,
+                        message: "Need input".to_string(),
+                        requested_schema: McpElicitationSchema {
+                            schema_uri: None,
+                            type_: McpElicitationObjectType::Object,
+                            properties: BTreeMap::new(),
+                            required: None,
+                        },
+                    },
+                },
+            }),
+            None
+        );
+
+        assert_eq!(
+            pending.resolve_notification(&AppServerRequestId::Integer(12)),
+            Some(ResolvedAppServerRequest::McpElicitation {
+                server_name: "example".to_string(),
+                request_id: McpRequestId::Integer(12),
+            })
         );
     }
 }

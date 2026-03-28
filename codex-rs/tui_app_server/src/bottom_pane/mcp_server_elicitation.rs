@@ -28,6 +28,7 @@ use ratatui::widgets::Widget;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ChatComposer;
@@ -1143,6 +1144,16 @@ impl McpServerElicitationOverlay {
         );
     }
 
+    fn advance_queue_or_complete(&mut self) {
+        if let Some(next) = self.queue.pop_front() {
+            self.request = next;
+            self.reset_for_request();
+            self.restore_current_draft();
+        } else {
+            self.done = true;
+        }
+    }
+
     fn submit_answers(&mut self) {
         self.save_current_draft();
         if let Some(idx) = self.first_required_unanswered_index() {
@@ -1179,13 +1190,7 @@ impl McpServerElicitationOverlay {
                 /*content*/ None,
                 meta,
             );
-            if let Some(next) = self.queue.pop_front() {
-                self.request = next;
-                self.reset_for_request();
-                self.restore_current_draft();
-            } else {
-                self.done = true;
-            }
+            self.advance_queue_or_complete();
             return;
         }
         let content = self
@@ -1203,13 +1208,28 @@ impl McpServerElicitationOverlay {
             Some(Value::Object(content)),
             /*meta*/ None,
         );
-        if let Some(next) = self.queue.pop_front() {
-            self.request = next;
-            self.reset_for_request();
-            self.restore_current_draft();
-        } else {
-            self.done = true;
+        self.advance_queue_or_complete();
+    }
+
+    fn dismiss_resolved_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        let ResolvedAppServerRequest::McpElicitation {
+            server_name,
+            request_id,
+        } = request
+        else {
+            return false;
+        };
+
+        let queue_len = self.queue.len();
+        self.queue.retain(|queued_request| {
+            queued_request.server_name != *server_name || queued_request.request_id != *request_id
+        });
+        if self.request.server_name == *server_name && self.request.request_id == *request_id {
+            self.advance_queue_or_complete();
+            return true;
         }
+
+        self.queue.len() != queue_len
     }
 
     fn go_next_or_submit(&mut self) {
@@ -1639,6 +1659,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
     ) -> Option<McpServerElicitationFormRequest> {
         self.queue.push_back(request);
         None
+    }
+
+    fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        self.dismiss_resolved_request(request)
     }
 }
 
@@ -2370,6 +2394,72 @@ mod tests {
         overlay.submit_answers();
 
         assert_eq!(overlay.request.message, "Third");
+    }
+
+    #[test]
+    fn resolved_request_dismisses_overlay_without_emitting_events() {
+        let (tx, mut rx) = test_sender();
+        let thread_id = ThreadId::default();
+        let supported_form_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "confirmed": {
+                    "type": "boolean",
+                    "title": "Confirm",
+                }
+            },
+        });
+        let mut overlay = McpServerElicitationOverlay::new(
+            McpServerElicitationFormRequest::from_event(
+                thread_id,
+                form_request("First", supported_form_schema.clone(), None),
+            )
+            .expect("expected supported form"),
+            tx,
+            true,
+            false,
+            false,
+        );
+        overlay.try_consume_mcp_server_elicitation_request(
+            McpServerElicitationFormRequest::from_event(
+                thread_id,
+                ElicitationRequestEvent {
+                    turn_id: Some("turn-2".to_string()),
+                    server_name: "server-1".to_string(),
+                    id: McpRequestId::String("request-2".to_string()),
+                    request: ElicitationRequest::Form {
+                        meta: None,
+                        message: "Second".to_string(),
+                        requested_schema: supported_form_schema,
+                    },
+                },
+            )
+            .expect("expected supported form"),
+        );
+
+        assert!(
+            overlay.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                server_name: "server-1".to_string(),
+                request_id: McpRequestId::String("request-1".to_string()),
+            })
+        );
+        assert_eq!(overlay.request.message, "Second");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+
+        assert!(
+            overlay.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                server_name: "server-1".to_string(),
+                request_id: McpRequestId::String("request-2".to_string()),
+            })
+        );
+        assert!(overlay.is_complete());
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
     }
 
     #[test]
