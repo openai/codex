@@ -558,6 +558,62 @@ async fn thread_read_include_turns_rejects_unmaterialized_loaded_thread() -> Res
 }
 
 #[tokio::test]
+async fn thread_read_loaded_ephemeral_thread_ignores_unrelated_rollout_mentions() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let unrelated_preview = thread.id.clone();
+    let _unrelated_rollout_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        "2025-01-05T13-00-00",
+        "2025-01-05T13:00:00Z",
+        &unrelated_preview,
+        vec![],
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(read.id, thread.id);
+    assert!(read.ephemeral);
+    assert_eq!(read.path, None);
+    assert!(read.preview.is_empty());
+    assert_eq!(read.status, ThreadStatus::Idle);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Result<()> {
     let server = responses::start_mock_server().await;
     let _response_mock = responses::mount_sse_once(

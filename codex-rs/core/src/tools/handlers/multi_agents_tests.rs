@@ -82,7 +82,7 @@ fn parse_agent_id(id: &str) -> ThreadId {
 fn thread_manager() -> ThreadManager {
     ThreadManager::with_models_provider_for_tests(
         CodexAuth::from_api_key("dummy"),
-        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
+        built_in_model_providers(/* openai_base_url */ None)["openai"].clone(),
     )
 }
 
@@ -247,8 +247,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let mut config = (*turn.config).clone();
-    let provider =
-        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["ollama"].clone();
+    let provider = built_in_model_providers(/* openai_base_url */ None)["ollama"].clone();
     config.model_provider_id = "ollama".to_string();
     config.model_provider = provider.clone();
     config
@@ -400,7 +399,47 @@ async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
 }
 
 #[tokio::test]
-async fn spawn_agent_returns_agent_id_without_task_name() {
+async fn spawn_agent_watchdog_role_returns_handle_without_spawn_mode() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::AgentWatchdog)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "check in periodically",
+                "agent_type": "watchdog"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let agent_id = parse_agent_id(
+        result["agent_id"]
+            .as_str()
+            .expect("spawn_agent result should include agent_id"),
+    );
+
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        manager.agent_control().get_status(agent_id).await,
+        AgentStatus::PendingInit
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_includes_task_name_key_when_not_named() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -421,11 +460,10 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
         serde_json::from_str(&content).expect("spawn_agent result should be json");
 
     assert!(result["agent_id"].is_string());
-    assert!(result.get("task_name").is_none());
+    assert_eq!(result["task_name"], serde_json::Value::Null);
     assert!(result.get("nickname").is_some());
     assert_eq!(success, Some(true));
 }
-
 #[tokio::test]
 async fn multi_agent_v2_spawn_requires_task_name() {
     let (mut session, mut turn) = make_session_and_context().await;
@@ -1067,7 +1105,7 @@ async fn multi_agent_v2_send_message_interrupts_busy_child_without_triggering_tu
                     AgentPath::try_from("/root/worker").expect("agent path"),
                     Vec::new(),
                     "continue".to_string(),
-                    /*trigger_turn*/ false,
+                    false,
                 ),
             );
             let saw_user_message = history_items.iter().any(|item| {
@@ -1199,7 +1237,7 @@ async fn multi_agent_v2_assign_task_interrupts_busy_child_without_losing_message
                     AgentPath::try_from("/root/worker").expect("agent path"),
                     Vec::new(),
                     "continue".to_string(),
-                    /*trigger_turn*/ true,
+                    true,
                 ),
             );
             let saw_user_message = history_items.iter().any(|item| {
@@ -1741,8 +1779,8 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
                 phase: None,
             })]),
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
-            /*persist_extended_history*/ false,
-            /*parent_trace*/ None,
+            false,
+            None,
         )
         .await
         .expect("start thread");
@@ -2663,7 +2701,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_resume_config(&turn, /*child_depth*/ 0).expect("resume config");
+    let config = build_agent_resume_config(&turn, 0).expect("resume config");
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;

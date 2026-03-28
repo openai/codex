@@ -2367,7 +2367,10 @@ enabled = false
         "custom".to_string(),
         crate::config::AgentRoleConfig {
             description: None,
+            model: None,
             config_file: Some(role_path),
+            spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: None,
         },
     );
@@ -2751,6 +2754,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
+        turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
+        last_completed_turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -3591,6 +3596,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
+        turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
+        last_completed_turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
@@ -5283,4 +5290,26 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     );
 
     pretty_assertions::assert_eq!(output, expected);
+}
+
+#[tokio::test]
+async fn root_agent_prompt_only_includes_watchdog_fragment_when_enabled() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+
+    let without_watchdog = load_root_agent_prompt(codex_home.path(), false).await;
+    assert!(!without_watchdog.contains("## Watchdogs"));
+
+    let with_watchdog = load_root_agent_prompt(codex_home.path(), true).await;
+    assert!(with_watchdog.contains("## Watchdogs"));
+}
+
+#[tokio::test]
+async fn subagent_prompt_only_includes_watchdog_fragment_when_enabled() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+
+    let without_watchdog = load_subagent_prompt(codex_home.path(), false).await;
+    assert!(!without_watchdog.contains("## Watchdog-only Guidance"));
+
+    let with_watchdog = load_subagent_prompt(codex_home.path(), true).await;
+    assert!(with_watchdog.contains("## Watchdog-only Guidance"));
 }

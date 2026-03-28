@@ -31,7 +31,7 @@ impl ToolHandler for Handler {
         let agents = session
             .services
             .agent_control
-            .list_agents(&turn.session_source, args.path_prefix.as_deref())
+            .list_agents_by_path(&turn.session_source, args.path_prefix.as_deref())
             .await
             .map_err(collab_spawn_error)?;
 

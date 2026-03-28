@@ -347,6 +347,12 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         let spec = create_resume_agent_tool();
         expected.insert(tool_name(&spec).to_string(), spec);
     }
+    if config.agent_watchdog {
+        let spec = create_list_agents_tool(config.agent_watchdog);
+        expected.insert(tool_name(&spec).to_string(), spec);
+        let spec = create_compact_parent_context_tool();
+        expected.insert(tool_name(&spec).to_string(), spec);
+    }
 
     if config.exec_permission_approvals_enabled {
         let spec = create_request_permissions_tool();
