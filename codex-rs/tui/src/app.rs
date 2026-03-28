@@ -2353,7 +2353,6 @@ impl App {
                 .await
             {
                 Ok(thread) => {
-                    self.ensure_thread_channel(thread_id);
                     self.upsert_agent_picker_thread(
                         thread_id,
                         thread.agent_nickname,
@@ -2627,9 +2626,15 @@ impl App {
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
     async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
-        let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
+        let mut thread_ids = self.agent_navigation.tracked_thread_ids();
+        for thread_id in self.thread_event_channels.keys().copied() {
+            if !thread_ids.contains(&thread_id) {
+                thread_ids.push(thread_id);
+            }
+        }
         for thread_id in thread_ids {
             let existing_entry = self.agent_navigation.get(&thread_id).cloned();
+            let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
             match app_server
                 .thread_read(thread_id, /*include_turns*/ false)
                 .await
@@ -2654,6 +2659,10 @@ impl App {
                     );
                 }
                 Err(err) => {
+                    if Self::is_terminal_thread_read_error(&err) && !has_replay_channel {
+                        self.agent_navigation.remove(thread_id);
+                        continue;
+                    }
                     let is_closed = Self::closed_state_for_thread_read_error(
                         &err,
                         existing_entry.as_ref().map(|entry| entry.is_closed),
@@ -2774,6 +2783,28 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    /// Materializes a live thread into local replay state when the picker knows about it but the
+    /// TUI has not cached a local event channel yet.
+    ///
+    /// Resume-time backfill intentionally avoids creating empty placeholder channels, because those
+    /// placeholders make stale `/agent` entries open blank transcripts. When a user later selects a
+    /// still-live discovered thread, attach it on demand with a real resumed snapshot.
+    async fn attach_live_thread_for_selection(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        if self.thread_event_channels.contains_key(&thread_id) {
+            return Ok(());
+        }
+
+        let started = app_server.resume_thread(self.config.clone(), thread_id).await?;
+        let channel = self.ensure_thread_channel(thread_id);
+        let mut store = channel.store.lock().await;
+        store.set_session(started.session, started.turns);
+        Ok(())
+    }
+
     /// Replaces the chat widget and re-seeds the new widget's collab metadata from the navigation
     /// cache.
     ///
@@ -2811,9 +2842,12 @@ impl App {
         }
 
         if !self.thread_event_channels.contains_key(&thread_id) {
-            self.chat_widget
-                .add_error_message(format!("Failed to attach to agent thread {thread_id}."));
-            return Ok(());
+            if let Err(err) = self.attach_live_thread_for_selection(app_server, thread_id).await {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to attach to agent thread {thread_id}: {err}"
+                ));
+                return Ok(());
+            }
         }
         let is_replay_only = self
             .agent_navigation
@@ -3014,7 +3048,6 @@ impl App {
         }
 
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
-            self.ensure_thread_channel(thread.thread_id);
             self.upsert_agent_picker_thread(
                 thread.thread_id,
                 thread.agent_nickname,
@@ -6980,6 +7013,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.open_agent_picker(&mut app_server).await;
+
+        assert_eq!(app.agent_navigation.get(&thread_id), None);
+        assert!(app.agent_navigation.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
@@ -7073,6 +7128,36 @@ mod tests {
                 is_closed: false,
             })
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attach_live_thread_for_selection_materializes_channel_on_demand() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server.start_thread(app.chat_widget.config_ref()).await?;
+        let thread_id = started.session.thread_id;
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Scout".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.attach_live_thread_for_selection(&mut app_server, thread_id)
+            .await?;
+
+        let channel = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread channel should exist after attach");
+        let store = channel.store.lock().await;
+        let session = store.session.clone().expect("attached session");
+        assert_eq!(session.thread_id, thread_id);
+        assert_eq!(session.cwd, app.chat_widget.config_ref().cwd.to_path_buf());
         Ok(())
     }
 
