@@ -2848,23 +2848,40 @@ impl App {
             return Ok(());
         }
 
-        let (thread, turns) = match app_server
-            .thread_read(thread_id, /*include_turns*/ true)
+        let (session, turns) = match app_server
+            .resume_thread(self.config.clone(), thread_id)
             .await
         {
-            Ok(thread) => {
-                let turns = thread.turns.clone();
-                (thread, turns)
+            Ok(started) => (started.session, started.turns),
+            Err(resume_err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %resume_err,
+                    "failed to resume live thread for selection; falling back to thread/read"
+                );
+                let (thread, turns) = match app_server
+                    .thread_read(thread_id, /*include_turns*/ true)
+                    .await
+                {
+                    Ok(thread) => {
+                        let turns = thread.turns.clone();
+                        (thread, turns)
+                    }
+                    Err(err) if Self::can_fallback_from_include_turns_error(&err) => {
+                        let thread = app_server
+                            .thread_read(thread_id, /*include_turns*/ false)
+                            .await?;
+                        (thread, Vec::new())
+                    }
+                    Err(err) => return Err(err),
+                };
+                let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
+                // Force `select_agent_thread` to upgrade this placeholder via `thread/resume`
+                // before replay so runtime policies and history metadata come from the server.
+                session.model.clear();
+                (session, turns)
             }
-            Err(err) if Self::can_fallback_from_include_turns_error(&err) => {
-                let thread = app_server
-                    .thread_read(thread_id, /*include_turns*/ false)
-                    .await?;
-                (thread, Vec::new())
-            }
-            Err(err) => return Err(err),
         };
-        let session = self.session_state_for_thread_read(thread_id, &thread).await;
         let channel = self.ensure_thread_channel(thread_id);
         let mut store = channel.store.lock().await;
         store.set_session(session, turns);
@@ -7239,8 +7256,13 @@ mod tests {
             .expect("thread channel should exist after attach");
         let store = channel.store.lock().await;
         let session = store.session.clone().expect("attached session");
-        assert_eq!(session.thread_id, thread_id);
-        assert_eq!(session.cwd, app.chat_widget.config_ref().cwd.to_path_buf());
+        if session != started.session {
+            assert_eq!(session.thread_id, started.session.thread_id);
+            assert_eq!(session.model, "");
+            assert_eq!(session.model_provider_id, started.session.model_provider_id);
+            assert_eq!(session.cwd, started.session.cwd);
+            assert_eq!(session.rollout_path, started.session.rollout_path);
+        }
         Ok(())
     }
 
