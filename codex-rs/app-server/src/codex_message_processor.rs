@@ -8791,6 +8791,7 @@ mod tests {
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             cwd: PathBuf::from("/tmp"),
             ephemeral: false,
+            agent_use_function_call_inbox: false,
             reasoning_effort: None,
             personality: None,
             session_source: SessionSource::Cli,
