@@ -70,6 +70,11 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+use super::analytics::assert_basic_thread_initialized_event;
+use super::analytics::enable_analytics_capture;
+use super::analytics::thread_initialized_event;
+use super::analytics::wait_for_analytics_payload;
+
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
@@ -147,6 +152,46 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
         resume_err.error.message
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Vec::new(),
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
+    let event = thread_initialized_event(&payload)?;
+    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.2-codex", "resumed");
     Ok(())
 }
 

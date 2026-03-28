@@ -1,8 +1,19 @@
 mod analytics_client;
 
 pub use analytics_client::AnalyticsEventsClient;
+pub use analytics_client::AnalyticsFact;
+pub use analytics_client::AnalyticsReducer;
 pub use analytics_client::AppInvocation;
+pub use analytics_client::AppMentionedInput;
+pub use analytics_client::AppServerRpcTransport;
+pub use analytics_client::AppUsedInput;
+pub use analytics_client::CustomAnalyticsFact;
+pub use analytics_client::InitializationMode;
 pub use analytics_client::InvocationType;
+pub use analytics_client::PluginState;
+pub use analytics_client::PluginStateChangedInput;
+pub use analytics_client::PluginUsedInput;
 pub use analytics_client::SkillInvocation;
+pub use analytics_client::SkillInvokedInput;
 pub use analytics_client::TrackEventsContext;
 pub use analytics_client::build_track_events_context;

@@ -74,6 +74,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AppServerRpcTransport;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -393,6 +394,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 enable_codex_api_key_env: args.enable_codex_api_key_env,
+                rpc_transport: AppServerRpcTransport::InProcess,
             });
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();

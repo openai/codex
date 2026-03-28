@@ -56,6 +56,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
 use codex_core::AnalyticsEventsClient;
+use codex_core::AppServerRpcTransport;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -161,9 +162,11 @@ pub(crate) struct MessageProcessor {
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
     auth_manager: Arc<AuthManager>,
+    analytics_events_client: AnalyticsEventsClient,
     fs_watch_manager: FsWatchManager,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    rpc_transport: AppServerRpcTransport,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -188,6 +191,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) enable_codex_api_key_env: bool,
+    pub(crate) rpc_transport: AppServerRpcTransport,
 }
 
 impl MessageProcessor {
@@ -207,6 +211,7 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             enable_codex_api_key_env,
+            rpc_transport,
         } = args;
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -244,6 +249,7 @@ impl MessageProcessor {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
+            analytics_events_client: analytics_events_client.clone(),
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
@@ -264,7 +270,7 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
             thread_manager,
-            analytics_events_client,
+            analytics_events_client.clone(),
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi::default();
@@ -277,9 +283,11 @@ impl MessageProcessor {
             external_agent_config_api,
             fs_api,
             auth_manager,
+            analytics_events_client,
             fs_watch_manager,
             config,
             config_warnings: Arc::new(config_warnings),
+            rpc_transport,
         }
     }
 
@@ -549,6 +557,7 @@ impl MessageProcessor {
                 // shared thread when another connected client did not opt into
                 // experimental API). Proposed direction is instance-global first-write-wins
                 // with initialize-time mismatch rejection.
+                let analytics_initialize_params = params.clone();
                 let (experimental_api_enabled, opt_out_notification_methods) =
                     match params.capabilities {
                         Some(capabilities) => (
@@ -576,7 +585,7 @@ impl MessageProcessor {
                 } else {
                     name.clone()
                 };
-                if let Err(error) = set_default_originator(originator) {
+                if let Err(error) = set_default_originator(originator.clone()) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {
@@ -599,6 +608,11 @@ impl MessageProcessor {
                         }
                     }
                 }
+                self.analytics_events_client.track_initialize(
+                    connection_id.0,
+                    analytics_initialize_params,
+                    self.rpc_transport,
+                );
                 set_default_client_residency_requirement(self.config.enforce_residency.value());
                 let user_agent_suffix = format!("{name}; {version}");
                 if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
