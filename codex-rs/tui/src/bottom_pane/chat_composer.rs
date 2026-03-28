@@ -3347,9 +3347,7 @@ impl ChatComposer {
     }
 
     pub fn remove_recording_meter_placeholder(&mut self, id: &str) {
-        if let Some(range) = self.textarea.named_element_range(id) {
-            let _ = self.textarea.remove_element_range(range);
-        }
+        let _ = self.textarea.replace_element_by_id(id, "");
     }
 }
 
@@ -3885,6 +3883,26 @@ mod tests {
             !bottom_row.contains("K label"),
             "expected flash to override hint override, saw: {bottom_row:?}",
         );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn remove_recording_meter_placeholder_clears_placeholder_text() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let id = composer.insert_recording_meter_placeholder("⠤⠤⠤⠤");
+        composer.remove_recording_meter_placeholder(&id);
+
+        assert_eq!(composer.textarea.text(), "");
+        assert!(composer.textarea.named_element_range(&id).is_none());
     }
 
     #[test]

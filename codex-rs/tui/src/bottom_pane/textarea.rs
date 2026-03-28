@@ -945,6 +945,22 @@ impl TextArea {
         self.set_cursor(end);
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub fn replace_element_by_id(&mut self, id: &str, text: &str) -> bool {
+        if let Some(idx) = self
+            .elements
+            .iter()
+            .position(|e| e.name.as_deref() == Some(id))
+        {
+            let range = self.elements[idx].range.clone();
+            self.replace_range_raw(range, text);
+            self.elements.retain(|e| e.name.as_deref() != Some(id));
+            true
+        } else {
+            false
+        }
+    }
+
     /// Update the element's text in place, preserving its id so callers can
     /// update it again later (e.g. recording -> transcribing -> final).
     #[allow(dead_code)]
