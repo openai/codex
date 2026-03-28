@@ -1012,10 +1012,10 @@ mod inbox_feature_tests {
     #[test]
     fn apps_require_feature_flag_and_chatgpt_auth() {
         let mut features = Features::with_defaults();
-        assert!(!features.apps_enabled_for_auth(None));
+        assert!(!features.apps_enabled_for_auth(/*auth*/ None));
 
         features.enable(Feature::Apps);
-        assert!(!features.apps_enabled_for_auth(None));
+        assert!(!features.apps_enabled_for_auth(/*auth*/ None));
 
         let api_key_auth = CodexAuth::from_api_key("test-api-key");
         assert!(!features.apps_enabled_for_auth(Some(&api_key_auth)));
