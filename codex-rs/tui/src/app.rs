@@ -2924,20 +2924,26 @@ impl App {
             return Ok(());
         }
 
-        if !self.thread_event_channels.contains_key(&thread_id)
-            && let Err(err) = self
-                .attach_live_thread_for_selection(app_server, thread_id)
-                .await
-        {
-            self.chat_widget.add_error_message(format!(
-                "Failed to attach to agent thread {thread_id}: {err}"
-            ));
-            return Ok(());
-        }
         let is_replay_only = self
             .agent_navigation
             .get(&thread_id)
             .is_some_and(|entry| entry.is_closed);
+        if !self.thread_event_channels.contains_key(&thread_id) {
+            if is_replay_only {
+                self.chat_widget
+                    .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+                return Ok(());
+            }
+            if let Err(err) = self
+                .attach_live_thread_for_selection(app_server, thread_id)
+                .await
+            {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to attach to agent thread {thread_id}: {err}"
+                ));
+                return Ok(());
+            }
+        }
 
         let previous_thread_id = self.active_thread_id;
         self.store_active_thread_receiver().await;
@@ -7263,6 +7269,52 @@ mod tests {
             assert_eq!(session.cwd, started.session.cwd);
             assert_eq!(session.rollout_path, started.session.rollout_path);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_agent_thread_does_not_resume_closed_metadata_only_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let main_thread_id = ThreadId::new();
+        let agent_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels.insert(
+            main_thread_id,
+            ThreadEventChannel::new_with_session(
+                /*capacity*/ 1,
+                test_thread_session(main_thread_id, PathBuf::from("/tmp/main")),
+                Vec::new(),
+            ),
+        );
+        app.agent_navigation.upsert(
+            agent_thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ true,
+        );
+        let terminal = crate::custom_terminal::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+        )?;
+        let mut tui = crate::tui::Tui::new(terminal);
+
+        app.select_agent_thread(&mut tui, &mut app_server, agent_thread_id)
+            .await?;
+
+        assert_eq!(app.active_thread_id, Some(main_thread_id));
+        assert!(!app.thread_event_channels.contains_key(&agent_thread_id));
+        assert_eq!(
+            app.agent_navigation.get(&agent_thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Ghost".to_string()),
+                agent_role: Some("worker".to_string()),
+                is_closed: true,
+            })
+        );
         Ok(())
     }
 
