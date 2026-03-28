@@ -180,7 +180,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
-    wait_for_request_count(&request_log, 1).await?;
+    wait_for_request_count(&request_log, /*expected*/ 1).await?;
 
     let steer_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-steer-456".to_string()),
@@ -304,8 +304,14 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     )
     .await??;
 
-    let warmup = websocket_server.wait_for_request(0, 0).await.body_json();
-    let request = websocket_server.wait_for_request(0, 1).await.body_json();
+    let warmup = websocket_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await
+        .body_json();
+    let request = websocket_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await
+        .body_json();
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));

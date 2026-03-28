@@ -1289,7 +1289,7 @@ async fn responses_websocket_preserves_custom_turn_metadata_fields() {
         &mut client_session,
         &harness,
         &prompt,
-        None,
+        /*service_tier*/ None,
         Some(&turn_metadata),
     )
     .await;
