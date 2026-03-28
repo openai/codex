@@ -454,7 +454,7 @@ impl AgentControl {
         };
         reservation.commit(agent_metadata);
         state.notify_thread_created(new_thread.thread_id);
-        self.send_input(new_thread.thread_id, items).await?;
+        self.send_input(new_thread.thread_id, items.into()).await?;
         Ok(new_thread.thread_id)
     }
 
@@ -963,7 +963,7 @@ impl AgentControl {
             .join("\n")
     }
 
-    pub(crate) async fn list_agents(
+    pub(crate) async fn list_agents_by_path(
         &self,
         current_session_source: &SessionSource,
         path_prefix: Option<&str>,
