@@ -139,12 +139,14 @@ async fn run_guardian_review(
         GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
+            user_authorization_confidence: 0,
             rationale: format!("Automatic approval review failed: {err}"),
             evidence: vec![],
         },
         GuardianReviewOutcome::TimedOut => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
+            user_authorization_confidence: 0,
             rationale:
                 "Automatic approval review timed out while evaluating the requested approval."
                     .to_string(),

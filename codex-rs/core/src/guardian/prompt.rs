@@ -103,7 +103,7 @@ pub(crate) async fn build_guardian_prompt_items(
     push_text("Planned action JSON:\n".to_string());
     push_text(format!("{planned_action_json}\n"));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
-    push_text("You may use read-only tool checks to gather any additional context you need to make a high-confidence determination.\n\nYour final message must be strict JSON with this exact schema:\n{\n  \"risk_level\": \"low\" | \"medium\" | \"high\",\n  \"risk_score\": 0-100,\n  \"rationale\": string,\n  \"evidence\": [{\"message\": string, \"why\": string}]\n}\n".to_string());
+    push_text(format!("{}\n", guardian_output_contract_prompt()));
     Ok(items)
 }
 
@@ -392,6 +392,11 @@ pub(crate) fn guardian_output_schema() -> Value {
                 "minimum": 0,
                 "maximum": 100
             },
+            "user_authorization_confidence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+            },
             "rationale": {
                 "type": "string"
             },
@@ -408,7 +413,13 @@ pub(crate) fn guardian_output_schema() -> Value {
                 }
             }
         },
-        "required": ["risk_level", "risk_score", "rationale", "evidence"]
+        "required": [
+            "risk_level",
+            "risk_score",
+            "user_authorization_confidence",
+            "rationale",
+            "evidence"
+        ]
     })
 }
 
@@ -419,6 +430,7 @@ fn guardian_output_contract_prompt() -> &'static str {
 {
   "risk_level": "low" | "medium" | "high",
   "risk_score": 0-100,
+  "user_authorization_confidence": integer 0-100,
   "rationale": string,
   "evidence": [{"message": string, "why": string}]
 }"#

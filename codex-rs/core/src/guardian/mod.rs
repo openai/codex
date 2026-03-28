@@ -55,6 +55,7 @@ pub(crate) struct GuardianEvidence {
 pub(crate) struct GuardianAssessment {
     pub(crate) risk_level: codex_protocol::protocol::GuardianRiskLevel,
     pub(crate) risk_score: u8,
+    pub(crate) user_authorization_confidence: u8,
     pub(crate) rationale: String,
     pub(crate) evidence: Vec<GuardianEvidence>,
 }
