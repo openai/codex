@@ -1,11 +1,9 @@
-use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use base64::Engine;
 use codex_core::config::Config;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use cpal::traits::DeviceTrait;
-use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -18,52 +16,18 @@ use tracing::error;
 const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const MODEL_AUDIO_CHANNELS: u16 = 1;
 
-pub struct RecordedAudio {
-    pub data: Vec<i16>,
-    pub sample_rate: u32,
-    pub channels: u16,
-}
-
 pub struct VoiceCapture {
     stream: Option<cpal::Stream>,
-    sample_rate: u32,
-    channels: u16,
-    data: Arc<Mutex<Vec<i16>>>,
     stopped: Arc<AtomicBool>,
     last_peak: Arc<AtomicU16>,
 }
 
 impl VoiceCapture {
-    pub fn start() -> Result<Self, String> {
-        let (device, config) = select_default_input_device_and_config()?;
-
-        let sample_rate = config.sample_rate().0;
-        let channels = config.channels();
-        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
-        let stopped = Arc::new(AtomicBool::new(false));
-        let last_peak = Arc::new(AtomicU16::new(0));
-
-        let stream = build_input_stream(&device, &config, data.clone(), last_peak.clone())?;
-        stream
-            .play()
-            .map_err(|e| format!("failed to start input stream: {e}"))?;
-
-        Ok(Self {
-            stream: Some(stream),
-            sample_rate,
-            channels,
-            data,
-            stopped,
-            last_peak,
-        })
-    }
-
     pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
         let (device, config) = select_realtime_input_device_and_config(config)?;
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
-        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
         let stopped = Arc::new(AtomicBool::new(false));
         let last_peak = Arc::new(AtomicU16::new(0));
 
@@ -81,45 +45,20 @@ impl VoiceCapture {
 
         Ok(Self {
             stream: Some(stream),
-            sample_rate,
-            channels,
-            data,
             stopped,
             last_peak,
         })
     }
 
-    pub fn stop(mut self) -> Result<RecordedAudio, String> {
+    pub fn stop(mut self) {
         // Mark stopped so any metering task can exit cleanly.
         self.stopped.store(true, Ordering::SeqCst);
         // Dropping the stream stops capture.
         self.stream.take();
-        let data = self
-            .data
-            .lock()
-            .map_err(|_| "failed to lock audio buffer".to_string())?
-            .clone();
-        Ok(RecordedAudio {
-            data,
-            sample_rate: self.sample_rate,
-            channels: self.channels,
-        })
-    }
-
-    pub fn data_arc(&self) -> Arc<Mutex<Vec<i16>>> {
-        self.data.clone()
     }
 
     pub fn stopped_flag(&self) -> Arc<AtomicBool> {
         self.stopped.clone()
-    }
-
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    pub fn channels(&self) -> u16 {
-        self.channels
     }
 
     pub fn last_peak_arc(&self) -> Arc<AtomicU16> {
@@ -190,74 +129,10 @@ impl RecordingMeterState {
 // Voice input helpers
 // -------------------------
 
-fn select_default_input_device_and_config()
--> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "no input audio device available".to_string())?;
-    let config = crate::audio_device::preferred_input_config(&device)?;
-    Ok((device, config))
-}
-
 fn select_realtime_input_device_and_config(
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
     crate::audio_device::select_configured_input_device_and_config(config)
-}
-
-fn build_input_stream(
-    device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
-    data: Arc<Mutex<Vec<i16>>>,
-    last_peak: Arc<AtomicU16>,
-) -> Result<cpal::Stream, String> {
-    match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[f32], _| {
-                    let peak = peak_f32(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    if let Ok(mut buf) = data.lock() {
-                        for &s in input {
-                            buf.push(f32_to_i16(s));
-                        }
-                    }
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        cpal::SampleFormat::I16 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[i16], _| {
-                    let peak = peak_i16(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    if let Ok(mut buf) = data.lock() {
-                        buf.extend_from_slice(input);
-                    }
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        cpal::SampleFormat::U16 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[u16], _| {
-                    if let Ok(mut buf) = data.lock() {
-                        let peak = convert_u16_to_i16_and_peak(input, &mut buf);
-                        last_peak.store(peak, Ordering::Relaxed);
-                    }
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        _ => Err("unsupported input sample format".to_string()),
-    }
 }
 
 fn build_realtime_input_stream(

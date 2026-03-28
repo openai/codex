@@ -205,8 +205,6 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use std::time::Instant;
 /// If the pasted content exceeds this number of characters, replace it with a
@@ -3349,7 +3347,9 @@ impl ChatComposer {
     }
 
     pub fn remove_recording_meter_placeholder(&mut self, id: &str) {
-        let _ = self.textarea.replace_element_by_id(id, "");
+        if let Some(range) = self.textarea.named_element_range(id) {
+            let _ = self.textarea.remove_element_range(range);
+        }
     }
 }
 
