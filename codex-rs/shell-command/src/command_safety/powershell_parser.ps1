@@ -1,6 +1,21 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# Long-lived PowerShell AST parser used by the Rust command-safety layer on Windows.
+# The caller starts one child process per PowerShell executable variant and then sends
+# newline-delimited JSON requests over stdin:
+#   { "id": <u64>, "payload": "<base64-encoded UTF-16LE script>" }
+# We answer with one compact JSON line per request:
+#   { "id": <same>, "status": "ok", "commands": [["Get-Content", "foo.txt"]] }
+# or:
+#   { "id": <same>, "status": "parse_failed" | "parse_errors" | "unsupported" }
+#
+# "unsupported" is intentional: it means the script parsed successfully, but the AST
+# included constructs that we conservatively refuse to lower into argv-like command words.
+# The Rust side treats that the same way as an unsafe command.
+
+# Use BOM-free UTF-8 on the protocol stream so Rust sees clean JSON lines with no
+# leading BOM bytes on the first response.
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 $stdin = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), $utf8, $false)
 $stdout = [System.IO.StreamWriter]::new([Console]::OpenStandardOutput(), $utf8)
@@ -27,6 +42,8 @@ function Invoke-ParseRequest {
         return @{ id = $RequestId; status = 'parse_errors' }
     }
 
+    # Only accept AST shapes we can flatten into a list of argv-like command words.
+    # Anything more dynamic than that becomes "unsupported" instead of being guessed at.
     $commands = [System.Collections.ArrayList]::new()
 
     foreach ($statement in $ast.EndBlock.Statements) {
@@ -39,6 +56,8 @@ function Invoke-ParseRequest {
     if ($commands -ne $null) {
         $normalized = [System.Collections.ArrayList]::new()
         foreach ($cmd in $commands) {
+            # Convert every successful parse result to an array-of-arrays shape so the Rust
+            # side can deserialize one uniform representation.
             if ($cmd -is [string]) {
                 $null = $normalized.Add(@($cmd))
                 continue
@@ -72,6 +91,8 @@ function Write-Response {
 function Convert-CommandElement {
     param($element)
 
+    # Accept only literal-ish command elements. Variable expansion, subexpressions, splats,
+    # and other dynamic forms return $null so the whole request becomes unsupported.
     if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
         return @($element.Value)
     }
@@ -110,6 +131,8 @@ function Convert-PipelineElement {
     param($element)
 
     if ($element -is [System.Management.Automation.Language.CommandAst]) {
+        # Redirections and invocation operators make the command harder to classify safely,
+        # so reject them rather than trying to normalize them.
         if ($element.Redirections.Count -gt 0) {
             return $null
         }
@@ -137,6 +160,8 @@ function Convert-PipelineElement {
             return $null
         }
 
+        # Allow a parenthesized single pipeline element like "(Get-Content foo.rs -Raw)" so
+        # the caller still sees the inner command words. More complex expressions stay unsupported.
         if ($element.Expression -is [System.Management.Automation.Language.ParenExpressionAst]) {
             $innerPipeline = $element.Expression.Pipeline
             if ($innerPipeline -and $innerPipeline.PipelineElements.Count -eq 1) {
@@ -189,6 +214,8 @@ function Add-CommandsFromPipelineBase {
         return Add-CommandsFromPipelineAst $pipeline $commands
     }
 
+    # Windows PowerShell 5.1 does not define PipelineChainAst, so avoid a direct type
+    # reference here and instead check the runtime type name.
     if ($pipeline.GetType().FullName -eq 'System.Management.Automation.Language.PipelineChainAst') {
         return Add-CommandsFromPipelineChain $pipeline $commands
     }
