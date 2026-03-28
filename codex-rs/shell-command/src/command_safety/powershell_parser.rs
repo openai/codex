@@ -20,6 +20,10 @@ const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
 /// Cache one long-lived parser process per executable path so repeated safety checks reuse
 /// PowerShell startup work while still consulting the real parser every time.
+///
+/// We keep the cache behind one mutex because each child process speaks a simple
+/// request/response protocol over a single stdin/stdout pair, so callers targeting the same
+/// executable must serialize access anyway.
 pub(super) fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
     static PARSER_PROCESSES: LazyLock<Mutex<HashMap<String, PowershellParserProcess>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -62,6 +66,9 @@ fn parse_with_cached_process(
         match parse_result {
             Ok(outcome) => return outcome,
             Err(_) if attempt == 0 => {
+                // The common failure mode here is that a previously cached child exited or its
+                // stdio stream became unusable between requests. Drop that process and retry once
+                // with a fresh child before giving up.
                 parser_processes.remove(&parser_key);
             }
             Err(_) => return PowershellParseOutcome::Failed,
@@ -89,6 +96,8 @@ struct PowershellParserProcess {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    // Request ids are monotonic within one child process so the caller can detect protocol
+    // desynchronization if stdout is contaminated or the child is unexpectedly replaced.
     next_request_id: u64,
 }
 
@@ -149,7 +158,8 @@ impl PowershellParserProcess {
 
         let response = deserialize_response(&response_line)?;
         // Requests are serialized today; the id still catches protocol desyncs if stdout is
-        // contaminated or the child process is unexpectedly replaced mid-request.
+        // contaminated or the child process is unexpectedly replaced mid-request. That turns an
+        // ambiguous parser result into a hard failure so the caller can discard the cached child.
         if response.id != request.id {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidData,
