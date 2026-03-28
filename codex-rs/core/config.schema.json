@@ -503,9 +503,6 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
-            "voice_transcription": {
-              "type": "boolean"
-            },
             "web_search": {
               "type": "boolean"
             },
@@ -734,7 +731,7 @@
           "type": "string"
         },
         {
-          "description": "Do not write history to disk.",
+          "description": "Do not write any history entries to disk.",
           "enum": [
             "none"
           ],
@@ -742,322 +739,118 @@
         }
       ]
     },
-    "McpServerToolConfig": {
-      "additionalProperties": false,
-      "description": "Per-tool approval settings for a single MCP server tool.",
-      "properties": {
-        "approval_mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AppToolApproval"
-            }
-          ],
-          "description": "Approval mode for this tool."
-        }
-      },
-      "type": "object"
-    },
-    "MemoriesToml": {
-      "additionalProperties": false,
-      "description": "Memories settings loaded from config.toml.",
-      "properties": {
-        "consolidation_model": {
-          "description": "Model used for memory consolidation.",
-          "type": "string"
-        },
-        "extract_model": {
-          "description": "Model used for thread summarisation.",
-          "type": "string"
-        },
-        "generate_memories": {
-          "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"` in the state DB.",
-          "type": "boolean"
-        },
-        "max_raw_memories_for_consolidation": {
-          "description": "Maximum number of recent raw memories retained for global consolidation.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_rollout_age_days": {
-          "description": "Maximum age of the threads used for memories.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "max_rollouts_per_startup": {
-          "description": "Maximum number of rollout candidates processed per pass.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_unused_days": {
-          "description": "Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "min_rollout_idle_hours": {
-          "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "no_memories_if_mcp_or_web_search": {
-          "description": "When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `\"polluted\"`.",
-          "type": "boolean"
-        },
-        "use_memories": {
-          "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "ModelAvailabilityNuxConfig": {
-      "additionalProperties": {
-        "format": "uint32",
-        "minimum": 0.0,
-        "type": "integer"
-      },
-      "type": "object"
-    },
-    "ModelProviderInfo": {
-      "additionalProperties": false,
-      "description": "Serializable representation of a provider definition.",
-      "properties": {
-        "base_url": {
-          "description": "Base URL for the provider's OpenAI-compatible API.",
-          "type": "string"
-        },
-        "env_http_headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Optional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and _environment variable_ whose value should be used. If the environment variable is not set, or the value is empty, the header will not be included in the request.",
-          "type": "object"
-        },
-        "env_key": {
-          "description": "Environment variable that stores the user's API key for this provider.",
-          "type": "string"
-        },
-        "env_key_instructions": {
-          "description": "Optional instructions to help the user get a valid value for the variable and set it.",
-          "type": "string"
-        },
-        "experimental_bearer_token": {
-          "description": "Value to use with `Authorization: Bearer <token>` header. Use of this config is discouraged in favor of `env_key` for security reasons, but this may be necessary when using this programmatically.",
-          "type": "string"
-        },
-        "http_headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
-          "type": "object"
-        },
-        "name": {
-          "description": "Friendly display name.",
-          "type": "string"
-        },
-        "query_params": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Optional query parameters to append to the base URL.",
-          "type": "object"
-        },
-        "request_max_retries": {
-          "description": "Maximum number of times to retry a failed HTTP request to this provider.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "requires_openai_auth": {
-          "default": false,
-          "description": "Does this provider require an OpenAI API Key or ChatGPT login token? If true, user is presented with login screen on first run, and login preference and token/key are stored in auth.json. If false (which is the default), login screen is skipped, and API key (if needed) comes from the \"env_key\" environment variable.",
-          "type": "boolean"
-        },
-        "stream_idle_timeout_ms": {
-          "description": "Idle timeout (in milliseconds) to wait for activity on a streaming response before treating the connection as lost.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "stream_max_retries": {
-          "description": "Number of times to retry reconnecting a dropped streaming response before failing.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "supports_websockets": {
-          "default": false,
-          "description": "Whether this provider supports the Responses API WebSocket transport.",
-          "type": "boolean"
-        },
-        "websocket_connect_timeout_ms": {
-          "description": "Maximum time (in milliseconds) to wait for a websocket connection attempt before treating it as failed.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "wire_api": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WireApi"
-            }
-          ],
-          "default": "responses",
-          "description": "Which wire protocol this provider expects."
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "type": "object"
-    },
-    "NetworkDomainPermissionToml": {
-      "enum": [
-        "allow",
-        "deny"
-      ],
-      "type": "string"
-    },
-    "NetworkDomainPermissionsToml": {
-      "type": "object"
-    },
-    "NetworkModeSchema": {
-      "enum": [
-        "limited",
-        "full"
-      ],
-      "type": "string"
-    },
-    "NetworkToml": {
-      "additionalProperties": false,
-      "properties": {
-        "allow_local_binding": {
-          "type": "boolean"
-        },
-        "allow_upstream_proxy": {
-          "type": "boolean"
-        },
-        "dangerously_allow_all_unix_sockets": {
-          "type": "boolean"
-        },
-        "dangerously_allow_non_loopback_proxy": {
-          "type": "boolean"
-        },
-        "domains": {
-          "$ref": "#/definitions/NetworkDomainPermissionsToml"
-        },
-        "enable_socks5": {
-          "type": "boolean"
-        },
-        "enable_socks5_udp": {
-          "type": "boolean"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "mode": {
-          "$ref": "#/definitions/NetworkModeSchema"
-        },
-        "proxy_url": {
-          "type": "string"
-        },
-        "socks_url": {
-          "type": "string"
-        },
-        "unix_sockets": {
-          "$ref": "#/definitions/NetworkUnixSocketPermissionsToml"
-        }
-      },
-      "type": "object"
-    },
-    "NetworkUnixSocketPermissionToml": {
-      "enum": [
-        "allow",
-        "none"
-      ],
-      "type": "string"
-    },
-    "NetworkUnixSocketPermissionsToml": {
-      "type": "object"
-    },
-    "Notice": {
-      "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
-      "properties": {
-        "hide_full_access_warning": {
-          "description": "Tracks whether the user has acknowledged the full access warning prompt.",
-          "type": "boolean"
-        },
-        "hide_gpt-5.1-codex-max_migration_prompt": {
-          "description": "Tracks whether the user has seen the gpt-5.1-codex-max migration prompt",
-          "type": "boolean"
-        },
-        "hide_gpt5_1_migration_prompt": {
-          "description": "Tracks whether the user has seen the model migration prompt",
-          "type": "boolean"
-        },
-        "hide_rate_limit_model_nudge": {
-          "description": "Tracks whether the user opted out of the rate limit model switch reminder.",
-          "type": "boolean"
-        },
-        "hide_world_writable_warning": {
-          "description": "Tracks whether the user has acknowledged the Windows world-writable directories warning.",
-          "type": "boolean"
-        },
-        "model_migrations": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "description": "Tracks acknowledged model migrations as old->new model slug mappings.",
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "NotificationMethod": {
-      "enum": [
-        "auto",
-        "osc9",
-        "bel"
-      ],
-      "type": "string"
-    },
-    "Notifications": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      ]
-    },
-    "OAuthCredentialsStoreMode": {
-      "description": "Determine where Codex should store and read MCP credentials.",
+    "McpOauthCredentialsStoreMode": {
+      "description": "Determine where Codex should store MCP OAuth credentials.",
       "oneOf": [
         {
-          "description": "`Keyring` when available; otherwise, `File`. Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.",
-          "enum": [
-            "auto"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "CODEX_HOME/.credentials.json This file will be readable to Codex and other applications running as the same user.",
+          "description": "Persist credentials in CODEX_HOME/mcp-oauth/.",
           "enum": [
             "file"
           ],
           "type": "string"
         },
         {
-          "description": "Keyring when available, otherwise fail.",
+          "description": "Persist credentials in the keyring. Fail if unavailable.",
           "enum": [
             "keyring"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use keyring when available; otherwise, fall back to files in CODEX_HOME/mcp-oauth/.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "MemoriesToml": {
+      "additionalProperties": false,
+      "properties": {
+        "capacity_bytes": {
+          "description": "Maximum approximate total size of memory entries stored locally.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "When `false`, disables local memory recording and retrieval.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ModelProviderInfo": {
+      "additionalProperties": false,
+      "description": "Configuration for a custom model provider.",
+      "properties": {
+        "api_key_env": {
+          "description": "Environment variable holding the API key.",
+          "type": "string"
+        },
+        "base_url": {
+          "description": "Base URL for the provider.",
+          "type": "string"
+        },
+        "chat_completions_path": {
+          "description": "Optional chat completions endpoint path for providers that do not use the default.",
+          "type": "string"
+        },
+        "display_name": {
+          "description": "Human-readable provider name.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Stable provider identifier.",
+          "type": "string"
+        },
+        "responses_path": {
+          "description": "Optional responses endpoint path for providers that do not use the default.",
+          "type": "string"
+        },
+        "wire_api": {
+          "$ref": "#/definitions/WireApi"
+        }
+      },
+      "required": [
+        "name",
+        "base_url",
+        "wire_api"
+      ],
+      "type": "object"
+    },
+    "Notice": {
+      "additionalProperties": false,
+      "properties": {
+        "tips": {
+          "description": "Display startup tips in the TUI.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "OAuthCredentialsStoreMode": {
+      "description": "Determine where Codex should store MCP OAuth credentials.",
+      "oneOf": [
+        {
+          "description": "Persist credentials in CODEX_HOME/mcp-oauth/.",
+          "enum": [
+            "file"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Persist credentials in the keyring. Fail if unavailable.",
+          "enum": [
+            "keyring"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use keyring when available; otherwise, fall back to files in CODEX_HOME/mcp-oauth/.",
+          "enum": [
+            "auto"
           ],
           "type": "string"
         }
@@ -1065,316 +858,98 @@
     },
     "OtelConfigToml": {
       "additionalProperties": false,
-      "description": "OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
-        "environment": {
-          "description": "Mark traces with environment (dev, staging, prod, test). Defaults to dev.",
-          "type": "string"
-        },
-        "exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional log exporter"
-        },
-        "log_user_prompt": {
-          "description": "Log user prompt in traces",
+        "enabled": {
+          "description": "When `true`, enable OTLP exporting.",
           "type": "boolean"
         },
-        "metrics_exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional metrics exporter"
-        },
-        "trace_exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional trace exporter"
-        }
-      },
-      "type": "object"
-    },
-    "OtelExporterKind": {
-      "description": "Which OTEL exporter to use.",
-      "oneOf": [
-        {
-          "enum": [
-            "none",
-            "statsig"
-          ],
+        "endpoint": {
+          "description": "Optional OTLP endpoint, e.g. `http://localhost:4317`.",
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "otlp-http": {
-              "additionalProperties": false,
-              "properties": {
-                "endpoint": {
-                  "type": "string"
-                },
-                "headers": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "default": {},
-                  "type": "object"
-                },
-                "protocol": {
-                  "$ref": "#/definitions/OtelHttpProtocol"
-                },
-                "tls": {
-                  "allOf": [
-                    {
-                      "$ref": "#/definitions/OtelTlsConfig"
-                    }
-                  ],
-                  "default": null
-                }
-              },
-              "required": [
-                "endpoint",
-                "protocol"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "otlp-http"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "otlp-grpc": {
-              "additionalProperties": false,
-              "properties": {
-                "endpoint": {
-                  "type": "string"
-                },
-                "headers": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "default": {},
-                  "type": "object"
-                },
-                "tls": {
-                  "allOf": [
-                    {
-                      "$ref": "#/definitions/OtelTlsConfig"
-                    }
-                  ],
-                  "default": null
-                }
-              },
-              "required": [
-                "endpoint"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "otlp-grpc"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "OtelHttpProtocol": {
-      "oneOf": [
-        {
-          "description": "Binary payload",
-          "enum": [
-            "binary"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "JSON payload",
-          "enum": [
-            "json"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "OtelTlsConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "ca-certificate": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "client-certificate": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "client-private-key": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      },
-      "type": "object"
-    },
-    "PermissionProfileToml": {
-      "additionalProperties": false,
-      "properties": {
-        "filesystem": {
-          "$ref": "#/definitions/FilesystemPermissionsToml"
-        },
-        "network": {
-          "$ref": "#/definitions/NetworkToml"
         }
       },
       "type": "object"
     },
     "PermissionsToml": {
+      "additionalProperties": {
+        "$ref": "#/definitions/PermissionsProfileToml"
+      },
       "type": "object"
     },
-    "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
-    },
-    "PluginConfig": {
+    "PermissionsProfileToml": {
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "default": true,
+        "filesystem": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/FilesystemPermissionsToml"
+            }
+          ],
+          "description": "Filesystem allow/deny rules for this profile."
+        },
+        "network": {
+          "description": "Whether network access is allowed.",
           "type": "boolean"
         }
       },
       "type": "object"
     },
+    "Personality": {
+      "enum": [
+        "default",
+        "concise",
+        "mentor"
+      ],
+      "type": "string"
+    },
     "ProjectConfig": {
       "additionalProperties": false,
       "properties": {
-        "trust_level": {
-          "$ref": "#/definitions/TrustLevel"
+        "doc_paths": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "root": {
+          "$ref": "#/definitions/AbsolutePathBuf"
         }
       },
+      "required": [
+        "root"
+      ],
       "type": "object"
     },
     "RawMcpServerConfig": {
       "additionalProperties": false,
       "properties": {
         "args": {
-          "default": null,
           "items": {
             "type": "string"
           },
           "type": "array"
-        },
-        "bearer_token": {
-          "type": "string"
-        },
-        "bearer_token_env_var": {
-          "type": "string"
         },
         "command": {
           "type": "string"
         },
         "cwd": {
-          "default": null,
-          "type": "string"
-        },
-        "disabled_tools": {
-          "default": null,
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "enabled": {
-          "default": null,
-          "type": "boolean"
-        },
-        "enabled_tools": {
-          "default": null,
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "env": {
           "additionalProperties": {
             "type": "string"
           },
-          "default": null,
           "type": "object"
         },
-        "env_http_headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": null,
-          "type": "object"
-        },
-        "env_vars": {
-          "default": null,
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "http_headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "name": {
-          "default": null,
-          "description": "Legacy display-name field accepted for backward compatibility.",
-          "type": "string"
-        },
-        "oauth_resource": {
-          "default": null,
-          "type": "string"
-        },
-        "required": {
-          "default": null,
+        "enabled": {
           "type": "boolean"
         },
-        "scopes": {
-          "default": null,
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "startup_timeout_ms": {
-          "default": null,
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "startup_timeout_sec": {
-          "default": null,
-          "format": "double",
-          "type": "number"
-        },
-        "tool_timeout_sec": {
-          "default": null,
-          "format": "double",
-          "type": "number"
-        },
-        "tools": {
-          "additionalProperties": {
-            "$ref": "#/definitions/McpServerToolConfig"
-          },
-          "default": null,
-          "type": "object"
+        "transport": {
+          "enum": [
+            "stdio",
+            "sse"
+          ],
+          "type": "string"
         },
         "url": {
           "type": "string"
@@ -1382,101 +957,85 @@
       },
       "type": "object"
     },
+    "ReasoningEffort": {
+      "enum": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "ReasoningSummary": {
+      "enum": [
+        "auto",
+        "detailed",
+        "none"
+      ],
+      "type": "string"
+    },
     "RealtimeAudioToml": {
       "additionalProperties": false,
       "properties": {
-        "microphone": {
+        "input_device": {
+          "description": "Preferred input device name for realtime voice.",
           "type": "string"
         },
-        "speaker": {
+        "output_device": {
+          "description": "Preferred output device name for realtime voice.",
           "type": "string"
         }
       },
       "type": "object"
-    },
-    "RealtimeConversationVersion": {
-      "enum": [
-        "v1",
-        "v2"
-      ],
-      "type": "string"
     },
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
         "type": {
-          "$ref": "#/definitions/RealtimeWsMode"
+          "description": "Experimental / do not use. Realtime session type.",
+          "enum": [
+            "conversation",
+            "transcription"
+          ],
+          "type": "string"
         },
         "version": {
-          "$ref": "#/definitions/RealtimeConversationVersion"
+          "description": "Experimental / do not use. Realtime transport protocol version.",
+          "enum": [
+            "v1",
+            "v2"
+          ],
+          "type": "string"
         }
       },
       "type": "object"
     },
-    "RealtimeWsMode": {
-      "enum": [
-        "conversational",
-        "transcription"
-      ],
-      "type": "string"
-    },
-    "ReasoningEffort": {
-      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "type": "string"
-    },
-    "ReasoningSummary": {
-      "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
+    "SandboxMode": {
       "oneOf": [
         {
           "enum": [
-            "auto",
-            "concise",
-            "detailed"
+            "danger-full-access"
           ],
           "type": "string"
         },
         {
-          "description": "Option to disable reasoning summaries.",
           "enum": [
-            "none"
+            "workspace-write"
+          ],
+          "type": "string"
+        },
+        {
+          "enum": [
+            "read-only"
           ],
           "type": "string"
         }
       ]
     },
-    "SandboxMode": {
-      "enum": [
-        "read-only",
-        "workspace-write",
-        "danger-full-access"
-      ],
-      "type": "string"
-    },
     "SandboxWorkspaceWrite": {
       "additionalProperties": false,
       "properties": {
-        "exclude_slash_tmp": {
-          "default": false,
-          "type": "boolean"
-        },
-        "exclude_tmpdir_env_var": {
-          "default": false,
-          "type": "boolean"
-        },
-        "network_access": {
-          "default": false,
-          "type": "boolean"
-        },
-        "writable_roots": {
-          "default": [],
+        "additional_paths": {
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -1487,42 +1046,16 @@
     },
     "ServiceTier": {
       "enum": [
+        "auto",
         "fast",
         "flex"
       ],
       "type": "string"
     },
-    "ShellEnvironmentPolicyInherit": {
-      "oneOf": [
-        {
-          "description": "\"Core\" environment variables for the platform. On UNIX, this would include HOME, LOGNAME, PATH, SHELL, and USER, among others.",
-          "enum": [
-            "core"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Inherits the full environment from the parent process.",
-          "enum": [
-            "all"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Do not inherit any environment variables from the parent process.",
-          "enum": [
-            "none"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "ShellEnvironmentPolicyToml": {
       "additionalProperties": false,
-      "description": "Policy for building the `env` when spawning a process via either the `shell` or `local_shell` tool.",
       "properties": {
         "exclude": {
-          "description": "List of regular expressions.",
           "items": {
             "type": "string"
           },
@@ -1535,14 +1068,13 @@
           "type": "boolean"
         },
         "include_only": {
-          "description": "List of regular expressions.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "inherit": {
-          "$ref": "#/definitions/ShellEnvironmentPolicyInherit"
+          "type": "boolean"
         },
         "set": {
           "additionalProperties": {
@@ -1553,41 +1085,17 @@
       },
       "type": "object"
     },
+    "SkillsConfig": {
+      "additionalProperties": {
+        "$ref": "#/definitions/SkillConfig"
+      },
+      "type": "object"
+    },
     "SkillConfig": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean"
-        },
-        "name": {
-          "description": "Name-based selector.",
-          "type": "string"
-        },
-        "path": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            }
-          ],
-          "description": "Path-based selector."
-        }
-      },
-      "required": [
-        "enabled"
-      ],
-      "type": "object"
-    },
-    "SkillsConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "bundled": {
-          "$ref": "#/definitions/BundledSkillsConfig"
-        },
-        "config": {
-          "items": {
-            "$ref": "#/definitions/SkillConfig"
-          },
-          "type": "array"
         }
       },
       "type": "object"
@@ -1595,162 +1103,44 @@
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
-        "discoverables": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/ToolSuggestDiscoverable"
-          },
-          "type": "array"
+        "enabled": {
+          "type": "boolean"
         }
       },
       "type": "object"
-    },
-    "ToolSuggestDiscoverable": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "type": {
-          "$ref": "#/definitions/ToolSuggestDiscoverableType"
-        }
-      },
-      "required": [
-        "id",
-        "type"
-      ],
-      "type": "object"
-    },
-    "ToolSuggestDiscoverableType": {
-      "enum": [
-        "connector",
-        "plugin"
-      ],
-      "type": "string"
     },
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
         "view_image": {
-          "default": null,
-          "description": "Enable the `view_image` tool that lets the agent attach local images.",
           "type": "boolean"
-        },
-        "web_search": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WebSearchToolConfig"
-            }
-          ],
-          "default": null
         }
       },
       "type": "object"
     },
-    "TrustLevel": {
-      "description": "Represents the trust level for a project directory. This determines the approval policy and sandbox mode applied.",
-      "enum": [
-        "trusted",
-        "untrusted"
-      ],
-      "type": "string"
-    },
     "Tui": {
       "additionalProperties": false,
-      "description": "Collection of settings that are specific to the TUI.",
       "properties": {
-        "alternate_screen": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AltScreenMode"
-            }
-          ],
-          "default": "auto",
-          "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n- `auto` (default): Disable alternate screen in Zellij, enable elsewhere. - `always`: Always use alternate screen (original behavior). - `never`: Never use alternate screen (inline mode only, preserves scrollback).\n\nUsing alternate screen provides a cleaner fullscreen experience but prevents scrollback in terminal multiplexers like Zellij that follow the xterm spec."
-        },
-        "animations": {
-          "default": true,
-          "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
-          "type": "boolean"
-        },
-        "model_availability_nux": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelAvailabilityNuxConfig"
-            }
-          ],
-          "default": {},
-          "description": "Startup tooltip availability NUX state persisted by the TUI."
-        },
-        "notification_method": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/NotificationMethod"
-            }
-          ],
-          "default": "auto",
-          "description": "Notification method to use for unfocused terminal notifications. Defaults to `auto`."
-        },
-        "notifications": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/Notifications"
-            }
-          ],
-          "default": true,
-          "description": "Enable desktop notifications from the TUI when the terminal is unfocused. Defaults to `true`."
-        },
-        "show_tooltips": {
-          "default": true,
-          "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
-          "type": "boolean"
-        },
-        "status_line": {
-          "default": null,
-          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and `current-dir`.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "terminal_title": {
-          "default": null,
-          "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title. When unset, the TUI defaults to: `spinner` and `project`.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "theme": {
-          "default": null,
-          "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
-          "type": "string"
+        "alt_screen": {
+          "$ref": "#/definitions/AltScreenMode"
         }
       },
       "type": "object"
     },
     "UriBasedFileOpener": {
-      "oneOf": [
-        {
-          "enum": [
-            "vscode",
-            "vscode-insiders",
-            "windsurf",
-            "cursor"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Option to disable the URI-based file opener.",
-          "enum": [
-            "none"
-          ],
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "description": "Template containing `{path}` and optional `{line}`/`{column}` placeholders.",
           "type": "string"
         }
-      ]
+      },
+      "required": [
+        "template"
+      ],
+      "type": "object"
     },
     "Verbosity": {
-      "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",
       "enum": [
         "low",
         "medium",
@@ -1760,9 +1150,9 @@
     },
     "WebSearchContextSize": {
       "enum": [
-        "low",
+        "small",
         "medium",
-        "high"
+        "large"
       ],
       "type": "string"
     },
@@ -1785,14 +1175,31 @@
       "type": "object"
     },
     "WebSearchMode": {
-      "enum": [
-        "disabled",
-        "cached",
-        "live"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "disabled"
+          ],
+          "type": "string"
+        },
+        {
+          "enum": [
+            "cached"
+          ],
+          "type": "string"
+        },
+        {
+          "enum": [
+            "live"
+          ],
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/WebSearchRequestConfig"
+        }
+      ]
     },
-    "WebSearchToolConfig": {
+    "WebSearchRequestConfig": {
       "additionalProperties": false,
       "properties": {
         "allowed_domains": {
@@ -1824,7 +1231,7 @@
           "$ref": "#/definitions/WindowsSandboxModeToml"
         },
         "sandbox_private_desktop": {
-          "description": "Defaults to `true`. Set to `false` to launch the final sandboxed child process on `Winsta0\\\\Default` instead of a private desktop.",
+          "description": "Defaults to `true`. Set to `false` to launch the final sandboxed child process on `Winsta0\\Default` instead of a private desktop.",
           "type": "boolean"
         }
       },
@@ -2146,9 +1553,6 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
-          "type": "boolean"
-        },
-        "voice_transcription": {
           "type": "boolean"
         },
         "web_search": {
