@@ -251,7 +251,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
 fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
     let content = "prefix ".repeat(200) + &" suffix".repeat(200);
 
-    let truncated = guardian_truncate_text(&content, 20);
+    let truncated = guardian_truncate_text(&content, /*token_cap*/ 20);
 
     assert!(truncated.starts_with("prefix"));
     assert!(truncated.contains("<truncated omitted_approx_tokens=\""));
@@ -392,7 +392,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
             patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
                 .to_string(),
         },
-        None,
+        /*retry_reason*/ None,
         cancel_token,
     )
     .await;
@@ -556,7 +556,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         Arc::clone(&turn),
         prompt,
         guardian_output_schema(),
-        None,
+        /*external_cancel*/ None,
     )
     .await;
     let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
@@ -634,7 +634,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&turn),
         first_prompt,
         guardian_output_schema(),
-        None,
+        /*external_cancel*/ None,
     )
     .await;
     let second_prompt = build_guardian_prompt_items(
@@ -659,7 +659,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&turn),
         second_prompt,
         guardian_output_schema(),
-        None,
+        /*external_cancel*/ None,
     )
     .await;
 
@@ -772,7 +772,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
             additional_permissions: None,
             justification: Some("Need to push the reviewed docs fix.".to_string()),
         },
-        None,
+        /*retry_reason*/ None,
     )
     .await;
 
@@ -884,7 +884,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         justification: Some("Inspect repo state before proceeding.".to_string()),
     };
     assert_eq!(
-        review_approval_request(&session, &turn, initial_request, None).await,
+        review_approval_request(&session, &turn, initial_request, /*retry_reason*/ None).await,
         ReviewDecision::Approved
     );
 
@@ -988,7 +988,7 @@ fn guardian_review_session_config_preserves_parent_network_proxy() {
 
     let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
-        None,
+        /*live_network_config*/ None,
         "parent-active-model",
         Some(codex_protocol::openai_models::ReasoningEffort::Low),
     )
@@ -1019,9 +1019,13 @@ fn guardian_review_session_config_overrides_parent_developer_instructions() {
     parent_config.developer_instructions =
         Some("parent or managed config should not replace guardian policy".to_string());
 
-    let guardian_config =
-        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
-            .expect("guardian config");
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
 
     assert_eq!(
         guardian_config.developer_instructions,
@@ -1040,7 +1044,7 @@ fn guardian_review_session_config_uses_live_network_proxy_state() {
     parent_config.permissions.network = Some(
         NetworkProxySpec::from_config_and_constraints(
             parent_network,
-            None,
+            /*requirements*/ None,
             parent_config.permissions.sandbox_policy.get(),
         )
         .expect("parent network proxy spec"),
@@ -1056,7 +1060,7 @@ fn guardian_review_session_config_uses_live_network_proxy_state() {
         &parent_config,
         Some(live_network.clone()),
         "active-model",
-        None,
+        /*reasoning_effort*/ None,
     )
     .expect("guardian config");
 
@@ -1065,7 +1069,7 @@ fn guardian_review_session_config_uses_live_network_proxy_state() {
         Some(
             NetworkProxySpec::from_config_and_constraints(
                 live_network,
-                None,
+                /*requirements*/ None,
                 &SandboxPolicy::new_read_only_policy(),
             )
             .expect("live network proxy spec")
@@ -1087,9 +1091,13 @@ fn guardian_review_session_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err =
-        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
-            .expect_err("guardian config should fail when collab is pinned on");
+    let err = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect_err("guardian config should fail when collab is pinned on");
 
     assert!(
         err.to_string()
@@ -1102,9 +1110,13 @@ fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_
     let mut parent_config = test_config();
     parent_config.model = Some("configured-model".to_string());
 
-    let guardian_config =
-        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
-            .expect("guardian config");
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
 
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
 }
@@ -1135,9 +1147,13 @@ fn guardian_review_session_config_uses_requirements_guardian_override() {
     )
     .expect("load config");
 
-    let guardian_config =
-        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
-            .expect("guardian config");
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
 
     assert_eq!(
         guardian_config.developer_instructions,
@@ -1163,9 +1179,13 @@ fn guardian_review_session_config_uses_default_guardian_policy_without_requireme
     )
     .expect("load config");
 
-    let guardian_config =
-        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
-            .expect("guardian config");
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
 
     assert_eq!(
         guardian_config.developer_instructions,

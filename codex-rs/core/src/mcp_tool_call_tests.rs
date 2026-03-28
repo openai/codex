@@ -72,13 +72,13 @@ fn prompt_options(
 
 #[test]
 fn approval_required_when_read_only_false_and_destructive() {
-    let annotations = annotations(Some(false), Some(true), None);
+    let annotations = annotations(Some(false), Some(true), /*open_world*/ None);
     assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
 }
 
 #[test]
 fn approval_required_when_read_only_false_and_open_world() {
-    let annotations = annotations(Some(false), None, Some(true));
+    let annotations = annotations(Some(false), /*destructive*/ None, Some(true));
     assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
 }
 
@@ -90,12 +90,16 @@ fn approval_required_when_destructive_even_if_read_only_true() {
 
 #[test]
 fn approval_required_when_annotations_are_absent() {
-    assert_eq!(requires_mcp_tool_approval(None), true);
+    assert_eq!(requires_mcp_tool_approval(/*annotations*/ None), true);
 }
 
 #[test]
 fn approval_not_required_when_read_only_and_other_hints_are_absent() {
-    let annotations = annotations(Some(true), None, None);
+    let annotations = annotations(
+        Some(true),
+        /*destructive*/ None,
+        /*open_world*/ None,
+    );
     assert_eq!(requires_mcp_tool_approval(Some(&annotations)), false);
 }
 
@@ -187,7 +191,9 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
         CODEX_APPS_MCP_SERVER_NAME,
         "create_event",
         Some("Calendar"),
-        prompt_options(true, true),
+        prompt_options(
+            /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
+        ),
         Some("Allow Calendar to create an event?"),
     );
 
@@ -221,7 +227,9 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
             ]),
             question,
             message_override: Some("Allow Calendar to create an event?"),
-            prompt_options: prompt_options(true, true),
+            prompt_options: prompt_options(
+                /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
+            ),
         },
     );
 
@@ -279,9 +287,11 @@ fn custom_mcp_tool_question_mentions_server_name() {
         "q".to_string(),
         "custom_server",
         "run_action",
-        None,
-        prompt_options(false, false),
-        None,
+        /*connector_name*/ None,
+        prompt_options(
+            /*allow_session_remember*/ false, /*allow_persistent_approval*/ false,
+        ),
+        /*question_override*/ None,
     );
 
     assert_eq!(question.header, "Approve app tool call?");
@@ -305,9 +315,11 @@ fn codex_apps_tool_question_uses_fallback_app_label() {
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
         "run_action",
-        None,
-        prompt_options(true, true),
-        None,
+        /*connector_name*/ None,
+        prompt_options(
+            /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
+        ),
+        /*question_override*/ None,
     );
 
     assert_eq!(
@@ -323,8 +335,10 @@ fn trusted_codex_apps_tool_question_offers_always_allow() {
         CODEX_APPS_MCP_SERVER_NAME,
         "run_action",
         Some("Calendar"),
-        prompt_options(true, true),
-        None,
+        prompt_options(
+            /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
+        ),
+        /*question_override*/ None,
     );
     let options = question.options.expect("options");
 
@@ -363,8 +377,12 @@ fn codex_apps_tool_question_without_elicitation_omits_always_allow() {
         CODEX_APPS_MCP_SERVER_NAME,
         "run_action",
         Some("Calendar"),
-        mcp_tool_approval_prompt_options(Some(&session_key), Some(&persistent_key), false),
-        None,
+        mcp_tool_approval_prompt_options(
+            Some(&session_key),
+            Some(&persistent_key),
+            /*tool_call_mcp_elicitation_enabled*/ false,
+        ),
+        /*question_override*/ None,
     );
 
     assert_eq!(
@@ -388,9 +406,11 @@ fn custom_mcp_tool_question_offers_session_remember_and_always_allow() {
         "q".to_string(),
         "custom_server",
         "run_action",
-        None,
-        prompt_options(true, true),
-        None,
+        /*connector_name*/ None,
+        prompt_options(
+            /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
+        ),
+        /*question_override*/ None,
     );
 
     assert_eq!(
@@ -423,11 +443,15 @@ fn custom_servers_support_session_and_persistent_approval() {
     };
 
     assert_eq!(
-        session_mcp_tool_approval_key(&invocation, None, AppToolApproval::Auto),
+        session_mcp_tool_approval_key(&invocation, /*metadata*/ None, AppToolApproval::Auto),
         Some(expected.clone())
     );
     assert_eq!(
-        persistent_mcp_tool_approval_key(&invocation, None, AppToolApproval::Auto),
+        persistent_mcp_tool_approval_key(
+            &invocation,
+            /*metadata*/ None,
+            AppToolApproval::Auto
+        ),
         Some(expected)
     );
 }
@@ -439,7 +463,13 @@ fn codex_apps_connectors_support_persistent_approval() {
         tool: "calendar/list_events".to_string(),
         arguments: None,
     };
-    let metadata = approval_metadata(Some("calendar"), Some("Calendar"), None, None, None);
+    let metadata = approval_metadata(
+        Some("calendar"),
+        Some("Calendar"),
+        /*connector_description*/ None,
+        /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
     let expected = McpToolApprovalKey {
         server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         connector_id: Some("calendar".to_string()),
@@ -475,7 +505,8 @@ fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
         meta: None,
     });
 
-    let got = sanitize_mcp_tool_result_for_model(false, result).expect("sanitized result");
+    let got = sanitize_mcp_tool_result_for_model(/*supports_image_input*/ false, result)
+        .expect("sanitized result");
 
     assert_eq!(
         got.content,
@@ -505,8 +536,11 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
         meta: Some(serde_json::json!({"k": "v"})),
     };
 
-    let got =
-        sanitize_mcp_tool_result_for_model(true, Ok(original.clone())).expect("unsanitized result");
+    let got = sanitize_mcp_tool_result_for_model(
+        /*supports_image_input*/ true,
+        Ok(original.clone()),
+    )
+    .expect("unsanitized result");
 
     assert_eq!(got, original);
 }
@@ -606,10 +640,12 @@ fn approval_elicitation_meta_marks_tool_approvals() {
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             "custom_server",
-            None,
-            None,
-            None,
-            prompt_options(false, false),
+            /*metadata*/ None,
+            /*tool_params*/ None,
+            /*tool_params_display*/ None,
+            prompt_options(
+                /*allow_session_remember*/ false, /*allow_persistent_approval*/ false
+            ),
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
@@ -623,15 +659,17 @@ fn approval_elicitation_meta_merges_session_and_always_persist_for_custom_server
         build_mcp_tool_approval_elicitation_meta(
             "custom_server",
             Some(&approval_metadata(
-                None,
-                None,
-                None,
+                /*connector_id*/ None,
+                /*connector_name*/ None,
+                /*connector_description*/ None,
                 Some("Run Action"),
                 Some("Runs the selected action."),
             )),
             Some(&serde_json::json!({"id": 1})),
-            None,
-            prompt_options(true, true),
+            /*tool_params_display*/ None,
+            prompt_options(
+                /*allow_session_remember*/ true, /*allow_persistent_approval*/ true
+            ),
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
@@ -742,11 +780,11 @@ fn prepare_arc_request_action_serializes_mcp_tool_call_shape() {
     let action = prepare_arc_request_action(
         &invocation,
         Some(&approval_metadata(
-            None,
+            /*connector_id*/ None,
             Some("Playwright"),
-            None,
+            /*connector_description*/ None,
             Some("Navigate"),
-            None,
+            /*tool_description*/ None,
         )),
     );
 
@@ -796,8 +834,10 @@ fn approval_elicitation_meta_includes_connector_source_for_codex_apps() {
             Some(&serde_json::json!({
                 "calendar_id": "primary",
             })),
-            None,
-            prompt_options(false, false),
+            /*tool_params_display*/ None,
+            prompt_options(
+                /*allow_session_remember*/ false, /*allow_persistent_approval*/ false
+            ),
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
@@ -829,8 +869,10 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
             Some(&serde_json::json!({
                 "calendar_id": "primary",
             })),
-            None,
-            prompt_options(true, true),
+            /*tool_params_display*/ None,
+            prompt_options(
+                /*allow_session_remember*/ true, /*allow_persistent_approval*/ true
+            ),
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
@@ -1170,7 +1212,11 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         arguments: None,
     };
     let metadata = McpToolApprovalMetadata {
-        annotations: Some(annotations(Some(true), None, None)),
+        annotations: Some(annotations(
+            Some(true),
+            /*destructive*/ None,
+            /*open_world*/ None,
+        )),
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -1233,7 +1279,11 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         arguments: None,
     };
     let metadata = McpToolApprovalMetadata {
-        annotations: Some(annotations(Some(true), None, None)),
+        annotations: Some(annotations(
+            Some(true),
+            /*destructive*/ None,
+            /*open_world*/ None,
+        )),
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -1268,7 +1318,11 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         arguments: None,
     };
     let metadata = McpToolApprovalMetadata {
-        annotations: Some(annotations(Some(true), None, None)),
+        annotations: Some(annotations(
+            Some(true),
+            /*destructive*/ None,
+            /*open_world*/ None,
+        )),
         connector_id: None,
         connector_name: None,
         connector_description: None,

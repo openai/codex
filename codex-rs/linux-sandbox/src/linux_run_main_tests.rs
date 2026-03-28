@@ -53,7 +53,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
     .args;
     apply_inner_command_argv0_for_launcher(
         &mut argv,
-        true,
+        /*supports_argv0*/ true,
         "/tmp/codex-arg0-session/codex-linux-sandbox".to_string(),
     );
     assert_eq!(
@@ -95,7 +95,7 @@ fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
     .args;
     apply_inner_command_argv0_for_launcher(
         &mut argv,
-        false,
+        /*supports_argv0*/ false,
         "/tmp/codex-arg0-session/codex-linux-sandbox".to_string(),
     );
 
@@ -126,7 +126,7 @@ fn rewrites_bwrap_helper_command_not_nested_user_command_when_current_exe_appear
 
     apply_inner_command_argv0_for_launcher(
         &mut argv,
-        false,
+        /*supports_argv0*/ false,
         "/tmp/argv0-fallback-helper".to_string(),
     );
 
@@ -182,7 +182,10 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
 
 #[test]
 fn proxy_only_mode_takes_precedence_over_full_network_policy() {
-    let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
+    let mode = bwrap_network_mode(
+        NetworkSandboxPolicy::Enabled,
+        /*allow_network_for_proxy*/ true,
+    );
     assert_eq!(mode, BwrapNetworkMode::ProxyOnly);
 }
 
@@ -236,7 +239,10 @@ fn root_write_read_only_carveout_requires_direct_runtime_enforcement() {
 
 #[test]
 fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
-    let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
+    let mode = bwrap_network_mode(
+        NetworkSandboxPolicy::Enabled,
+        /*allow_network_for_proxy*/ true,
+    );
     let argv = build_preflight_bwrap_argv(
         Path::new("/"),
         Path::new("/"),
@@ -326,9 +332,13 @@ fn managed_proxy_inner_command_requires_route_spec() {
 fn resolve_sandbox_policies_derives_split_policies_from_legacy_policy() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
-    let resolved =
-        resolve_sandbox_policies(Path::new("/tmp"), Some(sandbox_policy.clone()), None, None)
-            .expect("legacy policy should resolve");
+    let resolved = resolve_sandbox_policies(
+        Path::new("/tmp"),
+        Some(sandbox_policy.clone()),
+        /*file_system_sandbox_policy*/ None,
+        /*network_sandbox_policy*/ None,
+    )
+    .expect("legacy policy should resolve");
 
     assert_eq!(resolved.sandbox_policy, sandbox_policy);
     assert_eq!(
@@ -349,7 +359,7 @@ fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
 
     let resolved = resolve_sandbox_policies(
         Path::new("/tmp"),
-        None,
+        /*sandbox_policy*/ None,
         Some(file_system_sandbox_policy.clone()),
         Some(network_sandbox_policy),
     )
@@ -369,7 +379,7 @@ fn resolve_sandbox_policies_rejects_partial_split_policies() {
         Path::new("/tmp"),
         Some(SandboxPolicy::new_read_only_policy()),
         Some(FileSystemSandboxPolicy::default()),
-        None,
+        /*network_sandbox_policy*/ None,
     )
     .expect_err("partial split policies should fail");
 
@@ -471,7 +481,11 @@ fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inpu
 
 #[test]
 fn apply_seccomp_then_exec_with_legacy_landlock_panics() {
-    let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, true));
+    let result = std::panic::catch_unwind(|| {
+        ensure_inner_stage_mode_is_valid(
+            /*apply_seccomp_then_exec*/ true, /*use_legacy_landlock*/ true,
+        )
+    });
     assert!(result.is_err());
 }
 
@@ -496,7 +510,7 @@ fn legacy_landlock_rejects_split_only_filesystem_policies() {
 
     let result = std::panic::catch_unwind(|| {
         ensure_legacy_landlock_mode_supports_policy(
-            true,
+            /*use_legacy_landlock*/ true,
             &policy,
             NetworkSandboxPolicy::Restricted,
             temp_dir.path(),
@@ -508,7 +522,13 @@ fn legacy_landlock_rejects_split_only_filesystem_policies() {
 
 #[test]
 fn valid_inner_stage_modes_do_not_panic() {
-    ensure_inner_stage_mode_is_valid(false, false);
-    ensure_inner_stage_mode_is_valid(false, true);
-    ensure_inner_stage_mode_is_valid(true, false);
+    ensure_inner_stage_mode_is_valid(
+        /*apply_seccomp_then_exec*/ false, /*use_legacy_landlock*/ false,
+    );
+    ensure_inner_stage_mode_is_valid(
+        /*apply_seccomp_then_exec*/ false, /*use_legacy_landlock*/ true,
+    );
+    ensure_inner_stage_mode_is_valid(
+        /*apply_seccomp_then_exec*/ true, /*use_legacy_landlock*/ false,
+    );
 }

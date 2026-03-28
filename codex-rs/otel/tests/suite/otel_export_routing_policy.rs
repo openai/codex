@@ -126,7 +126,7 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
             Some("engineer@example.com".to_string()),
             Some(TelemetryAuthMode::ApiKey),
             "codex_exec".to_string(),
-            true,
+            /*log_user_prompts*/ true,
             "tty".to_string(),
             SessionSource::Cli,
         );
@@ -235,7 +235,7 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
             Some("engineer@example.com".to_string()),
             Some(TelemetryAuthMode::ApiKey),
             "codex_exec".to_string(),
-            true,
+            /*log_user_prompts*/ true,
             "tty".to_string(),
             SessionSource::Cli,
         );
@@ -246,7 +246,7 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
             "call-1",
             "secret arguments",
             std::time::Duration::from_millis(42),
-            true,
+            /*success*/ true,
             "secret output\nsecond line",
             &[],
             Some("internal-mcp"),
@@ -348,7 +348,7 @@ fn otel_export_routing_policy_routes_auth_recovery_log_and_trace_events() {
             Some("engineer@example.com".to_string()),
             Some(TelemetryAuthMode::Chatgpt),
             "codex_exec".to_string(),
-            true,
+            /*log_user_prompts*/ true,
             "tty".to_string(),
             SessionSource::Cli,
         );
@@ -362,7 +362,7 @@ fn otel_export_routing_policy_routes_auth_recovery_log_and_trace_events() {
             Some("ray-401"),
             Some("missing_authorization_header"),
             Some("token_expired"),
-            None,
+            /*recovery_reason*/ None,
             Some(true),
         );
     });
@@ -494,7 +494,7 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
             Some("engineer@example.com".to_string()),
             Some(TelemetryAuthMode::Chatgpt),
             "codex_exec".to_string(),
-            true,
+            /*log_user_prompts*/ true,
             "tty".to_string(),
             SessionSource::Cli,
         )
@@ -503,23 +503,23 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
         let _root_guard = root_span.enter();
         manager.conversation_starts(
             "openai",
-            None,
+            /*reasoning_effort*/ None,
             ReasoningSummary::Auto,
-            None,
-            None,
+            /*context_window*/ None,
+            /*auto_compact_token_limit*/ None,
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
             Vec::new(),
-            None,
+            /*active_profile*/ None,
         );
         manager.record_api_request(
-            1,
+            /*attempt*/ 1,
             Some(401),
             Some("http 401"),
             std::time::Duration::from_millis(42),
-            true,
+            /*auth_header_attached*/ true,
             Some("authorization"),
-            true,
+            /*retry_after_unauthorized*/ true,
             Some("managed"),
             Some("refresh_token"),
             "/responses",
@@ -679,7 +679,7 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
             Some("engineer@example.com".to_string()),
             Some(TelemetryAuthMode::Chatgpt),
             "codex_exec".to_string(),
-            true,
+            /*log_user_prompts*/ true,
             "tty".to_string(),
             SessionSource::Cli,
         )
@@ -690,13 +690,13 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
             std::time::Duration::from_millis(17),
             Some(401),
             Some("http 401"),
-            true,
+            /*auth_header_attached*/ true,
             Some("authorization"),
-            true,
+            /*retry_after_unauthorized*/ true,
             Some("managed"),
             Some("reload"),
             "/responses",
-            false,
+            /*connection_reused*/ false,
             Some("req-ws-401"),
             Some("ray-ws-401"),
             Some("missing_authorization_header"),
@@ -796,7 +796,7 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
             Some("engineer@example.com".to_string()),
             Some(TelemetryAuthMode::Chatgpt),
             "codex_exec".to_string(),
-            true,
+            /*log_user_prompts*/ true,
             "tty".to_string(),
             SessionSource::Cli,
         )
@@ -806,7 +806,7 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
         manager.record_websocket_request(
             std::time::Duration::from_millis(23),
             Some("stream error"),
-            true,
+            /*connection_reused*/ true,
         );
     });
 

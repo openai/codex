@@ -232,9 +232,9 @@ fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
         "done",
         "recovery_not_run",
         Some("req-401-b"),
-        None,
-        None,
-        None,
+        /*auth_cf_ray*/ None,
+        /*auth_error*/ None,
+        /*auth_error_code*/ None,
     );
 
     let tags = tags.lock().unwrap().clone();
@@ -440,7 +440,7 @@ fn resume_command_prefers_name_over_id() {
 #[test]
 fn resume_command_with_only_id() {
     let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
-    let command = resume_command(None, Some(thread_id));
+    let command = resume_command(/*thread_name*/ None, Some(thread_id));
     assert_eq!(
         command,
         Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
@@ -449,21 +449,21 @@ fn resume_command_with_only_id() {
 
 #[test]
 fn resume_command_with_no_name_or_id() {
-    let command = resume_command(None, None);
+    let command = resume_command(/*thread_name*/ None, /*thread_id*/ None);
     assert_eq!(command, None);
 }
 
 #[test]
 fn resume_command_quotes_thread_name_when_needed() {
-    let command = resume_command(Some("-starts-with-dash"), None);
+    let command = resume_command(Some("-starts-with-dash"), /*thread_id*/ None);
     assert_eq!(
         command,
         Some("codex resume -- -starts-with-dash".to_string())
     );
 
-    let command = resume_command(Some("two words"), None);
+    let command = resume_command(Some("two words"), /*thread_id*/ None);
     assert_eq!(command, Some("codex resume 'two words'".to_string()));
 
-    let command = resume_command(Some("quote'case"), None);
+    let command = resume_command(Some("quote'case"), /*thread_id*/ None);
     assert_eq!(command, Some("codex resume \"quote'case\"".to_string()));
 }

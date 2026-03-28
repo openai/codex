@@ -4,6 +4,7 @@ set -euo pipefail
 
 print_failed_bazel_test_logs=0
 use_node_test_env=0
+remote_download_toplevel=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -13,6 +14,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --use-node-test-env)
       use_node_test_env=1
+      shift
+      ;;
+    --remote-download-toplevel)
+      remote_download_toplevel=1
       shift
       ;;
     --)
@@ -27,7 +32,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -114,6 +119,13 @@ if [[ $use_node_test_env -eq 1 && "${RUNNER_OS:-}" != "Windows" ]]; then
   bazel_args+=("--test_env=CODEX_JS_REPL_NODE_PATH=${node_bin}")
 fi
 
+post_config_bazel_args=()
+if [[ $remote_download_toplevel -eq 1 ]]; then
+  # Override the CI config's remote_download_minimal setting when callers need
+  # the built artifact to exist on disk after the command completes.
+  post_config_bazel_args+=(--remote_download_toplevel)
+fi
+
 bazel_console_log="$(mktemp)"
 trap 'rm -f "$bazel_console_log"' EXIT
 
@@ -128,12 +140,18 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   # seen in CI (for example "is not a symlink" or permission errors while
   # materializing external repos such as rules_perl). We still use BuildBuddy for
   # remote execution/cache; this only disables the startup-level repo contents cache.
+  bazel_run_args=(
+    "${bazel_args[@]}"
+    "--config=${ci_config}"
+    "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+  )
+  if (( ${#post_config_bazel_args[@]} > 0 )); then
+    bazel_run_args+=("${post_config_bazel_args[@]}")
+  fi
   set +e
   "${bazel_cmd[@]}" \
     --noexperimental_remote_repo_contents_cache \
-    "${bazel_args[@]}" \
-    "--config=${ci_config}" \
-    "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}" \
+    "${bazel_run_args[@]}" \
     -- \
     "${bazel_targets[@]}" \
     2>&1 | tee "$bazel_console_log"
@@ -157,12 +175,18 @@ else
   #   clear remote cache/execution endpoints configured in .bazelrc.
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
+  bazel_run_args=(
+    "${bazel_args[@]}"
+    --remote_cache=
+    --remote_executor=
+  )
+  if (( ${#post_config_bazel_args[@]} > 0 )); then
+    bazel_run_args+=("${post_config_bazel_args[@]}")
+  fi
   set +e
   "${bazel_cmd[@]}" \
     --noexperimental_remote_repo_contents_cache \
-    "${bazel_args[@]}" \
-    --remote_cache= \
-    --remote_executor= \
+    "${bazel_run_args[@]}" \
     -- \
     "${bazel_targets[@]}" \
     2>&1 | tee "$bazel_console_log"

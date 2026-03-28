@@ -95,15 +95,24 @@ fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
 #[test]
 fn approval_sandbox_permissions_only_downgrades_preapproved_additional_permissions() {
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, true),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::WithAdditionalPermissions,
+            /*additional_permissions_preapproved*/ true
+        ),
         SandboxPermissions::UseDefault,
     );
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, false),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::WithAdditionalPermissions,
+            /*additional_permissions_preapproved*/ false
+        ),
         SandboxPermissions::WithAdditionalPermissions,
     );
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::RequireEscalated, true),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::RequireEscalated,
+            /*additional_permissions_preapproved*/ true
+        ),
         SandboxPermissions::RequireEscalated,
     );
 }
@@ -278,7 +287,7 @@ fn shell_request_escalation_execution_is_explicit() {
             &sandbox_policy,
             &file_system_sandbox_policy,
             network_sandbox_policy,
-            None,
+            /*additional_permissions*/ None,
         ),
         EscalationExecution::TurnDefault,
     );
@@ -288,7 +297,7 @@ fn shell_request_escalation_execution_is_explicit() {
             &sandbox_policy,
             &file_system_sandbox_policy,
             network_sandbox_policy,
-            None,
+            /*additional_permissions*/ None,
         ),
         EscalationExecution::Unsandboxed,
     );
@@ -466,7 +475,7 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
             file_system_sandbox_policy: &file_system_sandbox_policy,
             sandbox_permissions: super::approval_sandbox_permissions(
                 SandboxPermissions::WithAdditionalPermissions,
-                true,
+                /*additional_permissions_preapproved*/ true,
             ),
             enable_shell_wrapper_parsing: false,
         },

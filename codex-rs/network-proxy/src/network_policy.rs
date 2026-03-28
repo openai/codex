@@ -693,7 +693,9 @@ mod tests {
         });
 
         let (decision, events) = capture_events(|| async {
-            evaluate_host_policy(&state, None, &request).await.unwrap()
+            evaluate_host_policy(&state, /*decider*/ None, &request)
+                .await
+                .unwrap()
         })
         .await;
         assert_eq!(
@@ -784,7 +786,9 @@ mod tests {
         });
 
         let (_decision, events) = capture_events(|| async {
-            evaluate_host_policy(&state, None, &request).await.unwrap()
+            evaluate_host_policy(&state, /*decider*/ None, &request)
+                .await
+                .unwrap()
         })
         .await;
 
@@ -867,7 +871,9 @@ mod tests {
             exec_policy_hint: None,
         });
 
-        let decision = evaluate_host_policy(&state, None, &request).await.unwrap();
+        let decision = evaluate_host_policy(&state, /*decider*/ None, &request)
+            .await
+            .unwrap();
         assert_eq!(
             decision,
             NetworkDecision::Deny {

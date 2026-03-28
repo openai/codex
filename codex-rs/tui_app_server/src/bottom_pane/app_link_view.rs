@@ -669,7 +669,7 @@ mod tests {
         view.screen = AppLinkScreen::InstallConfirmation;
 
         let rendered: Vec<String> = view
-            .content_lines(40)
+            .content_lines(/*width*/ 40)
             .into_iter()
             .map(|line| {
                 line.spans
@@ -911,7 +911,10 @@ mod tests {
 
         assert_snapshot!(
             "app_link_view_install_suggestion_with_reason",
-            render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))
+            render_snapshot(
+                &view,
+                Rect::new(0, 0, 72, view.desired_height(/*width*/ 72))
+            )
         );
     }
 
@@ -937,7 +940,10 @@ mod tests {
 
         assert_snapshot!(
             "app_link_view_enable_suggestion_with_reason",
-            render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))
+            render_snapshot(
+                &view,
+                Rect::new(0, 0, 72, view.desired_height(/*width*/ 72))
+            )
         );
     }
 }

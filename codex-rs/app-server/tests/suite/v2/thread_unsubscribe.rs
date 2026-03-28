@@ -219,7 +219,7 @@ async fn thread_unsubscribe_during_turn_interrupts_turn_and_emits_thread_closed(
 
     wait_for_responses_request_count_to_stabilize(
         &server,
-        1,
+        /*expected_count*/ 1,
         std::time::Duration::from_millis(200),
     )
     .await?;

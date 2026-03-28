@@ -2389,7 +2389,13 @@ pub(crate) fn build_specs(
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_tools(config, mcp_tools, app_tools, None, dynamic_tools)
+    build_specs_with_discoverable_tools(
+        config,
+        mcp_tools,
+        app_tools,
+        /*discoverable_tools*/ None,
+        dynamic_tools,
+    )
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(

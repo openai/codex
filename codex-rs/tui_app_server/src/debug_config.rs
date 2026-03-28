@@ -752,7 +752,11 @@ approval_policy = "never"
     #[test]
     fn session_all_proxy_url_uses_socks_when_enabled() {
         assert_eq!(
-            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", true),
+            session_all_proxy_url(
+                "127.0.0.1:3128",
+                "127.0.0.1:8081",
+                /*socks_enabled*/ true
+            ),
             "socks5h://127.0.0.1:8081".to_string()
         );
     }
@@ -760,7 +764,11 @@ approval_policy = "never"
     #[test]
     fn session_all_proxy_url_uses_http_when_socks_disabled() {
         assert_eq!(
-            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", false),
+            session_all_proxy_url(
+                "127.0.0.1:3128",
+                "127.0.0.1:8081",
+                /*socks_enabled*/ false
+            ),
             "http://127.0.0.1:3128".to_string()
         );
     }

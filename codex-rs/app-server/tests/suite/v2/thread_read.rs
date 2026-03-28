@@ -57,7 +57,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
             .map(|elem| serde_json::to_value(elem).expect("serialize text element"))
             .collect(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -112,7 +112,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
             .map(|elem| serde_json::to_value(elem).expect("serialize text element"))
             .collect(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -215,7 +215,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
         preview,
         vec![],
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;

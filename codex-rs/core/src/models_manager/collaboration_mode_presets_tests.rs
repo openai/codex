@@ -31,8 +31,10 @@ fn default_mode_instructions_replace_mode_names_placeholder() {
     let expected_snippet = format!("Known mode names are {known_mode_names}.");
     assert!(default_instructions.contains(&expected_snippet));
 
-    let expected_availability_message =
-        request_user_input_availability_message(ModeKind::Default, true);
+    let expected_availability_message = request_user_input_availability_message(
+        ModeKind::Default,
+        /*default_mode_request_user_input*/ true,
+    );
     assert!(default_instructions.contains(&expected_availability_message));
     assert!(default_instructions.contains("prefer using the `request_user_input` tool"));
 }

@@ -149,7 +149,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
                 "rev-parse".to_string(),
                 "HEAD".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "review-call-1",
         )?,

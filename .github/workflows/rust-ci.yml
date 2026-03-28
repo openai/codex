@@ -116,8 +116,10 @@ jobs:
       - name: Install cargo-dylint tooling
         if: ${{ steps.cargo_dylint_cache.outputs.cache-hit != 'true' }}
         run: cargo install --locked cargo-dylint dylint-link
-      - name: Check source wrapper syntax
-        run: bash -n tools/argument-comment-lint/run.sh
+      - name: Check Python wrapper syntax
+        run: python3 -m py_compile tools/argument-comment-lint/wrapper_common.py tools/argument-comment-lint/run.py tools/argument-comment-lint/run-prebuilt-linter.py tools/argument-comment-lint/test_wrapper_common.py
+      - name: Test Python wrapper helpers
+        run: python3 -m unittest discover -s tools/argument-comment-lint -p 'test_*.py'
       - name: Test argument comment lint package
         working-directory: tools/argument-comment-lint
         run: cargo test
@@ -154,8 +156,17 @@ jobs:
           components: llvm-tools-preview, rustc-dev, rust-src
       - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
       - name: Run argument comment lint on codex-rs
+        if: ${{ runner.os == 'macOS' }}
         shell: bash
-        run: ./tools/argument-comment-lint/run-prebuilt-linter.sh
+        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py
+      - name: Run argument comment lint on codex-rs (default targets only)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
+      - name: Run argument comment lint on codex-rs (default targets only)
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: python ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:

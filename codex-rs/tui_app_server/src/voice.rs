@@ -881,7 +881,10 @@ mod tests {
     #[test]
     fn convert_pcm16_downmixes_and_resamples_for_model_input() {
         let input = vec![100, 300, 200, 400, 500, 700, 600, 800];
-        let converted = convert_pcm16(&input, 48_000, 2, 24_000, 1);
+        let converted = convert_pcm16(
+            &input, /*input_sample_rate*/ 48_000, /*input_channels*/ 2,
+            /*output_sample_rate*/ 24_000, /*output_channels*/ 1,
+        );
         assert_eq!(converted, vec![200, 700]);
     }
 

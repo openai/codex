@@ -646,7 +646,7 @@ mod tests {
                 initialized,
                 Arc::new(AtomicBool::new(true)),
                 opted_out_notification_methods,
-                None,
+                /*disconnect_sender*/ None,
             ),
         );
 
@@ -686,7 +686,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::from(["configWarning".to_string()]))),
-                None,
+                /*disconnect_sender*/ None,
             ),
         );
 
@@ -726,7 +726,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                None,
+                /*disconnect_sender*/ None,
             ),
         );
 
@@ -772,7 +772,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(RwLock::new(HashSet::new())),
-                None,
+                /*disconnect_sender*/ None,
             ),
         );
 
@@ -834,7 +834,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                None,
+                /*disconnect_sender*/ None,
             ),
         );
 
@@ -1006,7 +1006,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                None,
+                /*disconnect_sender*/ None,
             ),
         );
 

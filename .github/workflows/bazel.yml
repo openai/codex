@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -39,9 +40,9 @@ jobs:
           # - os: ubuntu-24.04-arm
           #   target: aarch64-unknown-linux-gnu
 
-          # TODO: Enable Windows once we fix the toolchain issues there.
-          #- os: windows-latest
-          #  target: x86_64-pc-windows-gnullvm
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job
@@ -67,8 +68,14 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          # Keep V8 out of the ordinary Bazel CI path. Only the dedicated
-          # canary and release workflows should build `third_party/v8`.
+          bazel_targets=(
+            //...
+            # Keep standalone V8 library targets out of the ordinary Bazel CI
+            # path. V8 consumers under `//codex-rs/...` still participate
+            # transitively through `//...`.
+            -//third_party/v8:all
+          )
+
           ./.github/scripts/run-bazel-ci.sh \
             --print-failed-test-logs \
             --use-node-test-env \
@@ -77,8 +84,7 @@ jobs:
             --test_verbose_timeout_warnings \
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
             -- \
-            //... \
-            -//third_party/v8:all
+            "${bazel_targets[@]}"
 
       # Save bazel repository cache explicitly; make non-fatal so cache uploading
       # never fails the overall job. Only save when key wasn't hit.

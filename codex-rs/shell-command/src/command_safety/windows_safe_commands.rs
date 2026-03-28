@@ -1,12 +1,7 @@
 use crate::command_safety::is_dangerous_command::git_global_option_requires_prompt;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use serde::Deserialize;
+use crate::command_safety::powershell_parser::PowershellParseOutcome;
+use crate::command_safety::powershell_parser::parse_with_powershell_ast;
 use std::path::Path;
-use std::process::Command;
-use std::sync::LazyLock;
-
-const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
@@ -120,82 +115,6 @@ fn is_powershell_executable(exe: &str) -> bool {
         executable_name.as_str(),
         "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
     )
-}
-
-/// Attempts to parse PowerShell using the real PowerShell parser, returning every pipeline element
-/// as a flat argv vector when possible. If parsing fails or the AST includes unsupported constructs,
-/// we conservatively reject the command instead of trying to split it manually.
-fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
-    let encoded_script = encode_powershell_base64(script);
-    let encoded_parser_script = encoded_parser_script();
-    match Command::new(executable)
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            encoded_parser_script,
-        ])
-        .env("CODEX_POWERSHELL_PAYLOAD", &encoded_script)
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            if let Ok(result) =
-                serde_json::from_slice::<PowershellParserOutput>(output.stdout.as_slice())
-            {
-                result.into_outcome()
-            } else {
-                PowershellParseOutcome::Failed
-            }
-        }
-        _ => PowershellParseOutcome::Failed,
-    }
-}
-
-fn encode_powershell_base64(script: &str) -> String {
-    let mut utf16 = Vec::with_capacity(script.len() * 2);
-    for unit in script.encode_utf16() {
-        utf16.extend_from_slice(&unit.to_le_bytes());
-    }
-    BASE64_STANDARD.encode(utf16)
-}
-
-fn encoded_parser_script() -> &'static str {
-    static ENCODED: LazyLock<String> =
-        LazyLock::new(|| encode_powershell_base64(POWERSHELL_PARSER_SCRIPT));
-    &ENCODED
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PowershellParserOutput {
-    status: String,
-    commands: Option<Vec<Vec<String>>>,
-}
-
-impl PowershellParserOutput {
-    fn into_outcome(self) -> PowershellParseOutcome {
-        match self.status.as_str() {
-            "ok" => self
-                .commands
-                .filter(|commands| {
-                    !commands.is_empty()
-                        && commands
-                            .iter()
-                            .all(|cmd| !cmd.is_empty() && cmd.iter().all(|word| !word.is_empty()))
-                })
-                .map(PowershellParseOutcome::Commands)
-                .unwrap_or(PowershellParseOutcome::Unsupported),
-            "unsupported" => PowershellParseOutcome::Unsupported,
-            _ => PowershellParseOutcome::Failed,
-        }
-    }
-}
-
-enum PowershellParseOutcome {
-    Commands(Vec<Vec<String>>),
-    Unsupported,
-    Failed,
 }
 
 fn join_arguments_as_script(args: &[String]) -> String {

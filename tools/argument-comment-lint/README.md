@@ -84,9 +84,9 @@ rustup toolchain install nightly-2025-09-18 \
 ```
 
 The checked-in DotSlash file lives at `tools/argument-comment-lint/argument-comment-lint`.
-`run-prebuilt-linter.sh` resolves that file via `dotslash` and is the path used by
+`run-prebuilt-linter.py` resolves that file via `dotslash` and is the path used by
 `just clippy`, `just argument-comment-lint`, and the Rust CI job. The
-source-build path remains available in `run.sh` for people
+source-build path remains available in `run.py` for people
 iterating on the lint crate itself.
 
 The Unix archive layout is:
@@ -110,7 +110,7 @@ host-qualified nightly filename to the plain `nightly-2025-09-18` channel when
 needed, and then invokes `cargo-dylint dylint --lib-path <that-library>` with
 the repo's default `DYLINT_RUSTFLAGS` and `CARGO_INCREMENTAL=0` settings.
 
-The checked-in `run-prebuilt-linter.sh` wrapper uses the fetched package
+The checked-in `run-prebuilt-linter.py` wrapper uses the fetched package
 contents directly so the current checked-in alpha artifact works the same way.
 It also makes sure the `rustup` shims stay ahead of any direct toolchain
 `cargo` binary on `PATH`, and sets `RUSTUP_HOME` from `rustup show home` when
@@ -120,24 +120,27 @@ required for the current Windows Dylint driver path.
 If you are changing the lint crate itself, use the source-build wrapper:
 
 ```bash
-./tools/argument-comment-lint/run.sh -p codex-core
+./tools/argument-comment-lint/run.py -p codex-core
 ```
 
 Run the lint against `codex-rs` from the repo root:
 
 ```bash
-./tools/argument-comment-lint/run-prebuilt-linter.sh -p codex-core
+./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core
 just argument-comment-lint -p codex-core
 ```
 
-If no package selection is provided, `run-prebuilt-linter.sh` defaults to checking the
+If no package selection is provided, `run-prebuilt-linter.py` defaults to checking the
 `codex-rs` workspace with `--workspace --no-deps`.
+For non-`--fix` runs, both wrappers also default the underlying Cargo
+invocation to `--all-targets` unless you explicitly narrow the target set, so
+workspace and package lint runs both cover test-only call sites by default.
 
 Repo runs also promote `uncommented_anonymous_literal_argument` to an error by
 default:
 
 ```bash
-./tools/argument-comment-lint/run-prebuilt-linter.sh -p codex-core
+./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core
 ```
 
 The wrapper does that by setting `DYLINT_RUSTFLAGS`, and it leaves an explicit
@@ -149,11 +152,11 @@ hoc run:
 ```bash
 DYLINT_RUSTFLAGS="-A uncommented-anonymous-literal-argument" \
 CARGO_INCREMENTAL=1 \
-  ./tools/argument-comment-lint/run.sh -p codex-core
+  ./tools/argument-comment-lint/run.py -p codex-core
 ```
 
-To expand target coverage for an ad hoc run:
+To override an explicitly narrow target selection, or to be explicit in scripts:
 
 ```bash
-./tools/argument-comment-lint/run-prebuilt-linter.sh -p codex-core -- --all-targets
+./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core -- --all-targets
 ```

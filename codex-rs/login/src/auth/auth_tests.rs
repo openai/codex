@@ -33,7 +33,7 @@ async fn refresh_without_id_token() {
     );
     let updated = super::persist_tokens(
         &storage,
-        None,
+        /*id_token*/ None,
         Some("new-access-token".to_string()),
         Some("new-refresh-token".to_string()),
     )
@@ -97,9 +97,13 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
     )
     .expect("failed to write auth file");
 
-    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
-        .unwrap()
-        .unwrap();
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(None, auth.api_key());
     assert_eq!(crate::AuthMode::Chatgpt, auth.auth_mode());
     assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-12345"));
@@ -144,9 +148,13 @@ async fn loads_api_key_from_auth_json() {
     )
     .unwrap();
 
-    let auth = super::load_auth(dir.path(), false, AuthCredentialsStoreMode::File)
-        .unwrap()
-        .unwrap();
+    let auth = super::load_auth(
+        dir.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(auth.auth_mode(), crate::AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
 
@@ -175,7 +183,7 @@ fn unauthorized_recovery_reports_mode_and_step_names() {
     let dir = tempdir().unwrap();
     let manager = AuthManager::shared(
         dir.path().to_path_buf(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     );
     let managed = UnauthorizedRecovery {
@@ -210,9 +218,13 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     )
     .expect("failed to write auth file");
 
-    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth available");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
     let mut updated_auth_dot_json = auth
         .get_current_auth_json()
         .expect("AuthDotJson should exist");
@@ -347,7 +359,12 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
     login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
         .expect("seed api key");
 
-    let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+    let config = build_config(
+        codex_home.path(),
+        Some(ForcedLoginMethod::Chatgpt),
+        /*forced_chatgpt_workspace_id*/ None,
+    )
+    .await;
 
     let err =
         super::enforce_login_restrictions(&config).expect_err("expected method mismatch to error");
@@ -372,7 +389,12 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     )
     .expect("failed to write auth file");
 
-    let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some("org_mine".to_string()),
+    )
+    .await;
 
     let err = super::enforce_login_restrictions(&config)
         .expect_err("expected workspace mismatch to error");
@@ -397,7 +419,12 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     )
     .expect("failed to write auth file");
 
-    let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some("org_mine".to_string()),
+    )
+    .await;
 
     super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
     assert!(
@@ -413,7 +440,12 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
     login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
         .expect("seed api key");
 
-    let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some("org_mine".to_string()),
+    )
+    .await;
 
     super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
     assert!(
@@ -428,7 +460,12 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
     let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
     let codex_home = tempdir().unwrap();
 
-    let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+    let config = build_config(
+        codex_home.path(),
+        Some(ForcedLoginMethod::Chatgpt),
+        /*forced_chatgpt_workspace_id*/ None,
+    )
+    .await;
 
     let err = super::enforce_login_restrictions(&config)
         .expect_err("environment API key should not satisfy forced ChatGPT login");
@@ -451,9 +488,13 @@ fn plan_type_maps_known_plan() {
     )
     .expect("failed to write auth file");
 
-    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth available");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
 }
@@ -471,9 +512,13 @@ fn plan_type_maps_self_serve_business_usage_based_plan() {
     )
     .expect("failed to write auth file");
 
-    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth available");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
 
     pretty_assertions::assert_eq!(
         auth.account_plan_type(),
@@ -494,9 +539,13 @@ fn plan_type_maps_enterprise_cbp_usage_based_plan() {
     )
     .expect("failed to write auth file");
 
-    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth available");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
 
     pretty_assertions::assert_eq!(
         auth.account_plan_type(),
@@ -517,9 +566,13 @@ fn plan_type_maps_unknown_to_unknown() {
     )
     .expect("failed to write auth file");
 
-    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth available");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
 }
@@ -537,9 +590,13 @@ fn missing_plan_type_maps_to_unknown() {
     )
     .expect("failed to write auth file");
 
-    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth available");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
 }

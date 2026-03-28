@@ -429,6 +429,6 @@ mod tests {
             },
         ];
         let view = SkillsToggleView::new(items, tx);
-        assert_snapshot!("skills_toggle_basic", render_lines(&view, 72));
+        assert_snapshot!("skills_toggle_basic", render_lines(&view, /*width*/ 72));
     }
 }

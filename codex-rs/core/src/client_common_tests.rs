@@ -52,7 +52,8 @@ fn serializes_text_schema_with_strict_format() {
         "required": ["answer"],
     });
     let text_controls =
-        create_text_param_for_request(None, &Some(schema.clone())).expect("text controls");
+        create_text_param_for_request(/*verbosity*/ None, &Some(schema.clone()))
+            .expect("text controls");
 
     let req = ResponsesApiRequest {
         model: "gpt-5.1".to_string(),

@@ -139,7 +139,7 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -292,7 +292,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, true).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -302,8 +302,8 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket prewarm failed");
@@ -383,8 +383,8 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket stream failed");
@@ -411,7 +411,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, true).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -421,8 +421,8 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket prewarm failed");
@@ -433,8 +433,8 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket stream failed");
@@ -476,7 +476,7 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -486,8 +486,8 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket prewarm failed");
@@ -533,7 +533,7 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, true).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
     let mut client_session = harness.client.new_session();
     client_session
         .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
@@ -576,7 +576,7 @@ async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websocket
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, true).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -625,7 +625,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -669,7 +669,7 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false).await;
+    let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -757,7 +757,8 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
     ]]])
     .await;
 
-    let harness = websocket_harness_with_runtime_metrics(&server, true).await;
+    let harness =
+        websocket_harness_with_runtime_metrics(&server, /*runtime_metrics_enabled*/ true).await;
     harness.session_telemetry.reset_runtime_metrics();
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -795,7 +796,8 @@ async fn responses_websocket_omits_timing_metrics_header_when_runtime_metrics_di
     ]]])
     .await;
 
-    let harness = websocket_harness_with_runtime_metrics(&server, false).await;
+    let harness =
+        websocket_harness_with_runtime_metrics(&server, /*runtime_metrics_enabled*/ false).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -833,8 +835,8 @@ async fn responses_websocket_emits_reasoning_included_event() {
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket stream failed");
@@ -906,8 +908,8 @@ async fn responses_websocket_emits_rate_limit_events() {
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket stream failed");
@@ -1213,7 +1215,7 @@ async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_c
         &mut client_session,
         &harness,
         &prompt_one,
-        None,
+        /*service_tier*/ None,
         Some(first_turn_metadata),
     )
     .await;
@@ -1221,7 +1223,7 @@ async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_c
         &mut client_session,
         &harness,
         &prompt_two,
-        None,
+        /*service_tier*/ None,
         Some(enriched_turn_metadata),
     )
     .await;
@@ -1381,7 +1383,7 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_v2(&server, true).await;
+    let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
     let mut session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -1420,7 +1422,7 @@ async fn responses_websocket_v2_creates_without_previous_response_id_when_non_in
     ]])
     .await;
 
-    let harness = websocket_harness_with_v2(&server, true).await;
+    let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
     let mut session = harness.client.new_session();
     let prompt_one =
         prompt_with_input_and_instructions(vec![message_item("hello")], "base instructions one");
@@ -1467,7 +1469,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
     ])
     .await;
 
-    let harness = websocket_harness_with_v2(&server, true).await;
+    let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
     let mut session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
@@ -1486,8 +1488,8 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket stream failed");
@@ -1559,7 +1561,7 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
     }])
     .await;
 
-    let harness = websocket_harness_with_v2(&server, true).await;
+    let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
     let mut session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
@@ -1573,8 +1575,8 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("websocket stream failed");
@@ -1605,7 +1607,7 @@ async fn responses_websocket_v2_sets_openai_beta_header() {
     ]]])
     .await;
 
-    let harness = websocket_harness_with_v2(&server, true).await;
+    let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
     let mut session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -1659,7 +1661,7 @@ fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &s
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
-    websocket_provider_with_connect_timeout(server, None)
+    websocket_provider_with_connect_timeout(server, /*websocket_connect_timeout_ms*/ None)
 }
 
 fn websocket_provider_with_connect_timeout(
@@ -1686,7 +1688,7 @@ fn websocket_provider_with_connect_timeout(
 }
 
 async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
-    websocket_harness_with_runtime_metrics(server, false).await
+    websocket_harness_with_runtime_metrics(server, /*runtime_metrics_enabled*/ false).await
 }
 
 async fn websocket_harness_with_runtime_metrics(
@@ -1739,11 +1741,11 @@ async fn websocket_harness_with_provider_options(
         conversation_id,
         MODEL,
         model_info.slug.as_str(),
-        None,
+        /*account_id*/ None,
         Some("test@test.com".to_string()),
         auth_manager.auth_mode().map(TelemetryAuthMode::from),
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test".to_string(),
         SessionSource::Exec,
     )
@@ -1751,14 +1753,14 @@ async fn websocket_harness_with_provider_options(
     let effort = None;
     let summary = ReasoningSummary::Auto;
     let client = ModelClient::new(
-        None,
+        /*auth_manager*/ None,
         conversation_id,
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
-        false,
+        /*enable_request_compression*/ false,
         runtime_metrics_enabled,
-        None,
+        /*beta_features_header*/ None,
     );
 
     WebsocketTestHarness {
@@ -1777,7 +1779,13 @@ async fn stream_until_complete(
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
 ) {
-    stream_until_complete_with_service_tier(client_session, harness, prompt, None).await;
+    stream_until_complete_with_service_tier(
+        client_session,
+        harness,
+        prompt,
+        /*service_tier*/ None,
+    )
+    .await;
 }
 
 async fn stream_until_complete_with_service_tier(
@@ -1786,8 +1794,14 @@ async fn stream_until_complete_with_service_tier(
     prompt: &Prompt,
     service_tier: Option<ServiceTier>,
 ) {
-    stream_until_complete_with_turn_metadata(client_session, harness, prompt, service_tier, None)
-        .await;
+    stream_until_complete_with_turn_metadata(
+        client_session,
+        harness,
+        prompt,
+        service_tier,
+        /*turn_metadata_header*/ None,
+    )
+    .await;
 }
 
 async fn stream_until_complete_with_turn_metadata(

@@ -81,7 +81,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     .await??;
     let _: ThreadShellCommandResponse = to_response::<ThreadShellCommandResponse>(shell_resp)?;
 
-    let started = wait_for_command_execution_started(&mut mcp, None).await?;
+    let started = wait_for_command_execution_started(&mut mcp, /*expected_id*/ None).await?;
     let ThreadItem::CommandExecution {
         id, source, status, ..
     } = &started.item
@@ -167,7 +167,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-approve",
         )?,
@@ -345,7 +345,7 @@ async fn wait_for_command_execution_started_by_source(
     expected_source: CommandExecutionSource,
 ) -> Result<ItemStartedNotification> {
     loop {
-        let started = wait_for_command_execution_started(mcp, None).await?;
+        let started = wait_for_command_execution_started(mcp, /*expected_id*/ None).await?;
         let ThreadItem::CommandExecution { source, .. } = &started.item else {
             continue;
         };

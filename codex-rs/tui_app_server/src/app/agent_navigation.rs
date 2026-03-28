@@ -253,18 +253,23 @@ mod tests {
         let second_agent_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000103").expect("valid thread");
 
-        state.upsert(main_thread_id, None, None, false);
+        state.upsert(
+            main_thread_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
         state.upsert(
             first_agent_id,
             Some("Robie".to_string()),
             Some("explorer".to_string()),
-            false,
+            /*is_closed*/ false,
         );
         state.upsert(
             second_agent_id,
             Some("Bob".to_string()),
             Some("worker".to_string()),
-            false,
+            /*is_closed*/ false,
         );
 
         (state, main_thread_id, first_agent_id, second_agent_id)
@@ -278,7 +283,7 @@ mod tests {
             first_agent_id,
             Some("Robie".to_string()),
             Some("worker".to_string()),
-            true,
+            /*is_closed*/ true,
         );
 
         assert_eq!(

@@ -30,7 +30,8 @@ fn skip_test() -> bool {
 
 #[expect(clippy::expect_used)]
 async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
-    let sandbox_type = get_platform_sandbox(false).expect("should be able to get sandbox type");
+    let sandbox_type = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
+        .expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
 
     let params = ExecParams {
@@ -56,8 +57,8 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         NetworkSandboxPolicy::from(&policy),
         tmp.path(),
         &None,
-        false,
-        None,
+        /*use_legacy_landlock*/ false,
+        /*stdout_stream*/ None,
     )
     .await
 }

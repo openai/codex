@@ -2174,7 +2174,7 @@ mod tests {
     async fn branch_override_is_used_when_provided() {
         let git_ref = resolve_git_ref_with_git_info(
             Some(&"feature/override".to_string()),
-            &StubGitInfo::new(None, None),
+            &StubGitInfo::new(/*default_branch*/ None, /*current_branch*/ None),
         )
         .await;
 
@@ -2185,7 +2185,7 @@ mod tests {
     async fn trims_override_whitespace() {
         let git_ref = resolve_git_ref_with_git_info(
             Some(&"  feature/spaces  ".to_string()),
-            &StubGitInfo::new(None, None),
+            &StubGitInfo::new(/*default_branch*/ None, /*current_branch*/ None),
         )
         .await;
 
@@ -2195,7 +2195,7 @@ mod tests {
     #[tokio::test]
     async fn prefers_current_branch_when_available() {
         let git_ref = resolve_git_ref_with_git_info(
-            None,
+            /*branch_override*/ None,
             &StubGitInfo::new(
                 Some("default-main".to_string()),
                 Some("feature/current".to_string()),
@@ -2209,8 +2209,8 @@ mod tests {
     #[tokio::test]
     async fn falls_back_to_current_branch_when_default_is_missing() {
         let git_ref = resolve_git_ref_with_git_info(
-            None,
-            &StubGitInfo::new(None, Some("develop".to_string())),
+            /*branch_override*/ None,
+            &StubGitInfo::new(/*default_branch*/ None, Some("develop".to_string())),
         )
         .await;
 
@@ -2219,7 +2219,11 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_to_main_when_no_git_info_is_available() {
-        let git_ref = resolve_git_ref_with_git_info(None, &StubGitInfo::new(None, None)).await;
+        let git_ref = resolve_git_ref_with_git_info(
+            /*branch_override*/ None,
+            &StubGitInfo::new(/*default_branch*/ None, /*current_branch*/ None),
+        )
+        .await;
 
         assert_eq!(git_ref, "main");
     }
@@ -2242,7 +2246,7 @@ mod tests {
             is_review: false,
             attempt_total: None,
         };
-        let lines = format_task_status_lines(&task, now, false);
+        let lines = format_task_status_lines(&task, now, /*colorize*/ false);
         assert_eq!(
             lines,
             vec![
@@ -2267,7 +2271,7 @@ mod tests {
             is_review: false,
             attempt_total: Some(1),
         };
-        let lines = format_task_status_lines(&task, now, false);
+        let lines = format_task_status_lines(&task, now, /*colorize*/ false);
         assert_eq!(
             lines,
             vec![
@@ -2309,7 +2313,12 @@ mod tests {
                 attempt_total: Some(1),
             },
         ];
-        let lines = format_task_list_lines(&tasks, "https://chatgpt.com/backend-api", now, false);
+        let lines = format_task_list_lines(
+            &tasks,
+            "https://chatgpt.com/backend-api",
+            now,
+            /*colorize*/ false,
+        );
         assert_eq!(
             lines,
             vec![

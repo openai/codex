@@ -562,7 +562,7 @@ fn mcp_init_error_display_prompts_for_login_when_auth_required() {
     let server_name = "example";
     let err: StartupOutcomeError = anyhow::anyhow!("Auth required for server").into();
 
-    let display = mcp_init_error_display(server_name, None, &err);
+    let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
 
     let expected = format!(
         "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
@@ -609,7 +609,7 @@ fn mcp_init_error_display_includes_startup_timeout_hint() {
     let server_name = "slow";
     let err: StartupOutcomeError = anyhow::anyhow!("request timed out").into();
 
-    let display = mcp_init_error_display(server_name, None, &err);
+    let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
 
     assert_eq!(
         "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",

@@ -58,7 +58,7 @@ async fn emit_js_repl_exec_end_sends_event() {
         turn.as_ref(),
         "call-1",
         "hello",
-        None,
+        /*error*/ None,
         Duration::from_millis(12),
     )
     .await;

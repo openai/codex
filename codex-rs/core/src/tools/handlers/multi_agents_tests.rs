@@ -82,7 +82,7 @@ fn parse_agent_id(id: &str) -> ThreadId {
 fn thread_manager() -> ThreadManager {
     ThreadManager::with_models_provider_for_tests(
         CodexAuth::from_api_key("dummy"),
-        built_in_model_providers(/* openai_base_url */ None)["openai"].clone(),
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
 }
 
@@ -247,7 +247,8 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let mut config = (*turn.config).clone();
-    let provider = built_in_model_providers(/* openai_base_url */ None)["ollama"].clone();
+    let provider =
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["ollama"].clone();
     config.model_provider_id = "ollama".to_string();
     config.model_provider = provider.clone();
     config
@@ -962,7 +963,7 @@ async fn multi_agent_v2_send_message_interrupts_busy_child_without_triggering_tu
                     AgentPath::try_from("/root/worker").expect("agent path"),
                     Vec::new(),
                     "continue".to_string(),
-                    false,
+                    /*trigger_turn*/ false,
                 ),
             );
             let saw_user_message = history_items.iter().any(|item| {
@@ -1094,7 +1095,7 @@ async fn multi_agent_v2_assign_task_interrupts_busy_child_without_losing_message
                     AgentPath::try_from("/root/worker").expect("agent path"),
                     Vec::new(),
                     "continue".to_string(),
-                    true,
+                    /*trigger_turn*/ true,
                 ),
             );
             let saw_user_message = history_items.iter().any(|item| {
@@ -1636,8 +1637,8 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
                 phase: None,
             })]),
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
-            false,
-            None,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
         )
         .await
         .expect("start thread");
@@ -2557,7 +2558,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_resume_config(&turn, 0).expect("resume config");
+    let config = build_agent_resume_config(&turn, /*child_depth*/ 0).expect("resume config");
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;

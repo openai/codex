@@ -688,27 +688,27 @@ mod tests {
     fn agent_shortcut_matches_option_arrow_word_motion_fallbacks_only_when_allowed() {
         assert!(previous_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
-            false,
+            /*allow_word_motion_fallback*/ false,
         ));
         assert!(next_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
-            false,
+            /*allow_word_motion_fallback*/ false,
         ));
         assert!(previous_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
-            true,
+            /*allow_word_motion_fallback*/ true,
         ));
         assert!(next_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
-            true,
+            /*allow_word_motion_fallback*/ true,
         ));
         assert!(!previous_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
-            false,
+            /*allow_word_motion_fallback*/ false,
         ));
         assert!(!next_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
-            false,
+            /*allow_word_motion_fallback*/ false,
         ));
     }
 
@@ -757,7 +757,7 @@ mod tests {
             }),
         );
 
-        let lines = cell.display_lines(200);
+        let lines = cell.display_lines(/*width*/ 200);
         let title = &lines[0];
         assert_eq!(title.spans[2].content.as_ref(), "Robie");
         assert_eq!(title.spans[2].style.fg, Some(Color::Cyan));
@@ -789,7 +789,7 @@ mod tests {
     }
 
     fn cell_to_text(cell: &PlainHistoryCell) -> String {
-        cell.display_lines(200)
+        cell.display_lines(/*width*/ 200)
             .iter()
             .map(line_to_text)
             .collect::<Vec<_>>()

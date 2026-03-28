@@ -281,7 +281,10 @@ mod tests {
             "thread".to_string(),
         ];
         let view = TerminalTitleSetupView::new(Some(&selected), tx);
-        assert_snapshot!("terminal_title_setup_basic", render_lines(&view, 84));
+        assert_snapshot!(
+            "terminal_title_setup_basic",
+            render_lines(&view, /*width*/ 84)
+        );
     }
 
     #[test]

@@ -548,8 +548,10 @@ mod tests {
 
     #[test]
     fn code_mode_only_description_includes_nested_tools() {
-        let description =
-            build_exec_tool_description(&[("foo".to_string(), "bar".to_string())], true);
+        let description = build_exec_tool_description(
+            &[("foo".to_string(), "bar".to_string())],
+            /*code_mode_only*/ true,
+        );
         assert!(description.contains("### `foo` (`foo`)"));
     }
 }

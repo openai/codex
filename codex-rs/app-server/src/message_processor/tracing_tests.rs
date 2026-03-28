@@ -147,7 +147,7 @@ impl TracingHarness {
                         }),
                     },
                 },
-                None,
+                /*trace*/ None,
             )
             .await;
         assert!(harness.session.initialized);
@@ -213,7 +213,7 @@ async fn build_test_config(codex_home: &Path, server_uri: &str) -> Result<Config
         codex_home,
         server_uri,
         &BTreeMap::new(),
-        8_192,
+        /*auto_compact_limit*/ 8_192,
         Some(false),
         "mock_provider",
         "compact",
@@ -509,7 +509,9 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
         ..
     } = RemoteTrace::new("00000000000000000000000000000011", "0000000000000022");
 
-    let _: ThreadStartResponse = harness.start_thread(20_002, None).await;
+    let _: ThreadStartResponse = harness
+        .start_thread(/*request_id*/ 20_002, /*trace*/ None)
+        .await;
     let untraced_spans = wait_for_exported_spans(harness.tracing, |spans| {
         spans.iter().any(|span| {
             span.span_kind == SpanKind::Server
@@ -538,10 +540,16 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
             .span_context
             .trace_id(),
     );
-    assert_has_internal_descendant_at_min_depth(&untraced_spans, untraced_server_span, 1);
+    assert_has_internal_descendant_at_min_depth(
+        &untraced_spans,
+        untraced_server_span,
+        /*min_depth*/ 1,
+    );
 
     let baseline_len = untraced_spans.len();
-    let _: ThreadStartResponse = harness.start_thread(20_003, Some(remote_trace)).await;
+    let _: ThreadStartResponse = harness
+        .start_thread(/*request_id*/ 20_003, Some(remote_trace))
+        .await;
     let spans = wait_for_new_exported_spans(harness.tracing, baseline_len, |spans| {
         spans.iter().any(|span| {
             span.span_kind == SpanKind::Server
@@ -561,8 +569,8 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
     assert!(server_request_span.parent_span_is_remote);
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
     assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
-    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, 1);
-    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, 2);
+    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, /*min_depth*/ 1);
+    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, /*min_depth*/ 2);
     harness.shutdown().await;
 
     Ok(())
@@ -572,7 +580,7 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
     let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
-    let thread_start_response = harness.start_thread(2, None).await;
+    let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
     let thread_id = thread_start_response.thread.id.clone();
 
     harness.reset_tracing();

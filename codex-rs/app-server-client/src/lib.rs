@@ -917,7 +917,7 @@ mod tests {
             + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        start_test_remote_server_with_auth(None, handler).await
+        start_test_remote_server_with_auth(/*expected_auth_token*/ None, handler).await
     }
 
     async fn start_test_remote_server_with_auth<F, Fut>(
@@ -1164,7 +1164,8 @@ mod tests {
 
     #[tokio::test]
     async fn tiny_channel_capacity_still_supports_request_roundtrip() {
-        let client = start_test_client_with_capacity(SessionSource::Exec, 1).await;
+        let client =
+            start_test_client_with_capacity(SessionSource::Exec, /*channel_capacity*/ 1).await;
         let _response: ConfigRequirementsReadResponse = client
             .request_typed(ClientRequest::ConfigRequirementsRead {
                 request_id: RequestId::Integer(1),

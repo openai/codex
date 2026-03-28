@@ -132,8 +132,12 @@ mod tests {
     fn rejects_missing_local_auth() {
         let codex_home = TempDir::new().expect("tempdir");
 
-        let err = load_local_chatgpt_auth(codex_home.path(), AuthCredentialsStoreMode::File, None)
-            .expect_err("missing auth should fail");
+        let err = load_local_chatgpt_auth(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
+        )
+        .expect_err("missing auth should fail");
 
         assert_eq!(err, "no local auth available");
     }
@@ -153,8 +157,12 @@ mod tests {
         )
         .expect("api key auth should save");
 
-        let err = load_local_chatgpt_auth(codex_home.path(), AuthCredentialsStoreMode::File, None)
-            .expect_err("api key auth should fail");
+        let err = load_local_chatgpt_auth(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            /*forced_chatgpt_workspace_id*/ None,
+        )
+        .expect_err("api key auth should fail");
 
         assert_eq!(err, "local auth is not a ChatGPT login");
     }

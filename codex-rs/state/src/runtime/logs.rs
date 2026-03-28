@@ -679,7 +679,12 @@ mod tests {
     #[test]
     fn format_feedback_log_line_matches_feedback_formatter_shape() {
         assert_eq!(
-            format_feedback_log_line(1, 123_456_000, "INFO", "alpha"),
+            format_feedback_log_line(
+                /*ts*/ 1,
+                /*ts_nanos*/ 123_456_000,
+                "INFO",
+                "alpha"
+            ),
             "1970-01-01T00:00:01.123456Z  INFO alpha\n"
         );
     }
@@ -687,7 +692,12 @@ mod tests {
     #[test]
     fn format_feedback_log_line_preserves_existing_trailing_newline() {
         assert_eq!(
-            format_feedback_log_line(1, 123_456_000, "INFO", "alpha\n"),
+            format_feedback_log_line(
+                /*ts*/ 1,
+                /*ts_nanos*/ 123_456_000,
+                "INFO",
+                "alpha\n"
+            ),
             "1970-01-01T00:00:01.123456Z  INFO alpha\n"
         );
     }
@@ -1247,9 +1257,9 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
             [
-                format_feedback_log_line(1, 0, "INFO", "alpha"),
-                format_feedback_log_line(2, 0, "INFO", "bravo"),
-                format_feedback_log_line(3, 0, "INFO", "charlie"),
+                format_feedback_log_line(/*ts*/ 1, /*ts_nanos*/ 0, "INFO", "alpha"),
+                format_feedback_log_line(/*ts*/ 2, /*ts_nanos*/ 0, "INFO", "bravo"),
+                format_feedback_log_line(/*ts*/ 3, /*ts_nanos*/ 0, "INFO", "charlie"),
             ]
             .concat()
         );
@@ -1380,9 +1390,24 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
             [
-                format_feedback_log_line(1, 0, "INFO", "threadless-before"),
-                format_feedback_log_line(2, 0, "INFO", "thread-scoped"),
-                format_feedback_log_line(3, 0, "INFO", "threadless-after"),
+                format_feedback_log_line(
+                    /*ts*/ 1,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "threadless-before"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ 2,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "thread-scoped"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ 3,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "threadless-after"
+                ),
             ]
             .concat()
         );
@@ -1463,9 +1488,24 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
             [
-                format_feedback_log_line(2, 0, "INFO", "old-process-thread"),
-                format_feedback_log_line(3, 0, "INFO", "new-process-thread"),
-                format_feedback_log_line(4, 0, "INFO", "new-process-threadless"),
+                format_feedback_log_line(
+                    /*ts*/ 2,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "old-process-thread"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ 3,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "new-process-thread"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ 4,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "new-process-threadless"
+                ),
             ]
             .concat()
         );
@@ -1647,10 +1687,20 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
             [
-                format_feedback_log_line(1, 0, "INFO", "thread-1"),
-                format_feedback_log_line(2, 0, "INFO", "thread-2"),
-                format_feedback_log_line(3, 0, "INFO", "threadless-proc-1"),
-                format_feedback_log_line(4, 0, "INFO", "threadless-proc-2"),
+                format_feedback_log_line(/*ts*/ 1, /*ts_nanos*/ 0, "INFO", "thread-1"),
+                format_feedback_log_line(/*ts*/ 2, /*ts_nanos*/ 0, "INFO", "thread-2"),
+                format_feedback_log_line(
+                    /*ts*/ 3,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "threadless-proc-1"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ 4,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "threadless-proc-2"
+                ),
             ]
             .concat()
         );

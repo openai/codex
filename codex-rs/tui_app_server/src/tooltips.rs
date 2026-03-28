@@ -291,7 +291,9 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for seed in 0..32 {
             let mut rng = StdRng::seed_from_u64(seed);
-            seen.insert(pick_paid_tooltip(&mut rng, false));
+            seen.insert(pick_paid_tooltip(
+                &mut rng, /*fast_mode_enabled*/ false,
+            ));
         }
 
         let expected = std::collections::BTreeSet::from([paid_app_tooltip(), FAST_TOOLTIP]);
@@ -303,7 +305,7 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for seed in 0..8 {
             let mut rng = StdRng::seed_from_u64(seed);
-            seen.insert(pick_paid_tooltip(&mut rng, true));
+            seen.insert(pick_paid_tooltip(&mut rng, /*fast_mode_enabled*/ true));
         }
 
         let expected = std::collections::BTreeSet::from([paid_app_tooltip()]);

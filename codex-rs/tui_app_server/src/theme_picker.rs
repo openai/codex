@@ -476,7 +476,9 @@ mod tests {
 
     #[test]
     fn theme_picker_uses_half_width_with_stacked_fallback_preview() {
-        let params = build_theme_picker_params(None, None, None);
+        let params = build_theme_picker_params(
+            /*current_name*/ None, /*codex_home*/ None, /*terminal_width*/ None,
+        );
         assert_eq!(params.side_content_width, SideContentWidth::Half);
         assert_eq!(params.side_content_min_width, WIDE_PREVIEW_MIN_WIDTH);
         assert!(params.stacked_side_content.is_some());
@@ -484,7 +486,9 @@ mod tests {
 
     #[test]
     fn theme_picker_items_include_search_values_for_preview_mapping() {
-        let params = build_theme_picker_params(None, None, None);
+        let params = build_theme_picker_params(
+            /*current_name*/ None, /*codex_home*/ None, /*terminal_width*/ None,
+        );
         assert!(
             params.items.iter().all(|item| item.search_value.is_some()),
             "theme picker preview mapping relies on item search_value to stay aligned with final item order"
@@ -493,7 +497,11 @@ mod tests {
 
     #[test]
     fn wide_preview_renders_all_lines_with_vertical_center_and_left_inset() {
-        let lines = render_lines(&ThemePreviewWideRenderable, 80, 20);
+        let lines = render_lines(
+            &ThemePreviewWideRenderable,
+            /*width*/ 80,
+            /*height*/ 20,
+        );
         let numbered_rows: Vec<usize> = lines
             .iter()
             .enumerate()
@@ -539,7 +547,11 @@ mod tests {
 
     #[test]
     fn narrow_preview_renders_single_add_and_single_remove_in_four_lines() {
-        let lines = render_lines(&ThemePreviewNarrowRenderable, 80, 6);
+        let lines = render_lines(
+            &ThemePreviewNarrowRenderable,
+            /*width*/ 80,
+            /*height*/ 6,
+        );
         let numbered_lines: Vec<usize> = lines
             .iter()
             .filter_map(|line| preview_line_number(line))
@@ -606,7 +618,8 @@ mod tests {
 
     #[test]
     fn subtitle_falls_back_to_preview_instructions_without_tilde_path() {
-        let subtitle = theme_picker_subtitle(None, None);
+        let subtitle =
+            theme_picker_subtitle(/*codex_home*/ None, /*terminal_width*/ None);
         assert_eq!(subtitle, PREVIEW_FALLBACK_SUBTITLE);
     }
 
@@ -623,7 +636,11 @@ mod tests {
     #[test]
     fn unavailable_configured_theme_falls_back_to_configured_or_default_selection() {
         let configured_or_default_theme = highlight::configured_theme_name();
-        let params = build_theme_picker_params(Some("not-a-real-theme"), None, Some(120));
+        let params = build_theme_picker_params(
+            Some("not-a-real-theme"),
+            /*codex_home*/ None,
+            Some(120),
+        );
         let selected_idx = params
             .initial_selected_idx
             .expect("expected selected index for active fallback theme");

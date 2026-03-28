@@ -1235,15 +1235,15 @@ mod tests {
         let session = thread_session_state_from_thread_response(
             &thread_id.to_string(),
             Some("restore".to_string()),
-            None,
+            /*rollout_path*/ None,
             "gpt-5.4".to_string(),
             "openai".to_string(),
-            None,
+            /*service_tier*/ None,
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
             PathBuf::from("/tmp/project"),
-            None,
+            /*reasoning_effort*/ None,
             &config,
         )
         .await

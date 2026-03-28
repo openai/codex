@@ -441,7 +441,7 @@ mod tests {
             id: 7,
             label: "round-trip".to_string(),
         };
-        let send_fds = fd_list(1)?;
+        let send_fds = fd_list(/*count*/ 1)?;
 
         let receive_task =
             tokio::spawn(async move { server.receive_with_fds::<TestPayload>().await });
@@ -474,7 +474,7 @@ mod tests {
     async fn async_datagram_sockets_round_trip_messages() -> std::io::Result<()> {
         let (server, client) = AsyncDatagramSocket::pair()?;
         let data = b"datagram payload".to_vec();
-        let send_fds = fd_list(1)?;
+        let send_fds = fd_list(/*count*/ 1)?;
         let receive_task = tokio::spawn(async move { server.receive_with_fds().await });
 
         client.send_with_fds(&data, &send_fds).await?;
@@ -499,7 +499,7 @@ mod tests {
     fn send_stream_chunk_rejects_excessive_fd_counts() -> std::io::Result<()> {
         let (socket, _peer) = Socket::pair_raw(Domain::UNIX, Type::STREAM, None)?;
         let fds = fd_list(MAX_FDS_PER_MESSAGE + 1)?;
-        let err = send_stream_chunk(&socket, b"hello", &fds, true).unwrap_err();
+        let err = send_stream_chunk(&socket, b"hello", &fds, /*include_fds*/ true).unwrap_err();
         assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
         Ok(())
     }

@@ -28,9 +28,10 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         "hello<oai-mem-citation><citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<rollout_ids>\n019cc2ea-1dff-7902-8d40-c8f6e5d83cc4\n</rollout_ids></oai-mem-citation> world",
     );
 
-    let turn_item = handle_non_tool_response_item(&session, &turn_context, &item, false)
-        .await
-        .expect("assistant message should parse");
+    let turn_item =
+        handle_non_tool_response_item(&session, &turn_context, &item, /*plan_mode*/ false)
+            .await
+            .expect("assistant message should parse");
 
     let TurnItem::AgentMessage(agent_message) = turn_item else {
         panic!("expected agent message");
@@ -60,7 +61,7 @@ fn last_assistant_message_from_item_strips_citations_and_plan_blocks() {
         "before<oai-mem-citation>doc1</oai-mem-citation>\n<proposed_plan>\n- x\n</proposed_plan>\nafter",
     );
 
-    let message = last_assistant_message_from_item(&item, true)
+    let message = last_assistant_message_from_item(&item, /*plan_mode*/ true)
         .expect("assistant text should remain after stripping");
 
     assert_eq!(message, "before\nafter");
@@ -70,14 +71,20 @@ fn last_assistant_message_from_item_strips_citations_and_plan_blocks() {
 fn last_assistant_message_from_item_returns_none_for_citation_only_message() {
     let item = assistant_output_text("<oai-mem-citation>doc1</oai-mem-citation>");
 
-    assert_eq!(last_assistant_message_from_item(&item, false), None);
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ false),
+        None
+    );
 }
 
 #[test]
 fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() {
     let item = assistant_output_text("<proposed_plan>\n- x\n</proposed_plan>");
 
-    assert_eq!(last_assistant_message_from_item(&item, true), None);
+    assert_eq!(
+        last_assistant_message_from_item(&item, /*plan_mode*/ true),
+        None
+    );
 }
 
 #[tokio::test]

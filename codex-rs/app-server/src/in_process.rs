@@ -786,7 +786,8 @@ mod tests {
 
     #[tokio::test]
     async fn in_process_start_clamps_zero_channel_capacity() {
-        let client = start_test_client_with_capacity(SessionSource::Cli, 0).await;
+        let client =
+            start_test_client_with_capacity(SessionSource::Cli, /*channel_capacity*/ 0).await;
         let response = loop {
             match client
                 .request(ClientRequest::ConfigRequirementsRead {

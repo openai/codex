@@ -997,7 +997,7 @@ mod tests {
 
         assert_snapshot!(
             "approval_overlay_cross_thread_prompt",
-            render_overlay_lines(&view, 80)
+            render_overlay_lines(&view, /*width*/ 80)
         );
     }
 
@@ -1109,8 +1109,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(80)));
-        view.render(Rect::new(0, 0, 80, view.desired_height(80)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)));
+        view.render(
+            Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -1146,7 +1149,7 @@ mod tests {
                 ReviewDecision::Abort,
             ],
             Some(&network_context),
-            None,
+            /*additional_permissions*/ None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1169,8 +1172,8 @@ mod tests {
                 ReviewDecision::ApprovedForSession,
                 ReviewDecision::Abort,
             ],
-            None,
-            None,
+            /*network_approval_context*/ None,
+            /*additional_permissions*/ None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1195,7 +1198,7 @@ mod tests {
         };
         let options = exec_options(
             &[ReviewDecision::Approved, ReviewDecision::Abort],
-            None,
+            /*network_approval_context*/ None,
             Some(&additional_permissions),
         );
 
@@ -1276,8 +1279,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(120)));
-        view.render(Rect::new(0, 0, 120, view.desired_height(120)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(/*width*/ 120)));
+        view.render(
+            Rect::new(0, 0, 120, view.desired_height(/*width*/ 120)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -1325,7 +1331,7 @@ mod tests {
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_additional_permissions_prompt",
-            normalize_snapshot_paths(render_overlay_lines(&view, 120))
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
         );
     }
 
@@ -1336,7 +1342,7 @@ mod tests {
         let view = ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_permissions_prompt",
-            normalize_snapshot_paths(render_overlay_lines(&view, 120))
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
         );
     }
 
@@ -1369,8 +1375,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
-        view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)));
+        view.render(
+            Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)),
+            &mut buf,
+        );
         assert_snapshot!("network_exec_prompt", format!("{buf:?}"));
 
         let rendered: Vec<String> = (0..buf.area.height)
@@ -1409,7 +1418,7 @@ mod tests {
             ReviewDecision::Approved,
             history_cell::ApprovalDecisionActor::User,
         );
-        let lines = cell.display_lines(28);
+        let lines = cell.display_lines(/*width*/ 28);
         let rendered: Vec<String> = lines
             .iter()
             .map(|line| {

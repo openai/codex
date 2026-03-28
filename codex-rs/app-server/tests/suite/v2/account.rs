@@ -981,7 +981,7 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
         },
     )?;
     write_models_cache(codex_home.path())?;
-    mock_device_code_usercode_failure(&mock_server, 404).await;
+    mock_device_code_usercode_failure(&mock_server, /*status*/ 404).await;
 
     let issuer = mock_server.uri();
     let mut mcp = McpProcess::new_with_env(
@@ -1038,7 +1038,7 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
     )?;
     write_models_cache(codex_home.path())?;
 
-    mock_device_code_usercode(&mock_server, 0).await;
+    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
     mock_device_code_token_success(&mock_server).await;
     let id_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
@@ -1122,8 +1122,8 @@ async fn login_account_chatgpt_device_code_failure_notifies_without_account_upda
     )?;
     write_models_cache(codex_home.path())?;
 
-    mock_device_code_usercode(&mock_server, 0).await;
-    mock_device_code_token_failure(&mock_server, 500).await;
+    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
+    mock_device_code_token_failure(&mock_server, /*status*/ 500).await;
 
     let issuer = mock_server.uri();
     let mut mcp = McpProcess::new_with_env(
@@ -1197,8 +1197,8 @@ async fn login_account_chatgpt_device_code_can_be_cancelled() -> Result<()> {
     )?;
     write_models_cache(codex_home.path())?;
 
-    mock_device_code_usercode(&mock_server, 1).await;
-    mock_device_code_token_failure(&mock_server, 404).await;
+    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 1).await;
+    mock_device_code_token_failure(&mock_server, /*status*/ 404).await;
 
     let issuer = mock_server.uri();
     let mut mcp = McpProcess::new_with_env(

@@ -116,10 +116,10 @@ mod tests {
 
     #[test]
     fn drain_n_clamps_to_available_lines() {
-        let mut state = StreamState::new(None, &test_cwd());
+        let mut state = StreamState::new(/*width*/ None, &test_cwd());
         state.enqueue(vec![Line::from("one")]);
 
-        let drained = state.drain_n(8);
+        let drained = state.drain_n(/*max_lines*/ 8);
         assert_eq!(drained, vec![Line::from("one")]);
         assert!(state.is_idle());
     }

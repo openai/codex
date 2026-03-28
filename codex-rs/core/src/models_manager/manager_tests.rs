@@ -145,7 +145,7 @@ async fn get_model_info_tracks_fallback_usage() {
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     );
     let known_slug = manager
@@ -175,7 +175,7 @@ async fn get_model_info_uses_custom_catalog() {
         .build()
         .await
         .expect("load default test config");
-    let mut overlay = remote_model("gpt-overlay", "Overlay", 0);
+    let mut overlay = remote_model("gpt-overlay", "Overlay", /*priority*/ 0);
     overlay.supports_image_detail_original = true;
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -208,7 +208,7 @@ async fn get_model_info_matches_namespaced_suffix() {
         .build()
         .await
         .expect("load default test config");
-    let mut remote = remote_model("gpt-image", "Image", 0);
+    let mut remote = remote_model("gpt-image", "Image", /*priority*/ 0);
     remote.supports_image_detail_original = true;
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
@@ -240,7 +240,7 @@ async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     );
     let known_slug = manager
@@ -262,8 +262,8 @@ async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
 async fn refresh_available_models_sorts_by_priority() {
     let server = MockServer::start().await;
     let remote_models = vec![
-        remote_model("priority-low", "Low", 1),
-        remote_model("priority-high", "High", 0),
+        remote_model("priority-low", "Low", /*priority*/ 1),
+        remote_model("priority-high", "High", /*priority*/ 0),
     ];
     let models_mock = mount_models_once(
         &server,
@@ -313,7 +313,7 @@ async fn refresh_available_models_sorts_by_priority() {
 #[tokio::test]
 async fn refresh_available_models_uses_cache_when_fresh() {
     let server = MockServer::start().await;
-    let remote_models = vec![remote_model("cached", "Cached", 5)];
+    let remote_models = vec![remote_model("cached", "Cached", /*priority*/ 5)];
     let models_mock = mount_models_once(
         &server,
         ModelsResponse {
@@ -354,7 +354,7 @@ async fn refresh_available_models_uses_cache_when_fresh() {
 #[tokio::test]
 async fn refresh_available_models_refetches_when_cache_stale() {
     let server = MockServer::start().await;
-    let initial_models = vec![remote_model("stale", "Stale", 1)];
+    let initial_models = vec![remote_model("stale", "Stale", /*priority*/ 1)];
     let initial_mock = mount_models_once(
         &server,
         ModelsResponse {
@@ -387,7 +387,7 @@ async fn refresh_available_models_refetches_when_cache_stale() {
         .await
         .expect("cache manipulation succeeds");
 
-    let updated_models = vec![remote_model("fresh", "Fresh", 9)];
+    let updated_models = vec![remote_model("fresh", "Fresh", /*priority*/ 9)];
     server.reset().await;
     let refreshed_mock = mount_models_once(
         &server,
@@ -417,7 +417,7 @@ async fn refresh_available_models_refetches_when_cache_stale() {
 #[tokio::test]
 async fn refresh_available_models_refetches_when_version_mismatch() {
     let server = MockServer::start().await;
-    let initial_models = vec![remote_model("old", "Old", 1)];
+    let initial_models = vec![remote_model("old", "Old", /*priority*/ 1)];
     let initial_mock = mount_models_once(
         &server,
         ModelsResponse {
@@ -450,7 +450,7 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
         .await
         .expect("cache mutation succeeds");
 
-    let updated_models = vec![remote_model("new", "New", 2)];
+    let updated_models = vec![remote_model("new", "New", /*priority*/ 2)];
     server.reset().await;
     let refreshed_mock = mount_models_once(
         &server,
@@ -480,7 +480,11 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
 #[tokio::test]
 async fn refresh_available_models_drops_removed_remote_models() {
     let server = MockServer::start().await;
-    let initial_models = vec![remote_model("remote-old", "Remote Old", 1)];
+    let initial_models = vec![remote_model(
+        "remote-old",
+        "Remote Old",
+        /*priority*/ 1,
+    )];
     let initial_mock = mount_models_once(
         &server,
         ModelsResponse {
@@ -506,7 +510,11 @@ async fn refresh_available_models_drops_removed_remote_models() {
         .expect("initial refresh succeeds");
 
     server.reset().await;
-    let refreshed_models = vec![remote_model("remote-new", "Remote New", 1)];
+    let refreshed_models = vec![remote_model(
+        "remote-new",
+        "Remote New",
+        /*priority*/ 1,
+    )];
     let refreshed_mock = mount_models_once(
         &server,
         ModelsResponse {
@@ -550,7 +558,7 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
     let models_mock = mount_models_once(
         &server,
         ModelsResponse {
-            models: vec![remote_model(dynamic_slug, "No Auth", 1)],
+            models: vec![remote_model(dynamic_slug, "No Auth", /*priority*/ 1)],
         },
     )
     .await;
@@ -558,7 +566,7 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = Arc::new(AuthManager::new(
         codex_home.path().to_path_buf(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     ));
     let provider = provider_for(server.uri());
@@ -621,7 +629,7 @@ fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
             .unwrap(),
     );
     telemetry.on_request(
-        1,
+        /*attempt*/ 1,
         Some(StatusCode::UNAUTHORIZED),
         Some(&TransportError::Http {
             status: StatusCode::UNAUTHORIZED,
@@ -695,8 +703,10 @@ fn build_available_models_picks_default_after_hiding_hidden_models() {
         provider,
     );
 
-    let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
-    let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
+    let hidden_model =
+        remote_model_with_visibility("hidden", "Hidden", /*priority*/ 0, "hide");
+    let visible_model =
+        remote_model_with_visibility("visible", "Visible", /*priority*/ 1, "list");
 
     let expected_hidden = ModelPreset::from(hidden_model.clone());
     let mut expected_visible = ModelPreset::from(visible_model.clone());

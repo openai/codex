@@ -424,7 +424,11 @@ mod tests {
 
     #[test]
     fn exit_code_two_without_stderr_does_not_block() {
-        let parsed = parse_completed(&handler(), run_result(Some(2), "", "   "), None);
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(2), "", "   "),
+            /*turn_id*/ None,
+        );
 
         assert_eq!(parsed.data, StopHandlerData::default());
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);

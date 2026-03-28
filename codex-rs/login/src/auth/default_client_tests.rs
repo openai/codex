@@ -85,7 +85,7 @@ async fn test_create_client_sets_default_headers() {
         .expect("residency header missing");
     assert_eq!(residency_header.to_str().unwrap(), "us");
 
-    set_default_client_residency_requirement(None);
+    set_default_client_residency_requirement(/*enforce_residency*/ None);
 }
 
 #[test]

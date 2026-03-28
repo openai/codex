@@ -421,7 +421,11 @@ mod tests {
     #[test]
     fn call_tool_result_includes_thread_id_in_structured_content() {
         let thread_id = ThreadId::new();
-        let result = create_call_tool_result_with_thread_id(thread_id, "done".to_string(), None);
+        let result = create_call_tool_result_with_thread_id(
+            thread_id,
+            "done".to_string(),
+            /*is_error*/ None,
+        );
         assert_eq!(
             result.structured_content,
             Some(json!({

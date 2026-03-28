@@ -64,12 +64,15 @@ alias(
 
 alias(
     name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
-    actual = ":v8_146_4_0_aarch64_pc_windows_msvc",
+    # `rusty_v8` only ships prebuilt Windows archives for MSVC. Build the
+    # GNU-flavored archive in-tree so windows-gnullvm consumers can link
+    # against a matching ABI instead of trying to reuse the MSVC release.
+    actual = ":v8_146_4_0_aarch64_pc_windows_gnullvm_bazel",
 )
 
 alias(
     name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
-    actual = ":v8_146_4_0_x86_64_pc_windows_msvc",
+    actual = ":v8_146_4_0_x86_64_pc_windows_gnullvm_bazel",
 )
 
 filegroup(
@@ -114,12 +117,16 @@ filegroup(
 
 alias(
     name = "src_binding_release_x86_64_pc_windows_gnullvm",
-    actual = ":src_binding_release_x86_64_pc_windows_msvc",
+    # `rusty_v8` does not publish a Windows GNU binding file. The generated
+    # binding only describes this V8 release's C++ API surface, so reuse the
+    # Linux release binding while the windows-gnullvm archive build is still
+    # experimental.
+    actual = ":src_binding_release_x86_64_unknown_linux_gnu",
 )
 
 alias(
     name = "src_binding_release_aarch64_pc_windows_gnullvm",
-    actual = ":src_binding_release_aarch64_pc_windows_msvc",
+    actual = ":src_binding_release_aarch64_unknown_linux_gnu",
 )
 
 alias(
@@ -167,6 +174,8 @@ genrule(
     name = "binding_cc",
     srcs = ["@v8_crate_146_4_0//:binding_cc"],
     outs = ["binding.cc"],
+    # Keep this as a literal shell snippet. The string-concatenated form looked
+    # cleaner in Starlark but produced a broken `sed` invocation in CI.
     cmd = """
       sed \
         -e '/#include "v8\\/src\\/flags\\/flags.h"/d' \
@@ -209,7 +218,19 @@ cc_static_library(
 )
 
 cc_static_library(
+    name = "v8_146_4_0_aarch64_pc_windows_gnullvm_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
     name = "v8_146_4_0_x86_64_apple_darwin_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_pc_windows_gnullvm_bazel",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
 )

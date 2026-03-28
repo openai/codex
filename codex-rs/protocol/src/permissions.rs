@@ -1268,7 +1268,10 @@ mod tests {
     fn unknown_special_paths_are_ignored_by_legacy_bridge() -> std::io::Result<()> {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::unknown(":future_special_path", None),
+                value: FileSystemSpecialPath::unknown(
+                    ":future_special_path",
+                    /*subpath*/ None,
+                ),
             },
             access: FileSystemAccessMode::Write,
         }]);
