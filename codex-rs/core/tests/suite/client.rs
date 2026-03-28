@@ -825,6 +825,8 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         &config,
         auth_manager,
         SessionSource::Exec,
+        config.model_catalog.clone(),
+        config.custom_models.clone(),
         CollaborationModesConfig {
             default_mode_request_user_input: config
                 .features

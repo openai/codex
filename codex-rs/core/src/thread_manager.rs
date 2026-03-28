@@ -10,6 +10,7 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::config::CustomModelConfig;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
@@ -34,6 +35,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -216,6 +218,8 @@ impl ThreadManager {
         config: &Config,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
+        model_catalog: Option<ModelsResponse>,
+        custom_models: HashMap<String, CustomModelConfig>,
         collaboration_modes_config: CollaborationModesConfig,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
@@ -245,7 +249,8 @@ impl ThreadManager {
                 models_manager: Arc::new(ModelsManager::new_with_provider(
                     codex_home,
                     auth_manager.clone(),
-                    config.model_catalog.clone(),
+                    model_catalog,
+                    custom_models,
                     collaboration_modes_config,
                     openai_models_provider,
                 )),

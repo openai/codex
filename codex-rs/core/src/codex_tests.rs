@@ -96,6 +96,7 @@ use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -251,7 +252,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
         crate::model_provider_info::ModelProviderInfo::create_openai_provider(
-            /* base_url */ /*base_url*/ None,
+            /*base_url*/ None,
         ),
         codex_protocol::protocol::SessionSource::Exec,
         /*model_verbosity*/ None,
@@ -501,7 +502,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
         "example.com",
         NetworkRuleProtocol::Https,
         Decision::Allow,
-        /*justification*/ None,
+        None,
     )?;
 
     let (started_proxy, _) = Session::start_managed_network_proxy(
@@ -2164,14 +2165,14 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            /*forked_from_id*/ None,
+            None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
+        None,
+        None,
     )
     .await
     .expect("create rollout recorder");
@@ -2210,11 +2211,11 @@ fn session_telemetry(
         conversation_id,
         ModelsManager::get_model_offline_for_tests(config.model.as_deref()).as_str(),
         model_info.slug.as_str(),
-        /*account_id*/ None,
+        None,
         Some("test@test.com".to_string()),
         Some(TelemetryAuthMode::Chatgpt),
         "test_originator".to_string(),
-        /*log_user_prompts*/ false,
+        false,
         "test".to_string(),
         session_source,
     )
@@ -2337,7 +2338,7 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .skills_manager
         .skills_for_cwd(
             &crate::skills_load_input_from_config(&parent_config, Vec::new()),
-            /*force_reload*/ true,
+            true,
         )
         .await;
     let parent_skill = parent_outcome
@@ -2485,7 +2486,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        /*model_catalog*/ None,
+        None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
@@ -2534,10 +2536,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        /*bundled_skills_enabled*/ true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -2578,7 +2577,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        /*model_catalog*/ None,
+        None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
@@ -2641,10 +2641,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        /*bundled_skills_enabled*/ true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
@@ -2730,7 +2727,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         per_turn_config,
         model_info,
         &models_manager,
-        /*network*/ None,
+        None,
         environment,
         "turn_id".to_string(),
         Arc::clone(&js_repl),
@@ -3418,7 +3415,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        /*model_catalog*/ None,
+        None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
@@ -3481,10 +3479,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        /*bundled_skills_enabled*/ true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
@@ -3570,7 +3565,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         per_turn_config,
         model_info,
         &models_manager,
-        /*network*/ None,
+        None,
         environment,
         "turn_id".to_string(),
         Arc::clone(&js_repl),
@@ -3934,7 +3929,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
             }],
-            /*reference_context_item*/ None,
+            None,
         )
         .await;
 
@@ -4178,14 +4173,14 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            /*forked_from_id*/ None,
+            None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
+        None,
+        None,
     )
     .await
     .expect("create rollout recorder");
@@ -4275,14 +4270,14 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            /*forked_from_id*/ None,
+            None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
+        None,
+        None,
     )
     .await
     .expect("create rollout recorder");

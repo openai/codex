@@ -15,6 +15,7 @@ use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
@@ -294,6 +295,8 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         &config,
         auth_manager,
         SessionSource::Exec,
+        /*model_catalog*/ None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
             /*exec_server_url*/ None,
@@ -424,6 +427,8 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
+        config.model_catalog.clone(),
+        config.custom_models.clone(),
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
             /*exec_server_url*/ None,
@@ -524,6 +529,8 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
+        config.model_catalog.clone(),
+        config.custom_models.clone(),
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
             /*exec_server_url*/ None,
@@ -613,6 +620,8 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
+        config.model_catalog.clone(),
+        config.custom_models.clone(),
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
             /*exec_server_url*/ None,
