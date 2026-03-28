@@ -1133,7 +1133,7 @@ fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonS
             "fork_context".to_string(),
             JsonSchema::Boolean {
                 description: Some(
-                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
+                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you. Forked agents always inherit the parent thread's model and reasoning effort, ignoring any child `model` or `reasoning_effort` overrides."
                         .to_string(),
                 ),
             },
@@ -1142,7 +1142,7 @@ fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonS
             "model".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional model override for the new agent. Replaces the inherited model."
+                    "Optional model override for the new agent. Replaces the inherited model unless `fork_context` is true."
                         .to_string(),
                 ),
             },
@@ -1151,7 +1151,7 @@ fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonS
             "reasoning_effort".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort unless `fork_context` is true."
                         .to_string(),
                 ),
             },
