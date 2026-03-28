@@ -219,7 +219,29 @@ fn normalize_snapshot_paths(text: impl Into<String>) -> String {
 }
 
 fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> String {
-    normalize_snapshot_paths(format!("{value}"))
+    let platform_test_cwd = test_path_display("/tmp/project");
+    let rendered = format!("{value}");
+
+    if platform_test_cwd == "/tmp/project" {
+        return rendered;
+    }
+
+    rendered
+        .lines()
+        .map(|line| {
+            if let Some(content) = line
+                .strip_prefix('"')
+                .and_then(|line| line.strip_suffix('"'))
+            {
+                let width = content.chars().count();
+                let normalized = content.replace(&platform_test_cwd, "/tmp/project");
+                format!("\"{normalized:width$}\"")
+            } else {
+                line.replace(&platform_test_cwd, "/tmp/project")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
