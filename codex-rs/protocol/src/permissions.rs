@@ -83,7 +83,20 @@ pub enum FileSystemSpecialPath {
         #[ts(optional)]
         subpath: Option<PathBuf>,
     },
+    /// Config-facing `:tmpdir` special path.
+    ///
+    /// This is the broader restricted-policy temp bundle used by filesystem
+    /// permission profiles. On Unix it expands to the temp env roots plus
+    /// `/tmp` and `/tmp`'s canonical target. On Windows it expands to the
+    /// platform temp env roots.
     Tmpdir,
+    /// Legacy env-backed temp roots used when bridging old
+    /// `SandboxPolicy::WorkspaceWrite` semantics into split filesystem policy.
+    ///
+    /// Keep this narrower than [`FileSystemSpecialPath::Tmpdir`] so existing
+    /// `exclude_tmpdir_env_var = false` behavior does not silently widen to the
+    /// full temp bundle on Unix.
+    TmpdirEnvVar,
     SlashTmp,
     /// WARNING: `:special_path` tokens are part of config compatibility.
     /// Do not make older runtimes reject newly introduced tokens.
@@ -644,50 +657,57 @@ impl FileSystemSandboxPolicy {
                             FileSystemSpecialPath::CurrentWorkingDirectory => {
                                 if entry.access.can_write() {
                                     workspace_root_writable = true;
-                                } else if entry.access.can_read()
-                                    && let Some(path) = resolve_file_system_special_path(
+                                } else if entry.access.can_read() {
+                                    readable_roots.extend(resolve_file_system_special_paths(
                                         value,
                                         cwd_absolute.as_ref(),
-                                    )
-                                {
-                                    readable_roots.push(path);
+                                    ));
                                 }
                             }
                             FileSystemSpecialPath::ProjectRoots { subpath } => {
                                 if subpath.is_none() && entry.access.can_write() {
                                     workspace_root_writable = true;
-                                } else if let Some(path) =
-                                    resolve_file_system_special_path(value, cwd_absolute.as_ref())
-                                {
+                                } else {
+                                    let resolved_paths = resolve_file_system_special_paths(
+                                        value,
+                                        cwd_absolute.as_ref(),
+                                    );
                                     if entry.access.can_write() {
-                                        writable_roots.push(path);
+                                        writable_roots.extend(resolved_paths);
                                     } else if entry.access.can_read() {
-                                        readable_roots.push(path);
+                                        readable_roots.extend(resolved_paths);
                                     }
                                 }
                             }
                             FileSystemSpecialPath::Tmpdir => {
                                 if entry.access.can_write() {
                                     tmpdir_writable = true;
-                                } else if entry.access.can_read()
-                                    && let Some(path) = resolve_file_system_special_path(
+                                    slash_tmp_writable = true;
+                                } else if entry.access.can_read() {
+                                    readable_roots.extend(resolve_file_system_special_paths(
                                         value,
                                         cwd_absolute.as_ref(),
-                                    )
-                                {
-                                    readable_roots.push(path);
+                                    ));
+                                }
+                            }
+                            FileSystemSpecialPath::TmpdirEnvVar => {
+                                if entry.access.can_write() {
+                                    tmpdir_writable = true;
+                                } else if entry.access.can_read() {
+                                    readable_roots.extend(resolve_file_system_special_paths(
+                                        value,
+                                        cwd_absolute.as_ref(),
+                                    ));
                                 }
                             }
                             FileSystemSpecialPath::SlashTmp => {
                                 if entry.access.can_write() {
                                     slash_tmp_writable = true;
-                                } else if entry.access.can_read()
-                                    && let Some(path) = resolve_file_system_special_path(
+                                } else if entry.access.can_read() {
+                                    readable_roots.extend(resolve_file_system_special_paths(
                                         value,
                                         cwd_absolute.as_ref(),
-                                    )
-                                {
-                                    readable_roots.push(path);
+                                    ));
                                 }
                             }
                             FileSystemSpecialPath::Unknown { .. } => {}
@@ -728,11 +748,6 @@ impl FileSystemSandboxPolicy {
                         exclude_tmpdir_env_var: !tmpdir_writable,
                         exclude_slash_tmp: !slash_tmp_writable,
                     }
-                } else if !writable_roots.is_empty() || tmpdir_writable || slash_tmp_writable {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "permissions profile requests filesystem writes outside the workspace root, which is not supported until the runtime enforces FileSystemSandboxPolicy directly",
-                    ));
                 } else {
                     SandboxPolicy::ReadOnly {
                         access: read_only_access,
@@ -747,13 +762,13 @@ impl FileSystemSandboxPolicy {
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
         self.entries
             .iter()
-            .filter_map(|entry| {
-                resolve_entry_path(&entry.path, cwd_absolute.as_ref()).map(|path| {
-                    ResolvedFileSystemEntry {
+            .flat_map(|entry| {
+                resolve_entry_paths(&entry.path, cwd_absolute.as_ref())
+                    .into_iter()
+                    .map(|path| ResolvedFileSystemEntry {
                         path,
                         access: entry.access,
-                    }
-                })
+                    })
             })
             .collect()
     }
@@ -875,7 +890,7 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
                 if !exclude_tmpdir_env_var {
                     entries.push(FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::Tmpdir,
+                            value: FileSystemSpecialPath::TmpdirEnvVar,
                         },
                         access: FileSystemAccessMode::Write,
                     });
@@ -898,21 +913,21 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
 fn resolve_file_system_path(
     path: &FileSystemPath,
     cwd: Option<&AbsolutePathBuf>,
-) -> Option<AbsolutePathBuf> {
+) -> Vec<AbsolutePathBuf> {
     match path {
-        FileSystemPath::Path { path } => Some(path.clone()),
-        FileSystemPath::Special { value } => resolve_file_system_special_path(value, cwd),
+        FileSystemPath::Path { path } => vec![path.clone()],
+        FileSystemPath::Special { value } => resolve_file_system_special_paths(value, cwd),
     }
 }
 
-fn resolve_entry_path(
+fn resolve_entry_paths(
     path: &FileSystemPath,
     cwd: Option<&AbsolutePathBuf>,
-) -> Option<AbsolutePathBuf> {
+) -> Vec<AbsolutePathBuf> {
     match path {
         FileSystemPath::Special {
             value: FileSystemSpecialPath::Root,
-        } => cwd.map(absolute_root_path_for_cwd),
+        } => cwd.map(absolute_root_path_for_cwd).into_iter().collect(),
         _ => resolve_file_system_path(path, cwd),
     }
 }
@@ -957,6 +972,7 @@ fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSp
             FileSystemSpecialPath::CurrentWorkingDirectory,
         )
         | (FileSystemSpecialPath::Tmpdir, FileSystemSpecialPath::Tmpdir)
+        | (FileSystemSpecialPath::TmpdirEnvVar, FileSystemSpecialPath::TmpdirEnvVar)
         | (FileSystemSpecialPath::SlashTmp, FileSystemSpecialPath::SlashTmp) => true,
         (
             FileSystemSpecialPath::CurrentWorkingDirectory,
@@ -993,11 +1009,13 @@ fn special_path_matches_absolute_path(
     value: &FileSystemSpecialPath,
     path: &AbsolutePathBuf,
 ) -> bool {
-    match value {
-        FileSystemSpecialPath::Root => path.as_path().parent().is_none(),
-        FileSystemSpecialPath::SlashTmp => path.as_path() == Path::new("/tmp"),
-        _ => false,
+    if matches!(value, FileSystemSpecialPath::Root) {
+        return path.as_path().parent().is_none();
     }
+
+    resolve_cwd_independent_special_paths(value)
+        .into_iter()
+        .any(|candidate| candidate == *path)
 }
 
 /// Orders resolved entries so the most specific path wins first, then applies
@@ -1017,44 +1035,106 @@ fn absolute_root_path_for_cwd(cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
         .unwrap_or_else(|err| panic!("cwd root must be an absolute path: {err}"))
 }
 
-fn resolve_file_system_special_path(
+fn resolve_file_system_special_paths(
     value: &FileSystemSpecialPath,
     cwd: Option<&AbsolutePathBuf>,
-) -> Option<AbsolutePathBuf> {
+) -> Vec<AbsolutePathBuf> {
     match value {
         FileSystemSpecialPath::Root
         | FileSystemSpecialPath::Minimal
-        | FileSystemSpecialPath::Unknown { .. } => None,
+        | FileSystemSpecialPath::Unknown { .. } => Vec::new(),
         FileSystemSpecialPath::CurrentWorkingDirectory => {
-            let cwd = cwd?;
-            Some(cwd.clone())
+            let Some(cwd) = cwd else {
+                return Vec::new();
+            };
+            vec![cwd.clone()]
         }
         FileSystemSpecialPath::ProjectRoots { subpath } => {
-            let cwd = cwd?;
+            let Some(cwd) = cwd else {
+                return Vec::new();
+            };
             match subpath.as_ref() {
-                Some(subpath) => {
-                    AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path()).ok()
-                }
-                None => Some(cwd.clone()),
+                Some(subpath) => AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path())
+                    .into_iter()
+                    .collect(),
+                None => vec![cwd.clone()],
             }
         }
-        FileSystemSpecialPath::Tmpdir => {
-            let tmpdir = std::env::var_os("TMPDIR")?;
-            if tmpdir.is_empty() {
-                None
-            } else {
-                let tmpdir = AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok()?;
-                Some(tmpdir)
-            }
+        FileSystemSpecialPath::Tmpdir => resolve_tmpdir_paths(),
+        FileSystemSpecialPath::TmpdirEnvVar => resolve_temp_env_paths(),
+        FileSystemSpecialPath::SlashTmp => resolve_slash_tmp_path().into_iter().collect(),
+    }
+}
+
+fn resolve_cwd_independent_special_paths(value: &FileSystemSpecialPath) -> Vec<AbsolutePathBuf> {
+    match value {
+        FileSystemSpecialPath::Root => Vec::new(),
+        FileSystemSpecialPath::Minimal
+        | FileSystemSpecialPath::CurrentWorkingDirectory
+        | FileSystemSpecialPath::ProjectRoots { .. }
+        | FileSystemSpecialPath::Unknown { .. } => Vec::new(),
+        FileSystemSpecialPath::Tmpdir => resolve_tmpdir_paths(),
+        FileSystemSpecialPath::TmpdirEnvVar => resolve_temp_env_paths(),
+        FileSystemSpecialPath::SlashTmp => resolve_slash_tmp_path().into_iter().collect(),
+    }
+}
+
+fn resolve_tmpdir_paths() -> Vec<AbsolutePathBuf> {
+    let mut paths = resolve_temp_env_paths();
+    if let Some(slash_tmp) = resolve_slash_tmp_path() {
+        paths.push(slash_tmp.clone());
+        if let Ok(realpath) = slash_tmp.as_path().canonicalize()
+            && let Ok(realpath) = AbsolutePathBuf::from_absolute_path(realpath)
+        {
+            paths.push(realpath);
         }
-        FileSystemSpecialPath::SlashTmp => {
-            #[allow(clippy::expect_used)]
-            let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
-            if !slash_tmp.as_path().is_dir() {
-                return None;
-            }
-            Some(slash_tmp)
+    }
+    dedup_absolute_paths(paths, /*normalize_effective_paths*/ false)
+}
+
+pub(crate) fn resolve_temp_env_paths() -> Vec<AbsolutePathBuf> {
+    dedup_absolute_paths(
+        temp_env_var_keys()
+            .iter()
+            .filter_map(|key| resolve_temp_env_path(key))
+            .collect(),
+        /*normalize_effective_paths*/ false,
+    )
+}
+
+#[cfg(windows)]
+const fn temp_env_var_keys() -> &'static [&'static str] {
+    &["TEMP", "TMP"]
+}
+
+#[cfg(not(windows))]
+const fn temp_env_var_keys() -> &'static [&'static str] {
+    &["TMPDIR"]
+}
+
+fn resolve_temp_env_path(key: &str) -> Option<AbsolutePathBuf> {
+    let value = std::env::var_os(key)?;
+    if value.is_empty() {
+        None
+    } else {
+        AbsolutePathBuf::from_absolute_path(PathBuf::from(value)).ok()
+    }
+}
+
+fn resolve_slash_tmp_path() -> Option<AbsolutePathBuf> {
+    #[cfg(not(unix))]
+    {
+        None
+    }
+
+    #[cfg(unix)]
+    {
+        #[allow(clippy::expect_used)]
+        let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
+        if !slash_tmp.as_path().is_dir() {
+            return None;
         }
+        Some(slash_tmp)
     }
 }
 
@@ -1763,12 +1843,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn tmpdir_special_path_canonicalizes_symlinked_tmpdir() {
+    fn tmpdir_env_var_special_path_canonicalizes_symlinked_tmpdir() {
         if std::env::var_os(SYMLINKED_TMPDIR_TEST_ENV).is_none() {
             let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
                 .env(SYMLINKED_TMPDIR_TEST_ENV, "1")
                 .arg("--exact")
-                .arg("permissions::tests::tmpdir_special_path_canonicalizes_symlinked_tmpdir")
+                .arg(
+                    "permissions::tests::tmpdir_env_var_special_path_canonicalizes_symlinked_tmpdir",
+                )
                 .output()
                 .expect("run tmpdir subprocess test");
 
@@ -1815,7 +1897,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Tmpdir,
+                    value: FileSystemSpecialPath::TmpdirEnvVar,
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -1843,6 +1925,143 @@ mod tests {
                 .read_only_subpaths
                 .contains(&expected_codex)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tmpdir_special_path_includes_tmpdir_env_and_tmp_namespace() {
+        if std::env::var_os(SYMLINKED_TMPDIR_TEST_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .env(SYMLINKED_TMPDIR_TEST_ENV, "1")
+                .arg("--exact")
+                .arg(
+                    "permissions::tests::tmpdir_special_path_includes_tmpdir_env_and_tmp_namespace",
+                )
+                .output()
+                .expect("run tmpdir subprocess test");
+
+            assert!(
+                output.status.success(),
+                "tmpdir subprocess test failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let cwd = TempDir::new().expect("tempdir");
+        let real_tmpdir = cwd.path().join("real-tmpdir");
+        let link_tmpdir = cwd.path().join("link-tmpdir");
+        fs::create_dir_all(&real_tmpdir).expect("create real tmpdir");
+        symlink_dir(&real_tmpdir, &link_tmpdir).expect("create symlinked tmpdir");
+
+        unsafe {
+            std::env::set_var("TMPDIR", &link_tmpdir);
+        }
+
+        let slash_tmp =
+            AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp should be absolute");
+        let slash_tmp_realpath = AbsolutePathBuf::from_absolute_path(
+            slash_tmp
+                .as_path()
+                .canonicalize()
+                .expect("canonicalize /tmp"),
+        )
+        .expect("absolute canonical /tmp");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Tmpdir,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        assert!(policy.can_write_path_with_cwd(link_tmpdir.as_path(), cwd.path()));
+        assert!(policy.can_write_path_with_cwd(Path::new("/tmp/codex-protocol"), cwd.path()));
+        assert!(
+            policy.can_write_path_with_cwd(
+                slash_tmp_realpath
+                    .join("codex-protocol")
+                    .expect("valid tmp child")
+                    .as_path(),
+                cwd.path(),
+            )
+        );
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert!(writable_roots.iter().any(|root| {
+            root.root
+                == AbsolutePathBuf::from_absolute_path(
+                    real_tmpdir.canonicalize().expect("canonicalize tmpdir"),
+                )
+                .expect("absolute canonical tmpdir")
+        }));
+        assert!(
+            writable_roots
+                .iter()
+                .any(|root| root.root == slash_tmp_realpath)
+        );
+    }
+
+    #[test]
+    fn tmpdir_write_without_workspace_root_falls_back_to_read_only_legacy_policy()
+    -> std::io::Result<()> {
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Tmpdir,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let sandbox_policy = policy.to_legacy_sandbox_policy(
+            NetworkSandboxPolicy::Restricted,
+            Path::new("/tmp/workspace"),
+        )?;
+
+        assert_eq!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: false,
+                    readable_roots: Vec::new(),
+                },
+                network_access: false,
+            }
+        );
+        assert!(policy.needs_direct_runtime_enforcement(
+            NetworkSandboxPolicy::Restricted,
+            Path::new("/tmp/workspace"),
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_workspace_write_uses_tmpdir_env_var_special_path() {
+        let file_system_policy = FileSystemSandboxPolicy::from(&SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: true,
+        });
+
+        assert!(file_system_policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && entry.path
+                    == FileSystemPath::Special {
+                        value: FileSystemSpecialPath::TmpdirEnvVar,
+                    }
+        }));
+        assert!(!file_system_policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && entry.path
+                    == FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Tmpdir,
+                    }
+        }));
     }
 
     #[test]

@@ -586,13 +586,14 @@ fn permissions_profiles_require_default_permissions() -> std::io::Result<()> {
 }
 
 #[test]
-fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Result<()> {
+fn permissions_profiles_allow_writes_outside_workspace_root_with_read_only_legacy_fallback()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
     let external_write_path = if cfg!(windows) { r"C:\temp" } else { "/tmp" };
 
-    let err = Config::load_from_base_config_with_overrides(
+    let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             default_permissions: Some("workspace".to_string()),
             permissions: Some(PermissionsToml {
@@ -616,14 +617,45 @@ fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Resul
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
-    )
-    .expect_err("writes outside the workspace root should be rejected");
+    )?;
 
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        }
+    );
     assert!(
-        err.to_string()
-            .contains("filesystem writes outside the workspace root"),
-        "{err}"
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .can_write_path_with_cwd(Path::new(external_write_path), cwd.path())
+    );
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .needs_direct_runtime_enforcement(
+                config.permissions.network_sandbox_policy,
+                cwd.path(),
+            )
+    );
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .can_write_path_with_cwd(codex_home.path().join("memories").as_path(), cwd.path())
+    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let warnings = &config.startup_warnings;
+    assert!(
+        warnings.is_empty(),
+        "external writes should no longer fail config load: {warnings:?}"
     );
     Ok(())
 }
@@ -733,6 +765,133 @@ fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
         )),
         "{:?}",
         config.startup_warnings
+    );
+    Ok(())
+}
+
+#[test]
+fn permissions_profiles_allow_tmpdir_write_with_read_only_legacy_fallback() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            entries: BTreeMap::from([(
+                                ":tmpdir".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                            )]),
+                        }),
+                        network: None,
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
+
+    let memories_root = codex_home.path().join("memories").abs();
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.access == FileSystemAccessMode::Write
+                    && entry.path
+                        == FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Tmpdir,
+                        }
+            })
+    );
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .can_write_path_with_cwd(memories_root.as_path(), cwd.path())
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        }
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn permissions_profiles_allow_slash_tmp_write_with_read_only_legacy_fallback() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            entries: BTreeMap::from([(
+                                "/tmp".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                            )]),
+                        }),
+                        network: None,
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.access == FileSystemAccessMode::Write
+                    && entry.path
+                        == FileSystemPath::Path {
+                            path: test_absolute_path("/tmp"),
+                        }
+            })
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        }
     );
     Ok(())
 }
