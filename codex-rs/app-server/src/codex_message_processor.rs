@@ -3567,9 +3567,14 @@ impl CodexMessageProcessor {
         self.command_exec_manager
             .connection_closed(connection_id)
             .await;
-        self.thread_state_manager
+        let orphaned_thread_ids = self
+            .thread_state_manager
             .remove_connection(connection_id)
             .await;
+        for thread_id in orphaned_thread_ids {
+            self.maybe_unload_orphaned_thread_after_disconnect(thread_id)
+                .await;
+        }
     }
 
     pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
@@ -5163,6 +5168,93 @@ impl CodexMessageProcessor {
         }
     }
 
+    fn should_unload_orphaned_thread_after_disconnect(
+        rollout_path: Option<&Path>,
+        agent_status: AgentStatus,
+        loaded_status: ThreadStatus,
+    ) -> bool {
+        rollout_path.is_some_and(std::path::Path::exists)
+            && !matches!(agent_status, AgentStatus::Running)
+            && matches!(
+                loaded_status,
+                ThreadStatus::Idle | ThreadStatus::SystemError
+            )
+    }
+
+    async fn begin_thread_shutdown(&self, thread_id: ThreadId, thread: Arc<CodexThread>) {
+        info!("thread {thread_id} has no subscribers; shutting down");
+        self.pending_thread_unloads.lock().await.insert(thread_id);
+        // Any pending app-server -> client requests for this thread can no longer be
+        // answered; cancel their callbacks before shutdown/unload.
+        self.outgoing
+            .cancel_requests_for_thread(thread_id, /*error*/ None)
+            .await;
+        self.thread_state_manager
+            .remove_thread_state(thread_id)
+            .await;
+
+        let outgoing = self.outgoing.clone();
+        let pending_thread_unloads = self.pending_thread_unloads.clone();
+        let thread_manager = self.thread_manager.clone();
+        let thread_watch_manager = self.thread_watch_manager.clone();
+        tokio::spawn(async move {
+            match Self::wait_for_thread_shutdown(&thread).await {
+                ThreadShutdownResult::Complete => {
+                    if thread_manager.remove_thread(&thread_id).await.is_none() {
+                        info!("thread {thread_id} was already removed before shutdown finalized");
+                        thread_watch_manager
+                            .remove_thread(&thread_id.to_string())
+                            .await;
+                        pending_thread_unloads.lock().await.remove(&thread_id);
+                        return;
+                    }
+                    thread_watch_manager
+                        .remove_thread(&thread_id.to_string())
+                        .await;
+                    let notification = ThreadClosedNotification {
+                        thread_id: thread_id.to_string(),
+                    };
+                    outgoing
+                        .send_server_notification(ServerNotification::ThreadClosed(notification))
+                        .await;
+                    pending_thread_unloads.lock().await.remove(&thread_id);
+                }
+                ThreadShutdownResult::SubmitFailed => {
+                    pending_thread_unloads.lock().await.remove(&thread_id);
+                    warn!("failed to submit Shutdown to thread {thread_id}");
+                }
+                ThreadShutdownResult::TimedOut => {
+                    pending_thread_unloads.lock().await.remove(&thread_id);
+                    warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
+                }
+            }
+        });
+    }
+
+    async fn maybe_unload_orphaned_thread_after_disconnect(&self, thread_id: ThreadId) {
+        let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+            return;
+        };
+
+        let loaded_status = self
+            .thread_watch_manager
+            .loaded_status_for_thread(&thread_id.to_string())
+            .await;
+        let agent_status = thread.agent_status().await;
+        if !Self::should_unload_orphaned_thread_after_disconnect(
+            thread.rollout_path().as_deref(),
+            agent_status,
+            loaded_status,
+        ) {
+            return;
+        }
+        if self.thread_state_manager.has_subscribers(thread_id).await {
+            return;
+        }
+
+        self.begin_thread_shutdown(thread_id, thread).await;
+    }
+
     async fn finalize_thread_teardown(&mut self, thread_id: ThreadId) {
         self.pending_thread_unloads.lock().await.remove(&thread_id);
         self.outgoing
@@ -5224,57 +5316,7 @@ impl CodexMessageProcessor {
 
         if !self.thread_state_manager.has_subscribers(thread_id).await {
             // This connection was the last subscriber. Only now do we unload the thread.
-            info!("thread {thread_id} has no subscribers; shutting down");
-            self.pending_thread_unloads.lock().await.insert(thread_id);
-            // Any pending app-server -> client requests for this thread can no longer be
-            // answered; cancel their callbacks before shutdown/unload.
-            self.outgoing
-                .cancel_requests_for_thread(thread_id, /*error*/ None)
-                .await;
-            self.thread_state_manager
-                .remove_thread_state(thread_id)
-                .await;
-
-            let outgoing = self.outgoing.clone();
-            let pending_thread_unloads = self.pending_thread_unloads.clone();
-            let thread_manager = self.thread_manager.clone();
-            let thread_watch_manager = self.thread_watch_manager.clone();
-            tokio::spawn(async move {
-                match Self::wait_for_thread_shutdown(&thread).await {
-                    ThreadShutdownResult::Complete => {
-                        if thread_manager.remove_thread(&thread_id).await.is_none() {
-                            info!(
-                                "thread {thread_id} was already removed before unsubscribe finalized"
-                            );
-                            thread_watch_manager
-                                .remove_thread(&thread_id.to_string())
-                                .await;
-                            pending_thread_unloads.lock().await.remove(&thread_id);
-                            return;
-                        }
-                        thread_watch_manager
-                            .remove_thread(&thread_id.to_string())
-                            .await;
-                        let notification = ThreadClosedNotification {
-                            thread_id: thread_id.to_string(),
-                        };
-                        outgoing
-                            .send_server_notification(ServerNotification::ThreadClosed(
-                                notification,
-                            ))
-                            .await;
-                        pending_thread_unloads.lock().await.remove(&thread_id);
-                    }
-                    ThreadShutdownResult::SubmitFailed => {
-                        pending_thread_unloads.lock().await.remove(&thread_id);
-                        warn!("failed to submit Shutdown to thread {thread_id}");
-                    }
-                    ThreadShutdownResult::TimedOut => {
-                        pending_thread_unloads.lock().await.remove(&thread_id);
-                        warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
-                    }
-                }
-            });
+            self.begin_thread_shutdown(thread_id, thread).await;
         }
 
         self.outgoing
@@ -9311,17 +9353,37 @@ mod tests {
             state.lock().await.cancel_tx = Some(cancel_tx);
         }
 
-        manager.remove_connection(connection_a).await;
+        let orphaned_thread_ids = manager.remove_connection(connection_a).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx)
                 .await
                 .is_err()
         );
+        assert!(orphaned_thread_ids.is_empty());
 
         assert_eq!(
             manager.subscribed_connection_ids(thread_id).await,
             vec![connection_b]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn removing_last_connection_reports_orphaned_thread() -> Result<()> {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let connection = ConnectionId(1);
+
+        manager.connection_initialized(connection).await;
+        manager
+            .try_ensure_connection_subscribed(thread_id, connection, false)
+            .await
+            .expect("connection should be live");
+
+        let orphaned_thread_ids = manager.remove_connection(connection).await;
+
+        assert_eq!(orphaned_thread_ids, vec![thread_id]);
+        assert!(!manager.has_subscribers(thread_id).await);
         Ok(())
     }
 
@@ -9332,7 +9394,8 @@ mod tests {
         let connection = ConnectionId(1);
 
         manager.connection_initialized(connection).await;
-        manager.remove_connection(connection).await;
+        let orphaned_thread_ids = manager.remove_connection(connection).await;
+        assert!(orphaned_thread_ids.is_empty());
 
         assert!(
             manager
