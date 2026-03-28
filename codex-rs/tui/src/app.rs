@@ -2633,54 +2633,11 @@ impl App {
             }
         }
         for thread_id in thread_ids {
-            let existing_entry = self.agent_navigation.get(&thread_id).cloned();
-            let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
-            match app_server
-                .thread_read(thread_id, /*include_turns*/ false)
+            if !self
+                .refresh_agent_picker_thread_liveness(app_server, thread_id)
                 .await
             {
-                Ok(thread) => {
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        thread.agent_nickname.or_else(|| {
-                            existing_entry
-                                .as_ref()
-                                .and_then(|entry| entry.agent_nickname.clone())
-                        }),
-                        thread.agent_role.or_else(|| {
-                            existing_entry
-                                .as_ref()
-                                .and_then(|entry| entry.agent_role.clone())
-                        }),
-                        matches!(
-                            thread.status,
-                            codex_app_server_protocol::ThreadStatus::NotLoaded
-                        ),
-                    );
-                }
-                Err(err) => {
-                    if Self::is_terminal_thread_read_error(&err) && !has_replay_channel {
-                        self.agent_navigation.remove(thread_id);
-                        continue;
-                    }
-                    let is_closed = Self::closed_state_for_thread_read_error(
-                        &err,
-                        existing_entry.as_ref().map(|entry| entry.is_closed),
-                    );
-                    if let Some(entry) = existing_entry {
-                        self.upsert_agent_picker_thread(
-                            thread_id,
-                            entry.agent_nickname,
-                            entry.agent_role,
-                            is_closed,
-                        );
-                    } else {
-                        self.upsert_agent_picker_thread(
-                            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
-                            is_closed,
-                        );
-                    }
-                }
+                continue;
             }
         }
 
@@ -2789,6 +2746,64 @@ impl App {
     fn mark_agent_picker_thread_closed(&mut self, thread_id: ThreadId) {
         self.agent_navigation.mark_closed(thread_id);
         self.sync_active_agent_label();
+    }
+
+    async fn refresh_agent_picker_thread_liveness(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> bool {
+        let existing_entry = self.agent_navigation.get(&thread_id).cloned();
+        let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
+        match app_server
+            .thread_read(thread_id, /*include_turns*/ false)
+            .await
+        {
+            Ok(thread) => {
+                self.upsert_agent_picker_thread(
+                    thread_id,
+                    thread.agent_nickname.or_else(|| {
+                        existing_entry
+                            .as_ref()
+                            .and_then(|entry| entry.agent_nickname.clone())
+                    }),
+                    thread.agent_role.or_else(|| {
+                        existing_entry
+                            .as_ref()
+                            .and_then(|entry| entry.agent_role.clone())
+                    }),
+                    matches!(
+                        thread.status,
+                        codex_app_server_protocol::ThreadStatus::NotLoaded
+                    ),
+                );
+                true
+            }
+            Err(err) => {
+                if Self::is_terminal_thread_read_error(&err) && !has_replay_channel {
+                    self.agent_navigation.remove(thread_id);
+                    return false;
+                }
+                let is_closed = Self::closed_state_for_thread_read_error(
+                    &err,
+                    existing_entry.as_ref().map(|entry| entry.is_closed),
+                );
+                if let Some(entry) = existing_entry {
+                    self.upsert_agent_picker_thread(
+                        thread_id,
+                        entry.agent_nickname,
+                        entry.agent_role,
+                        is_closed,
+                    );
+                } else {
+                    self.upsert_agent_picker_thread(
+                        thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                        is_closed,
+                    );
+                }
+                true
+            }
+        }
     }
 
     async fn session_state_for_thread_read(
@@ -2921,6 +2936,15 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         if self.active_thread_id == Some(thread_id) {
+            return Ok(());
+        }
+
+        if !self
+            .refresh_agent_picker_thread_liveness(app_server, thread_id)
+            .await
+        {
+            self.chat_widget
+                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
             return Ok(());
         }
 
@@ -7303,6 +7327,32 @@ mod tests {
         app.thread_event_channels
             .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
         assert!(!app.should_attach_live_thread_for_selection(thread_id));
+    }
+
+    #[tokio::test]
+    async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        let is_available = app
+            .refresh_agent_picker_thread_liveness(&mut app_server, thread_id)
+            .await;
+
+        assert!(!is_available);
+        assert_eq!(app.agent_navigation.get(&thread_id), None);
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
+        Ok(())
     }
 
     #[tokio::test]
