@@ -231,11 +231,15 @@ impl Session {
         };
 
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
+        let mailbox_items = self.get_pending_input().await;
         let mut active = self.active_turn.lock().await;
         let mut turn = ActiveTurn::default();
         let mut turn_state = turn.turn_state.lock().await;
         turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
         for item in queued_response_items {
+            turn_state.push_pending_input(item);
+        }
+        for item in mailbox_items {
             turn_state.push_pending_input(item);
         }
         drop(turn_state);
@@ -258,8 +262,27 @@ impl Session {
         *active = Some(turn);
     }
 
-    pub(crate) async fn ensure_task_for_queued_response_items(self: &Arc<Self>) {
-        if !self.has_queued_response_items_for_next_turn().await {
+    /// Starts a regular turn when queued next-turn items or trigger-turn mailbox mail are waiting.
+    ///
+    /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
+    /// explicit-sub-id variant.
+    pub(crate) async fn ensure_task_for_pending_inputs(self: &Arc<Self>) {
+        self.ensure_task_for_pending_inputs_with_sub_id(uuid::Uuid::new_v4().to_string())
+            .await;
+    }
+
+    /// Starts a regular turn with the provided sub-id when pending input should wake an idle
+    /// session.
+    ///
+    /// The turn is created only when there are queued next-turn items or mailbox mail marked with
+    /// `trigger_turn`, and only if the session is currently idle.
+    pub(crate) async fn ensure_task_for_pending_inputs_with_sub_id(
+        self: &Arc<Self>,
+        sub_id: String,
+    ) {
+        if !self.has_queued_response_items_for_next_turn().await
+            && !self.has_trigger_turn_mailbox_items().await
+        {
             return;
         }
 
@@ -267,7 +290,7 @@ impl Session {
             return;
         }
 
-        let turn_context = self.new_default_turn().await;
+        let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
         self.start_task(turn_context, Vec::new(), RegularTask::new())
@@ -284,7 +307,7 @@ impl Session {
             active_turn.clear_pending().await;
         }
         if reason == TurnAbortReason::Interrupted {
-            self.ensure_task_for_queued_response_items().await;
+            self.ensure_task_for_pending_inputs().await;
         }
     }
 

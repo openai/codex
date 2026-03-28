@@ -180,10 +180,7 @@ impl CodexThread {
                 .session
                 .queue_response_items_for_next_turn(items)
                 .await;
-            self.codex
-                .session
-                .ensure_task_for_queued_response_items()
-                .await;
+            self.codex.session.ensure_task_for_pending_inputs().await;
         }
 
         Ok(submission_id)
