@@ -600,6 +600,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                         text: "hello".to_string(),
                         text_elements: Vec::new(),
                     }],
+                    client_metadata: None,
                     cwd: None,
                     approval_policy: None,
                     sandbox_policy: None,
@@ -622,7 +623,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                 && span_attr(span, "rpc.method") == Some("turn/start")
                 && span.span_context.trace_id() == remote_trace_id
         }) && spans.iter().any(|span| {
-            span_attr(span, "codex.op") == Some("user_input")
+            span_attr(span, "codex.op") == Some("user_input_with_client_metadata")
                 && span.span_context.trace_id() == remote_trace_id
         })
     })
@@ -630,10 +631,12 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
 
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
-    let core_turn_span =
-        find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
-            span_attr(span, "codex.op") == Some("user_input")
-        });
+    let core_turn_span = find_span_with_trace(
+        &spans,
+        remote_trace_id,
+        "codex.op=user_input_with_client_metadata",
+        |span| span_attr(span, "codex.op") == Some("user_input_with_client_metadata"),
+    );
 
     assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
     assert!(server_request_span.parent_span_is_remote);
