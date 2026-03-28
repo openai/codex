@@ -420,8 +420,12 @@ async fn send_input_submits_user_message() {
 #[test]
 fn build_agent_inbox_items_emits_function_call_and_output() {
     let sender_thread_id = ThreadId::new();
-    let items = build_agent_inbox_items(sender_thread_id, "watchdog update".to_string(), false)
-        .expect("tool role should build inbox items");
+    let items = build_agent_inbox_items(
+        sender_thread_id,
+        "watchdog update".to_string(),
+        /*prepend_turn_start_user_message*/ false,
+    )
+    .expect("tool role should build inbox items");
 
     assert_eq!(items.len(), 2);
 
@@ -462,8 +466,12 @@ fn build_agent_inbox_items_emits_function_call_and_output() {
 #[test]
 fn build_agent_inbox_items_prepends_empty_user_message_when_requested() {
     let sender_thread_id = ThreadId::new();
-    let items = build_agent_inbox_items(sender_thread_id, "watchdog update".to_string(), true)
-        .expect("tool role should build inbox items");
+    let items = build_agent_inbox_items(
+        sender_thread_id,
+        "watchdog update".to_string(),
+        /*prepend_turn_start_user_message*/ true,
+    )
+    .expect("tool role should build inbox items");
 
     assert_eq!(items.len(), 3);
     assert_eq!(
@@ -1539,7 +1547,10 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
         "researcher".to_string(),
         AgentRoleConfig {
             description: Some("Research role".to_string()),
+            model: None,
             config_file: None,
+            spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: Some(vec!["Atlas".to_string()]),
         },
     );
