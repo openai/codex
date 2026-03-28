@@ -99,6 +99,8 @@ pub struct ThreadMetadata {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Arbitrary client-defined thread metadata stored as canonical JSON.
+    pub metadata_json: String,
 }
 
 /// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
@@ -138,6 +140,8 @@ pub struct ThreadMetadataBuilder {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Arbitrary client-defined thread metadata stored as canonical JSON.
+    pub metadata_json: String,
 }
 
 impl ThreadMetadataBuilder {
@@ -166,6 +170,7 @@ impl ThreadMetadataBuilder {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            metadata_json: "{}".to_string(),
         }
     }
 
@@ -208,6 +213,7 @@ impl ThreadMetadataBuilder {
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
+            metadata_json: self.metadata_json.clone(),
         }
     }
 }
@@ -295,6 +301,9 @@ impl ThreadMetadata {
         if self.git_origin_url != other.git_origin_url {
             diffs.push("git_origin_url");
         }
+        if self.metadata_json != other.metadata_json {
+            diffs.push("metadata_json");
+        }
         diffs
     }
 }
@@ -327,6 +336,7 @@ pub(crate) struct ThreadRow {
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
+    metadata_json: String,
 }
 
 impl ThreadRow {
@@ -354,6 +364,7 @@ impl ThreadRow {
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
             git_origin_url: row.try_get("git_origin_url")?,
+            metadata_json: row.try_get("metadata_json")?,
         })
     }
 }
@@ -385,6 +396,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            metadata_json,
         } = row;
         Ok(Self {
             id: ThreadId::try_from(id)?,
@@ -410,6 +422,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            metadata_json,
         })
     }
 }
@@ -478,6 +491,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            metadata_json: "{}".to_string(),
         }
     }
 
@@ -506,6 +520,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            metadata_json: "{}".to_string(),
         }
     }
 

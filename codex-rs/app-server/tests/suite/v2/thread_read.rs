@@ -29,6 +29,7 @@ use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -196,6 +197,50 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
     assert_eq!(read.path, Some(thread_path));
     assert!(read.preview.is_empty());
     assert_eq!(read.turns.len(), 0);
+    assert_eq!(read.status, ThreadStatus::Idle);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_read_returns_persisted_metadata() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_sqlite_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let metadata = BTreeMap::from([("client".to_string(), "desktop".to_string())]);
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            metadata: Some(metadata.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(read.id, thread.id);
+    assert_eq!(read.metadata, metadata);
     assert_eq!(read.status, ThreadStatus::Idle);
 
     Ok(())
@@ -486,6 +531,33 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_sqlite_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+suppress_unstable_features_warning = true
+
+model_provider = "mock_provider"
+
+[features]
+sqlite = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

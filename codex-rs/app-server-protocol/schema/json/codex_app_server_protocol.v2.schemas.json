@@ -9863,6 +9863,14 @@
         "id": {
           "type": "string"
         },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Arbitrary client-defined metadata.",
+          "type": "object"
+        },
         "modelProvider": {
           "description": "Model provider used for this thread (for example, 'openai').",
           "type": "string"
@@ -10050,6 +10058,15 @@
         },
         "ephemeral": {
           "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
@@ -10991,6 +11008,16 @@
           ],
           "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
         },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Replace the stored client-defined metadata for this thread.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "threadId": {
           "type": "string"
         }
@@ -11549,6 +11576,15 @@
         "ephemeral": {
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
             "null"
           ]
         },

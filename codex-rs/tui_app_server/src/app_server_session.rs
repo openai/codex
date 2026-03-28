@@ -1181,6 +1181,7 @@ mod tests {
                 agent_role: None,
                 git_info: None,
                 name: None,
+                metadata: std::collections::BTreeMap::new(),
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
                     items: vec![

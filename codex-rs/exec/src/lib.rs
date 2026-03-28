@@ -1916,6 +1916,7 @@ mod tests {
             agent_role: None,
             git_info: None,
             name: None,
+            metadata: std::collections::BTreeMap::new(),
             turns: vec![
                 codex_app_server_protocol::Turn {
                     id: "turn-1".to_string(),
@@ -2031,6 +2032,7 @@ mod tests {
                 agent_role: None,
                 git_info: None,
                 name: Some("thread".to_string()),
+                metadata: std::collections::BTreeMap::new(),
                 turns: vec![],
             },
             model: "gpt-5.4".to_string(),

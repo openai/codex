@@ -182,7 +182,8 @@ SELECT
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
+    git_origin_url,
+    metadata_json
 FROM threads
 LEFT JOIN stage1_outputs
     ON stage1_outputs.thread_id = threads.id

@@ -2060,6 +2060,7 @@ impl CodexMessageProcessor {
             service_name,
             base_instructions,
             developer_instructions,
+            metadata,
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
@@ -2067,6 +2068,13 @@ impl CodexMessageProcessor {
             ephemeral,
             persist_extended_history,
         } = params;
+        let thread_metadata = match metadata.map(validate_thread_metadata).transpose() {
+            Ok(metadata) => metadata.unwrap_or_default(),
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2104,6 +2112,7 @@ impl CodexMessageProcessor {
                 dynamic_tools,
                 persist_extended_history,
                 service_name,
+                thread_metadata,
                 experimental_raw_events,
                 request_trace,
             )
@@ -2177,6 +2186,7 @@ impl CodexMessageProcessor {
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         persist_extended_history: bool,
         service_name: Option<String>,
+        thread_metadata: BTreeMap<String, String>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) {
@@ -2249,21 +2259,46 @@ impl CodexMessageProcessor {
             Ok(new_conv) => {
                 let NewThread {
                     thread_id,
-                    thread,
+                    thread: started_thread,
                     session_configured,
                     ..
                 } = new_conv;
-                let config_snapshot = thread
+                let config_snapshot = started_thread
                     .config_snapshot()
                     .instrument(tracing::info_span!(
                         "app_server.thread_start.config_snapshot",
                         otel.name = "app_server.thread_start.config_snapshot",
                     ))
                     .await;
-                let mut thread = build_thread_from_snapshot(
+                let started_thread_state_db = started_thread.state_db();
+                if let Err(message) = persist_materialized_thread_metadata(
+                    started_thread_state_db.as_ref(),
+                    session_configured.rollout_path.as_deref(),
+                    thread_id,
+                    &config_snapshot,
+                    &thread_metadata,
+                )
+                .await
+                {
+                    listener_task_context
+                        .outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message,
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                }
+                let mut thread = project_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
                     session_configured.rollout_path.clone(),
+                    Some(&thread_metadata),
+                    /*persisted_metadata*/ None,
                 );
 
                 // Auto-attach a thread listener when starting a thread.
@@ -2602,8 +2637,16 @@ impl CodexMessageProcessor {
     ) {
         let ThreadMetadataUpdateParams {
             thread_id,
+            metadata,
             git_info,
         } = params;
+        let metadata = match metadata.map(validate_thread_metadata).transpose() {
+            Ok(metadata) => metadata,
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
 
         let thread_uuid = match ThreadId::from_string(&thread_id) {
             Ok(id) => id,
@@ -2614,21 +2657,26 @@ impl CodexMessageProcessor {
             }
         };
 
-        let Some(ThreadMetadataGitInfoUpdateParams {
-            sha,
-            branch,
-            origin_url,
-        }) = git_info
-        else {
+        if metadata.is_none() && git_info.is_none() {
             self.send_invalid_request_error(
                 request_id,
-                "gitInfo must include at least one field".to_string(),
+                "metadata or gitInfo must include at least one field".to_string(),
             )
             .await;
             return;
-        };
+        }
 
-        if sha.is_none() && branch.is_none() && origin_url.is_none() {
+        let (sha, branch, origin_url) = git_info
+            .map(
+                |ThreadMetadataGitInfoUpdateParams {
+                     sha,
+                     branch,
+                     origin_url,
+                 }| (sha, branch, origin_url),
+            )
+            .unwrap_or((None, None, None));
+
+        if metadata.is_none() && sha.is_none() && branch.is_none() && origin_url.is_none() {
             self.send_invalid_request_error(
                 request_id,
                 "gitInfo must include at least one field".to_string(),
@@ -2708,36 +2756,77 @@ impl CodexMessageProcessor {
             None => None,
         };
 
-        let updated = match state_db_ctx
-            .update_thread_git_info(
-                thread_uuid,
-                git_sha.as_ref().map(|value| value.as_deref()),
-                git_branch.as_ref().map(|value| value.as_deref()),
-                git_origin_url.as_ref().map(|value| value.as_deref()),
-            )
-            .await
-        {
-            Ok(updated) => updated,
-            Err(err) => {
+        if let Some(metadata) = metadata.as_ref() {
+            let metadata_json = match serde_json::to_string(metadata) {
+                Ok(metadata_json) => metadata_json,
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to serialize thread metadata for {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let updated = match state_db_ctx
+                .update_thread_metadata_json(thread_uuid, metadata_json.as_str())
+                .await
+            {
+                Ok(updated) => updated,
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to update thread metadata for {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            if !updated {
                 self.send_internal_error(
                     request_id,
-                    format!("failed to update thread metadata for {thread_uuid}: {err}"),
+                    format!("thread metadata disappeared before update completed: {thread_uuid}"),
                 )
                 .await;
                 return;
             }
-        };
-        if !updated {
-            self.send_internal_error(
-                request_id,
-                format!("thread metadata disappeared before update completed: {thread_uuid}"),
-            )
-            .await;
-            return;
         }
 
-        let Some(summary) =
-            read_summary_from_state_db_context_by_thread_id(Some(&state_db_ctx), thread_uuid).await
+        if git_sha.is_some() || git_branch.is_some() || git_origin_url.is_some() {
+            let updated = match state_db_ctx
+                .update_thread_git_info(
+                    thread_uuid,
+                    git_sha.as_ref().map(|value| value.as_deref()),
+                    git_branch.as_ref().map(|value| value.as_deref()),
+                    git_origin_url.as_ref().map(|value| value.as_deref()),
+                )
+                .await
+            {
+                Ok(updated) => updated,
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to update thread metadata for {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            if !updated {
+                self.send_internal_error(
+                    request_id,
+                    format!("thread metadata disappeared before update completed: {thread_uuid}"),
+                )
+                .await;
+                return;
+            }
+        }
+
+        let Some(persisted_metadata) = read_thread_metadata_from_state_db_context_by_thread_id(
+            Some(&state_db_ctx),
+            thread_uuid,
+        )
+        .await
         else {
             self.send_internal_error(
                 request_id,
@@ -2747,7 +2836,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let mut thread = summary_to_thread(summary);
+        let mut thread = project_thread_from_persisted_metadata(&persisted_metadata);
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -3042,7 +3131,7 @@ impl CodexMessageProcessor {
                 message: format!("failed to update unarchived thread timestamp: {err}"),
                 data: None,
             })?;
-            if let Some(ctx) = state_db_ctx {
+            if let Some(ref ctx) = state_db_ctx {
                 let _ = ctx
                     .mark_unarchived(thread_id, restored_path.as_path())
                     .await;
@@ -3055,7 +3144,16 @@ impl CodexMessageProcessor {
                         message: format!("failed to read unarchived thread: {err}"),
                         data: None,
                     })?;
-            Ok(summary_to_thread(summary))
+            let mut thread = project_thread_from_summary(
+                summary, /*metadata*/ None, /*persisted_metadata*/ None,
+            );
+            merge_thread_metadata_from_state_db_context(
+                &mut thread,
+                state_db_ctx.as_ref(),
+                thread_id,
+            )
+            .await;
+            Ok(thread)
         }
         .await;
 
@@ -3305,15 +3403,31 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let mut threads = Vec::with_capacity(summaries.len());
         let mut thread_ids = HashSet::with_capacity(summaries.len());
-        let mut status_ids = Vec::with_capacity(summaries.len());
+        let mut summary_items = Vec::with_capacity(summaries.len());
+        let state_db_ctx = get_state_db(&self.config).await;
 
         for summary in summaries {
             let conversation_id = summary.conversation_id;
             thread_ids.insert(conversation_id);
-
-            let thread = summary_to_thread(summary);
+            summary_items.push((conversation_id, summary));
+        }
+        let persisted_metadata_by_thread_id = read_thread_metadata_from_state_db_context_by_ids(
+            state_db_ctx.as_ref(),
+            &summary_items
+                .iter()
+                .map(|(conversation_id, _)| *conversation_id)
+                .collect::<Vec<_>>(),
+        )
+        .await;
+        let mut threads = Vec::with_capacity(summary_items.len());
+        let mut status_ids = Vec::with_capacity(summary_items.len());
+        for (conversation_id, summary) in summary_items {
+            let thread = project_thread_from_summary(
+                summary,
+                /*metadata*/ None,
+                persisted_metadata_by_thread_id.get(&conversation_id),
+            );
             status_ids.push(thread.id.clone());
             threads.push((conversation_id, thread));
         }
@@ -3421,12 +3535,15 @@ impl CodexMessageProcessor {
 
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
-        let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
-            read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
+        let db_metadata = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
+            read_thread_metadata_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid)
+                .await
         } else {
-            read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
+            read_thread_metadata_from_state_db_by_thread_id(&self.config, thread_uuid).await
         };
-        let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
+        let mut rollout_path = db_metadata
+            .as_ref()
+            .map(|metadata| metadata.rollout_path.clone());
         if rollout_path.is_none() || include_turns {
             rollout_path =
                 match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
@@ -3451,21 +3568,35 @@ impl CodexMessageProcessor {
                 };
         }
 
-        if include_turns && rollout_path.is_none() && db_summary.is_some() {
-            self.send_internal_error(
-                request_id,
-                format!("failed to locate rollout for thread {thread_uuid}"),
-            )
-            .await;
-            return;
+        if include_turns && rollout_path.is_none() {
+            if loaded_thread.is_some() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
+                    ),
+                )
+                .await;
+                return;
+            }
+            if db_metadata.is_some() {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to locate rollout for thread {thread_uuid}"),
+                )
+                .await;
+                return;
+            }
         }
 
-        let mut thread = if let Some(summary) = db_summary {
-            summary_to_thread(summary)
+        let mut thread = if let Some(persisted_metadata) = db_metadata.as_ref() {
+            project_thread_from_persisted_metadata(persisted_metadata)
         } else if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => project_thread_from_summary(
+                    summary, /*metadata*/ None, /*persisted_metadata*/ None,
+                ),
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -3500,7 +3631,13 @@ impl CodexMessageProcessor {
             if include_turns {
                 rollout_path = loaded_rollout_path.clone();
             }
-            build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
+            project_thread_from_snapshot(
+                thread_uuid,
+                &config_snapshot,
+                loaded_rollout_path,
+                /*metadata*/ None,
+                /*persisted_metadata*/ None,
+            )
         };
         self.attach_thread_name(thread_uuid, &mut thread).await;
 
@@ -3584,8 +3721,13 @@ impl CodexMessageProcessor {
     ) {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
-            let loaded_thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, thread.rollout_path());
+            let loaded_thread = project_thread_from_snapshot(
+                thread_id,
+                &config_snapshot,
+                thread.rollout_path(),
+                /*metadata*/ None,
+                /*persisted_metadata*/ None,
+            );
             self.thread_watch_manager.upsert_thread(loaded_thread).await;
         }
 
@@ -4097,10 +4239,12 @@ impl CodexMessageProcessor {
             }
             InitialHistory::Forked(items) => {
                 let config_snapshot = thread.config_snapshot().await;
-                let mut thread = build_thread_from_snapshot(
+                let mut thread = project_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
                     Some(rollout_path.into()),
+                    /*metadata*/ None,
+                    persisted_resume_metadata,
                 );
                 thread.preview = preview_from_rollout_items(items);
                 Ok(thread)
@@ -4148,9 +4292,17 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
+            metadata,
             ephemeral,
             persist_extended_history,
         } = params;
+        let thread_metadata = match metadata.map(validate_thread_metadata).transpose() {
+            Ok(metadata) => metadata.unwrap_or_default(),
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
             (path, None)
@@ -4298,6 +4450,20 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let fork_config_snapshot = forked_thread.config_snapshot().await;
+        let forked_thread_state_db = forked_thread.state_db();
+        if let Err(message) = persist_materialized_thread_metadata(
+            forked_thread_state_db.as_ref(),
+            session_configured.rollout_path.as_deref(),
+            thread_id,
+            &fork_config_snapshot,
+            &thread_metadata,
+        )
+        .await
+        {
+            self.send_internal_error(request_id, message).await;
+            return;
+        }
 
         // Auto-attach a conversation listener when forking a thread.
         Self::log_listener_attach_result(
@@ -4322,7 +4488,11 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => project_thread_from_summary(
+                    summary,
+                    Some(&thread_metadata),
+                    /*persisted_metadata*/ None,
+                ),
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -4336,10 +4506,14 @@ impl CodexMessageProcessor {
                 }
             }
         } else {
-            let config_snapshot = forked_thread.config_snapshot().await;
             // forked thread names do not inherit the source thread name
-            let mut thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
+            let mut thread = project_thread_from_snapshot(
+                thread_id,
+                &fork_config_snapshot,
+                /*path*/ None,
+                Some(&thread_metadata),
+                /*persisted_metadata*/ None,
+            );
             let history_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await
             {
                 Ok(items) => items,
@@ -6831,7 +7005,9 @@ impl CodexMessageProcessor {
         if let Some(rollout_path) = review_thread.rollout_path() {
             match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
                 Ok(summary) => {
-                    let mut thread = summary_to_thread(summary);
+                    let mut thread = project_thread_from_summary(
+                        summary, /*metadata*/ None, /*persisted_metadata*/ None,
+                    );
                     self.thread_watch_manager
                         .upsert_thread_silently(thread.clone())
                         .await;
@@ -8201,25 +8377,130 @@ async fn read_history_cwd_from_state_db(
     }
 }
 
+async fn read_thread_metadata_from_state_db_by_thread_id(
+    config: &Config,
+    thread_id: ThreadId,
+) -> Option<ThreadMetadata> {
+    let state_db_ctx = get_state_db(config).await;
+    read_thread_metadata_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
+}
+
+async fn read_thread_metadata_from_state_db_context_by_thread_id(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+) -> Option<ThreadMetadata> {
+    let state_db_ctx = state_db_ctx?;
+
+    match state_db_ctx.get_thread(thread_id).await {
+        Ok(Some(metadata)) => Some(metadata),
+        Ok(None) | Err(_) => None,
+    }
+}
+
+async fn read_thread_metadata_from_state_db_context_by_ids(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_ids: &[ThreadId],
+) -> HashMap<ThreadId, ThreadMetadata> {
+    let Some(state_db_ctx) = state_db_ctx else {
+        return HashMap::new();
+    };
+
+    state_db_ctx
+        .as_ref()
+        .get_threads_by_ids(thread_ids)
+        .await
+        .unwrap_or_default()
+}
+
+async fn persist_materialized_thread_metadata(
+    state_db_ctx: Option<&StateDbHandle>,
+    rollout_path: Option<&Path>,
+    thread_id: ThreadId,
+    config_snapshot: &ThreadConfigSnapshot,
+    thread_metadata: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let (Some(state_db_ctx), Some(rollout_path)) = (state_db_ctx, rollout_path) else {
+        return Ok(());
+    };
+    persist_thread_metadata_from_snapshot(
+        state_db_ctx.as_ref(),
+        thread_id,
+        rollout_path,
+        config_snapshot,
+        thread_metadata,
+    )
+    .await
+}
+
+pub(crate) async fn merge_thread_metadata_from_state_db_context(
+    thread: &mut Thread,
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+) {
+    if let Some(persisted_metadata) =
+        read_thread_metadata_from_state_db_context_by_thread_id(state_db_ctx, thread_id).await
+    {
+        apply_persisted_mutable_thread_metadata(thread, Some(&persisted_metadata));
+    }
+}
+
+pub(crate) fn project_thread_from_summary(
+    summary: ConversationSummary,
+    metadata: Option<&BTreeMap<String, String>>,
+    persisted_metadata: Option<&ThreadMetadata>,
+) -> Thread {
+    let mut thread = summary_to_thread(summary);
+    apply_thread_projection_metadata(&mut thread, metadata, persisted_metadata);
+    thread
+}
+
+fn project_thread_from_snapshot(
+    thread_id: ThreadId,
+    config_snapshot: &ThreadConfigSnapshot,
+    path: Option<PathBuf>,
+    metadata: Option<&BTreeMap<String, String>>,
+    persisted_metadata: Option<&ThreadMetadata>,
+) -> Thread {
+    let mut thread = build_thread_from_snapshot(thread_id, config_snapshot, path);
+    apply_thread_projection_metadata(&mut thread, metadata, persisted_metadata);
+    thread
+}
+
+fn project_thread_from_persisted_metadata(persisted_metadata: &ThreadMetadata) -> Thread {
+    project_thread_from_summary(
+        summary_from_thread_metadata(persisted_metadata),
+        /*metadata*/ None,
+        Some(persisted_metadata),
+    )
+}
+
+fn apply_thread_projection_metadata(
+    thread: &mut Thread,
+    metadata: Option<&BTreeMap<String, String>>,
+    persisted_metadata: Option<&ThreadMetadata>,
+) {
+    if let Some(metadata) = metadata {
+        thread.metadata = metadata.clone();
+    }
+    apply_persisted_mutable_thread_metadata(thread, persisted_metadata);
+}
+
 async fn read_summary_from_state_db_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = get_state_db(config).await;
-    read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
+    read_thread_metadata_from_state_db_by_thread_id(config, thread_id)
+        .await
+        .map(|metadata| summary_from_thread_metadata(&metadata))
 }
 
 async fn read_summary_from_state_db_context_by_thread_id(
     state_db_ctx: Option<&StateDbHandle>,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = state_db_ctx?;
-
-    let metadata = match state_db_ctx.get_thread(thread_id).await {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) | Err(_) => return None,
-    };
-    Some(summary_from_thread_metadata(&metadata))
+    read_thread_metadata_from_state_db_context_by_thread_id(state_db_ctx, thread_id)
+        .await
+        .map(|metadata| summary_from_thread_metadata(&metadata))
 }
 
 async fn summary_from_thread_list_item(
@@ -8502,28 +8783,46 @@ async fn load_thread_summary_for_rollout(
     fallback_provider: &str,
     persisted_metadata: Option<&ThreadMetadata>,
 ) -> std::result::Result<Thread, String> {
-    let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
+    let summary = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
-        .map(summary_to_thread)
         .map_err(|err| {
             format!(
                 "failed to load rollout `{}` for thread {thread_id}: {err}",
                 rollout_path.display()
             )
         })?;
-    if let Some(persisted_metadata) = persisted_metadata {
-        merge_mutable_thread_metadata(
-            &mut thread,
-            summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
-        );
-    } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
-        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
-    }
-    Ok(thread)
+    let loaded_persisted_metadata = if persisted_metadata.is_some() {
+        None
+    } else {
+        read_thread_metadata_from_state_db_by_thread_id(config, thread_id).await
+    };
+    Ok(project_thread_from_summary(
+        summary,
+        /*metadata*/ None,
+        persisted_metadata.or(loaded_persisted_metadata.as_ref()),
+    ))
 }
 
-fn merge_mutable_thread_metadata(thread: &mut Thread, persisted_thread: Thread) {
-    thread.git_info = persisted_thread.git_info;
+fn apply_persisted_mutable_thread_metadata(
+    thread: &mut Thread,
+    persisted_metadata: Option<&ThreadMetadata>,
+) {
+    let Some(persisted_metadata) = persisted_metadata else {
+        return;
+    };
+    thread.git_info = if persisted_metadata.git_sha.is_none()
+        && persisted_metadata.git_branch.is_none()
+        && persisted_metadata.git_origin_url.is_none()
+    {
+        None
+    } else {
+        Some(ApiGitInfo {
+            sha: persisted_metadata.git_sha.clone(),
+            branch: persisted_metadata.git_branch.clone(),
+            origin_url: persisted_metadata.git_origin_url.clone(),
+        })
+    };
+    thread.metadata = parse_thread_metadata_json(persisted_metadata.metadata_json.as_str());
 }
 
 fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
@@ -8616,6 +8915,7 @@ fn build_thread_from_snapshot(
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
         name: None,
+        metadata: BTreeMap::new(),
         turns: Vec::new(),
     }
 }
@@ -8658,8 +8958,76 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         source: source.into(),
         git_info,
         name: None,
+        metadata: BTreeMap::new(),
         turns: Vec::new(),
     }
+}
+
+fn parse_thread_metadata_json(metadata_json: &str) -> BTreeMap<String, String> {
+    serde_json::from_str(metadata_json).unwrap_or_default()
+}
+
+async fn persist_thread_metadata_from_snapshot(
+    state_db_ctx: &StateRuntime,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+    config_snapshot: &ThreadConfigSnapshot,
+    thread_metadata: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let metadata_json = serde_json::to_string(thread_metadata)
+        .map_err(|err| format!("failed to serialize thread metadata for {thread_id}: {err}"))?;
+
+    let mut builder = ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path.to_path_buf(),
+        Utc::now(),
+        config_snapshot.session_source.clone(),
+    );
+    builder.model_provider = Some(config_snapshot.model_provider_id.clone());
+    builder.cwd = config_snapshot.cwd.clone();
+    builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
+    builder.approval_mode = config_snapshot.approval_policy;
+    builder.metadata_json = metadata_json.clone();
+
+    let metadata = builder.build(config_snapshot.model_provider_id.as_str());
+    let inserted = state_db_ctx
+        .insert_thread_if_absent(&metadata)
+        .await
+        .map_err(|err| format!("failed to create thread metadata for {thread_id}: {err}"))?;
+    if !inserted {
+        let updated = state_db_ctx
+            .update_thread_metadata_json(thread_id, metadata_json.as_str())
+            .await
+            .map_err(|err| format!("failed to persist thread metadata for {thread_id}: {err}"))?;
+        if !updated {
+            return Err(format!(
+                "thread metadata disappeared before metadata persisted: {thread_id}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_thread_metadata(
+    metadata: BTreeMap<String, String>,
+) -> std::result::Result<BTreeMap<String, String>, String> {
+    if metadata.len() > 16 {
+        return Err("metadata must include at most 16 entries".to_string());
+    }
+
+    for (key, value) in &metadata {
+        if key.chars().count() > 512 {
+            return Err(format!("metadata key exceeds 512 characters: {key}"));
+        }
+        if value.chars().count() > 512 {
+            return Err(format!(
+                "metadata value exceeds 512 characters for key: {key}"
+            ));
+        }
+    }
+
+    Ok(metadata)
 }
 
 #[cfg(test)]

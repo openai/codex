@@ -40,6 +40,7 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
         git_sha: None,
         git_branch: Some("main".to_string()),
         git_origin_url: None,
+        metadata_json: "{}".to_string(),
     }
 }
 

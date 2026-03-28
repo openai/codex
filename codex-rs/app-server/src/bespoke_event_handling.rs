@@ -1,7 +1,8 @@
 use crate::codex_message_processor::ApiVersion;
+use crate::codex_message_processor::merge_thread_metadata_from_state_db_context;
+use crate::codex_message_processor::project_thread_from_summary;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
-use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
@@ -1804,7 +1805,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await
                 {
                     Ok(summary) => {
-                        let mut thread = summary_to_thread(summary);
+                        let mut thread = project_thread_from_summary(
+                            summary, /*metadata*/ None, /*persisted_metadata*/ None,
+                        );
+                        merge_thread_metadata_from_state_db_context(
+                            &mut thread,
+                            conversation.state_db().as_ref(),
+                            conversation_id,
+                        )
+                        .await;
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);

@@ -6,6 +6,7 @@ use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -96,6 +97,23 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     )
     .await??;
 
+    let metadata_update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread.id.clone(),
+            metadata: Some(
+                [("source".to_string(), "rollback-test".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            git_info: None,
+        })
+        .await?;
+    let _metadata_update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(metadata_update_id)),
+    )
+    .await??;
+
     // Roll back the last turn.
     let rollback_id = mcp
         .send_thread_rollback_request(ThreadRollbackParams {
@@ -127,6 +145,10 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
 
     assert_eq!(rolled_back_thread.turns.len(), 1);
     assert_eq!(rolled_back_thread.status, ThreadStatus::Idle);
+    assert_eq!(
+        rolled_back_thread.metadata.get("source"),
+        Some(&"rollback-test".to_string())
+    );
     assert_eq!(rolled_back_thread.turns[0].items.len(), 2);
     match &rolled_back_thread.turns[0].items[0] {
         ThreadItem::UserMessage { content, .. } => {

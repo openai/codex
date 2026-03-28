@@ -2576,6 +2576,8 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
+    pub metadata: Option<BTreeMap<String, String>>,
+    #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
@@ -2768,6 +2770,8 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub metadata: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// If true, persist additional rollout EventMsg variants required to
@@ -2894,6 +2898,9 @@ pub struct ThreadSetNameResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateParams {
     pub thread_id: String,
+    /// Replace the stored client-defined metadata for this thread.
+    #[ts(optional = nullable)]
+    pub metadata: Option<BTreeMap<String, String>>,
     /// Patch the stored Git metadata for this thread.
     /// Omit a field to leave it unchanged, set it to `null` to clear it, or
     /// provide a string to replace the stored value.
@@ -3602,6 +3609,9 @@ pub struct Thread {
     pub git_info: Option<GitInfo>,
     /// Optional user-facing thread title.
     pub name: Option<String>,
+    /// Arbitrary client-defined metadata.
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
