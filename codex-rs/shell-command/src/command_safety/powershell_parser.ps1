@@ -6,39 +6,6 @@ $stdin = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), $utf8, $f
 $stdout = [System.IO.StreamWriter]::new([Console]::OpenStandardOutput(), $utf8)
 $stdout.AutoFlush = $true
 
-# This script stays alive so the Rust caller can amortize PowerShell startup across
-# many parse requests. Each request and response is one compact JSON line.
-while (($requestLine = $stdin.ReadLine()) -ne $null) {
-    $request = $null
-    try {
-        $request = $requestLine | ConvertFrom-Json
-    } catch {
-        Write-Response @{ id = $null; status = 'parse_failed' }
-        continue
-    }
-
-    # We process requests serially, but still echo the id back so the Rust side can
-    # detect protocol desyncs instead of silently trusting mixed stdout.
-    $requestId = $request.id
-    $payload = $request.payload
-    if ([string]::IsNullOrEmpty($payload)) {
-        Write-Response @{ id = $requestId; status = 'parse_failed' }
-        continue
-    }
-
-    try {
-        $source =
-            [System.Text.Encoding]::Unicode.GetString(
-                [System.Convert]::FromBase64String($payload)
-            )
-    } catch {
-        Write-Response @{ id = $requestId; status = 'parse_failed' }
-        continue
-    }
-
-    Write-Response (Invoke-ParseRequest -RequestId $requestId -Source $source)
-}
-
 function Invoke-ParseRequest {
     param($RequestId, $Source)
 
@@ -222,9 +189,42 @@ function Add-CommandsFromPipelineBase {
         return Add-CommandsFromPipelineAst $pipeline $commands
     }
 
-    if ($pipeline -is [System.Management.Automation.Language.PipelineChainAst]) {
+    if ($pipeline.GetType().FullName -eq 'System.Management.Automation.Language.PipelineChainAst') {
         return Add-CommandsFromPipelineChain $pipeline $commands
     }
 
     return $false
+}
+
+# This script stays alive so the Rust caller can amortize PowerShell startup across
+# many parse requests. Each request and response is one compact JSON line.
+while (($requestLine = $stdin.ReadLine()) -ne $null) {
+    $request = $null
+    try {
+        $request = $requestLine | ConvertFrom-Json
+    } catch {
+        Write-Response @{ id = $null; status = 'parse_failed' }
+        continue
+    }
+
+    # We process requests serially, but still echo the id back so the Rust side can
+    # detect protocol desyncs instead of silently trusting mixed stdout.
+    $requestId = $request.id
+    $payload = $request.payload
+    if ([string]::IsNullOrEmpty($payload)) {
+        Write-Response @{ id = $requestId; status = 'parse_failed' }
+        continue
+    }
+
+    try {
+        $source =
+            [System.Text.Encoding]::Unicode.GetString(
+                [System.Convert]::FromBase64String($payload)
+            )
+    } catch {
+        Write-Response @{ id = $requestId; status = 'parse_failed' }
+        continue
+    }
+
+    Write-Response (Invoke-ParseRequest -RequestId $requestId -Source $source)
 }
