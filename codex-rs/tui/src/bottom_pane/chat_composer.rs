@@ -3718,62 +3718,6 @@ impl ChatComposer {
     }
 }
 
-fn prompt_selection_action(
-    prompt: &CustomPrompt,
-    first_line: &str,
-    mode: PromptSelectionMode,
-    text_elements: &[TextElement],
-) -> PromptSelectionAction {
-    let named_args = prompt_argument_names(&prompt.content);
-    let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
-
-    match mode {
-        PromptSelectionMode::Completion => {
-            if !named_args.is_empty() {
-                let (text, cursor) =
-                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
-                return PromptSelectionAction::Insert {
-                    text,
-                    cursor: Some(cursor),
-                };
-            }
-            if has_numeric {
-                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
-                return PromptSelectionAction::Insert { text, cursor: None };
-            }
-            let text = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
-            PromptSelectionAction::Insert { text, cursor: None }
-        }
-        PromptSelectionMode::Submit => {
-            if !named_args.is_empty() {
-                let (text, cursor) =
-                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
-                return PromptSelectionAction::Insert {
-                    text,
-                    cursor: Some(cursor),
-                };
-            }
-            if has_numeric {
-                if let Some(expanded) =
-                    expand_if_numeric_with_positional_args(prompt, first_line, text_elements)
-                {
-                    return PromptSelectionAction::Submit {
-                        text: expanded.text,
-                        text_elements: expanded.text_elements,
-                    };
-                }
-                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
-                return PromptSelectionAction::Insert { text, cursor: None };
-            }
-            PromptSelectionAction::Submit {
-                text: prompt.content.clone(),
-                // By now we know this custom prompt has no args, so no text elements to preserve.
-                text_elements: Vec::new(),
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6226,44 +6170,6 @@ mod tests {
             }
         }
         assert!(found_error, "expected error history cell to be sent");
-    }
-
-    #[test]
-    fn extract_args_supports_quoted_paths_single_arg() {
-        let args = extract_positional_args_for_prompt_line(
-            "/prompts:review \"docs/My File.md\"",
-            "review",
-            &[],
-        );
-        assert_eq!(
-            args,
-            vec![PromptArg {
-                text: "docs/My File.md".to_string(),
-                text_elements: Vec::new(),
-            }]
-        );
-    }
-
-    #[test]
-    fn extract_args_supports_mixed_quoted_and_unquoted() {
-        let args = extract_positional_args_for_prompt_line(
-            "/prompts:cmd \"with spaces\" simple",
-            "cmd",
-            &[],
-        );
-        assert_eq!(
-            args,
-            vec![
-                PromptArg {
-                    text: "with spaces".to_string(),
-                    text_elements: Vec::new(),
-                },
-                PromptArg {
-                    text: "simple".to_string(),
-                    text_elements: Vec::new(),
-                }
-            ]
-        );
     }
 
     #[test]
