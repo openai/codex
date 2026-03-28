@@ -2753,11 +2753,11 @@ impl App {
         Self::is_terminal_thread_read_error(err) || existing_is_closed.unwrap_or(false)
     }
 
-    fn is_unmaterialized_include_turns_error(err: &color_eyre::Report) -> bool {
+    fn can_fallback_from_include_turns_error(err: &color_eyre::Report) -> bool {
         err.chain().any(|cause| {
-            cause
-                .to_string()
-                .contains("includeTurns is unavailable before first user message")
+            let message = cause.to_string();
+            message.contains("includeTurns is unavailable before first user message")
+                || message.contains("ephemeral threads do not support includeTurns")
         })
     }
 
@@ -2856,7 +2856,7 @@ impl App {
                 let turns = thread.turns.clone();
                 (thread, turns)
             }
-            Err(err) if Self::is_unmaterialized_include_turns_error(&err) => {
+            Err(err) if Self::can_fallback_from_include_turns_error(&err) => {
                 let thread = app_server
                     .thread_read(thread_id, /*include_turns*/ false)
                     .await?;
@@ -7170,6 +7170,19 @@ mod tests {
         assert!(App::closed_state_for_thread_read_error(
             &err, /*existing_is_closed*/ None
         ));
+    }
+
+    #[test]
+    fn include_turns_fallback_detection_handles_unmaterialized_and_ephemeral_threads() {
+        let unmaterialized = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: thread thr_123 is not materialized yet; includeTurns is unavailable before first user message"
+        );
+        let ephemeral = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: ephemeral threads do not support includeTurns"
+        );
+
+        assert!(App::can_fallback_from_include_turns_error(&unmaterialized));
+        assert!(App::can_fallback_from_include_turns_error(&ephemeral));
     }
 
     #[tokio::test]
