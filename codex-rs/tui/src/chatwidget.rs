@@ -3736,6 +3736,7 @@ impl ChatWidget {
                                 .as_ref()
                                 .and_then(|metadata| metadata.agent_role.clone()),
                             prompt: prompt.unwrap_or_default(),
+                            spawn_mode: codex_protocol::protocol::AgentSpawnMode::Spawn,
                             model: String::new(),
                             reasoning_effort: ReasoningEffortConfig::Medium,
                             // Thread history items do not carry spawn_mode yet, so the
