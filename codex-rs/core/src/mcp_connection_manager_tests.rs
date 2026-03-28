@@ -409,15 +409,18 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        AsyncManagedClient {
-            client: pending_client,
-            startup_snapshot: Some(startup_tools),
-            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-        },
-    );
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            AsyncManagedClient {
+                client: pending_client,
+                startup_snapshot: Some(startup_tools),
+                startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            },
+        );
 
     let tools = manager.list_all_tools().await;
     let tool = tools
@@ -434,15 +437,18 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        AsyncManagedClient {
-            client: pending_client,
-            startup_snapshot: None,
-            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-        },
-    );
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            AsyncManagedClient {
+                client: pending_client,
+                startup_snapshot: None,
+                startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            },
+        );
 
     let timeout_result =
         tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
@@ -456,15 +462,18 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        AsyncManagedClient {
-            client: pending_client,
-            startup_snapshot: Some(Vec::new()),
-            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-        },
-    );
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            AsyncManagedClient {
+                client: pending_client,
+                startup_snapshot: Some(Vec::new()),
+                startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            },
+        );
 
     let timeout_result =
         tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
@@ -488,15 +497,18 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        AsyncManagedClient {
-            client: failed_client,
-            startup_snapshot: Some(startup_tools),
-            startup_complete,
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-        },
-    );
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            AsyncManagedClient {
+                client: failed_client,
+                startup_snapshot: Some(startup_tools),
+                startup_complete,
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            },
+        );
 
     let tools = manager.list_all_tools().await;
     let tool = tools
