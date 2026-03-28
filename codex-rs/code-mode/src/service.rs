@@ -605,6 +605,57 @@ text(JSON.stringify(returnsUndefined));
     }
 
     #[tokio::test]
+    async fn notify_rejects_empty_text() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"notify("   "); text("after");"#.to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some("notify expects non-empty text".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn store_surfaces_serialization_errors() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"store("bad", () => {}); text("after");"#.to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some(
+                    "failed to serialize JavaScript value: expected value at line 1 column 1"
+                        .to_string(),
+                ),
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn terminate_waits_for_runtime_shutdown_before_responding() {
         let inner = test_inner();
         let (event_tx, event_rx) = mpsc::unbounded_channel();

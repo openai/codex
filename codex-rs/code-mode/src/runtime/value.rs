@@ -34,8 +34,8 @@ pub(super) fn serialize_output_text(
 pub(super) fn normalize_output_image(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-) -> Result<FunctionCallOutputContentItem, ()> {
-    let result = (|| -> Result<FunctionCallOutputContentItem, String> {
+) -> Result<FunctionCallOutputContentItem, String> {
+    (|| -> Result<FunctionCallOutputContentItem, String> {
         let (image_url, detail) = if value.is_string() {
             (value.to_rust_string_lossy(scope), None)
         } else if value.is_object() && !value.is_array() {
@@ -101,15 +101,7 @@ pub(super) fn normalize_output_image(
         };
 
         Ok(FunctionCallOutputContentItem::InputImage { image_url, detail })
-    })();
-
-    match result {
-        Ok(item) => Ok(item),
-        Err(error_text) => {
-            throw_type_error(scope, &error_text);
-            Err(())
-        }
-    }
+    })()
 }
 
 pub(super) fn v8_value_to_json(
