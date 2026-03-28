@@ -6,6 +6,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -80,6 +81,23 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         .expect("expected rollout path for thread id to exist");
     assert_paths_match_on_disk(&found_rollout_path, &rollout_path)?;
 
+    let metadata_update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread.id.clone(),
+            metadata: Some(
+                [("source".to_string(), "unarchive-test".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            git_info: None,
+        })
+        .await?;
+    let _metadata_update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(metadata_update_id)),
+    )
+    .await??;
+
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
@@ -141,6 +159,10 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         "expected updated_at to be bumped on unarchive"
     );
     assert_eq!(unarchived_thread.status, ThreadStatus::NotLoaded);
+    assert_eq!(
+        unarchived_thread.metadata.get("source"),
+        Some(&"unarchive-test".to_string())
+    );
 
     // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = unarchive_result

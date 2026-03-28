@@ -802,6 +802,7 @@ mod tests {
             source,
             git_info: None,
             name: None,
+            metadata: std::collections::BTreeMap::new(),
             turns: Vec::new(),
         }
     }

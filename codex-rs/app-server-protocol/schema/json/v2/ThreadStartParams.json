@@ -156,6 +156,15 @@
         "null"
       ]
     },
+    "metadata": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "model": {
       "type": [
         "string",

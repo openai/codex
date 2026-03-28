@@ -132,13 +132,13 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread.
+- `thread/start` — create a new thread; accepts optional client-defined `metadata` (`string -> string`, up to 16 entries with keys/values <= 512 chars), emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. Accepts optional client-defined `metadata` plus `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded, plus any stored client `metadata`.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
-- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
-- `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
+- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded, plus any stored client `metadata`.
+- `thread/metadata/update` — replace stored client `metadata` and/or patch stored `gitInfo` fields in sqlite, then return the refreshed `thread`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
@@ -210,6 +210,7 @@ Start a fresh thread when you need a new Codex conversation.
     "sandbox": "workspaceWrite",
     "personality": "friendly",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
+    "metadata": { "client": "vscode", "surface": "chat" },
     // Experimental: requires opt-in
     "dynamicTools": [
         {
@@ -231,7 +232,8 @@ Start a fresh thread when you need a new Codex conversation.
         "id": "thr_123",
         "preview": "",
         "modelProvider": "openai",
-        "createdAt": 1730910000
+        "createdAt": 1730910000,
+        "metadata": { "client": "vscode", "surface": "chat" }
     }
 } }
 { "method": "thread/started", "params": { "thread": { … } } }
@@ -253,10 +255,14 @@ Example:
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
 
-To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:
+To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. You can also set replacement client `metadata` on the fork. Pass `ephemeral: true` when the fork should stay in-memory only:
 
 ```json
-{ "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123", "ephemeral": true } }
+{ "method": "thread/fork", "id": 12, "params": {
+    "threadId": "thr_123",
+    "metadata": { "origin": "review" },
+    "ephemeral": true
+} }
 { "id": 12, "result": { "thread": { "id": "thr_456", … } } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
@@ -347,7 +353,7 @@ If this was the last subscriber, the server unloads the thread and emits `thread
 
 ### Example: Read a thread
 
-Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`. The returned thread includes `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
+Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`. The returned thread includes `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available, plus stored client `metadata` when present.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
@@ -365,25 +371,38 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 
 ### Example: Update stored thread metadata
 
-Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports persisted `gitInfo`; omitted fields are left unchanged, while explicit `null` clears a stored value.
+Use `thread/metadata/update` to update sqlite-backed metadata for a thread without resuming it. `metadata` replaces the stored client-defined key/value map. `gitInfo` remains patch-style: omitted fields are left unchanged, while explicit `null` clears a stored value.
 
 ```json
 { "method": "thread/metadata/update", "id": 24, "params": {
     "threadId": "thr_123",
-    "gitInfo": { "branch": "feature/sidebar-pr" }
+    "metadata": { "client": "desktop", "surface": "composer" }
 } }
 { "id": 24, "result": {
+    "thread": {
+        "id": "thr_123",
+        "metadata": { "client": "desktop", "surface": "composer" }
+    }
+} }
+```
+
+```json
+{ "method": "thread/metadata/update", "id": 25, "params": {
+    "threadId": "thr_123",
+    "gitInfo": { "branch": "feature/sidebar-pr" }
+} }
+{ "id": 25, "result": {
     "thread": {
         "id": "thr_123",
         "gitInfo": { "sha": null, "branch": "feature/sidebar-pr", "originUrl": null }
     }
 } }
 
-{ "method": "thread/metadata/update", "id": 25, "params": {
+{ "method": "thread/metadata/update", "id": 26, "params": {
     "threadId": "thr_123",
     "gitInfo": { "branch": null }
 } }
-{ "id": 25, "result": {
+{ "id": 26, "result": {
     "thread": {
         "id": "thr_123",
         "gitInfo": null

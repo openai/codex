@@ -27,7 +27,8 @@ SELECT
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
+    git_origin_url,
+    metadata_json
 FROM threads
 WHERE id = ?
             "#,
@@ -37,6 +38,59 @@ WHERE id = ?
         .await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .transpose()
+    }
+
+    pub async fn get_threads_by_ids(
+        &self,
+        ids: &[ThreadId],
+    ) -> anyhow::Result<std::collections::HashMap<ThreadId, crate::ThreadMetadata>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+SELECT
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    agent_nickname,
+    agent_role,
+    agent_path,
+    model_provider,
+    model,
+    reasoning_effort,
+    cwd,
+    cli_version,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    first_user_message,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url,
+    metadata_json
+FROM threads
+WHERE id IN (
+            "#,
+        );
+        let mut separated = builder.separated(", ");
+        for id in ids {
+            separated.push_bind(id.to_string());
+        }
+        separated.push_unseparated(")");
+
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+        rows.into_iter()
+            .map(|row| {
+                let metadata = ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from)?;
+                Ok((metadata.id, metadata))
+            })
+            .collect()
     }
 
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
@@ -364,7 +418,8 @@ SELECT
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
+    git_origin_url,
+    metadata_json
 FROM threads
             "#,
         );
@@ -467,8 +522,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    metadata_json,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -500,6 +556,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(metadata.metadata_json.as_str())
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
@@ -563,6 +620,19 @@ WHERE id = ?
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn update_thread_metadata_json(
+        &self,
+        thread_id: ThreadId,
+        metadata_json: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("UPDATE threads SET metadata_json = ? WHERE id = ?")
+            .bind(metadata_json)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn upsert_thread_with_creation_memory_mode(
         &self,
         metadata: &crate::ThreadMetadata,
@@ -594,8 +664,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    metadata_json,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -618,7 +689,8 @@ ON CONFLICT(id) DO UPDATE SET
     archived_at = excluded.archived_at,
     git_sha = excluded.git_sha,
     git_branch = excluded.git_branch,
-    git_origin_url = excluded.git_origin_url
+    git_origin_url = excluded.git_origin_url,
+    metadata_json = excluded.metadata_json
             "#,
         )
         .bind(metadata.id.to_string())
@@ -649,6 +721,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(metadata.metadata_json.as_str())
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
