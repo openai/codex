@@ -490,12 +490,12 @@ mod windows_impl {
 
         #[test]
         fn applies_network_block_when_access_is_disabled() {
-            assert!(!workspace_policy(false).has_full_network_access());
+            assert!(!workspace_policy(/*network_access*/ false).has_full_network_access());
         }
 
         #[test]
         fn skips_network_block_when_access_is_allowed() {
-            assert!(workspace_policy(true).has_full_network_access());
+            assert!(workspace_policy(/*network_access*/ true).has_full_network_access());
         }
 
         #[test]

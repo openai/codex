@@ -617,12 +617,16 @@ mod windows_impl {
 
         #[test]
         fn applies_network_block_when_access_is_disabled() {
-            assert!(should_apply_network_block(&workspace_policy(false)));
+            assert!(should_apply_network_block(&workspace_policy(
+                /*network_access*/ false
+            )));
         }
 
         #[test]
         fn skips_network_block_when_access_is_allowed() {
-            assert!(!should_apply_network_block(&workspace_policy(true)));
+            assert!(!should_apply_network_block(&workspace_policy(
+                /*network_access*/ true
+            )));
         }
 
         #[test]

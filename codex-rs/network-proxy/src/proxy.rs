@@ -780,7 +780,7 @@ mod tests {
         let reserved = reserve_windows_managed_listeners(
             SocketAddr::from(([127, 0, 0, 1], busy_port)),
             SocketAddr::from(([127, 0, 0, 1], 48081)),
-            false,
+            /*reserve_socks_listener*/ false,
         )
         .unwrap();
 

@@ -717,19 +717,19 @@ mod tests {
     fn agent_shortcut_matches_option_arrows_only() {
         assert!(previous_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::ALT,),
-            false
+            /*allow_word_motion_fallback*/ false
         ));
         assert!(next_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::ALT,),
-            false
+            /*allow_word_motion_fallback*/ false
         ));
         assert!(!previous_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('b'), crossterm::event::KeyModifiers::ALT,),
-            false
+            /*allow_word_motion_fallback*/ false
         ));
         assert!(!next_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('f'), crossterm::event::KeyModifiers::ALT,),
-            false
+            /*allow_word_motion_fallback*/ false
         ));
     }
 

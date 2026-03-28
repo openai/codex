@@ -163,10 +163,10 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
-      - name: Run argument comment lint on codex-rs (default targets only)
+      - name: Run argument comment lint on codex-rs
         if: ${{ runner.os == 'Windows' }}
         shell: bash
-        run: python ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
+        run: python ./tools/argument-comment-lint/run-prebuilt-linter.py
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
