@@ -438,7 +438,7 @@ async fn thread_read_loaded_ephemeral_thread_ignores_unrelated_rollout_mentions(
         &unrelated_preview,
         vec![],
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let read_id = mcp
