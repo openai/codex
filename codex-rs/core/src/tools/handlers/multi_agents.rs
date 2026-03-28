@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;

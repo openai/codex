@@ -9,7 +9,6 @@ use crate::render::line_utils::prefix_lines;
 use crate::text_formatting::truncate_text;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -583,6 +582,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::AgentSpawnMode;
     use crate::history_cell::HistoryCell;
     #[cfg(target_os = "macos")]
     use crossterm::event::KeyEvent;
