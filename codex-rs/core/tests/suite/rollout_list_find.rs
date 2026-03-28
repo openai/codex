@@ -274,7 +274,10 @@ async fn find_does_not_move_unrelated_file_for_stale_archived_db_path() {
     let runtime = StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
         .await
         .unwrap();
-    runtime.mark_backfill_complete(None).await.unwrap();
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .unwrap();
     runtime
         .mark_archived(
             requested_thread_id,

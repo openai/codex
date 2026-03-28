@@ -212,7 +212,7 @@ async fn thread_resume_unarchives_archived_rollout() -> Result<()> {
         "Saved user message",
         Vec::new(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
     let active_rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
     let archived_rollout_path = codex_home.path().join("archived_sessions/2025/01/05").join(
