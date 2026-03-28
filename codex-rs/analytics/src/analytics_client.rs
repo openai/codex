@@ -87,6 +87,7 @@ pub enum AnalyticsFact {
         connection_id: u64,
         params: InitializeParams,
         runtime: CodexRuntimeMetadata,
+        rpc_transport: AppServerRpcTransport,
     },
     Request {
         connection_id: u64,
@@ -142,6 +143,14 @@ pub enum PluginState {
     Uninstalled,
     Enabled,
     Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppServerRpcTransport {
+    Stdio,
+    Websocket,
+    InProcess,
 }
 
 #[derive(Default)]
@@ -250,11 +259,17 @@ impl AnalyticsEventsClient {
         )));
     }
 
-    pub fn track_initialize(&self, connection_id: u64, params: InitializeParams) {
+    pub fn track_initialize(
+        &self,
+        connection_id: u64,
+        params: InitializeParams,
+        rpc_transport: AppServerRpcTransport,
+    ) {
         self.record_fact(AnalyticsFact::Initialize {
             connection_id,
             params,
             runtime: current_runtime_metadata(),
+            rpc_transport,
         });
     }
 
@@ -382,6 +397,7 @@ struct CodexAppServerClientMetadata {
     product_client_id: String,
     client_name: Option<String>,
     client_version: Option<String>,
+    rpc_transport: AppServerRpcTransport,
     experimental_api_enabled: Option<bool>,
 }
 
@@ -475,8 +491,9 @@ impl AnalyticsReducer {
                 connection_id,
                 params,
                 runtime,
+                rpc_transport,
             } => {
-                self.ingest_initialize(connection_id, params, runtime);
+                self.ingest_initialize(connection_id, params, runtime, rpc_transport);
             }
             AnalyticsFact::Request {
                 connection_id: _connection_id,
@@ -515,6 +532,7 @@ impl AnalyticsReducer {
         connection_id: u64,
         params: InitializeParams,
         runtime: CodexRuntimeMetadata,
+        rpc_transport: AppServerRpcTransport,
     ) {
         self.connections.insert(
             connection_id,
@@ -523,6 +541,7 @@ impl AnalyticsReducer {
                     product_client_id: params.client_info.name.clone(),
                     client_name: Some(params.client_info.name),
                     client_version: Some(params.client_info.version),
+                    rpc_transport,
                     experimental_api_enabled: params
                         .capabilities
                         .map(|capabilities| capabilities.experimental_api),

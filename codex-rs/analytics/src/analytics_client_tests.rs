@@ -268,6 +268,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 product_client_id: "codex-tui".to_string(),
                 client_name: Some("codex-tui".to_string()),
                 client_version: Some("1.0.0".to_string()),
+                rpc_transport: super::AppServerRpcTransport::Stdio,
                 experimental_api_enabled: Some(true),
             },
             runtime: super::CodexRuntimeMetadata {
@@ -300,6 +301,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                     "product_client_id": "codex-tui",
                     "client_name": "codex-tui",
                     "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
                     "experimental_api_enabled": true
                 },
                 "runtime": {
@@ -361,6 +363,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                     runtime_os_version: "24.04".to_string(),
                     runtime_arch: "x86_64".to_string(),
                 },
+                rpc_transport: super::AppServerRpcTransport::Websocket,
             },
             &mut events,
         )
@@ -391,6 +394,10 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["client_version"],
         "1.0.0"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["rpc_transport"],
+        "websocket"
     );
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["experimental_api_enabled"],

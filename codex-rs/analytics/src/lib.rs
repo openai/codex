@@ -5,6 +5,7 @@ pub use analytics_client::AnalyticsFact;
 pub use analytics_client::AnalyticsReducer;
 pub use analytics_client::AppInvocation;
 pub use analytics_client::AppMentionedInput;
+pub use analytics_client::AppServerRpcTransport;
 pub use analytics_client::AppUsedInput;
 pub use analytics_client::CustomAnalyticsFact;
 pub use analytics_client::InitializationMode;

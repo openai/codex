@@ -141,6 +141,10 @@ pub(crate) fn assert_basic_thread_initialized_event(
         event["event_params"]["app_server_client"]["product_client_id"],
         DEFAULT_CLIENT_NAME
     );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["rpc_transport"],
+        "stdio"
+    );
     assert_eq!(event["event_params"]["model"], expected_model);
     assert_eq!(event["event_params"]["ephemeral"], false);
     assert_eq!(event["event_params"]["thread_source"], "user");
