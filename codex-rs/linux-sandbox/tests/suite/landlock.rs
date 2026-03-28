@@ -97,11 +97,69 @@ async fn run_cmd_result_with_writable_roots(
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+    let sandbox_cwd = std::env::current_dir().expect("cwd should exist");
+    run_cmd_result_with_policies_and_cwd(
+        cmd,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        sandbox_cwd,
+        timeout_ms,
+        use_legacy_landlock,
+    )
+    .await
+}
+
+async fn run_cmd_result_with_writable_roots_and_cwd(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    sandbox_cwd: PathBuf,
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+    network_access: bool,
+) -> Result<codex_core::exec::ExecToolCallOutput> {
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: writable_roots
+            .iter()
+            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+            .collect(),
+        read_only_access: Default::default(),
+        network_access,
+        // Exclude tmp-related folders from writable roots because we need a
+        // folder that is writable by tests but that we intentionally disallow
+        // writing to in the sandbox.
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+    run_cmd_result_with_policies_and_cwd(
+        cmd,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        sandbox_cwd,
+        timeout_ms,
+        use_legacy_landlock,
+    )
+    .await
+}
+
+async fn run_cmd_result_with_policies_and_cwd(
+    cmd: &[&str],
+    sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_cwd: PathBuf,
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+) -> Result<codex_core::exec::ExecToolCallOutput> {
     run_cmd_result_with_policies(
         cmd,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        sandbox_cwd,
         timeout_ms,
         use_legacy_landlock,
     )
@@ -114,14 +172,13 @@ async fn run_cmd_result_with_policies(
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_cwd: PathBuf,
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_core::exec::ExecToolCallOutput> {
-    let cwd = std::env::current_dir().expect("cwd should exist");
-    let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
-        cwd,
+        cwd: sandbox_cwd.clone(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: create_env_from_core_vars(),
@@ -342,6 +399,63 @@ async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
 
     assert_eq!(output.exit_code, 0);
     assert_eq!(output.stdout.text, "sandbox-ok");
+}
+
+#[tokio::test]
+async fn bwrap_root_cwd_masks_missing_dot_codex_at_runtime() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+    if std::path::Path::new("/.codex").exists() {
+        eprintln!("skipping bwrap test: /.codex already exists on this host");
+        return;
+    }
+    if !std::path::Path::new("/dev/shm").exists() {
+        eprintln!("skipping bwrap test: /dev/shm is unavailable in this environment");
+        return;
+    }
+
+    let target_file = match NamedTempFile::new_in("/dev/shm") {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("skipping bwrap test: failed to create /dev/shm temp file: {err}");
+            return;
+        }
+    };
+    let target_path = target_file.path().to_path_buf();
+    std::fs::write(&target_path, "host-before").expect("seed /dev/shm file");
+
+    // This complements the argv-shape unit test in `bwrap.rs` by exercising
+    // the runtime `cwd="/"` path with a missing `/.codex`. The precise `/dev`
+    // mount ordering is still asserted at the unit level.
+    let output = run_cmd_result_with_writable_roots_and_cwd(
+        &[
+            "bash",
+            "-lc",
+            &format!(
+                "printf sandbox-after > {target} && if mkdir -p /.codex 2>/dev/null && printf denied > /.codex/canary 2>/dev/null; then exit 17; fi",
+                target = target_path.to_string_lossy()
+            ),
+        ],
+        &[PathBuf::from("/dev")],
+        PathBuf::from("/"),
+        LONG_TIMEOUT_MS,
+        false,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(
+        output.exit_code, 0,
+        "expected runtime masking for missing /.codex under cwd=/; stdout:\n{}\nstderr:\n{}",
+        output.stdout.text, output.stderr.text
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target_path).expect("read /dev/shm file"),
+        "sandbox-after"
+    );
 }
 
 #[tokio::test]
@@ -603,6 +717,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
             sandbox_policy,
             file_system_sandbox_policy,
             NetworkSandboxPolicy::Enabled,
+            std::env::current_dir().expect("cwd should exist"),
             LONG_TIMEOUT_MS,
             /*use_legacy_landlock*/ false,
         )
@@ -685,6 +800,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         sandbox_policy,
         file_system_sandbox_policy,
         NetworkSandboxPolicy::Enabled,
+        std::env::current_dir().expect("cwd should exist"),
         LONG_TIMEOUT_MS,
         /*use_legacy_landlock*/ false,
     )
@@ -736,6 +852,7 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
             sandbox_policy,
             file_system_sandbox_policy,
             NetworkSandboxPolicy::Enabled,
+            std::env::current_dir().expect("cwd should exist"),
             LONG_TIMEOUT_MS,
             /*use_legacy_landlock*/ false,
         )
