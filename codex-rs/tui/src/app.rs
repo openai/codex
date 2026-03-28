@@ -2928,12 +2928,7 @@ impl App {
             .agent_navigation
             .get(&thread_id)
             .is_some_and(|entry| entry.is_closed);
-        if !self.thread_event_channels.contains_key(&thread_id) {
-            if is_replay_only {
-                self.chat_widget
-                    .add_error_message(format!("Agent thread {thread_id} is no longer available."));
-                return Ok(());
-            }
+        if self.should_attach_live_thread_for_selection(thread_id) {
             if let Err(err) = self
                 .attach_live_thread_for_selection(app_server, thread_id)
                 .await
@@ -2943,6 +2938,10 @@ impl App {
                 ));
                 return Ok(());
             }
+        } else if !self.thread_event_channels.contains_key(&thread_id) && is_replay_only {
+            self.chat_widget
+                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+            return Ok(());
         }
 
         let previous_thread_id = self.active_thread_id;
@@ -2984,6 +2983,14 @@ impl App {
         self.refresh_pending_thread_approvals().await;
 
         Ok(())
+    }
+
+    fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {
+        !self.thread_event_channels.contains_key(&thread_id)
+            && self
+                .agent_navigation
+                .get(&thread_id)
+                .is_none_or(|entry| !entry.is_closed)
     }
 
     fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -7273,49 +7280,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn select_agent_thread_does_not_resume_closed_metadata_only_threads() -> Result<()> {
+    async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_threads() {
         let mut app = make_test_app().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-                .await
-                .expect("embedded app server");
-        let main_thread_id = ThreadId::new();
-        let agent_thread_id = ThreadId::new();
-        app.primary_thread_id = Some(main_thread_id);
-        app.active_thread_id = Some(main_thread_id);
-        app.thread_event_channels.insert(
-            main_thread_id,
-            ThreadEventChannel::new_with_session(
-                /*capacity*/ 1,
-                test_thread_session(main_thread_id, PathBuf::from("/tmp/main")),
-                Vec::new(),
-            ),
-        );
+        let thread_id = ThreadId::new();
         app.agent_navigation.upsert(
-            agent_thread_id,
+            thread_id,
             Some("Ghost".to_string()),
             Some("worker".to_string()),
             /*is_closed*/ true,
         );
-        let terminal = crate::custom_terminal::Terminal::with_options(
-            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
-        )?;
-        let mut tui = crate::tui::Tui::new(terminal);
 
-        app.select_agent_thread(&mut tui, &mut app_server, agent_thread_id)
-            .await?;
+        assert!(!app.should_attach_live_thread_for_selection(thread_id));
 
-        assert_eq!(app.active_thread_id, Some(main_thread_id));
-        assert!(!app.thread_event_channels.contains_key(&agent_thread_id));
-        assert_eq!(
-            app.agent_navigation.get(&agent_thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Ghost".to_string()),
-                agent_role: Some("worker".to_string()),
-                is_closed: true,
-            })
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
         );
-        Ok(())
+        assert!(app.should_attach_live_thread_for_selection(thread_id));
+
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        assert!(!app.should_attach_live_thread_for_selection(thread_id));
     }
 
     #[tokio::test]
