@@ -32,6 +32,7 @@ use std::sync::atomic::Ordering;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
+use crate::api_bridge::inline_image_request_limit_bad_request_observation;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
@@ -121,6 +122,8 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+const INLINE_IMAGE_REQUEST_LIMIT_METRIC_NAME: &str = "codex.responses.inline_image_limit";
+const INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_UPSTREAM_REJECTED: &str = "upstream_rejected";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(crate::model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -1468,6 +1471,14 @@ where
                     }
                 }
                 Err(err) => {
+                    if let Some(observation) =
+                        upstream_inline_image_request_limit_observation_from_api_error(&err)
+                    {
+                        record_upstream_inline_image_request_limit_observation(
+                            &session_telemetry,
+                            observation,
+                        );
+                    }
                     let mapped = map_api_error(err);
                     if !logged_error {
                         session_telemetry.see_event_completed_failed(&mapped);
@@ -1674,6 +1685,69 @@ fn api_error_http_status(error: &ApiError) -> Option<u16> {
     }
 }
 
+fn upstream_inline_image_request_limit_observation_from_transport_error(
+    error: &TransportError,
+) -> Option<crate::api_bridge::InlineImageRequestLimitBadRequestObservation> {
+    let TransportError::Http {
+        status,
+        body: Some(body_text),
+        ..
+    } = error
+    else {
+        return None;
+    };
+    if *status != StatusCode::BAD_REQUEST {
+        return None;
+    }
+    inline_image_request_limit_bad_request_observation(body_text)
+}
+
+fn upstream_inline_image_request_limit_observation_from_api_error(
+    error: &ApiError,
+) -> Option<crate::api_bridge::InlineImageRequestLimitBadRequestObservation> {
+    match error {
+        ApiError::InvalidRequest { message } => {
+            inline_image_request_limit_bad_request_observation(message)
+        }
+        ApiError::Transport(transport) => {
+            upstream_inline_image_request_limit_observation_from_transport_error(transport)
+        }
+        _ => None,
+    }
+}
+
+fn record_upstream_inline_image_request_limit_observation(
+    session_telemetry: &SessionTelemetry,
+    observation: crate::api_bridge::InlineImageRequestLimitBadRequestObservation,
+) {
+    session_telemetry.counter(
+        INLINE_IMAGE_REQUEST_LIMIT_METRIC_NAME,
+        /*inc*/ 1,
+        &[
+            (
+                "outcome",
+                INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_UPSTREAM_REJECTED,
+            ),
+            (
+                "bytes_exceeded",
+                if observation.bytes_exceeded {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+            (
+                "images_exceeded",
+                if observation.images_exceeded {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+        ],
+    );
+}
+
 struct ApiTelemetry {
     session_telemetry: SessionTelemetry,
     auth_context: AuthRequestTelemetryContext,
@@ -1752,6 +1826,14 @@ impl RequestTelemetry for ApiTelemetry {
             },
             &self.auth_env_telemetry,
         );
+        if let Some(observation) =
+            error.and_then(upstream_inline_image_request_limit_observation_from_transport_error)
+        {
+            record_upstream_inline_image_request_limit_observation(
+                &self.session_telemetry,
+                observation,
+            );
+        }
     }
 }
 
