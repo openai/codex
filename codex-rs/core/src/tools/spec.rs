@@ -2479,7 +2479,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     ToolSpec::Freeform(tool) => (tool.name, tool.description),
                     _ => return None,
                 };
-                codex_code_mode::is_code_mode_nested_tool(&name).then_some((name, description))
+                codex_code_mode::is_code_mode_function(&name).then_some((name, description))
             })
             .collect::<Vec<_>>();
         enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));

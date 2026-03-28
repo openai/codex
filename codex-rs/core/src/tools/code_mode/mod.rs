@@ -257,7 +257,7 @@ pub(super) async fn build_enabled_tools(
 
 fn enabled_tool_from_spec(spec: ToolSpec) -> Option<codex_code_mode::ToolDefinition> {
     let tool_name = spec.name().to_string();
-    if !codex_code_mode::is_code_mode_nested_tool(&tool_name) {
+    if !codex_code_mode::is_code_mode_function(&tool_name) {
         return None;
     }
 

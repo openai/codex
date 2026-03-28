@@ -16,8 +16,8 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
         return Err("failed to remove global `console`".to_string());
     }
 
-    let tools = build_tools_object(scope)?;
-    let all_tools = build_all_tools_value(scope)?;
+    let functions = build_functions_object(scope)?;
+    let all_functions = build_all_functions_object(scope)?;
     let text = helper_function(scope, "text", text_callback)?;
     let image = helper_function(scope, "image", image_callback)?;
     let store = helper_function(scope, "store", store_callback)?;
@@ -26,8 +26,11 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     let yield_control = helper_function(scope, "yield_control", yield_control_callback)?;
     let exit = helper_function(scope, "exit", exit_callback)?;
 
-    set_global(scope, global, "tools", tools.into())?;
-    set_global(scope, global, "ALL_TOOLS", all_tools)?;
+    // We use the word "tools" everywhere in the codebase to refer to functions the model can call.
+    // The model sees these things as callables in the "functions" namespace. So we use "functions"
+    // as the name of the JS global that holds its callable functions.
+    set_global(scope, global, "functions", functions.into())?;
+    set_global(scope, global, "ALL_FUNCTIONS", all_functions)?;
     set_global(scope, global, "text", text.into())?;
     set_global(scope, global, "image", image.into())?;
     set_global(scope, global, "store", store.into())?;
@@ -38,10 +41,10 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     Ok(())
 }
 
-fn build_tools_object<'s>(
+fn build_functions_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Result<v8::Local<'s, v8::Object>, String> {
-    let tools = v8::Object::new(scope);
+    let functions = v8::Object::new(scope);
     let enabled_tools = scope
         .get_slot::<RuntimeState>()
         .map(|state| state.enabled_tools.clone())
@@ -49,14 +52,14 @@ fn build_tools_object<'s>(
 
     for tool in enabled_tools {
         let name = v8::String::new(scope, &tool.global_name)
-            .ok_or_else(|| "failed to allocate tool name".to_string())?;
+            .ok_or_else(|| "failed to allocate tool name in code mode functions object".to_string())?;
         let function = tool_function(scope, &tool.tool_name)?;
-        tools.set(scope, name.into(), function.into());
+        functions.set(scope, name.into(), function.into());
     }
-    Ok(tools)
+    Ok(functions)
 }
 
-fn build_all_tools_value<'s>(
+fn build_all_functions_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Result<v8::Local<'s, v8::Value>, String> {
     let enabled_tools = scope
@@ -65,25 +68,25 @@ fn build_all_tools_value<'s>(
         .unwrap_or_default();
     let array = v8::Array::new(scope, enabled_tools.len() as i32);
     let name_key = v8::String::new(scope, "name")
-        .ok_or_else(|| "failed to allocate ALL_TOOLS name key".to_string())?;
+        .ok_or_else(|| "failed to allocate ALL_FUNCTIONS name key".to_string())?;
     let description_key = v8::String::new(scope, "description")
-        .ok_or_else(|| "failed to allocate ALL_TOOLS description key".to_string())?;
+        .ok_or_else(|| "failed to allocate ALL_FUNCTIONS description key".to_string())?;
 
     for (index, tool) in enabled_tools.iter().enumerate() {
         let item = v8::Object::new(scope);
         let name = v8::String::new(scope, &tool.global_name)
-            .ok_or_else(|| "failed to allocate ALL_TOOLS name".to_string())?;
+            .ok_or_else(|| "failed to allocate ALL_FUNCTIONS name".to_string())?;
         let description = v8::String::new(scope, &tool.description)
-            .ok_or_else(|| "failed to allocate ALL_TOOLS description".to_string())?;
+            .ok_or_else(|| "failed to allocate ALL_FUNCTIONS description".to_string())?;
 
         if item.set(scope, name_key.into(), name.into()) != Some(true) {
-            return Err("failed to set ALL_TOOLS name".to_string());
+            return Err("failed to set ALL_FUNCTIONS name".to_string());
         }
         if item.set(scope, description_key.into(), description.into()) != Some(true) {
-            return Err("failed to set ALL_TOOLS description".to_string());
+            return Err("failed to set ALL_FUNCTIONS description".to_string());
         }
         if array.set_index(scope, index as u32, item.into()) != Some(true) {
-            return Err("failed to append ALL_TOOLS metadata".to_string());
+            return Err("failed to append ALL_FUNCTIONS metadata".to_string());
         }
     }
 

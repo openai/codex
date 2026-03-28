@@ -10,7 +10,7 @@ pub use description::append_code_mode_sample;
 pub use description::augment_tool_definition;
 pub use description::build_exec_tool_description;
 pub use description::build_wait_tool_description;
-pub use description::is_code_mode_nested_tool;
+pub use description::is_code_mode_function;
 pub use description::normalize_code_mode_identifier;
 pub use description::parse_exec_source;
 pub use description::render_json_schema_to_typescript;

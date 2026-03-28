@@ -50,7 +50,7 @@ fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value>
 }
 
 fn tool_names(body: &Value) -> Vec<String> {
-    body.get("tools")
+    body.get("functions")
         .and_then(Value::as_array)
         .map(|tools| {
             tools
@@ -94,7 +94,7 @@ fn wait_for_file_source(path: &Path) -> Result<String> {
     let quoted_path = shlex::try_join([path.to_string_lossy().as_ref()])?;
     let command = format!("if [ -f {quoted_path} ]; then printf ready; fi");
     Ok(format!(
-        r#"while ((await tools.exec_command({{ cmd: {command:?} }})).output !== "ready") {{
+        r#"while ((await functions.exec_command({{ cmd: {command:?} }})).output !== "ready") {{
 }}"#
     ))
 }
@@ -250,7 +250,7 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
         &server,
         "use exec to run exec_command",
         r#"
-text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marker" })));
+text(JSON.stringify(await functions.exec_command({ cmd: "printf code_mode_exec_marker" })));
 "#,
         /*include_apply_patch*/ false,
     )
@@ -303,7 +303,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
         let _ = config.features.enable(Feature::CodeModeOnly);
     });
     let test = builder.build(&server).await?;
-    test.submit_turn("list tools in code mode only").await?;
+    test.submit_turn("list functions in code mode only").await?;
 
     let first_body = resp_mock.single_request().body_json();
     assert_eq!(
@@ -328,7 +328,7 @@ async fn code_mode_only_can_call_nested_tools() -> Result<()> {
                 "call-1",
                 "exec",
                 r#"
-const output = await tools.exec_command({ cmd: "printf code_mode_only_nested_tool_marker" });
+const output = await functions.exec_command({ cmd: "printf code_mode_only_nested_tool_marker" });
 text(output.output);
 "#,
             ),
@@ -373,7 +373,7 @@ async fn code_mode_update_plan_nested_tool_result_is_empty_object() -> Result<()
         &server,
         "use exec to run update_plan",
         r#"
-const result = await tools.update_plan({
+const result = await functions.update_plan({
   plan: [{ step: "Run update_plan from code mode", status: "in_progress" }],
 });
 text(JSON.stringify(result));
@@ -420,8 +420,8 @@ const args = {
 };
 
 await Promise.all([
-  tools.test_sync_tool(args),
-  tools.test_sync_tool(args),
+  functions.test_sync_tool(args),
+  functions.test_sync_tool(args),
 ]);
 "#;
     let code = r#"
@@ -435,8 +435,8 @@ const args = {
 };
 
 const results = await Promise.all([
-  tools.test_sync_tool(args),
-  tools.test_sync_tool(args),
+  functions.test_sync_tool(args),
+  functions.test_sync_tool(args),
 ]);
 
 text(JSON.stringify(results));
@@ -467,15 +467,15 @@ text(JSON.stringify(results));
     )
     .await;
 
-    test.submit_turn("warm up nested tools in parallel").await?;
+    test.submit_turn("warm up nested functions in parallel").await?;
 
     let start = Instant::now();
-    test.submit_turn("run nested tools in parallel").await?;
+    test.submit_turn("run nested functions in parallel").await?;
     let duration = start.elapsed();
 
     assert!(
         duration < Duration::from_millis(1_600),
-        "expected nested tools to finish in parallel, got {duration:?}",
+        "expected nested functions to finish in parallel, got {duration:?}",
     );
 
     let req = response_mock
@@ -498,7 +498,7 @@ async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<
         &server,
         "use exec to truncate the final result",
         r#"// @exec: {"max_output_tokens": 6}
-text(JSON.stringify(await tools.exec_command({
+text(JSON.stringify(await functions.exec_command({
   cmd: "printf 'token one token two token three token four token five token six token seven'",
   max_output_tokens: 100
 })));
@@ -583,7 +583,7 @@ async fn code_mode_exec_surfaces_handler_errors_as_exceptions() -> Result<()> {
         "surface nested tool handler failures as script exceptions",
         r#"
 try {
-  await tools.exec_command({});
+  await functions.exec_command({});
   text("no-exception");
 } catch (error) {
   text(`caught:${error?.message ?? String(error)}`);
@@ -1233,7 +1233,7 @@ text("session a start");
 yield_control();
 {session_a_wait}
 text("session a done");
-await tools.exec_command({{ cmd: {session_a_done_command:?} }});
+await functions.exec_command({{ cmd: {session_a_done_command:?} }});
 "#
     );
     let session_b_code = format!(
@@ -1422,7 +1422,7 @@ async fn code_mode_background_keeps_running_on_later_turn_without_wait() -> Resu
         r#"
 text("before yield");
 yield_control();
-await tools.exec_command({{ cmd: {write_file_command:?} }});
+await functions.exec_command({{ cmd: {write_file_command:?} }});
 text("after yield");
 "#
     );
@@ -1636,7 +1636,7 @@ async fn code_mode_notify_injects_additional_exec_tool_output_into_active_contex
         "use exec notify helper",
         r#"
 notify("code_mode_notify_marker");
-await tools.test_sync_tool({});
+await functions.test_sync_tool({});
 text("done");
 "#,
         /*include_apply_patch*/ false,
@@ -1816,7 +1816,7 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
     let image_path_json = serde_json::to_string(&image_path.to_string_lossy().to_string())?;
     let code = format!(
         r#"
-const out = await tools.view_image({{ path: {image_path_json}, detail: "original" }});
+const out = await functions.view_image({{ path: {image_path_json}, detail: "original" }});
 image(out);
 "#
     );
@@ -1887,7 +1887,7 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     let patch = format!(
         "*** Begin Patch\n*** Add File: {file_name}\n+hello from code_mode\n*** End Patch\n"
     );
-    let code = format!("text(await tools.apply_patch({patch:?}));\n");
+    let code = format!("text(await functions.apply_patch({patch:?}));\n");
 
     let (test, second_mock) = run_code_mode_turn(
         &server,
@@ -1929,7 +1929,7 @@ async fn code_mode_can_print_structured_mcp_tool_result_fields() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__echo({
+const { content, structuredContent, isError } = await functions.mcp__rmcp__echo({
   message: "ping",
 });
 text(
@@ -1962,17 +1962,17 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exposes_mcp_tools_on_global_tools_object() -> Result<()> {
+async fn code_mode_exposes_mcp_tools_on_global_functions_object() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__echo({
+const { content, structuredContent, isError } = await functions.mcp__rmcp__echo({
   message: "ping",
 });
 text(
-  `hasEcho=${String(Object.keys(tools).includes("mcp__rmcp__echo"))}\n` +
-    `echoType=${typeof tools.mcp__rmcp__echo}\n` +
+  `hasEcho=${String(Object.keys(functions).includes("mcp__rmcp__echo"))}\n` +
+    `echoType=${typeof functions.mcp__rmcp__echo}\n` +
     `echo=${structuredContent?.echo ?? "missing"}\n` +
     `isError=${String(isError)}\n` +
     `contentLength=${content.length}`
@@ -1980,7 +1980,7 @@ text(
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use exec to inspect the global tools object", code)
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect the global functions object", code)
             .await?;
 
     let req = second_mock.single_request();
@@ -2003,19 +2003,19 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exposes_namespaced_mcp_tools_on_global_tools_object() -> Result<()> {
+async fn code_mode_exposes_namespaced_mcp_tools_on_global_functions_object() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
 text(JSON.stringify({
-  hasExecCommand: typeof tools.exec_command === "function",
-  hasNamespacedEcho: typeof tools.mcp__rmcp__echo === "function",
+  hasExecCommand: typeof functions.exec_command === "function",
+  hasNamespacedEcho: typeof functions.mcp__rmcp__echo === "function",
 }));
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use exec to inspect the global tools object", code)
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect the global functions object", code)
             .await?;
 
     let req = second_mock.single_request();
@@ -2023,7 +2023,7 @@ text(JSON.stringify({
     assert_ne!(
         success,
         Some(false),
-        "exec global tools inspection failed unexpectedly: {output}"
+        "exec global functions inspection failed unexpectedly: {output}"
     );
 
     let parsed: Value = serde_json::from_str(&output)?;
@@ -2044,7 +2044,7 @@ async fn code_mode_exposes_normalized_illegal_mcp_tool_names() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const result = await tools.mcp__rmcp__echo_tool({ message: "ping" });
+const result = await functions.mcp__rmcp__echo_tool({ message: "ping" });
 text(`echo=${result.structuredContent.echo}`);
 "#;
 
@@ -2090,7 +2090,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
     let globals = globals.into_iter().collect::<HashSet<_>>();
     let expected = [
         "AggregateError",
-        "ALL_TOOLS",
+        "ALL_FUNCTIONS",
         "Array",
         "ArrayBuffer",
         "AsyncDisposableStack",
@@ -2153,6 +2153,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "escape",
         "exit",
         "eval",
+        "functions",
         "globalThis",
         "image",
         "isFinite",
@@ -2163,7 +2164,6 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "parseInt",
         "store",
         "text",
-        "tools",
         "undefined",
         "unescape",
         "yield_control",
@@ -2184,13 +2184,13 @@ async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> 
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "view_image");
+const tool = ALL_FUNCTIONS.find(({ name }) => name === "view_image");
 text(JSON.stringify(tool));
 "#;
 
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use exec to inspect ALL_TOOLS",
+        "use exec to inspect ALL_FUNCTIONS",
         code,
         /*include_apply_patch*/ false,
     )
@@ -2201,18 +2201,18 @@ text(JSON.stringify(tool));
     assert_ne!(
         success,
         Some(false),
-        "exec ALL_TOOLS lookup failed unexpectedly: {output}"
+        "exec ALL_FUNCTIONS lookup failed unexpectedly: {output}"
     );
 
     let parsed: Value = serde_json::from_str(
         &custom_tool_output_last_non_empty_text(&req, "call-1")
-            .expect("exec ALL_TOOLS lookup should emit JSON"),
+            .expect("exec ALL_FUNCTIONS lookup should emit JSON"),
     )?;
     assert_eq!(
         parsed,
         serde_json::json!({
             "name": "view_image",
-            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<{ detail: string | null; image_url: string; }>; };\n```",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const functions: { view_image(args: { path: string; }): Promise<{ detail: string | null; image_url: string; }>; };\n```",
         })
     );
 
@@ -2225,32 +2225,32 @@ async fn code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools() -> Resu
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const tool = ALL_TOOLS.find(
+const tool = ALL_FUNCTIONS.find(
   ({ name }) => name === "mcp__rmcp__echo"
 );
 text(JSON.stringify(tool));
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use exec to inspect ALL_TOOLS", code).await?;
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect ALL_FUNCTIONS", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
+        "exec ALL_FUNCTIONS MCP lookup failed unexpectedly: {output}"
     );
 
     let parsed: Value = serde_json::from_str(
         &custom_tool_output_last_non_empty_text(&req, "call-1")
-            .expect("exec ALL_TOOLS MCP lookup should emit JSON"),
+            .expect("exec ALL_FUNCTIONS MCP lookup should emit JSON"),
     )?;
     assert_eq!(
         parsed,
         serde_json::json!({
             "name": "mcp__rmcp__echo",
-            "description": "Echo back the provided message and include environment data.\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```",
+            "description": "Echo back the provided message and include environment data.\n\nexec tool declaration:\n```ts\ndeclare const functions: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```",
         })
     );
 
@@ -2291,8 +2291,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "hidden_dynamic_tool");
-const out = await tools.hidden_dynamic_tool({ city: "Paris" });
+const tool = ALL_FUNCTIONS.find(({ name }) => name === "hidden_dynamic_tool");
+const out = await functions.hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
@@ -2324,7 +2324,7 @@ text(
     test.codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
-                text: "use exec to inspect and call hidden tools".into(),
+                text: "use exec to inspect and call hidden functions".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
@@ -2396,7 +2396,7 @@ text(
             .and_then(Value::as_str)
             .is_some_and(|description| {
                 description.contains("A hidden dynamic tool.")
-                    && description.contains("declare const tools:")
+                    && description.contains("declare const functions:")
                     && description.contains("hidden_dynamic_tool(args:")
             })
     );
@@ -2410,7 +2410,7 @@ async fn code_mode_can_print_content_only_mcp_tool_result_fields() -> Result<()>
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__image_scenario({
+const { content, structuredContent, isError } = await functions.mcp__rmcp__image_scenario({
   scenario: "text_only",
   caption: "caption from mcp",
 });
@@ -2453,7 +2453,7 @@ async fn code_mode_can_print_error_mcp_tool_result_fields() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__echo({});
+const { content, structuredContent, isError } = await functions.mcp__rmcp__echo({});
 const firstText = content[0]?.text ?? "";
 const mentionsMissingMessage =
   firstText.includes("missing field") && firstText.includes("message");

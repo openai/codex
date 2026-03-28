@@ -6,14 +6,14 @@ use crate::PUBLIC_TOOL_NAME;
 
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 const CODE_MODE_ONLY_PREFACE: &str =
-    "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly";
+    "Use `exec/wait` to call all other functions, do not attempt to call any other functions directly";
 const EXEC_DESCRIPTION_TEMPLATE: &str = r#"## exec
 - Runs raw JavaScript in an isolated context (no Node, no file system, or network access, no console).
 - Send raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
-- You may optionally start the tool input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
+- You may optionally start the exec input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
 - `yield_time_ms` asks `exec` to yield early after that many milliseconds if the script is still running.
 - `max_output_tokens` sets the token budget for direct `exec` results. By default the result is truncated to 10000 tokens.
-- All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
+- All nested functions are available on the global `functions` object, for example `await functions.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await functions.mcp__ologs__get_profile(...)`.
 - Tool methods take either string or object as parameter.
 - They return either a structured value or a string based on the description above.
 
@@ -24,7 +24,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"## exec
 - `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
 - `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
 - `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
-- `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
+- `ALL_FUNCTIONS`: metadata for the enabled nested functions as `{ name, description }` entries.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
 - `cell_id` identifies the running `exec` cell to resume.
@@ -153,7 +153,7 @@ pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
     Ok(args)
 }
 
-pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
+pub fn is_code_mode_function(tool_name: &str) -> bool {
     tool_name != crate::PUBLIC_TOOL_NAME && tool_name != crate::WAIT_TOOL_NAME
 }
 
@@ -171,18 +171,18 @@ pub fn build_exec_tool_description(
     ];
 
     if !enabled_tools.is_empty() {
-        let nested_tool_reference = enabled_tools
+        let function_description = enabled_tools
             .iter()
-            .map(|(name, nested_description)| {
+            .map(|(name, description)| {
                 let global_name = normalize_code_mode_identifier(name);
                 format!(
                     "### `{global_name}` (`{name}`)\n{}",
-                    nested_description.trim()
+                    description.trim()
                 )
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        sections.push(nested_tool_reference);
+        sections.push(function_description);
     }
 
     sections.join("\n\n")
@@ -248,7 +248,7 @@ pub fn append_code_mode_sample(
     output_type: String,
 ) -> String {
     let declaration = format!(
-        "declare const tools: {{ {} }};",
+        "declare const functions: {{ {} }};",
         render_code_mode_tool_declaration(tool_name, input_name, input_type, output_type)
     );
     format!("{description}\n\nexec tool declaration:\n```ts\n{declaration}\n```")
@@ -538,7 +538,7 @@ mod tests {
         };
 
         let description = augment_tool_definition(definition).description;
-        assert!(description.contains("declare const tools"));
+        assert!(description.contains("declare const functions"));
         assert!(
             description.contains(
                 "hidden_dynamic_tool(args: { city: string; }): Promise<{ ok: boolean; }>;"
@@ -547,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn code_mode_only_description_includes_nested_tools() {
+    fn code_mode_only_description_includes_code_mode_functions() {
         let description = build_exec_tool_description(
             &[("foo".to_string(), "bar".to_string())],
             /*code_mode_only*/ true,
