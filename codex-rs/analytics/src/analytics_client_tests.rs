@@ -270,6 +270,12 @@ fn thread_initialized_event_serializes_expected_shape() {
                 client_version: Some("1.0.0".to_string()),
                 experimental_api_enabled: Some(true),
             },
+            runtime: super::CodexRuntimeMetadata {
+                codex_rs_version: "0.1.0".to_string(),
+                runtime_os: "macos".to_string(),
+                runtime_os_version: "15.3.1".to_string(),
+                runtime_arch: "aarch64".to_string(),
+            },
         },
         ThreadInitializedInput {
             connection_id: 1,
@@ -295,6 +301,12 @@ fn thread_initialized_event_serializes_expected_shape() {
                     "client_name": "codex-tui",
                     "client_version": "1.0.0",
                     "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
                 },
                 "model": "gpt-5",
                 "ephemeral": true,
@@ -343,6 +355,12 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                         opt_out_notification_methods: None,
                     }),
                 },
+                runtime: super::CodexRuntimeMetadata {
+                    codex_rs_version: "0.99.0".to_string(),
+                    runtime_os: "linux".to_string(),
+                    runtime_os_version: "24.04".to_string(),
+                    runtime_arch: "x86_64".to_string(),
+                },
             },
             &mut events,
         )
@@ -377,6 +395,19 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["experimental_api_enabled"],
         false
+    );
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["codex_rs_version"],
+        "0.99.0"
+    );
+    assert_eq!(payload[0]["event_params"]["runtime"]["runtime_os"], "linux");
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["runtime_os_version"],
+        "24.04"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["runtime_arch"],
+        "x86_64"
     );
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
     assert_eq!(payload[0]["event_params"]["thread_source"], "user");

@@ -86,6 +86,7 @@ pub enum AnalyticsFact {
     Initialize {
         connection_id: u64,
         params: InitializeParams,
+        runtime: CodexRuntimeMetadata,
     },
     Request {
         connection_id: u64,
@@ -150,6 +151,7 @@ pub struct AnalyticsReducer {
 
 struct ConnectionState {
     app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
 }
 
 #[derive(Clone)]
@@ -252,6 +254,7 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Initialize {
             connection_id,
             params,
+            runtime: current_runtime_metadata(),
         });
     }
 
@@ -382,10 +385,19 @@ struct CodexAppServerClientMetadata {
     experimental_api_enabled: Option<bool>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct CodexRuntimeMetadata {
+    codex_rs_version: String,
+    runtime_os: String,
+    runtime_os_version: String,
+    runtime_arch: String,
+}
+
 #[derive(Serialize)]
 struct ThreadInitializedEventParams {
     thread_id: String,
     app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
     model: String,
     ephemeral: bool,
     thread_source: Option<&'static str>,
@@ -462,8 +474,9 @@ impl AnalyticsReducer {
             AnalyticsFact::Initialize {
                 connection_id,
                 params,
+                runtime,
             } => {
-                self.ingest_initialize(connection_id, params);
+                self.ingest_initialize(connection_id, params, runtime);
             }
             AnalyticsFact::Request {
                 connection_id: _connection_id,
@@ -497,7 +510,12 @@ impl AnalyticsReducer {
         }
     }
 
-    fn ingest_initialize(&mut self, connection_id: u64, params: InitializeParams) {
+    fn ingest_initialize(
+        &mut self,
+        connection_id: u64,
+        params: InitializeParams,
+        runtime: CodexRuntimeMetadata,
+    ) {
         self.connections.insert(
             connection_id,
             ConnectionState {
@@ -509,6 +527,7 @@ impl AnalyticsReducer {
                         .capabilities
                         .map(|capabilities| capabilities.experimental_api),
                 },
+                runtime,
             },
         );
     }
@@ -691,6 +710,7 @@ fn thread_initialized_event_params(
     ThreadInitializedEventParams {
         thread_id: input.thread_id,
         app_server_client: connection_state.app_server_client.clone(),
+        runtime: connection_state.runtime.clone(),
         model: input.model,
         ephemeral: input.ephemeral,
         thread_source: thread_source_name(&input.thread_source),
@@ -743,6 +763,16 @@ fn thread_source_name(thread_source: &SessionSource) -> Option<&'static str> {
         | SessionSource::Mcp
         | SessionSource::Custom(_)
         | SessionSource::Unknown => None,
+    }
+}
+
+fn current_runtime_metadata() -> CodexRuntimeMetadata {
+    let os_info = os_info::get();
+    CodexRuntimeMetadata {
+        codex_rs_version: env!("CARGO_PKG_VERSION").to_string(),
+        runtime_os: std::env::consts::OS.to_string(),
+        runtime_os_version: os_info.version().to_string(),
+        runtime_arch: std::env::consts::ARCH.to_string(),
     }
 }
 
