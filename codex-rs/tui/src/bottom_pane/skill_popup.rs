@@ -180,7 +180,6 @@ impl SkillPopup {
                 })
         });
 
-        out.truncate(MAX_POPUP_ROWS);
         out
     }
 }
@@ -235,6 +234,8 @@ fn skill_popup_hint_line() -> Line<'static> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
 
     fn mention_item(index: usize) -> MentionItem {
         MentionItem {
@@ -249,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn filtered_mentions_are_capped_to_max_popup_rows() {
+    fn filtered_mentions_preserve_results_beyond_popup_height() {
         let popup = SkillPopup::new((0..(MAX_POPUP_ROWS + 2)).map(mention_item).collect());
 
         let filtered_names: Vec<String> = popup
@@ -260,7 +261,7 @@ mod tests {
 
         assert_eq!(
             filtered_names,
-            (0..MAX_POPUP_ROWS)
+            (0..(MAX_POPUP_ROWS + 2))
                 .map(|idx| format!("Mention {idx:02}"))
                 .collect::<Vec<_>>()
         );
@@ -268,5 +269,23 @@ mod tests {
             popup.calculate_required_height(72),
             (MAX_POPUP_ROWS as u16) + 2
         );
+    }
+
+    fn render_popup(popup: &SkillPopup, width: u16) -> String {
+        let area = Rect::new(0, 0, width, popup.calculate_required_height(width));
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        format!("{buf:?}")
+    }
+
+    #[test]
+    fn scrolling_mentions_shifts_rendered_window_snapshot() {
+        let mut popup = SkillPopup::new((0..(MAX_POPUP_ROWS + 2)).map(mention_item).collect());
+
+        for _ in 0..=MAX_POPUP_ROWS {
+            popup.move_down();
+        }
+
+        insta::assert_snapshot!("skill_popup_scrolled", render_popup(&popup, /*width*/ 72));
     }
 }
