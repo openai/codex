@@ -108,6 +108,19 @@ use codex_protocol::protocol::TurnStartedEvent;
 use std::time::Duration;
 
 impl App {
+    fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
+        let enabled_config_mcp_servers: Vec<String> = self
+            .chat_widget
+            .config_ref()
+            .mcp_servers
+            .get()
+            .iter()
+            .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
+            .collect();
+        self.chat_widget
+            .set_mcp_startup_expected_servers(enabled_config_mcp_servers);
+    }
+
     pub(super) async fn handle_app_server_event(
         &mut self,
         app_server_client: &AppServerSession,
@@ -119,6 +132,8 @@ impl App {
                     skipped,
                     "app-server event consumer lagged; dropping ignored events"
                 );
+                self.refresh_mcp_startup_expected_servers_from_config();
+                self.chat_widget.finish_mcp_startup_after_lag();
             }
             AppServerEvent::ServerNotification(notification) => {
                 self.handle_server_notification_event(app_server_client, notification)
@@ -145,6 +160,9 @@ impl App {
             ServerNotification::ServerRequestResolved(notification) => {
                 self.pending_app_server_requests
                     .resolve_notification(&notification.request_id);
+            }
+            ServerNotification::McpServerStatusUpdated(_) => {
+                self.refresh_mcp_startup_expected_servers_from_config();
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(
