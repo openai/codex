@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
+use codex_core::config::CustomModelConfig;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -269,6 +270,75 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_model_alias_sends_base_model_slug() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let alias = "gpt-5.4 1m";
+    let base_model = "gpt-5.4";
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model(alias)
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config.custom_models.insert(
+                alias.to_string(),
+                CustomModelConfig {
+                    model: base_model.to_string(),
+                    model_context_window: Some(1_000_000),
+                    model_auto_compact_token_limit: Some(900_000),
+                },
+            );
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![test_remote_model(base_model, ModelVisibility::List, 1)],
+            });
+        });
+
+    let TestCodex {
+        codex,
+        cwd,
+        config,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    assert_eq!(session_configured.model, alias);
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check custom alias model routing".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: alias.to_string(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let body = response_mock.single_request().body_json();
+    assert_eq!(body["model"].as_str(), Some(base_model));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -280,6 +350,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     let remote_model = ModelInfo {
         slug: REMOTE_MODEL_SLUG.to_string(),
+        request_model: None,
         display_name: "Remote Test".to_string(),
         description: Some("A remote model that requires the test shell".to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),
@@ -524,6 +595,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let remote_base = "Use the remote base instructions only.";
     let remote_model = ModelInfo {
         slug: model.to_string(),
+        request_model: None,
         display_name: "Parallel Remote".to_string(),
         description: Some("A remote model with custom instructions".to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),
@@ -1004,6 +1076,7 @@ fn test_remote_model_with_policy(
 ) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
+        request_model: None,
         display_name: format!("{slug} display"),
         description: Some(format!("{slug} description")),
         default_reasoning_level: Some(ReasoningEffort::Medium),
