@@ -3982,7 +3982,8 @@ mod tests {
     #[test]
     fn restricted_file_system_policy_treats_root_with_carveouts_as_scoped_access() {
         let cwd = TempDir::new().expect("tempdir");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let root = AbsolutePathBuf::from_absolute_path(&canonical_cwd)
             .expect("absolute canonical tempdir")
             .as_path()
@@ -3993,8 +3994,7 @@ mod tests {
         let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path())
             .expect("resolve blocked");
         let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            cwd.path()
-                .canonicalize()
+            codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
                 .expect("canonicalize cwd")
                 .join("blocked"),
         )
@@ -4039,7 +4039,8 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");
         std::fs::create_dir_all(cwd.path().join(".codex")).expect("create .codex");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let cwd_absolute =
             AbsolutePathBuf::from_absolute_path(&canonical_cwd).expect("absolute tempdir");
         let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path())
@@ -4107,7 +4108,8 @@ mod tests {
     #[test]
     fn restricted_file_system_policy_treats_read_entries_as_read_only_subpaths() {
         let cwd = TempDir::new().expect("tempdir");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let docs =
             AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
         let docs_public = AbsolutePathBuf::resolve_path_against_base("docs/public", cwd.path())
@@ -4157,7 +4159,8 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         let docs =
             AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
         let policy = SandboxPolicy::WorkspaceWrite {

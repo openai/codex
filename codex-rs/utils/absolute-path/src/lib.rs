@@ -101,6 +101,27 @@ impl AbsolutePathBuf {
     }
 }
 
+/// Canonicalize a path when possible, but preserve the logical absolute path
+/// whenever canonicalization would rewrite it through a nested symlink.
+///
+/// Top-level system aliases such as macOS `/var -> /private/var` still remain
+/// canonicalized so existing runtime expectations around those paths stay
+/// stable.
+pub fn canonicalize_preserving_symlinks(path: &Path) -> std::io::Result<PathBuf> {
+    let logical = AbsolutePathBuf::from_absolute_path(path)?.into_path_buf();
+    let preserve_logical_path = logical.ancestors().any(|ancestor| {
+        let Ok(metadata) = std::fs::symlink_metadata(ancestor) else {
+            return false;
+        };
+        metadata.file_type().is_symlink() && ancestor.parent().and_then(Path::parent).is_some()
+    });
+    match dunce::canonicalize(path) {
+        Ok(canonical) if preserve_logical_path && canonical != logical => Ok(logical),
+        Ok(canonical) => Ok(canonical),
+        Err(_) => Ok(logical),
+    }
+}
+
 impl AsRef<Path> for AbsolutePathBuf {
     fn as_ref(&self) -> &Path {
         &self.0
@@ -293,6 +314,37 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn canonicalize_preserving_symlinks_keeps_logical_symlink_path() {
+        let temp_dir = tempdir().expect("temp dir");
+        let real = temp_dir.path().join("real");
+        let link = temp_dir.path().join("link");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        std::os::unix::fs::symlink(&real, &link).expect("create symlink");
+
+        let canonicalized =
+            canonicalize_preserving_symlinks(&link).expect("canonicalize preserving symlinks");
+
+        assert_eq!(canonicalized, link);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonicalize_preserving_symlinks_keeps_logical_missing_child_under_symlink() {
+        let temp_dir = tempdir().expect("temp dir");
+        let real = temp_dir.path().join("real");
+        let link = temp_dir.path().join("link");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        std::os::unix::fs::symlink(&real, &link).expect("create symlink");
+        let missing = link.join("missing.txt");
+
+        let canonicalized =
+            canonicalize_preserving_symlinks(&missing).expect("canonicalize preserving symlinks");
+
+        assert_eq!(canonicalized, missing);
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn home_directory_backslash_subpath_is_expanded_in_deserialization() {
@@ -307,5 +359,23 @@ mod tests {
             serde_json::from_str::<AbsolutePathBuf>(&input).expect("is valid abs path")
         };
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn canonicalize_preserving_symlinks_avoids_verbatim_prefixes() {
+        let temp_dir = tempdir().expect("temp dir");
+
+        let canonicalized =
+            canonicalize_preserving_symlinks(temp_dir.path()).expect("canonicalize");
+
+        assert_eq!(
+            canonicalized,
+            dunce::canonicalize(temp_dir.path()).expect("canonicalize temp dir")
+        );
+        assert!(
+            !canonicalized.to_string_lossy().starts_with(r"\\?\"),
+            "expected a non-verbatim Windows path, got {canonicalized:?}"
+        );
     }
 }

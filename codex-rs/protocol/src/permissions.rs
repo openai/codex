@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -471,6 +472,9 @@ impl FileSystemSandboxPolicy {
             // so root-wide aliases do not create duplicate top-level masks.
             // Example: keep `/var/...` normalized under `/` instead of
             // materializing both `/var/...` and `/private/var/...`.
+            // Nested symlink paths under a writable root stay logical so
+            // downstream sandboxes can still bind the real target while
+            // masking the user-visible symlink inode when needed.
             let preserve_raw_carveout_paths = root.as_path().parent().is_some();
             let raw_writable_roots: Vec<&AbsolutePathBuf> = writable_entries
                 .iter()
@@ -1080,14 +1084,17 @@ fn dedup_absolute_paths(
 fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
     let raw_path = path.to_path_buf();
     for ancestor in raw_path.ancestors() {
-        let Ok(canonical_ancestor) = ancestor.canonicalize() else {
+        if std::fs::symlink_metadata(ancestor).is_err() {
+            continue;
+        }
+        let Ok(normalized_ancestor) = canonicalize_preserving_symlinks(ancestor) else {
             continue;
         };
         let Ok(suffix) = raw_path.strip_prefix(ancestor) else {
             continue;
         };
         if let Ok(normalized_path) =
-            AbsolutePathBuf::from_absolute_path(canonical_ancestor.join(suffix))
+            AbsolutePathBuf::from_absolute_path(normalized_ancestor.join(suffix))
         {
             return normalized_path;
         }
@@ -1438,7 +1445,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn effective_runtime_roots_canonicalize_symlinked_paths() {
+    fn effective_runtime_roots_preserve_symlinked_paths() {
         let cwd = TempDir::new().expect("tempdir");
         let real_root = cwd.path().join("real");
         let link_root = cwd.path().join("link");
@@ -1452,18 +1459,9 @@ mod tests {
         let link_root =
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
         let link_blocked = link_root.join("blocked").expect("symlinked blocked path");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            blocked.canonicalize().expect("canonicalize blocked"),
-        )
-        .expect("absolute canonical blocked");
-        let expected_codex = AbsolutePathBuf::from_absolute_path(
-            codex_dir.canonicalize().expect("canonicalize .codex"),
-        )
-        .expect("absolute canonical .codex");
+        let expected_root = link_root.clone();
+        let expected_blocked = link_blocked.clone();
+        let expected_codex = link_root.join(".codex").expect("expected .codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -1498,7 +1496,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn current_working_directory_special_path_canonicalizes_symlinked_cwd() {
+    fn current_working_directory_special_path_preserves_symlinked_cwd() {
         let cwd = TempDir::new().expect("tempdir");
         let real_root = cwd.path().join("real");
         let link_root = cwd.path().join("link");
@@ -1513,22 +1511,11 @@ mod tests {
 
         let link_blocked =
             AbsolutePathBuf::from_absolute_path(link_root.join("blocked")).expect("link blocked");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            blocked.canonicalize().expect("canonicalize blocked"),
-        )
-        .expect("absolute canonical blocked");
-        let expected_agents = AbsolutePathBuf::from_absolute_path(
-            agents_dir.canonicalize().expect("canonicalize .agents"),
-        )
-        .expect("absolute canonical .agents");
-        let expected_codex = AbsolutePathBuf::from_absolute_path(
-            codex_dir.canonicalize().expect("canonicalize .codex"),
-        )
-        .expect("absolute canonical .codex");
+        let expected_root =
+            AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
+        let expected_blocked = link_blocked.clone();
+        let expected_agents = expected_root.join(".agents").expect("expected .agents");
+        let expected_codex = expected_root.join(".codex").expect("expected .codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -1635,13 +1622,8 @@ mod tests {
         let link_private = link_root
             .join("linked-private")
             .expect("symlinked linked-private path");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_linked_private = expected_root
-            .join("linked-private")
-            .expect("expected linked-private path");
+        let expected_root = link_root.clone();
+        let expected_linked_private = link_private.clone();
         let unexpected_decoy =
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
@@ -1689,13 +1671,8 @@ mod tests {
         let link_private = link_root
             .join("linked-private")
             .expect("symlinked linked-private path");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_linked_private = expected_root
-            .join("linked-private")
-            .expect("expected linked-private path");
+        let expected_root = link_root.clone();
+        let expected_linked_private = link_private.clone();
         let unexpected_decoy =
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
@@ -1763,12 +1740,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn tmpdir_special_path_canonicalizes_symlinked_tmpdir() {
+    fn tmpdir_special_path_preserves_symlinked_tmpdir() {
         if std::env::var_os(SYMLINKED_TMPDIR_TEST_ENV).is_none() {
             let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
                 .env(SYMLINKED_TMPDIR_TEST_ENV, "1")
                 .arg("--exact")
-                .arg("permissions::tests::tmpdir_special_path_canonicalizes_symlinked_tmpdir")
+                .arg("permissions::tests::tmpdir_special_path_preserves_symlinked_tmpdir")
                 .output()
                 .expect("run tmpdir subprocess test");
 
@@ -1793,20 +1770,10 @@ mod tests {
 
         let link_blocked =
             AbsolutePathBuf::from_absolute_path(link_tmpdir.join("blocked")).expect("link blocked");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_tmpdir
-                .canonicalize()
-                .expect("canonicalize real tmpdir"),
-        )
-        .expect("absolute canonical tmpdir");
-        let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            blocked.canonicalize().expect("canonicalize blocked"),
-        )
-        .expect("absolute canonical blocked");
-        let expected_codex = AbsolutePathBuf::from_absolute_path(
-            codex_dir.canonicalize().expect("canonicalize .codex"),
-        )
-        .expect("absolute canonical .codex");
+        let expected_root =
+            AbsolutePathBuf::from_absolute_path(&link_tmpdir).expect("absolute symlinked tmpdir");
+        let expected_blocked = link_blocked.clone();
+        let expected_codex = expected_root.join(".codex").expect("expected .codex");
 
         unsafe {
             std::env::set_var("TMPDIR", &link_tmpdir);
@@ -1964,8 +1931,7 @@ mod tests {
         let docs =
             AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
         let expected_docs = AbsolutePathBuf::from_absolute_path(
-            cwd.path()
-                .canonicalize()
+            canonicalize_preserving_symlinks(cwd.path())
                 .expect("canonicalize cwd")
                 .join("docs"),
         )
