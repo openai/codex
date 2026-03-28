@@ -49,7 +49,7 @@ pub struct SessionStartOutcome {
     pub additional_contexts: Vec<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct SessionStartHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,

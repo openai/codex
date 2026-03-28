@@ -79,6 +79,7 @@ pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
@@ -102,6 +103,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(WebSearchMode::Cached),
                 /*source*/ None,
             ),
+            allow_managed_hooks_only: None,
             feature_requirements: None,
             mcp_servers: None,
             exec_policy: None,
@@ -291,6 +293,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    pub allow_managed_hooks_only: Option<bool>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
@@ -329,6 +332,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
@@ -360,6 +364,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: _,
             allowed_sandbox_modes: _,
             allowed_web_search_modes: _,
+            allow_managed_hooks_only: _,
             feature_requirements: _,
             mcp_servers: _,
             apps: _,
@@ -385,6 +390,7 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
+                allow_managed_hooks_only,
                 feature_requirements,
                 mcp_servers,
                 rules,
@@ -408,6 +414,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             mcp_servers,
             apps,
@@ -420,6 +427,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
+            allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
@@ -470,6 +478,7 @@ impl ConfigRequirementsToml {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_web_search_modes.is_none()
+            && self.allow_managed_hooks_only.is_none()
             && self
                 .feature_requirements
                 .as_ref()
@@ -497,6 +506,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             mcp_servers,
             apps: _apps,
@@ -682,6 +692,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             approval_policy,
             sandbox_policy,
             web_search_mode,
+            allow_managed_hooks_only,
             feature_requirements,
             mcp_servers,
             exec_policy,
@@ -718,6 +729,7 @@ mod tests {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             mcp_servers,
             apps,
@@ -732,6 +744,8 @@ mod tests {
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_managed_hooks_only: allow_managed_hooks_only
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -774,6 +788,7 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            allow_managed_hooks_only: Some(true),
             feature_requirements: Some(feature_requirements.clone()),
             mcp_servers: None,
             apps: None,
@@ -797,6 +812,7 @@ mod tests {
                     allowed_web_search_modes,
                     enforce_source.clone(),
                 )),
+                allow_managed_hooks_only: Some(Sourced::new(true, enforce_source.clone())),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
                     enforce_source.clone(),
@@ -838,6 +854,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 mcp_servers: None,
                 apps: None,
@@ -881,6 +898,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 mcp_servers: None,
                 apps: None,
