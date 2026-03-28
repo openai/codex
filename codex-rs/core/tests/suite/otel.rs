@@ -718,6 +718,57 @@ async fn record_responses_sets_span_fields_for_response_events() {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+#[traced_test]
+async fn responses_request_span_records_turn_correlation_fields() {
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("turn{otel.name=\"session_task.turn\"")
+                    && line.contains("conversation.id=")
+                    && line.contains("thread.id=")
+                    && line.contains("turn.id=")
+                    && line.contains("model=")
+                    && line.contains("responses_http.request{")
+                    && line.contains("otel.kind=\"client\"")
+                    && line.contains("transport=\"responses_http\"")
+                    && line.contains("conversation.id=")
+                    && line.contains("session.id=")
+                    && line.contains("turn.id=")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or_else(|| {
+                Err(
+                    "missing responses_http.request span nested under session_task.turn"
+                        .to_string(),
+                )
+            })
+    });
+}
+
 #[tokio::test]
 #[traced_test]
 async fn handle_response_item_records_tool_result_for_custom_tool_call() {

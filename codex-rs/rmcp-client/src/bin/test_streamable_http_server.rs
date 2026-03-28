@@ -58,6 +58,7 @@ struct TestToolServer {
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
+const TRACEPARENT_HEADER: &str = "traceparent";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
 
 impl TestToolServer {
@@ -347,6 +348,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         router
     };
+    let router = if std::env::var("MCP_EXPECT_TRACEPARENT").is_ok() {
+        router.layer(middleware::from_fn(require_traceparent_on_session_post))
+    } else {
+        router
+    };
 
     axum::serve(listener, router).await?;
     task::yield_now().await;
@@ -387,6 +393,23 @@ async fn arm_session_post_failure(
     };
     *state.armed_failure.lock().await = armed_failure;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn require_traceparent_on_session_post(request: Request<Body>, next: Next) -> Response {
+    if request.uri().path() != "/mcp"
+        || request.method() != Method::POST
+        || !request.headers().contains_key(MCP_SESSION_ID_HEADER)
+    {
+        return next.run(request).await;
+    }
+
+    if request.headers().contains_key(TRACEPARENT_HEADER) {
+        next.run(request).await
+    } else {
+        let mut response = Response::new(Body::from("missing traceparent header"));
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        response
+    }
 }
 
 async fn fail_session_post_when_armed(

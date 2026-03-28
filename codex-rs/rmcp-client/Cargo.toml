@@ -15,6 +15,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 codex-client = { workspace = true }
 codex-keyring-store = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-home-dir = { workspace = true }
@@ -60,9 +61,13 @@ which = { workspace = true }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
 

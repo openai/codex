@@ -52,6 +52,7 @@ mod mcp_tool_approval_templates;
 pub mod models_manager;
 mod network_policy_decision;
 pub mod network_proxy_loader;
+mod network_trace;
 mod original_image_detail;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;

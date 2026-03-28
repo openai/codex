@@ -36,6 +36,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
+use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use reqwest::Client;
@@ -691,6 +692,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let _trace_test_context = install_test_tracing("rmcp-integration-tests");
+
     let server = responses::start_mock_server().await;
 
     let call_id = "call-456";
@@ -737,6 +740,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         .kill_on_drop(true)
         .env("MCP_STREAMABLE_HTTP_BIND_ADDR", &bind_addr)
         .env("MCP_TEST_VALUE", expected_env_value)
+        .env("MCP_EXPECT_TRACEPARENT", "1")
         .spawn()?;
 
     wait_for_streamable_http_server(&mut http_server_child, &bind_addr, Duration::from_secs(5))

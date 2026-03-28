@@ -7,6 +7,10 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::RmcpClient;
 use codex_utils_cargo_bin::CargoBinError;
 use futures::FutureExt as _;
+use opentelemetry::global;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use rmcp::model::AnnotateAble;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
@@ -18,6 +22,10 @@ use rmcp::model::ProtocolVersion;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ResourceContents;
 use serde_json::json;
+use tracing::Instrument;
+use tracing::dispatcher::DefaultGuard;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 const RESOURCE_URI: &str = "memo://codex/example-note";
 
@@ -50,6 +58,25 @@ fn init_params() -> InitializeRequestParams {
             website_url: None,
         },
         protocol_version: ProtocolVersion::V_2025_06_18,
+    }
+}
+
+struct TestTracingContext {
+    _provider: SdkTracerProvider,
+    _guard: DefaultGuard,
+}
+
+fn install_test_tracing(tracer_name: &str) -> TestTracingContext {
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer(tracer_name.to_string());
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+    TestTracingContext {
+        _provider: provider,
+        _guard: subscriber.set_default(),
     }
 }
 
@@ -146,6 +173,64 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
             meta: None,
         }
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stdio_tool_call_propagates_trace_metadata() -> anyhow::Result<()> {
+    let _trace = install_test_tracing("rmcp-stdio-trace-test");
+    let client = RmcpClient::new_stdio_client(
+        stdio_server_bin()?.into(),
+        Vec::<OsString>::new(),
+        None,
+        &[],
+        None,
+    )
+    .await?;
+
+    client
+        .initialize(
+            init_params(),
+            Some(Duration::from_secs(5)),
+            Box::new(|_, _| {
+                async {
+                    Ok(ElicitationResponse {
+                        action: ElicitationAction::Accept,
+                        content: Some(json!({})),
+                        meta: None,
+                    })
+                }
+                .boxed()
+            }),
+        )
+        .await?;
+
+    let result = async {
+        client
+            .call_tool(
+                "echo".to_string(),
+                Some(json!({ "message": "ping" })),
+                None,
+                Some(Duration::from_secs(5)),
+            )
+            .await
+    }
+    .instrument(tracing::info_span!("rmcp.client.trace_test"))
+    .await?;
+
+    assert_eq!(result.is_error, Some(false));
+    let structured = result.structured_content.expect("structured content");
+    assert_eq!(structured["echo"], json!("ECHOING: ping"));
+    assert_eq!(structured["env"], serde_json::Value::Null);
+    assert!(
+        structured["tracestate"].is_null()
+            || structured["tracestate"].as_str().is_some_and(str::is_empty)
+    );
+    let traceparent = structured["traceparent"]
+        .as_str()
+        .expect("traceparent should be propagated via request metadata");
+    assert!(traceparent.starts_with("00-"));
 
     Ok(())
 }

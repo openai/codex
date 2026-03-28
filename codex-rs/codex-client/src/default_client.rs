@@ -10,7 +10,9 @@ use reqwest::Response;
 use serde::Serialize;
 use std::fmt::Display;
 use std::time::Duration;
+use tracing::Instrument;
 use tracing::Span;
+use tracing::field::Empty;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Clone, Debug)]
@@ -111,10 +113,39 @@ impl CodexRequestBuilder {
     }
 
     pub async fn send(self) -> Result<Response, reqwest::Error> {
-        let headers = trace_headers();
+        let parsed_url = reqwest::Url::parse(&self.url).ok();
+        let path = parsed_url
+            .as_ref()
+            .map(|url| url.path().to_string())
+            .unwrap_or_else(|| self.url.clone());
+        let request_span = tracing::info_span!(
+            "http.client",
+            otel.kind = "client",
+            http.request.method = %self.method,
+            http.response.status_code = Empty,
+            url.path = %path,
+            server.address = Empty,
+            server.port = Empty,
+        );
+        if let Some(url) = parsed_url.as_ref() {
+            if let Some(host) = url.host_str() {
+                request_span.record("server.address", host);
+            }
+            if let Some(port) = url.port_or_known_default() {
+                request_span.record("server.port", port as i64);
+            }
+        }
+        let headers = trace_headers_for_span(&request_span);
 
-        match self.builder.headers(headers).send().await {
+        match async { self.builder.headers(headers).send().await }
+            .instrument(request_span.clone())
+            .await
+        {
             Ok(response) => {
+                request_span.record(
+                    "http.response.status_code",
+                    response.status().as_u16() as i64,
+                );
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
@@ -127,11 +158,14 @@ impl CodexRequestBuilder {
                 Ok(response)
             }
             Err(error) => {
-                let status = error.status();
+                let status = error.status().map(|status| status.as_u16() as i64);
+                if let Some(status) = status {
+                    request_span.record("http.response.status_code", status);
+                }
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
-                    status = status.map(|s| s.as_u16()),
+                    status,
                     error = %error,
                     "Request failed"
                 );
@@ -154,13 +188,15 @@ impl<'a> Injector for HeaderMapInjector<'a> {
     }
 }
 
+#[cfg(test)]
 fn trace_headers() -> HeaderMap {
+    trace_headers_for_span(&Span::current())
+}
+
+fn trace_headers_for_span(span: &Span) -> HeaderMap {
     let mut headers = HeaderMap::new();
     global::get_text_map_propagator(|prop| {
-        prop.inject_context(
-            &Span::current().context(),
-            &mut HeaderMapInjector(&mut headers),
-        );
+        prop.inject_context(&span.context(), &mut HeaderMapInjector(&mut headers));
     });
     headers
 }
@@ -202,6 +238,33 @@ mod tests {
         assert!(extracted_context.is_valid());
         assert_eq!(extracted_context.trace_id(), span_context.trace_id());
         assert_eq!(extracted_context.span_id(), span_context.span_id());
+    }
+
+    #[test]
+    fn inject_trace_headers_for_span_uses_explicit_span_context() {
+        global::set_text_map_propagator(TraceContextPropagator::new());
+
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("test-tracer");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let _guard = subscriber.set_default();
+
+        let parent = trace_span!("parent");
+        let _parent_entered = parent.enter();
+        let child = trace_span!("child");
+        let child_context = child.context().span().span_context().clone();
+
+        let headers = trace_headers_for_span(&child);
+
+        let extractor = HeaderMapExtractor(&headers);
+        let extracted = TraceContextPropagator::new().extract(&extractor);
+        let extracted_span = extracted.span();
+        let extracted_context = extracted_span.span_context();
+
+        assert!(extracted_context.is_valid());
+        assert_eq!(extracted_context.trace_id(), child_context.trace_id());
+        assert_eq!(extracted_context.span_id(), child_context.span_id());
     }
 
     struct HeaderMapExtractor<'a>(&'a HeaderMap);
