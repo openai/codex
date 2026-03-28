@@ -2890,7 +2890,9 @@ impl App {
                     }
                     Err(err) => return Err(err),
                 };
-                if turns.is_empty() && thread.ephemeral {
+                if turns.is_empty() {
+                    // A `thread/read` fallback without turns would create a blank local replay
+                    // channel with no live listener attached, which blocks later real re-attach.
                     return Err(color_eyre::eyre::eyre!(
                         "Agent thread {thread_id} is not yet available for replay or live attach."
                     ));
@@ -7285,7 +7287,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attach_live_thread_for_selection_materializes_channel_on_demand() -> Result<()> {
+    async fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads()
+    -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
@@ -7302,25 +7305,16 @@ mod tests {
             /*is_closed*/ false,
         );
 
-        let live_attached = app
+        let err = app
             .attach_live_thread_for_selection(&mut app_server, thread_id)
-            .await?;
+            .await
+            .expect_err("empty fallback should not attach as a blank replay-only thread");
 
-        assert!(!live_attached);
-
-        let channel = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("thread channel should exist after attach");
-        let store = channel.store.lock().await;
-        let session = store.session.clone().expect("attached session");
-        if session != started.session {
-            assert_eq!(session.thread_id, started.session.thread_id);
-            assert_eq!(session.model, "");
-            assert_eq!(session.model_provider_id, started.session.model_provider_id);
-            assert_eq!(session.cwd, started.session.cwd);
-            assert_eq!(session.rollout_path, started.session.rollout_path);
-        }
+        assert_eq!(
+            err.to_string(),
+            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+        );
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
         Ok(())
     }
 
