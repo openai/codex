@@ -275,11 +275,6 @@ impl AgentControl {
                                 "parent thread rollout unavailable for fork: {parent_thread_id}"
                             ))
                         })?;
-<<<<<<<
-                    let mut forked_rollout_items = RolloutRecorder::get_fork_history(&rollout_path)
-                        .await?
-                        .get_rollout_items();
-=======
                     let mut forked_rollout_items: Vec<RolloutItem> =
                         RolloutRecorder::get_fork_history(&rollout_path)
                             .await?
@@ -299,7 +294,6 @@ impl AgentControl {
                         rollout_path: rollout_path.clone(),
                         nth_user_message: usize::MAX,
                     }));
->>>>>>>
                     let mut output = FunctionCallOutputPayload::from_text(
                         FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
                     );
@@ -466,11 +460,7 @@ impl AgentControl {
                 initial_history,
                 self.clone(),
                 session_source,
-<<<<<<<
                 /*persist_extended_history*/ false,
-=======
-                false,
->>>>>>>
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             )
