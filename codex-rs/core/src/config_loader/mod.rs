@@ -532,7 +532,9 @@ async fn load_requirements_from_legacy_scheme(
 struct ProjectTrustContext {
     project_root: AbsolutePathBuf,
     project_root_key: String,
+    project_root_lookup_keys: Vec<String>,
     repo_root_key: Option<String>,
+    repo_root_lookup_keys: Option<Vec<String>>,
     projects_trust: std::collections::HashMap<String, TrustLevel>,
     user_config_file: AbsolutePathBuf,
 }
@@ -555,28 +557,33 @@ impl ProjectTrustDecision {
 
 impl ProjectTrustContext {
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
-        let dir_key = normalized_project_trust_key(dir.as_path());
-        if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
-            return ProjectTrustDecision {
-                trust_level: Some(trust_level),
-                trust_key: dir_key,
-            };
+        for dir_key in normalized_project_trust_keys(dir.as_path()) {
+            if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
+                return ProjectTrustDecision {
+                    trust_level: Some(trust_level),
+                    trust_key: dir_key,
+                };
+            }
         }
 
-        if let Some(trust_level) = self.projects_trust.get(&self.project_root_key).copied() {
-            return ProjectTrustDecision {
-                trust_level: Some(trust_level),
-                trust_key: self.project_root_key.clone(),
-            };
+        for project_root_key in &self.project_root_lookup_keys {
+            if let Some(trust_level) = self.projects_trust.get(project_root_key).copied() {
+                return ProjectTrustDecision {
+                    trust_level: Some(trust_level),
+                    trust_key: project_root_key.clone(),
+                };
+            }
         }
 
-        if let Some(repo_root_key) = self.repo_root_key.as_ref()
-            && let Some(trust_level) = self.projects_trust.get(repo_root_key).copied()
-        {
-            return ProjectTrustDecision {
-                trust_level: Some(trust_level),
-                trust_key: repo_root_key.clone(),
-            };
+        if let Some(repo_root_lookup_keys) = self.repo_root_lookup_keys.as_ref() {
+            for repo_root_key in repo_root_lookup_keys {
+                if let Some(trust_level) = self.projects_trust.get(repo_root_key).copied() {
+                    return ProjectTrustDecision {
+                        trust_level: Some(trust_level),
+                        trust_key: repo_root_key.clone(),
+                    };
+                }
+            }
         }
 
         ProjectTrustDecision {
@@ -641,45 +648,71 @@ async fn project_trust_context(
     let project_root = find_project_root(cwd, project_root_markers).await?;
     let projects = project_trust_config.projects.unwrap_or_default();
 
-    let project_root_key = normalized_project_trust_key(project_root.as_path());
+    let project_root_lookup_keys = normalized_project_trust_keys(project_root.as_path());
+    let project_root_key = project_root_lookup_keys
+        .first()
+        .cloned()
+        .unwrap_or_else(|| normalized_project_trust_key(project_root.as_path()));
     let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
-    let repo_root_key = repo_root
+    let repo_root_lookup_keys = repo_root
         .as_ref()
-        .map(|root| normalized_project_trust_key(root));
+        .map(|root| normalized_project_trust_keys(root));
+    let repo_root_key = repo_root_lookup_keys
+        .as_ref()
+        .and_then(|keys| keys.first().cloned());
 
     let projects_trust = projects
         .into_iter()
-        .filter_map(|(key, project)| {
-            project
-                .trust_level
-                .map(|trust_level| (normalized_project_trust_key_str(&key), trust_level))
+        .flat_map(|(key, project)| {
+            project.trust_level.into_iter().flat_map(move |trust_level| {
+                normalized_project_trust_key_strs(&key)
+                    .into_iter()
+                    .map(move |normalized_key| (normalized_key, trust_level))
+            })
         })
         .collect();
 
     Ok(ProjectTrustContext {
         project_root,
         project_root_key,
+        project_root_lookup_keys,
         repo_root_key,
+        repo_root_lookup_keys,
         projects_trust,
         user_config_file: user_config_file.clone(),
     })
 }
 
 fn normalized_project_trust_key(path: &Path) -> String {
-    normalize_project_trust_lookup_key(
+    normalized_project_trust_keys(path)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| normalize_project_trust_lookup_key(path.to_string_lossy().to_string()))
+}
+
+fn normalized_project_trust_keys(path: &Path) -> Vec<String> {
+    let normalized_path = normalize_project_trust_lookup_key(path.to_string_lossy().to_string());
+    let normalized_canonical_path = normalize_project_trust_lookup_key(
         normalize_path(path)
             .unwrap_or_else(|_| path.to_path_buf())
             .to_string_lossy()
             .to_string(),
-    )
+    );
+    if normalized_path == normalized_canonical_path {
+        vec![normalized_path]
+    } else {
+        vec![normalized_path, normalized_canonical_path]
+    }
 }
 
-fn normalized_project_trust_key_str(path: &str) -> String {
+fn normalized_project_trust_key_strs(path: &str) -> Vec<String> {
     let path = Path::new(path);
     if path.is_absolute() {
-        normalized_project_trust_key(path)
+        normalized_project_trust_keys(path)
     } else {
-        normalize_project_trust_lookup_key(path.to_string_lossy().to_string())
+        vec![normalize_project_trust_lookup_key(
+            path.to_string_lossy().to_string(),
+        )]
     }
 }
 
