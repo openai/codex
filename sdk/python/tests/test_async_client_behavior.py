@@ -6,7 +6,7 @@ import time
 from codex_app_server.async_client import AsyncAppServerClient
 
 
-def test_async_client_serializes_transport_calls() -> None:
+def test_async_client_allows_parallel_transport_calls() -> None:
     async def scenario() -> int:
         client = AsyncAppServerClient()
         active = 0
@@ -24,10 +24,10 @@ def test_async_client_serializes_transport_calls() -> None:
         await asyncio.gather(client.model_list(), client.model_list())
         return max_active
 
-    assert asyncio.run(scenario()) == 1
+    assert asyncio.run(scenario()) == 2
 
 
-def test_async_stream_text_is_incremental_and_blocks_parallel_calls() -> None:
+def test_async_stream_text_is_incremental_and_allows_parallel_calls() -> None:
     async def scenario() -> tuple[str, list[str], bool]:
         client = AsyncAppServerClient()
 
@@ -46,19 +46,19 @@ def test_async_stream_text_is_incremental_and_blocks_parallel_calls() -> None:
         stream = client.stream_text("thread-1", "hello")
         first = await anext(stream)
 
-        blocked_before_stream_done = False
+        completed_before_stream_done = False
         competing_call = asyncio.create_task(client.model_list())
         await asyncio.sleep(0.01)
-        blocked_before_stream_done = not competing_call.done()
+        completed_before_stream_done = competing_call.done()
 
         remaining: list[str] = []
         async for item in stream:
             remaining.append(item)
 
         await competing_call
-        return first, remaining, blocked_before_stream_done
+        return first, remaining, completed_before_stream_done
 
-    first, remaining, blocked = asyncio.run(scenario())
+    first, remaining, completed = asyncio.run(scenario())
     assert first == "first"
     assert remaining == ["second", "third"]
-    assert blocked
+    assert completed
