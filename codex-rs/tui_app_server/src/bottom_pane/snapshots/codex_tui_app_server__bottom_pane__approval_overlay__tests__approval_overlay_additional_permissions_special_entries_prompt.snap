@@ -1,0 +1,16 @@
+---
+source: tui_app_server/src/bottom_pane/approval_overlay.rs
+expression: "normalize_snapshot_paths(render_overlay_lines(&view, 120))"
+---
+  Would you like to run the following command?
+
+  Reason: need broader filesystem access
+
+  Permission rule: write `:root`; deny `/tmp/secret.txt`
+
+  $ cat /tmp/readme.txt
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

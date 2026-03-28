@@ -88,10 +88,10 @@ fn write_permissions_for_paths(
         .ok()?;
 
     let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(write_paths),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(write_paths),
+        )),
         ..Default::default()
     })?;
 

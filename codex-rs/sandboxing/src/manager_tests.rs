@@ -130,10 +130,10 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                     network: Some(NetworkPermissions {
                         enabled: Some(true),
                     }),
-                    file_system: Some(FileSystemPermissions {
-                        read: Some(vec![path]),
-                        write: Some(Vec::new()),
-                    }),
+                    file_system: Some(FileSystemPermissions::from_read_write_roots(
+                        Some(vec![path]),
+                        Some(Vec::new()),
+                    )),
                 }),
             },
             policy: &SandboxPolicy::ExternalSandbox {
@@ -183,10 +183,10 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: Some(PermissionProfile {
-                    file_system: Some(FileSystemPermissions {
-                        read: None,
-                        write: Some(vec![allowed_path.clone()]),
-                    }),
+                    file_system: Some(FileSystemPermissions::from_read_write_roots(
+                        None,
+                        Some(vec![allowed_path.clone()]),
+                    )),
                     ..Default::default()
                 }),
             },
