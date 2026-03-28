@@ -302,8 +302,13 @@ impl WatchdogManager {
                     "watchdog helper cleanup failed: {err}"
                 );
             }
-            self.update_after_spawn(target_thread_id, generation, now, None)
-                .await;
+            self.update_after_spawn(
+                target_thread_id,
+                generation,
+                now,
+                /*active_helper_id*/ None,
+            )
+            .await;
             return;
         }
 
@@ -347,8 +352,13 @@ impl WatchdogManager {
             }
             Err(err) => {
                 warn!("watchdog spawn failed for target {target_thread_id}: {err}");
-                self.update_after_spawn(target_thread_id, generation, now, None)
-                    .await;
+                self.update_after_spawn(
+                    target_thread_id,
+                    generation,
+                    now,
+                    /*active_helper_id*/ None,
+                )
+                .await;
             }
         }
     }
