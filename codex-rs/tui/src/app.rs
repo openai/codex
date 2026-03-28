@@ -2858,16 +2858,16 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if self.thread_event_channels.contains_key(&thread_id) {
-            return Ok(());
+            return Ok(true);
         }
 
-        let (session, turns) = match app_server
+        let (session, turns, live_attached) = match app_server
             .resume_thread(self.config.clone(), thread_id)
             .await
         {
-            Ok(started) => (started.session, started.turns),
+            Ok(started) => (started.session, started.turns, true),
             Err(resume_err) => {
                 tracing::warn!(
                     thread_id = %thread_id,
@@ -2890,17 +2890,22 @@ impl App {
                     }
                     Err(err) => return Err(err),
                 };
+                if turns.is_empty() && thread.ephemeral {
+                    return Err(color_eyre::eyre::eyre!(
+                        "Agent thread {thread_id} is not yet available for replay or live attach."
+                    ));
+                }
                 let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
-                // Force `select_agent_thread` to upgrade this placeholder via `thread/resume`
-                // before replay so runtime policies and history metadata come from the server.
+                // `thread/read` can seed replay state, but it does not attach the app-server
+                // listener that `thread/resume` establishes, so treat this path as replay-only.
                 session.model.clear();
-                (session, turns)
+                (session, turns, false)
             }
         };
         let channel = self.ensure_thread_channel(thread_id);
         let mut store = channel.store.lock().await;
         store.set_session(session, turns);
-        Ok(())
+        Ok(live_attached)
     }
 
     /// Replaces the chat widget and re-seeds the new widget's collab metadata from the navigation
@@ -2948,19 +2953,28 @@ impl App {
             return Ok(());
         }
 
-        let is_replay_only = self
+        let mut is_replay_only = self
             .agent_navigation
             .get(&thread_id)
             .is_some_and(|entry| entry.is_closed);
+        let mut attached_replay_only = false;
         if self.should_attach_live_thread_for_selection(thread_id) {
-            if let Err(err) = self
+            match self
                 .attach_live_thread_for_selection(app_server, thread_id)
                 .await
             {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to attach to agent thread {thread_id}: {err}"
-                ));
-                return Ok(());
+                Ok(live_attached) => {
+                    attached_replay_only = !live_attached;
+                    if attached_replay_only {
+                        is_replay_only = true;
+                    }
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to attach to agent thread {thread_id}: {err}"
+                    ));
+                    return Ok(());
+                }
             }
         } else if !self.thread_event_channels.contains_key(&thread_id) && is_replay_only {
             self.chat_widget
@@ -2998,10 +3012,14 @@ impl App {
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
         if is_replay_only {
-            self.chat_widget.add_info_message(
-                format!("Agent thread {thread_id} is closed. Replaying saved transcript."),
-                /*hint*/ None,
-            );
+            let message = if attached_replay_only {
+                format!(
+                    "Agent thread {thread_id} could not be resumed live. Replaying saved transcript."
+                )
+            } else {
+                format!("Agent thread {thread_id} is closed. Replaying saved transcript.")
+            };
+            self.chat_widget.add_info_message(message, /*hint*/ None);
         }
         self.drain_active_thread_events(tui).await?;
         self.refresh_pending_thread_approvals().await;
@@ -7284,8 +7302,11 @@ mod tests {
             /*is_closed*/ false,
         );
 
-        app.attach_live_thread_for_selection(&mut app_server, thread_id)
+        let live_attached = app
+            .attach_live_thread_for_selection(&mut app_server, thread_id)
             .await?;
+
+        assert!(!live_attached);
 
         let channel = app
             .thread_event_channels
@@ -7300,6 +7321,38 @@ mod tests {
             assert_eq!(session.cwd, started.session.cwd);
             assert_eq!(session.rollout_path, started.session.rollout_path);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let mut ephemeral_config = app.chat_widget.config_ref().clone();
+        ephemeral_config.ephemeral = true;
+        let started = app_server.start_thread(&ephemeral_config).await?;
+        let thread_id = started.session.thread_id;
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Scout".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        let err = app
+            .attach_live_thread_for_selection(&mut app_server, thread_id)
+            .await
+            .expect_err("ephemeral fallback should not attach as a blank live thread");
+
+        assert_eq!(
+            err.to_string(),
+            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+        );
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
         Ok(())
     }
 
