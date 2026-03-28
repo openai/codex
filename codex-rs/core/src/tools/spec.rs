@@ -8,7 +8,6 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
-use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::discoverable::DiscoverableToolAction;
@@ -46,8 +45,10 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_tools::FreeformTool;
 use codex_tools::FreeformToolFormat;
 use codex_tools::ResponsesApiTool;
+use codex_tools::augment_tool_spec_for_code_mode;
 use codex_tools::dynamic_tool_to_responses_api_tool;
 use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_tools::tool_spec_to_code_mode_tool_definition;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_template::Template;
 use serde::Deserialize;
@@ -2351,29 +2352,17 @@ pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
 }
 
-/// Returns JSON values that are compatible with Function Calling in the
-/// Responses API:
-/// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
-pub fn create_tools_json_for_responses_api(
-    tools: &[ToolSpec],
-) -> crate::error::Result<Vec<serde_json::Value>> {
-    let mut tools_json = Vec::new();
-
-    for tool in tools {
-        let json = serde_json::to_value(tool)?;
-        tools_json.push(json);
-    }
-
-    Ok(tools_json)
-}
-
 fn push_tool_spec(
     builder: &mut ToolRegistryBuilder,
     spec: ToolSpec,
     supports_parallel_tool_calls: bool,
     code_mode_enabled: bool,
 ) {
-    let spec = augment_tool_spec_for_code_mode(spec, code_mode_enabled);
+    let spec = if code_mode_enabled {
+        augment_tool_spec_for_code_mode(spec)
+    } else {
+        spec
+    };
     if supports_parallel_tool_calls {
         builder.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ true);
     } else {
@@ -2471,16 +2460,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .build();
         let mut enabled_tools = nested_specs
             .into_iter()
-            .filter_map(|spec| {
-                let (name, description) = match augment_tool_spec_for_code_mode(
-                    spec.spec, /*code_mode_enabled*/ true,
-                ) {
-                    ToolSpec::Function(tool) => (tool.name, tool.description),
-                    ToolSpec::Freeform(tool) => (tool.name, tool.description),
-                    _ => return None,
-                };
-                codex_code_mode::is_code_mode_nested_tool(&name).then_some((name, description))
-            })
+            .filter_map(|spec| tool_spec_to_code_mode_tool_definition(&spec.spec))
+            .map(|tool| (tool.name, tool.description))
             .collect::<Vec<_>>();
         enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));
         enabled_tools.dedup_by(|left, right| left.0 == right.0);

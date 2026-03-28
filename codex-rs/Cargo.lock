@@ -2613,6 +2613,7 @@ dependencies = [
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
+ "codex-code-mode",
  "codex-protocol",
  "pretty_assertions",
  "rmcp",
