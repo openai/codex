@@ -60,8 +60,15 @@ runs:
         # Use the shortest available drive to reduce argv/path length issues,
         # but avoid the drive root because some Windows test launchers mis-handle
         # MANIFEST paths there.
-        $bazelOutputUserRoot = if (Test-Path 'D:\') { 'D:\b' } else { 'C:\b' }
+        $hasDDrive = Test-Path 'D:\'
+        $bazelOutputUserRoot = if ($hasDDrive) { 'D:\b' } else { 'C:\b' }
+        $repoContentsCache = Join-Path $env:RUNNER_TEMP "bazel-repo-contents-cache-$env:GITHUB_RUN_ID-$env:GITHUB_JOB"
         "BAZEL_OUTPUT_USER_ROOT=$bazelOutputUserRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "BAZEL_REPO_CONTENTS_CACHE=$repoContentsCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        if (-not $hasDDrive) {
+          $repositoryCache = Join-Path $env:USERPROFILE '.cache\bazel-repo-cache'
+          "BAZEL_REPOSITORY_CACHE=$repositoryCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        }
 
     - name: Enable Git long paths (Windows)
       if: runner.os == 'Windows'

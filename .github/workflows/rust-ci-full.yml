@@ -100,16 +100,28 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - name: Run argument comment lint on codex-rs via Bazel
+        if: ${{ runner.os != 'Windows' }}
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          ./.github/scripts/run-bazel-ci.sh \
-            -- \
-            build \
+          ./.github/scripts/run-argument-comment-lint-bazel.sh \
             --config=argument-comment-lint \
             --keep_going \
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
-            -- \
-            //codex-rs/...
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+      - name: Run argument comment lint on codex-rs via Bazel
+        if: ${{ runner.os == 'Windows' }}
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          ./.github/scripts/run-argument-comment-lint-bazel.sh \
+            --config=argument-comment-lint \
+            --host_platform=//:local_windows_msvc \
+            --platforms=//:local_windows \
+            --extra_execution_platforms=//:local_windows \
+            --keep_going \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:

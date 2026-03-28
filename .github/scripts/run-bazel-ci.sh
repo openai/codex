@@ -126,6 +126,17 @@ if [[ $remote_download_toplevel -eq 1 ]]; then
   post_config_bazel_args+=(--remote_download_toplevel)
 fi
 
+if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
+  # Windows self-hosted runners can run multiple Bazel jobs concurrently. Give
+  # each job its own repo contents cache so they do not fight over the shared
+  # path configured in `ci-windows`.
+  post_config_bazel_args+=("--repo_contents_cache=${BAZEL_REPO_CONTENTS_CACHE}")
+fi
+
+if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
+  post_config_bazel_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
+fi
+
 bazel_console_log="$(mktemp)"
 trap 'rm -f "$bazel_console_log"' EXIT
 
