@@ -178,6 +178,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::inline_image_request_limit::inline_image_request_limit_error;
 use codex_config::CONFIG_TOML_FILE;
 
 mod rollout_reconstruction;
@@ -3317,16 +3318,69 @@ impl Session {
             .await
     }
 
-    /// Records input items: always append to conversation history and
-    /// persist these response items to rollout.
+    /// Records input items, sanitizing inline tool images before persistence when
+    /// they would overflow the model request.
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items).await;
-        self.send_raw_response_items(turn_context, items).await;
+        let items_to_record = {
+            let mut state = self.state.lock().await;
+            let items_to_record = Self::prepare_items_for_recording(&state, turn_context, items);
+            state.record_items(items_to_record.iter(), turn_context.truncation_policy);
+            items_to_record
+        };
+
+        self.persist_rollout_response_items(&items_to_record).await;
+        self.send_raw_response_items(turn_context, &items_to_record)
+            .await;
+    }
+
+    fn prepare_items_for_recording(
+        state: &SessionState,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> Vec<ResponseItem> {
+        let mut items_to_record = items.to_vec();
+        let should_check_image_request_limits = items_to_record.iter().any(|item| match item {
+            ResponseItem::FunctionCallOutput { output, .. }
+            | ResponseItem::CustomToolCallOutput { output, .. } => {
+                output.content_items().is_some_and(|content_items| {
+                    content_items.iter().any(|content_item| {
+                        matches!(
+                            content_item,
+                            codex_protocol::models::FunctionCallOutputContentItem::InputImage { .. }
+                        )
+                    })
+                })
+            }
+            _ => false,
+        });
+        if !should_check_image_request_limits {
+            return items_to_record;
+        }
+
+        let mut candidate_history = state.clone_history();
+        candidate_history.record_items(items_to_record.iter(), turn_context.truncation_policy);
+        let prompt_input = candidate_history.for_prompt(&turn_context.model_info.input_modalities);
+        let Some(error) = inline_image_request_limit_error(&prompt_input, &turn_context.model_info)
+        else {
+            return items_to_record;
+        };
+
+        let mut pending_items = ContextManager::new();
+        pending_items.replace(items_to_record.clone());
+        if pending_items.replace_last_turn_tool_outputs_with_failure_message(
+            &error.tool_output_recovery_message(),
+        ) {
+            warn!(
+                "inline image request limit would be exceeded before upload; sanitizing tool image output before persistence"
+            );
+            items_to_record = pending_items.raw_items().to_vec();
+        }
+
+        items_to_record
     }
 
     /// Append ResponseItems to the in-memory conversation history only.

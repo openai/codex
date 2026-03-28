@@ -3,6 +3,8 @@ use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::inline_image_request_limit::parse_base64_image_data_url;
+use crate::inline_image_request_limit::visit_response_item_input_images;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
@@ -181,32 +183,60 @@ impl ContextManager {
     /// Replace image content in the last turn if it originated from a tool output.
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
-        let Some(index) = self.items.iter().rposition(|item| {
-            matches!(item, ResponseItem::FunctionCallOutput { .. }) || is_user_turn_boundary(item)
-        }) else {
-            return false;
-        };
+        self.visit_last_turn_tool_outputs_mut(|output| {
+            let Some(content_items) = output.content_items_mut() else {
+                return false;
+            };
+            let mut replaced = false;
+            let placeholder = placeholder.to_string();
+            for item in content_items.iter_mut() {
+                if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
+                    *item = FunctionCallOutputContentItem::InputText {
+                        text: placeholder.clone(),
+                    };
+                    replaced = true;
+                }
+            }
+            replaced
+        })
+    }
 
-        match &mut self.items[index] {
-            ResponseItem::FunctionCallOutput { output, .. } => {
-                let Some(content_items) = output.content_items_mut() else {
-                    return false;
-                };
-                let mut replaced = false;
-                let placeholder = placeholder.to_string();
-                for item in content_items.iter_mut() {
-                    if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
-                        *item = FunctionCallOutputContentItem::InputText {
-                            text: placeholder.clone(),
-                        };
-                        replaced = true;
+    /// Replace image-bearing tool outputs from the current turn with a textual failure so the
+    /// model can adapt and continue in the same turn.
+    pub(crate) fn replace_last_turn_tool_outputs_with_failure_message(
+        &mut self,
+        message: &str,
+    ) -> bool {
+        self.visit_last_turn_tool_outputs_mut(|output| {
+            let Some(content_items) = output.content_items() else {
+                return false;
+            };
+            let mut preserved_items = Vec::with_capacity(content_items.len().saturating_add(1));
+            let mut removed_images = false;
+            for item in content_items {
+                match item {
+                    FunctionCallOutputContentItem::InputText { text } => {
+                        preserved_items
+                            .push(FunctionCallOutputContentItem::InputText { text: text.clone() });
+                    }
+                    FunctionCallOutputContentItem::InputImage { .. } => {
+                        removed_images = true;
                     }
                 }
-                replaced
             }
-            ResponseItem::Message { .. } => false,
-            _ => false,
-        }
+            if !removed_images {
+                return false;
+            }
+            let message = message.to_string();
+            output.body = if preserved_items.is_empty() {
+                FunctionCallOutputBody::Text(message)
+            } else {
+                preserved_items.push(FunctionCallOutputContentItem::InputText { text: message });
+                FunctionCallOutputBody::ContentItems(preserved_items)
+            };
+            output.success = Some(false);
+            true
+        })
     }
 
     /// Drop the last `num_turns` instruction turns from this history.
@@ -544,40 +574,6 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
     }
 }
 
-/// Returns the base64 payload byte length for inline image data URLs that are
-/// eligible for token-estimation discounting.
-///
-/// We only discount payloads for `data:image/...;base64,...` URLs (case
-/// insensitive markers) and leave everything else at raw serialized size.
-fn parse_base64_image_data_url(url: &str) -> Option<&str> {
-    if !url
-        .get(.."data:".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
-    {
-        return None;
-    }
-    let comma_index = url.find(',')?;
-    let metadata = &url[..comma_index];
-    let payload = &url[comma_index + 1..];
-    // Parse the media type and parameters without decoding. This keeps the
-    // estimator cheap while ensuring we only apply the fixed-cost image
-    // heuristic to image-typed base64 data URLs.
-    let metadata_without_scheme = &metadata["data:".len()..];
-    let mut metadata_parts = metadata_without_scheme.split(';');
-    let mime_type = metadata_parts.next().unwrap_or_default();
-    let has_base64_marker = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
-    if !mime_type
-        .get(.."image/".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
-    {
-        return None;
-    }
-    if !has_base64_marker {
-        return None;
-    }
-    Some(payload)
-}
-
 fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
     let key = sha1_digest(image_url.as_bytes());
     ORIGINAL_IMAGE_ESTIMATE_CACHE.get_or_insert_with(key, || {
@@ -621,7 +617,7 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
     let mut payload_bytes = 0i64;
     let mut replacement_bytes = 0i64;
 
-    let mut accumulate = |image_url: &str, detail: Option<ImageDetail>| {
+    let accumulate = |image_url: &str, detail: Option<ImageDetail>| {
         if let Some(payload_len) = parse_base64_image_data_url(image_url).map(str::len) {
             payload_bytes =
                 payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
@@ -634,30 +630,33 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
         }
     };
 
-    match item {
-        ResponseItem::Message { content, .. } => {
-            for content_item in content {
-                if let ContentItem::InputImage { image_url } = content_item {
-                    accumulate(image_url, None);
-                }
-            }
-        }
-        ResponseItem::FunctionCallOutput { output, .. }
-        | ResponseItem::CustomToolCallOutput { output, .. } => {
-            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
-                for content_item in items {
-                    if let FunctionCallOutputContentItem::InputImage { image_url, detail } =
-                        content_item
-                    {
-                        accumulate(image_url, *detail);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
+    visit_response_item_input_images(item, accumulate);
 
     (payload_bytes, replacement_bytes)
+}
+
+impl ContextManager {
+    fn visit_last_turn_tool_outputs_mut(
+        &mut self,
+        mut visitor: impl FnMut(&mut FunctionCallOutputPayload) -> bool,
+    ) -> bool {
+        let start = self
+            .items
+            .iter()
+            .rposition(is_user_turn_boundary)
+            .map_or(0, |index| index.saturating_add(1));
+        let mut changed = false;
+        for item in &mut self.items[start..] {
+            match item {
+                ResponseItem::FunctionCallOutput { output, .. }
+                | ResponseItem::CustomToolCallOutput { output, .. } => {
+                    changed |= visitor(output);
+                }
+                _ => {}
+            }
+        }
+        changed
+    }
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {

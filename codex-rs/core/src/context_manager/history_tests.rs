@@ -762,6 +762,142 @@ fn replace_last_turn_images_does_not_touch_user_images() {
 }
 
 #[test]
+fn replace_last_turn_images_replaces_custom_tool_output_images() {
+    let items = vec![
+        user_input_text_msg("hi"),
+        ResponseItem::CustomToolCallOutput {
+            call_id: "call-custom".to_string(),
+            name: None,
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,AAA".to_string(),
+                        detail: None,
+                    },
+                ]),
+                success: Some(true),
+            },
+        },
+    ];
+    let mut history = create_history_with_items(items);
+
+    assert!(history.replace_last_turn_images("Invalid image"));
+
+    assert_eq!(
+        history.raw_items(),
+        vec![
+            user_input_text_msg("hi"),
+            ResponseItem::CustomToolCallOutput {
+                call_id: "call-custom".to_string(),
+                name: None,
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::ContentItems(vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "Invalid image".to_string(),
+                        },
+                    ]),
+                    success: Some(true),
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn replace_last_turn_tool_outputs_with_failure_message_replaces_only_latest_turn_images() {
+    let items = vec![
+        user_input_text_msg("first"),
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-old".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,OLD".to_string(),
+                        detail: None,
+                    },
+                ]),
+                success: Some(true),
+            },
+        },
+        user_input_text_msg("second"),
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-new".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "captured".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,NEW".to_string(),
+                        detail: None,
+                    },
+                ]),
+                success: Some(true),
+            },
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "call-custom".to_string(),
+            name: None,
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,CUSTOM".to_string(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                ]),
+                success: Some(true),
+            },
+        },
+    ];
+    let mut history = create_history_with_items(items);
+    let message = "Tool image output omitted because total inline image data in this request is 99 bytes, which exceeds the 10 byte limit for a single Responses API request. Retry with fewer images, smaller images, lower detail, or JPEG compression.";
+
+    assert!(history.replace_last_turn_tool_outputs_with_failure_message(message));
+
+    assert_eq!(
+        history.raw_items(),
+        vec![
+            user_input_text_msg("first"),
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-old".to_string(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::ContentItems(vec![
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url: "data:image/png;base64,OLD".to_string(),
+                            detail: None,
+                        },
+                    ]),
+                    success: Some(true),
+                },
+            },
+            user_input_text_msg("second"),
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-new".to_string(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::ContentItems(vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "captured".to_string(),
+                        },
+                        FunctionCallOutputContentItem::InputText {
+                            text: message.to_string(),
+                        },
+                    ]),
+                    success: Some(false),
+                },
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: "call-custom".to_string(),
+                name: None,
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text(message.to_string()),
+                    success: Some(false),
+                },
+            },
+        ]
+    );
+}
+
+#[test]
 fn remove_first_item_handles_local_shell_pair() {
     let items = vec![
         ResponseItem::LocalShellCall {

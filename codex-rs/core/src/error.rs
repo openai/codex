@@ -27,6 +27,100 @@ pub type Result<T> = std::result::Result<T, CodexErr>;
 /// Limit UI error messages to a reasonable size while keeping useful context.
 const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 2 KiB
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineImageRequestLimitExceededError {
+    total_bytes: Option<usize>,
+    limit_bytes: Option<usize>,
+    total_images: Option<usize>,
+    limit_images: Option<usize>,
+}
+
+impl InlineImageRequestLimitExceededError {
+    pub fn local_preflight_bytes(total_bytes: usize, limit_bytes: usize) -> Self {
+        Self {
+            total_bytes: Some(total_bytes),
+            limit_bytes: Some(limit_bytes),
+            total_images: None,
+            limit_images: None,
+        }
+    }
+
+    pub fn local_preflight_images(total_images: usize, limit_images: usize) -> Self {
+        Self {
+            total_bytes: None,
+            limit_bytes: None,
+            total_images: Some(total_images),
+            limit_images: Some(limit_images),
+        }
+    }
+
+    pub fn local_preflight_bytes_and_images(
+        total_bytes: usize,
+        limit_bytes: usize,
+        total_images: usize,
+        limit_images: usize,
+    ) -> Self {
+        Self {
+            total_bytes: Some(total_bytes),
+            limit_bytes: Some(limit_bytes),
+            total_images: Some(total_images),
+            limit_images: Some(limit_images),
+        }
+    }
+
+    pub fn tool_output_recovery_message(&self) -> String {
+        format!(
+            "Tool image output omitted because {} Retry with fewer images, smaller images, lower detail, or JPEG compression.",
+            self.message_body()
+        )
+    }
+
+    fn message_body(&self) -> String {
+        match (
+            self.total_images,
+            self.limit_images,
+            self.total_bytes,
+            self.limit_bytes,
+        ) {
+            (Some(total_images), Some(limit_images), Some(total_bytes), Some(limit_bytes)) => {
+                format!(
+                    "this request contains {total_images} images, which exceeds the {limit_images} image limit, and total inline image data is {total_bytes} bytes, which exceeds the {limit_bytes} byte limit for a single Responses API request."
+                )
+            }
+            (Some(total_images), Some(limit_images), _, _) => format!(
+                "this request contains {total_images} images, which exceeds the {limit_images} image limit for a single Responses API request."
+            ),
+            (None, None, Some(total_bytes), Some(limit_bytes)) => format!(
+                "total inline image data in this request is {total_bytes} bytes, which exceeds the {limit_bytes} byte limit for a single Responses API request."
+            ),
+            (None, None, None, Some(limit_bytes)) => format!(
+                "total inline image data in this request exceeds the {limit_bytes} byte limit for a single Responses API request."
+            ),
+            (None, None, Some(total_bytes), None) => format!(
+                "total inline image data in this request is {total_bytes} bytes, which exceeds the single-request limit for the Responses API."
+            ),
+            _ => {
+                "total inline image data in this request exceeds the single-request limit for the Responses API.".to_string()
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for InlineImageRequestLimitExceededError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = self.message_body();
+        let mut chars = message.chars();
+        let message = match chars.next() {
+            Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+            None => String::new(),
+        };
+        write!(
+            f,
+            "{message} Use fewer images, smaller images, lower detail, or JPEG compression and try again."
+        )
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum SandboxErr {
     /// Error from sandbox execution
@@ -117,6 +211,9 @@ pub enum CodexErr {
     InvalidImageRequest(),
 
     #[error("{0}")]
+    InlineImageRequestLimitExceeded(InlineImageRequestLimitExceededError),
+
+    #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
 
     #[error("Selected model is at capacity. Please try a different model.")]
@@ -203,6 +300,7 @@ impl CodexErr {
             | CodexErr::UsageNotIncluded
             | CodexErr::QuotaExceeded
             | CodexErr::InvalidImageRequest()
+            | CodexErr::InlineImageRequestLimitExceeded(_)
             | CodexErr::InvalidRequest(_)
             | CodexErr::RefreshTokenFailed(_)
             | CodexErr::UnsupportedOperation(_)
@@ -584,6 +682,7 @@ impl CodexErr {
             | CodexErr::InternalServerError
             | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
             CodexErr::UnsupportedOperation(_)
+            | CodexErr::InlineImageRequestLimitExceeded(_)
             | CodexErr::ThreadNotFound(_)
             | CodexErr::AgentLimitReached { .. } => CodexErrorInfo::BadRequest,
             CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,

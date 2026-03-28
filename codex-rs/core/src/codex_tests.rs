@@ -20,6 +20,7 @@ use crate::tools::format_exec_output_str;
 use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -923,6 +924,101 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         .await;
 
     assert_eq!(reconstructed.history, replacement_history);
+}
+
+#[tokio::test]
+async fn record_conversation_items_sanitizes_inline_tool_images_before_persistence() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let rollout_path = attach_rollout_recorder(&session).await;
+    let user = user_message("describe the image");
+    let image_url = "data:image/png;base64,AAAA".to_string();
+    turn_context.model_info.inline_image_request_limit_bytes = Some(10);
+    let tool_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "view_image".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "view-image".to_string(),
+    };
+    let original_output = ResponseItem::FunctionCallOutput {
+        call_id: "view-image".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "captured".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: image_url.clone(),
+                detail: None,
+            },
+        ]),
+    };
+    let recovery_message =
+        crate::error::InlineImageRequestLimitExceededError::local_preflight_bytes(
+            image_url.len(),
+            10,
+        )
+        .tool_output_recovery_message();
+    let recovered_output = ResponseItem::FunctionCallOutput {
+        call_id: "view-image".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "captured".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: recovery_message,
+                },
+            ]),
+            success: Some(false),
+        },
+    };
+
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&user))
+        .await;
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&tool_call))
+        .await;
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&original_output))
+        .await;
+
+    assert_eq!(
+        session.clone_history().await.raw_items().to_vec(),
+        vec![user.clone(), tool_call.clone(), recovered_output.clone()]
+    );
+
+    session.flush_rollout().await;
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+
+    let persisted_response_items = resumed
+        .history
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(item) => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let ResponseItem::FunctionCallOutput { output, .. } = recovered_output else {
+        panic!("expected function call output");
+    };
+    let persisted_output = ResponseItem::FunctionCallOutput {
+        call_id: "view-image".to_string(),
+        output: FunctionCallOutputPayload {
+            body: output.body,
+            success: None,
+        },
+    };
+    assert_eq!(
+        persisted_response_items,
+        vec![user, tool_call, persisted_output]
+    );
 }
 
 #[tokio::test]
