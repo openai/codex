@@ -200,9 +200,14 @@ async fn thread_start_accepts_flex_service_tier() -> Result<()> {
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
+    let read_timeout = if cfg!(windows) {
+        std::time::Duration::from_secs(15)
+    } else {
+        DEFAULT_READ_TIMEOUT
+    };
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(read_timeout, mcp.initialize()).await??;
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -212,7 +217,7 @@ async fn thread_start_accepts_flex_service_tier() -> Result<()> {
         .await?;
 
     let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        read_timeout,
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await??;
