@@ -178,7 +178,9 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::inline_image_request_limit::INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_RECOVERED;
 use crate::inline_image_request_limit::inline_image_request_limit_error;
+use crate::inline_image_request_limit::record_inline_image_request_limit_observation;
 use codex_config::CONFIG_TOML_FILE;
 
 mod rollout_reconstruction;
@@ -3374,8 +3376,10 @@ impl Session {
         if pending_items.replace_last_turn_tool_outputs_with_failure_message(
             &error.tool_output_recovery_message(),
         ) {
-            warn!(
-                "inline image request limit would be exceeded before upload; sanitizing tool image output before persistence"
+            record_inline_image_request_limit_observation(
+                &turn_context.session_telemetry,
+                &error,
+                INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_RECOVERED,
             );
             items_to_record = pending_items.raw_items().to_vec();
         }

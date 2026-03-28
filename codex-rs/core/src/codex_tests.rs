@@ -69,6 +69,9 @@ use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
+use codex_otel::metrics::names::INLINE_IMAGE_REQUEST_LIMIT_METRIC;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -95,8 +98,15 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
+use opentelemetry::KeyValue;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -931,6 +941,8 @@ async fn record_conversation_items_sanitizes_inline_tool_images_before_persisten
     let (session, mut turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let rollout_path = attach_rollout_recorder(&session).await;
+    turn_context.session_telemetry =
+        metric_test_session_telemetry(turn_context.model_info.slug.as_str(), SessionSource::Exec);
     let user = user_message("describe the image");
     let image_url = "data:image/png;base64,AAAA".to_string();
     turn_context.model_info.inline_image_request_limit_bytes = Some(10);
@@ -1018,6 +1030,21 @@ async fn record_conversation_items_sanitizes_inline_tool_images_before_persisten
     assert_eq!(
         persisted_response_items,
         vec![user, tool_call, persisted_output]
+    );
+
+    let snapshot = turn_context
+        .session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, INLINE_IMAGE_REQUEST_LIMIT_METRIC);
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("bytes_exceeded".to_string(), "true".to_string()),
+            ("images_exceeded".to_string(), "false".to_string()),
+            ("outcome".to_string(), "recovered".to_string()),
+        ])
     );
 }
 
@@ -2314,6 +2341,66 @@ fn session_telemetry(
         "test".to_string(),
         session_source,
     )
+}
+
+fn metric_test_session_telemetry(
+    model_slug: &str,
+    session_source: SessionSource,
+) -> SessionTelemetry {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    SessionTelemetry::new(
+        ThreadId::new(),
+        model_slug,
+        model_slug,
+        None,
+        Some("test@test.com".to_string()),
+        Some(TelemetryAuthMode::Chatgpt),
+        "test_originator".to_string(),
+        false,
+        "test".to_string(),
+        session_source,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    for scope_metrics in resource_metrics.scope_metrics() {
+        for metric in scope_metrics.metrics() {
+            if metric.name() == name {
+                return metric;
+            }
+        }
+    }
+    panic!("metric {name} missing");
+}
+
+fn attributes_to_map<'a>(
+    attributes: impl Iterator<Item = &'a KeyValue>,
+) -> BTreeMap<String, String> {
+    attributes
+        .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
+        .collect()
+}
+
+fn metric_point(resource_metrics: &ResourceMetrics, name: &str) -> (BTreeMap<String, String>, u64) {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::U64(data) => match data {
+            MetricData::Sum(sum) => {
+                let points: Vec<_> = sum.data_points().collect();
+                assert_eq!(points.len(), 1);
+                let point = points[0];
+                (attributes_to_map(point.attributes()), point.value())
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    }
 }
 
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
