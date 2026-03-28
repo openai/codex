@@ -567,6 +567,9 @@ impl RolloutRecorder {
                     RolloutItem::ResponseItem(item) => {
                         items.push(RolloutItem::ResponseItem(item));
                     }
+                    RolloutItem::ForkReference(item) => {
+                        items.push(RolloutItem::ForkReference(item));
+                    }
                     RolloutItem::Compacted(item) => {
                         items.push(RolloutItem::Compacted(item));
                     }
@@ -593,6 +596,10 @@ impl RolloutRecorder {
         Ok((items, thread_id, parse_errors))
     }
 
+    /// Load a rollout for resume semantics.
+    ///
+    /// This preserves the rollout's existing conversation id and rollout path, so callers must
+    /// not use it for true forking semantics.
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         let (items, thread_id, _parse_errors) = Self::load_rollout_items(path).await?;
         let conversation_id = thread_id
@@ -608,6 +615,21 @@ impl RolloutRecorder {
             history: items,
             rollout_path: path.to_path_buf(),
         }))
+    }
+
+    /// Load a rollout for true fork semantics.
+    ///
+    /// Unlike `get_rollout_history`, this intentionally discards the source rollout's
+    /// conversation id so the child thread gets a fresh id and preserves `forked_from_id`.
+    pub async fn get_fork_history(path: &Path) -> std::io::Result<InitialHistory> {
+        let (items, _thread_id, _parse_errors) = Self::load_rollout_items(path).await?;
+
+        if items.is_empty() {
+            return Ok(InitialHistory::New);
+        }
+
+        info!("Loaded rollout fork history from {path:?}");
+        Ok(InitialHistory::Forked(items))
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
@@ -1058,6 +1080,7 @@ async fn resume_candidate_matches_cwd(
         && let Some(latest_turn_context_cwd) = items.iter().rev().find_map(|item| match item {
             RolloutItem::TurnContext(turn_context) => Some(turn_context.cwd.as_path()),
             RolloutItem::SessionMeta(_)
+            | RolloutItem::ForkReference(_)
             | RolloutItem::ResponseItem(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,

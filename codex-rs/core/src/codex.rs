@@ -2164,6 +2164,11 @@ impl Session {
         state.clear_connector_selection();
     }
 
+    async fn set_connector_selection(&self, connector_ids: HashSet<String>) {
+        self.clear_connector_selection().await;
+        self.merge_connector_selection(connector_ids).await;
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         let is_subagent = {
@@ -2182,8 +2187,19 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                let hydrated_rollout_items = if rollout_items
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+                {
+                    self.materialize_rollout_items_for_replay(&rollout_items)
+                        .await
+                } else {
+                    rollout_items.clone()
+                };
+                let restored_connector_selection =
+                    Self::extract_connector_selection_from_rollout(&hydrated_rollout_items);
                 let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                    .apply_rollout_reconstruction(&turn_context, &hydrated_rollout_items)
                     .await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
@@ -2208,9 +2224,12 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = Self::last_token_info_from_rollout(&hydrated_rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
+                }
+                if let Some(selected_connectors) = restored_connector_selection {
+                    self.set_connector_selection(selected_connectors).await;
                 }
 
                 // Defer seeding the session's initial context until the first turn starts so
@@ -2220,18 +2239,40 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
-                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
+                let persisted_rollout_items = rollout_items
+                    .iter()
+                    .position(|item| matches!(item, RolloutItem::ForkReference(_)))
+                    .map(|index| rollout_items[index..].to_vec());
+                let hydrated_rollout_items = if rollout_items
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+                {
+                    self.materialize_rollout_items_for_replay(&rollout_items)
+                        .await
+                } else {
+                    rollout_items.clone()
+                };
+                let restored_connector_selection =
+                    Self::extract_connector_selection_from_rollout(&hydrated_rollout_items);
+
+                self.apply_rollout_reconstruction(&turn_context, &hydrated_rollout_items)
                     .await;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = Self::last_token_info_from_rollout(&hydrated_rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
+                if let Some(selected_connectors) = restored_connector_selection {
+                    self.set_connector_selection(selected_connectors).await;
+                }
 
-                // If persisting, persist all rollout items as-is (recorder filters)
-                if !rollout_items.is_empty() {
+                // Persist only the compact fork reference suffix so child rollouts do not
+                // duplicate the full parent history they inherited in memory.
+                if let Some(persisted_rollout_items) = persisted_rollout_items {
+                    self.persist_rollout_items(&persisted_rollout_items).await;
+                } else if !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
@@ -2270,6 +2311,41 @@ impl Session {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
             _ => None,
         })
+    }
+
+    fn extract_connector_selection_from_rollout(
+        rollout_items: &[RolloutItem],
+    ) -> Option<HashSet<String>> {
+        let mut active_selected_connectors: Option<HashSet<String>> = None;
+
+        for item in rollout_items {
+            let RolloutItem::ResponseItem(response_item) = item else {
+                continue;
+            };
+            let ResponseItem::FunctionCallOutput { output, .. } = response_item else {
+                continue;
+            };
+            let Some(content) = output.body.to_text() else {
+                continue;
+            };
+            let Ok(payload) = serde_json::from_str::<Value>(&content) else {
+                continue;
+            };
+            let Some(selected_connectors) = payload
+                .get("active_selected_tools")
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+            let connector_ids = selected_connectors
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<HashSet<_>>();
+            active_selected_connectors = Some(connector_ids);
+        }
+
+        active_selected_connectors
     }
 
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {

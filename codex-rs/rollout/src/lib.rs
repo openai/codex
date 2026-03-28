@@ -36,6 +36,7 @@ pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
+pub use list::resolve_fork_reference_rollout_path;
 pub use list::rollout_date_parts;
 pub use policy::EventPersistenceMode;
 pub use recorder::RolloutRecorder;
