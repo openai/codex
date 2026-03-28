@@ -155,7 +155,6 @@ mod version;
 mod voice;
 #[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
 mod voice {
-    use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
     use codex_core::config::Config;
     use codex_protocol::protocol::RealtimeAudioFrame;
@@ -177,10 +176,6 @@ mod voice {
     pub(crate) struct RealtimeAudioPlayer;
 
     impl VoiceCapture {
-        pub fn start() -> Result<Self, String> {
-            Err("voice input is unavailable in this build".to_string())
-        }
-
         pub fn start_realtime(_config: &Config, _tx: AppEventSender) -> Result<Self, String> {
             Err("voice input is unavailable in this build".to_string())
         }
@@ -230,18 +225,6 @@ mod voice {
         }
 
         pub(crate) fn clear(&self) {}
-    }
-
-    pub fn transcribe_async(
-        id: String,
-        _audio: RecordedAudio,
-        _context: Option<String>,
-        tx: AppEventSender,
-    ) {
-        tx.send(AppEvent::TranscriptionFailed {
-            id,
-            error: "voice input is unavailable in this build".to_string(),
-        });
     }
 }
 

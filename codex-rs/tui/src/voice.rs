@@ -1,42 +1,22 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use base64::Engine;
-use codex_client::build_reqwest_client_with_custom_ca;
-use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::config::Config;
-use codex_core::config::find_codex_home;
-use codex_core::default_client::get_codex_user_agent;
-use codex_login::AuthMode;
-use codex_login::CodexAuth;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
-use hound::SampleFormat;
-use hound::WavSpec;
-use hound::WavWriter;
 use std::collections::VecDeque;
-use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 use tracing::error;
-use tracing::info;
-use tracing::trace;
 
-const AUDIO_MODEL: &str = "gpt-4o-mini-transcribe";
 const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const MODEL_AUDIO_CHANNELS: u16 = 1;
-
-struct TranscriptionAuthContext {
-    mode: AuthMode,
-    bearer_token: String,
-    chatgpt_account_id: Option<String>,
-    chatgpt_base_url: String,
-}
 
 pub struct RecordedAudio {
     pub data: Vec<i16>,
@@ -204,62 +184,6 @@ impl RecordingMeterState {
         }
         text
     }
-}
-
-pub fn transcribe_async(
-    id: String,
-    audio: RecordedAudio,
-    context: Option<String>,
-    tx: AppEventSender,
-) {
-    std::thread::spawn(move || {
-        // Enforce minimum duration to avoid garbage outputs.
-        const MIN_DURATION_SECONDS: f32 = 1.0;
-        let duration_seconds = clip_duration_seconds(&audio);
-        if duration_seconds < MIN_DURATION_SECONDS {
-            let msg = format!(
-                "recording too short ({duration_seconds:.2}s); minimum is {MIN_DURATION_SECONDS:.2}s"
-            );
-            info!("{msg}");
-            tx.send(AppEvent::TranscriptionFailed { id, error: msg });
-            return;
-        }
-
-        // Encode entire clip as normalized WAV.
-        let wav_bytes = match encode_wav_normalized(&audio) {
-            Ok(b) => b,
-            Err(e) => {
-                error!("failed to encode wav: {e}");
-                tx.send(AppEvent::TranscriptionFailed { id, error: e });
-                return;
-            }
-        };
-
-        // Run the HTTP request on a small, dedicated runtime.
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                error!("failed to create tokio runtime: {e}");
-                return;
-            }
-        };
-
-        let tx2 = tx.clone();
-        let id2 = id.clone();
-        let res: Result<String, String> = rt
-            .block_on(async move { transcribe_bytes(wav_bytes, context, duration_seconds).await });
-
-        match res {
-            Ok(text) => {
-                tx2.send(AppEvent::TranscriptionComplete { id: id2, text });
-                info!("voice transcription succeeded");
-            }
-            Err(e) => {
-                error!("voice transcription error: {e}");
-                tx.send(AppEvent::TranscriptionFailed { id, error: e });
-            }
-        }
-    });
 }
 
 // -------------------------
@@ -673,210 +597,10 @@ fn convert_pcm16(
     out
 }
 
-// -------------------------
-// Transcription helpers
-// -------------------------
-
-fn clip_duration_seconds(audio: &RecordedAudio) -> f32 {
-    let total_samples = audio.data.len() as f32;
-    let samples_per_second = (audio.sample_rate as f32) * (audio.channels as f32);
-    if samples_per_second > 0.0 {
-        total_samples / samples_per_second
-    } else {
-        0.0
-    }
-}
-
-fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
-    let converted;
-    let (channels, sample_rate, segment) =
-        if audio.channels == MODEL_AUDIO_CHANNELS && audio.sample_rate == MODEL_AUDIO_SAMPLE_RATE {
-            (audio.channels, audio.sample_rate, audio.data.as_slice())
-        } else {
-            converted = convert_pcm16(
-                &audio.data,
-                audio.sample_rate,
-                audio.channels,
-                MODEL_AUDIO_SAMPLE_RATE,
-                MODEL_AUDIO_CHANNELS,
-            );
-            (
-                MODEL_AUDIO_CHANNELS,
-                MODEL_AUDIO_SAMPLE_RATE,
-                converted.as_slice(),
-            )
-        };
-
-    let mut wav_bytes: Vec<u8> = Vec::new();
-    let spec = WavSpec {
-        channels,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-    let mut cursor = Cursor::new(&mut wav_bytes);
-    let mut writer =
-        WavWriter::new(&mut cursor, spec).map_err(|_| "failed to create wav writer".to_string())?;
-
-    // Simple peak normalization with headroom to improve audibility on quiet inputs.
-    let mut peak: i16 = 0;
-    for &s in segment {
-        let a = s.unsigned_abs();
-        if a > peak.unsigned_abs() {
-            peak = s;
-        }
-    }
-    let peak_abs = (peak as i32).unsigned_abs() as i32;
-    let target = (i16::MAX as f32) * 0.9; // leave some headroom
-    let gain: f32 = if peak_abs > 0 {
-        target / (peak_abs as f32)
-    } else {
-        1.0
-    };
-
-    for &s in segment {
-        let v = ((s as f32) * gain)
-            .round()
-            .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-        writer
-            .write_sample(v)
-            .map_err(|_| "failed writing wav sample".to_string())?;
-    }
-    writer
-        .finalize()
-        .map_err(|_| "failed to finalize wav".to_string())?;
-    Ok(wav_bytes)
-}
-
-fn normalize_chatgpt_base_url(input: &str) -> String {
-    let mut base_url = input.to_string();
-    while base_url.ends_with('/') {
-        base_url.pop();
-    }
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    base_url
-}
-
-async fn resolve_auth() -> Result<TranscriptionAuthContext, String> {
-    let codex_home = find_codex_home().map_err(|e| format!("failed to find codex home: {e}"))?;
-    let auth = CodexAuth::from_auth_storage(&codex_home, AuthCredentialsStoreMode::Auto)
-        .map_err(|e| format!("failed to read auth.json: {e}"))?
-        .ok_or_else(|| "No Codex auth is configured; please run `codex login`".to_string())?;
-
-    let chatgpt_account_id = auth.get_account_id();
-
-    let token = auth
-        .get_token()
-        .map_err(|e| format!("failed to get auth token: {e}"))?;
-    let config = Config::load_with_cli_overrides(Vec::new())
-        .await
-        .map_err(|e| format!("failed to load config: {e}"))?;
-    Ok(TranscriptionAuthContext {
-        mode: auth.api_auth_mode(),
-        bearer_token: token,
-        chatgpt_account_id,
-        chatgpt_base_url: normalize_chatgpt_base_url(&config.chatgpt_base_url),
-    })
-}
-
-async fn transcribe_bytes(
-    wav_bytes: Vec<u8>,
-    context: Option<String>,
-    duration_seconds: f32,
-) -> Result<String, String> {
-    let auth = resolve_auth().await?;
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())
-        .map_err(|error| format!("failed to build transcription HTTP client: {error}"))?;
-    let audio_bytes = wav_bytes.len();
-    let prompt_for_log = context.as_deref().unwrap_or("").to_string();
-    let (endpoint, request) =
-        if matches!(auth.mode, AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens) {
-            let part = reqwest::multipart::Part::bytes(wav_bytes)
-                .file_name("audio.wav")
-                .mime_str("audio/wav")
-                .map_err(|e| format!("failed to set mime: {e}"))?;
-            let form = reqwest::multipart::Form::new().part("file", part);
-            let endpoint = format!("{}/transcribe", auth.chatgpt_base_url);
-            let mut req = client
-                .post(&endpoint)
-                .bearer_auth(&auth.bearer_token)
-                .multipart(form)
-                .header("User-Agent", get_codex_user_agent());
-            if let Some(acc) = auth.chatgpt_account_id {
-                req = req.header("ChatGPT-Account-Id", acc);
-            }
-            (endpoint, req)
-        } else {
-            let part = reqwest::multipart::Part::bytes(wav_bytes)
-                .file_name("audio.wav")
-                .mime_str("audio/wav")
-                .map_err(|e| format!("failed to set mime: {e}"))?;
-            let mut form = reqwest::multipart::Form::new()
-                .text("model", AUDIO_MODEL)
-                .part("file", part);
-            if let Some(context) = context {
-                form = form.text("prompt", context);
-            }
-            let endpoint = "https://api.openai.com/v1/audio/transcriptions".to_string();
-            (
-                endpoint,
-                client
-                    .post("https://api.openai.com/v1/audio/transcriptions")
-                    .bearer_auth(&auth.bearer_token)
-                    .multipart(form)
-                    .header("User-Agent", get_codex_user_agent()),
-            )
-        };
-
-    let audio_kib = audio_bytes as f32 / 1024.0;
-    let mode = auth.mode;
-    trace!(
-        "sending transcription request: mode={mode:?} endpoint={endpoint} duration={duration_seconds:.2}s audio={audio_kib:.1}KiB prompt={prompt_for_log}"
-    );
-
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| format!("transcription request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<failed to read body>".to_string());
-        return Err(format!("transcription failed: {status} {body}"));
-    }
-
-    let v: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse json: {e}"))?;
-    let text = v
-        .get("text")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    if text.is_empty() {
-        Err("empty transcription result".to_string())
-    } else {
-        Ok(text)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::RecordedAudio;
     use super::convert_pcm16;
-    use super::encode_wav_normalized;
     use pretty_assertions::assert_eq;
-    use std::io::Cursor;
 
     #[test]
     fn convert_pcm16_downmixes_and_resamples_for_model_input() {
@@ -886,26 +610,5 @@ mod tests {
             /*output_sample_rate*/ 24_000, /*output_channels*/ 1,
         );
         assert_eq!(converted, vec![200, 700]);
-    }
-
-    #[test]
-    fn encode_wav_normalized_outputs_24khz_mono_audio() {
-        let audio = RecordedAudio {
-            data: vec![100, 300, 200, 400, 500, 700, 600, 800],
-            sample_rate: 48_000,
-            channels: 2,
-        };
-
-        let wav = encode_wav_normalized(&audio).expect("wav should encode");
-        let reader = hound::WavReader::new(Cursor::new(wav)).expect("wav should parse");
-        let spec = reader.spec();
-        let samples = reader
-            .into_samples::<i16>()
-            .collect::<Result<Vec<_>, _>>()
-            .expect("samples should decode");
-
-        assert_eq!(spec.channels, 1);
-        assert_eq!(spec.sample_rate, 24_000);
-        assert_eq!(samples, vec![8_426, 29_490]);
     }
 }
