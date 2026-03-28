@@ -1099,18 +1099,12 @@ fn turn_items_for_thread(
         .map(|turn| turn.items.clone())
 }
 
-fn all_thread_source_kinds() -> Vec<ThreadSourceKind> {
+fn resumable_thread_source_kinds() -> Vec<ThreadSourceKind> {
     vec![
         ThreadSourceKind::Cli,
         ThreadSourceKind::VsCode,
         ThreadSourceKind::Exec,
         ThreadSourceKind::AppServer,
-        ThreadSourceKind::SubAgent,
-        ThreadSourceKind::SubAgentReview,
-        ThreadSourceKind::SubAgentCompact,
-        ThreadSourceKind::SubAgentThreadSpawn,
-        ThreadSourceKind::SubAgentOther,
-        ThreadSourceKind::Unknown,
     ]
 }
 
@@ -1169,7 +1163,7 @@ async fn resolve_resume_thread_id(
                         limit: Some(100),
                         sort_key: Some(ThreadSortKey::UpdatedAt),
                         model_providers: model_providers.clone(),
-                        source_kinds: Some(all_thread_source_kinds()),
+                        source_kinds: Some(resumable_thread_source_kinds()),
                         archived: Some(false),
                         cwd: None,
                         search_term: None,
@@ -1209,7 +1203,7 @@ async fn resolve_resume_thread_id(
                     limit: Some(100),
                     sort_key: Some(ThreadSortKey::UpdatedAt),
                     model_providers: model_providers.clone(),
-                    source_kinds: Some(all_thread_source_kinds()),
+                    source_kinds: Some(resumable_thread_source_kinds()),
                     archived: Some(false),
                     cwd: None,
                     // Thread names are attached separately from rollout titles, so name
@@ -1896,6 +1890,19 @@ mod tests {
             Some(vec!["test-provider".to_string()])
         );
         assert_eq!(resume_lookup_model_providers(&config, &named_args), None);
+    }
+
+    #[test]
+    fn resumable_thread_source_kinds_exclude_internal_threads() {
+        assert_eq!(
+            resumable_thread_source_kinds(),
+            vec![
+                ThreadSourceKind::Cli,
+                ThreadSourceKind::VsCode,
+                ThreadSourceKind::Exec,
+                ThreadSourceKind::AppServer,
+            ]
+        );
     }
 
     #[test]
