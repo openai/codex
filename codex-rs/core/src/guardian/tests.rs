@@ -339,8 +339,8 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
         guardian_assessment_action_value(&action),
         serde_json::json!({
             "tool": "apply_patch",
-            "cwd": cwd,
-            "files": [file],
+            "cwd": cwd.display().to_string(),
+            "files": [file.display().to_string()],
             "change_count": 1,
         })
     );

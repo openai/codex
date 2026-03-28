@@ -33,6 +33,7 @@ pub use codex_protocol::protocol::SessionMeta;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
 pub use list::find_archived_thread_path_by_id_str;
+pub use list::find_or_unarchive_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
