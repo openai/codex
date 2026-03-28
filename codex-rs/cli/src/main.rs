@@ -629,12 +629,16 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?;
             handle_app_exit(exit_info)?;
         }
-        Some(Subcommand::Exec(mut exec_cli)) => {
+        Some(Subcommand::Exec(exec_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
                 "exec",
             )?;
+            let mut exec_cli = match exec_cli.validate() {
+                Ok(exec_cli) => exec_cli,
+                Err(err) => err.exit(),
+            };
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1477,6 +1481,40 @@ mod tests {
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+    #[test]
+    fn exec_fork_accepts_prompt_positional() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec",
+            "--json",
+            "--fork",
+            "session-123",
+            "2+2",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        assert_eq!(exec.fork_session_id.as_deref(), Some("session-123"));
+        assert!(exec.command.is_none());
+        assert_eq!(exec.prompt.as_deref(), Some("2+2"));
+    }
+
+    #[test]
+    fn exec_fork_conflicts_with_resume_subcommand() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "exec", "--fork", "session-123", "resume"])
+                .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        let validate_result = exec.validate();
+        assert!(validate_result.is_err());
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
