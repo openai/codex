@@ -107,7 +107,7 @@ def build_final_args(parsed: ParsedWrapperArgs, manifest_path: Path) -> list[str
 
     if not parsed.has_manifest_path:
         final_args.extend(["--manifest-path", str(manifest_path)])
-    if not parsed.has_package_selection:
+    if not parsed.has_package_selection and not parsed.has_manifest_path:
         final_args.append("--workspace")
     if not parsed.has_no_deps:
         final_args.append("--no-deps")
@@ -205,6 +205,9 @@ def ensure_source_prerequisites(env: MutableMapping[str, str]) -> None:
 
 
 def prefer_rustup_shims(env: MutableMapping[str, str]) -> None:
+    if env.get("CODEX_ARGUMENT_COMMENT_LINT_SKIP_RUSTUP_SHIMS") == "1":
+        return
+
     rustup = shutil.which("rustup", path=env.get("PATH"))
     if rustup is None:
         return

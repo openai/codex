@@ -73,6 +73,7 @@ jobs:
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -88,29 +89,27 @@ jobs:
               labels: codex-windows-x64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: ${{ runner.os }}
+          install-test-prereqs: true
       - name: Install Linux sandbox build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-        with:
-          toolchain: nightly-2025-09-18
-          components: llvm-tools-preview, rustc-dev, rust-src
-      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-      - name: Run argument comment lint on codex-rs
-        if: ${{ runner.os == 'macOS' }}
+      - name: Run argument comment lint on codex-rs via Bazel
         shell: bash
-        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py
-      - name: Run argument comment lint on codex-rs (default targets only)
-        if: ${{ runner.os == 'Linux' }}
-        shell: bash
-        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
-      - name: Run argument comment lint on codex-rs
-        if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        run: python ./tools/argument-comment-lint/run-prebuilt-linter.py
+        run: |
+          ./.github/scripts/run-bazel-ci.sh \
+            -- \
+            build \
+            --config=argument-comment-lint \
+            --keep_going \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            -- \
+            //codex-rs/...
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
