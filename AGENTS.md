@@ -35,9 +35,9 @@ In the codex-rs folder where the rust code lives:
   - If a file exceeds roughly 800 LoC, add new functionality in a new module instead of extending
     the existing file unless there is a strong documented reason not to.
   - This rule applies especially to high-touch files that already attract unrelated changes, such
-    as `codex-rs/tui_app_server/src/app.rs`, `codex-rs/tui_app_server/src/bottom_pane/chat_composer.rs`,
-    `codex-rs/tui_app_server/src/bottom_pane/footer.rs`, `codex-rs/tui_app_server/src/chatwidget.rs`,
-    `codex-rs/tui_app_server/src/bottom_pane/mod.rs`, and similarly central orchestration modules.
+    as `codex-rs/tui/src/app.rs`, `codex-rs/tui/src/bottom_pane/chat_composer.rs`,
+    `codex-rs/tui/src/bottom_pane/footer.rs`, `codex-rs/tui/src/chatwidget.rs`,
+    `codex-rs/tui/src/bottom_pane/mod.rs`, and similarly central orchestration modules.
   - When extracting code from a large module, move the related tests and module/type docs toward
     the new implementation so the invariants stay close to the code that owns them.
 - When running Rust commands (e.g. `just fix` or `cargo test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
@@ -66,11 +66,9 @@ Likewise, when reviewing code, do not hesitate to push back on PRs that would un
 
 ## TUI style conventions
 
-See `codex-rs/tui_app_server/styles.md`.
+See `codex-rs/tui/styles.md`.
 
 ## TUI code conventions
-
-- When a change lands in `codex-rs/tui` and `codex-rs/tui_app_server` has a parallel implementation of the same behavior, reflect the change in `codex-rs/tui_app_server` too unless there is a documented reason not to.
 
 - Use concise styling helpers from ratatui’s Stylize trait.
   - Basic spans: use "text".into()

@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: term.backend().vt100().screen().contents()
+---
+✔ Auto-reviewer approved codex to run rm -f /tmp/guardian-approved.sqlite this
+  time
+
+
+› Ask Codex to do anything
+
+  gpt-5.3-codex default · 100% left · /tmp/project

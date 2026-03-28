@@ -1,9 +1,0 @@
----
-source: tui_app_server/src/chatwidget/tests.rs
-expression: terminal.backend()
----
-"                                                                                "
-"                                                                                "
-"› Ask Codex to do anything                                                      "
-"                                                                                "
-"  gpt-5.3-codex medium                          Plan mode (shift+tab to cycle)  "

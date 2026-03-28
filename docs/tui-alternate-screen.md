@@ -75,7 +75,7 @@ let terminal_info = codex_core::terminal::terminal_info();
 !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
 ```
 
-This detection happens in the helper function `determine_alt_screen_mode()` in `codex-rs/tui_app_server/src/lib.rs`.
+This detection happens in the helper function `determine_alt_screen_mode()` in `codex-rs/tui/src/lib.rs`.
 
 ### Configuration Schema
 

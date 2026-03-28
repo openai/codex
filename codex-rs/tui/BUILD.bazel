@@ -1,0 +1,23 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "tui",
+    crate_name = "codex_tui",
+    compile_data = glob(
+        include = ["**"],
+        exclude = [
+            "**/* *",
+            "BUILD.bazel",
+            "Cargo.toml",
+        ],
+        allow_empty = True,
+    ) + [
+        "//codex-rs/core:templates/collaboration_mode/default.md",
+        "//codex-rs/core:templates/collaboration_mode/plan.md",
+    ],
+    test_data_extra = glob(["src/**/snapshots/**"]) + ["//codex-rs/core:model_availability_nux_fixtures"],
+    integration_compile_data_extra = ["src/test_backend.rs"],
+    extra_binaries = [
+        "//codex-rs/cli:codex",
+    ],
+)

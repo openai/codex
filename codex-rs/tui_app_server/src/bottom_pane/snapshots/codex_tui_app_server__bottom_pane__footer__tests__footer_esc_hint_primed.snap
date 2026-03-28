@@ -1,5 +1,0 @@
----
-source: tui_app_server/src/bottom_pane/footer.rs
-expression: terminal.backend()
----
-"  esc again to edit previous message                                            "

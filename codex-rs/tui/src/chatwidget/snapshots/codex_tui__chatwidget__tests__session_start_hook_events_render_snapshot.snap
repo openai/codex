@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: combined
+---
+• Running SessionStart hook: warming the shell
+
+SessionStart hook (completed)
+  warning: Heads up from the hook
+  hook context: Remember the startup checklist.
