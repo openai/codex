@@ -6,14 +6,21 @@ use crate::shell::ShellType;
 use crate::tools::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_tools::AdditionalProperties;
+use codex_tools::CommandToolOptions;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::FreeformTool;
 use codex_tools::ResponsesApiWebSearchFilters;
 use codex_tools::ResponsesApiWebSearchUserLocation;
+use codex_tools::ViewImageToolOptions;
+use codex_tools::create_exec_command_tool;
+use codex_tools::create_request_permissions_tool;
+use codex_tools::create_view_image_tool;
+use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -52,10 +59,6 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }))
-}
-
-fn windows_shell_safety_description() -> String {
-    format!("\n\n{}", super::windows_destructive_filesystem_guidance())
 }
 
 fn search_capable_model_info() -> ModelInfo {
@@ -298,9 +301,10 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     // Build expected from the same helpers used by the builder.
     let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
     for spec in [
-        create_exec_command_tool(
-            /*allow_login_shell*/ true, /*exec_permission_approvals_enabled*/ false,
-        ),
+        create_exec_command_tool(CommandToolOptions {
+            allow_login_shell: true,
+            exec_permission_approvals_enabled: false,
+        }),
         create_write_stdin_tool(),
         PLAN_TOOL.clone(),
         create_request_user_input_tool(CollaborationModesConfig::default()),
@@ -312,7 +316,9 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_context_size: None,
             search_content_types: None,
         },
-        create_view_image_tool(config.can_request_original_image_detail),
+        create_view_image_tool(ViewImageToolOptions {
+            can_request_original_image_detail: config.can_request_original_image_detail,
+        }),
     ] {
         expected.insert(spec.name().to_string(), spec);
     }
@@ -340,7 +346,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     }
 
     if config.exec_permission_approvals_enabled {
-        let spec = create_request_permissions_tool();
+        let spec = create_request_permissions_tool(request_permissions_tool_description());
         expected.insert(spec.name().to_string(), spec);
     }
 
@@ -804,7 +810,7 @@ fn request_permissions_requires_feature_flag() {
     let request_permissions_tool = find_tool(&tools, "request_permissions");
     assert_eq!(
         request_permissions_tool.spec,
-        create_request_permissions_tool()
+        create_request_permissions_tool(request_permissions_tool_description())
     );
 }
 
@@ -2638,177 +2644,6 @@ fn test_mcp_tool_anyof_defaults_to_string() {
             defer_loading: None,
         })
     );
-}
-
-#[test]
-fn test_shell_tool() {
-    let tool = super::create_shell_tool(/*exec_permission_approvals_enabled*/ false);
-    let ToolSpec::Function(ResponsesApiTool {
-        description, name, ..
-    }) = &tool
-    else {
-        panic!("expected function tool");
-    };
-    assert_eq!(name, "shell");
-
-    let expected = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-
-Examples of valid command strings:
-
-- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
-- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
-- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
-- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
-                .to_string()
-                + &windows_shell_safety_description()
-    } else {
-        r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-                .to_string()
-    };
-    assert_eq!(description, &expected);
-}
-
-#[test]
-fn test_exec_command_tool_windows_description_includes_shell_safety_guidance() {
-    let tool = super::create_exec_command_tool(
-        /*allow_login_shell*/ true, /*exec_permission_approvals_enabled*/ false,
-    );
-    let ToolSpec::Function(ResponsesApiTool {
-        description, name, ..
-    }) = &tool
-    else {
-        panic!("expected function tool");
-    };
-    assert_eq!(name, "exec_command");
-
-    let expected = if cfg!(windows) {
-        format!(
-            "Runs a command in a PTY, returning output or a session ID for ongoing interaction.{}",
-            windows_shell_safety_description()
-        )
-    } else {
-        "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-            .to_string()
-    };
-    assert_eq!(description, &expected);
-}
-
-#[test]
-fn shell_tool_with_request_permission_includes_additional_permissions() {
-    let tool = super::create_shell_tool(/*exec_permission_approvals_enabled*/ true);
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("expected function tool");
-    };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("expected object parameters");
-    };
-
-    assert!(properties.contains_key("additional_permissions"));
-
-    let Some(JsonSchema::String {
-        description: Some(description),
-    }) = properties.get("sandbox_permissions")
-    else {
-        panic!("expected sandbox_permissions description");
-    };
-    assert!(description.contains("with_additional_permissions"));
-    assert!(description.contains("filesystem or network permissions"));
-
-    let Some(JsonSchema::Object {
-        properties: additional_properties,
-        ..
-    }) = properties.get("additional_permissions")
-    else {
-        panic!("expected additional_permissions schema");
-    };
-    assert!(additional_properties.contains_key("network"));
-    assert!(additional_properties.contains_key("file_system"));
-    assert!(!additional_properties.contains_key("macos"));
-}
-
-#[test]
-fn request_permissions_tool_includes_full_permission_schema() {
-    let tool = super::create_request_permissions_tool();
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("expected function tool");
-    };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("expected object parameters");
-    };
-    let Some(JsonSchema::Object {
-        properties: permission_properties,
-        additional_properties,
-        ..
-    }) = properties.get("permissions")
-    else {
-        panic!("expected permissions object");
-    };
-
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(permission_properties.contains_key("network"));
-    assert!(permission_properties.contains_key("file_system"));
-    assert!(!permission_properties.contains_key("macos"));
-
-    let Some(JsonSchema::Object {
-        properties: network_properties,
-        additional_properties,
-        ..
-    }) = permission_properties.get("network")
-    else {
-        panic!("expected network object");
-    };
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(network_properties.contains_key("enabled"));
-
-    let Some(JsonSchema::Object {
-        properties: file_system_properties,
-        additional_properties,
-        ..
-    }) = permission_properties.get("file_system")
-    else {
-        panic!("expected file_system object");
-    };
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(file_system_properties.contains_key("read"));
-    assert!(file_system_properties.contains_key("write"));
-}
-
-#[test]
-fn test_shell_command_tool() {
-    let tool = super::create_shell_command_tool(
-        /*allow_login_shell*/ true, /*exec_permission_approvals_enabled*/ false,
-    );
-    let ToolSpec::Function(ResponsesApiTool {
-        description, name, ..
-    }) = &tool
-    else {
-        panic!("expected function tool");
-    };
-    assert_eq!(name, "shell_command");
-
-    let expected = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output.
-
-Examples of valid command strings:
-
-- ls -a (show hidden): "Get-ChildItem -Force"
-- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
-- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
-- setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -""#
-            .to_string()
-            + &windows_shell_safety_description()
-    } else {
-        r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
-    };
-    assert_eq!(description, &expected);
 }
 
 #[test]

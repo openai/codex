@@ -22,6 +22,7 @@ schema and Responses API tool primitives that no longer need to live in
 - `ResponsesApiNamespace`
 - `ResponsesApiNamespaceTool`
 - code-mode `ToolSpec` adapters
+- local host tool spec builders for shell/exec/request-permissions/view-image
 - `parse_tool_input_schema()`
 - `parse_dynamic_tool()`
 - `parse_mcp_tool()`
