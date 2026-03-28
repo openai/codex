@@ -208,13 +208,37 @@ async fn test_config() -> Config {
         .expect("config")
 }
 
+fn test_project_path() -> PathBuf {
+    PathBuf::from(test_path_display("/tmp/project"))
+}
+
+fn truncated_path_variants(path: &str) -> Vec<String> {
+    let chars: Vec<char> = path.chars().collect();
+    (1..chars.len())
+        .map(|len| chars[..len].iter().collect::<String>())
+        .collect()
+}
+
 fn normalize_snapshot_paths(text: impl Into<String>) -> String {
-    let text = text.into();
+    let mut text = text.into();
     let platform_test_cwd = test_path_display("/tmp/project");
     if platform_test_cwd == "/tmp/project" {
         text
     } else {
-        text.replace(&platform_test_cwd, "/tmp/project")
+        text = text.replace(&platform_test_cwd, "/tmp/project");
+
+        for platform_prefix in truncated_path_variants(&platform_test_cwd)
+            .into_iter()
+            .rev()
+        {
+            let unix_prefix: String = "/tmp/project"
+                .chars()
+                .take(platform_prefix.chars().count())
+                .collect();
+            text = text.replace(&format!("{platform_prefix}…"), &format!("{unix_prefix}…"));
+        }
+
+        text
     }
 }
 
@@ -234,10 +258,10 @@ fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> String {
                 .and_then(|line| line.strip_suffix('"'))
             {
                 let width = content.chars().count();
-                let normalized = content.replace(&platform_test_cwd, "/tmp/project");
+                let normalized = normalize_snapshot_paths(content);
                 format!("\"{normalized:width$}\"")
             } else {
-                line.replace(&platform_test_cwd, "/tmp/project")
+                normalize_snapshot_paths(line)
             }
         })
         .collect::<Vec<_>>()
@@ -5225,7 +5249,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/tmp/project"),
+            cwd: test_project_path(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -5270,7 +5294,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/tmp/project"),
+            cwd: test_project_path(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -10469,7 +10493,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-            cwd: PathBuf::from("/tmp/project"),
+            cwd: test_project_path(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -10523,7 +10547,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },
-            cwd: PathBuf::from("/tmp/project"),
+            cwd: test_project_path(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -12524,7 +12548,7 @@ async fn status_line_fast_mode_footer_snapshot() {
 #[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.config.cwd = PathBuf::from("/tmp/project").abs();
+    chat.config.cwd = test_project_path().abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
@@ -12628,7 +12652,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.show_welcome_banner = false;
-    chat.config.cwd = PathBuf::from("/tmp/project").abs();
+    chat.config.cwd = test_project_path().abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
