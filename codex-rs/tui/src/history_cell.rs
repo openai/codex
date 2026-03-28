@@ -639,7 +639,7 @@ pub(crate) fn new_subagent_spawned_cell(name: &str, prompt_preview: &str) -> Pla
         Span::from(name.to_string()).bold(),
     ]));
 
-    let preview = truncate_text(prompt_preview.trim(), 240);
+    let preview = truncate_text(prompt_preview.trim(), /*max_graphemes*/ 240);
     if !preview.is_empty() {
         lines.push(Line::from(vec![
             "  └ ".dim(),
@@ -664,7 +664,7 @@ pub(crate) fn new_subagent_update_cell(
         status_label_span(status),
     ];
 
-    let summary = truncate_text(summary.trim(), 240);
+    let summary = truncate_text(summary.trim(), /*max_graphemes*/ 240);
     if !summary.is_empty() {
         spans.push(" — ".dim());
         spans.push(Span::from(summary));
