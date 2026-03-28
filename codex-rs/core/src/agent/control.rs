@@ -1069,7 +1069,7 @@ impl AgentControl {
             .join("\n")
     }
 
-    pub(crate) async fn list_agents(
+    pub(crate) async fn list_agents_by_path(
         &self,
         current_session_source: &SessionSource,
         path_prefix: Option<&str>,
