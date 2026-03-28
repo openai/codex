@@ -19,7 +19,7 @@ async fn offline_model_info_without_tool_output_override() {
     let manager = ModelsManager::new(
         config.codex_home.clone(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
     );
@@ -28,7 +28,7 @@ async fn offline_model_info_without_tool_output_override() {
 
     assert_eq!(
         model_info.truncation_policy,
-        TruncationPolicyConfig::bytes(10_000)
+        TruncationPolicyConfig::bytes(/*limit*/ 10_000)
     );
 }
 
@@ -43,7 +43,7 @@ async fn offline_model_info_with_tool_output_override() {
     let manager = ModelsManager::new(
         config.codex_home.clone(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
     );
@@ -52,7 +52,7 @@ async fn offline_model_info_with_tool_output_override() {
 
     assert_eq!(
         model_info.truncation_policy,
-        TruncationPolicyConfig::tokens(123)
+        TruncationPolicyConfig::tokens(/*limit*/ 123)
     );
 }
 
@@ -97,7 +97,7 @@ async fn custom_model_alias_applies_request_model_and_context_overrides() {
                 default_verbosity: None,
                 supports_search_tool: false,
                 apply_patch_tool_type: None,
-                truncation_policy: TruncationPolicyConfig::bytes(10_000),
+                truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
                 supports_parallel_tool_calls: false,
                 supports_image_detail_original: false,
                 context_window: Some(272_000),

@@ -305,7 +305,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         &config,
         auth_manager,
         SessionSource::Exec,
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(

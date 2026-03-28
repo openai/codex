@@ -248,17 +248,17 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
 
 fn test_model_client_session() -> crate::client::ModelClientSession {
     crate::client::ModelClient::new(
-        None,
+        /*auth_manager*/ None,
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
         crate::model_provider_info::ModelProviderInfo::create_openai_provider(
-            /* base_url */ None,
+            /*base_url*/ None,
         ),
         codex_protocol::protocol::SessionSource::Exec,
-        None,
-        false,
-        false,
-        None,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
     )
     .new_session()
 }
@@ -314,7 +314,7 @@ fn make_connector(id: &str, name: &str) -> AppInfo {
 
 #[test]
 fn assistant_message_stream_parsers_can_be_seeded_from_output_item_added_text() {
-    let mut parsers = AssistantMessageStreamParsers::new(false);
+    let mut parsers = AssistantMessageStreamParsers::new(/*plan_mode*/ false);
     let item_id = "msg-1";
 
     let seeded = parsers.seed_item_text(item_id, "hello <oai-mem-citation>doc");
@@ -331,7 +331,7 @@ fn assistant_message_stream_parsers_can_be_seeded_from_output_item_added_text() 
 
 #[test]
 fn assistant_message_stream_parsers_seed_buffered_prefix_stays_out_of_finish_tail() {
-    let mut parsers = AssistantMessageStreamParsers::new(false);
+    let mut parsers = AssistantMessageStreamParsers::new(/*plan_mode*/ false);
     let item_id = "msg-1";
 
     let seeded = parsers.seed_item_text(item_id, "hello <oai-mem-");
@@ -348,7 +348,7 @@ fn assistant_message_stream_parsers_seed_buffered_prefix_stays_out_of_finish_tai
 
 #[test]
 fn assistant_message_stream_parsers_seed_plan_parser_across_added_and_delta_boundaries() {
-    let mut parsers = AssistantMessageStreamParsers::new(true);
+    let mut parsers = AssistantMessageStreamParsers::new(/*plan_mode*/ true);
     let item_id = "msg-1";
 
     let seeded = parsers.seed_item_text(item_id, "Intro\n<proposed");
@@ -450,7 +450,7 @@ fn validated_network_policy_amendment_host_rejects_mismatch() {
 async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyhow::Result<()> {
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
-        None,
+        /*requirements*/ None,
         &SandboxPolicy::new_workspace_write_policy(),
     )?;
     let mut exec_policy = Policy::empty();
@@ -458,16 +458,16 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
         "example.com",
         NetworkRuleProtocol::Https,
         Decision::Allow,
-        None,
+        /*justification*/ None,
     )?;
 
     let (started_proxy, _) = Session::start_managed_network_proxy(
         &spec,
         &exec_policy,
         &SandboxPolicy::new_workspace_write_policy(),
-        None,
-        None,
-        false,
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
         crate::config::NetworkProxyAuditMetadata::default(),
     )
     .await?;
@@ -509,9 +509,9 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
         &spec,
         &exec_policy,
         &SandboxPolicy::new_workspace_write_policy(),
-        None,
-        None,
-        false,
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
         crate::config::NetworkProxyAuditMetadata::default(),
     )
     .await?;
