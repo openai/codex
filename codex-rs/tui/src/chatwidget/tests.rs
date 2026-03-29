@@ -11760,7 +11760,7 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
 
     assert_snapshot!(
         "app_server_mcp_startup_failure_renders_warning_history",
-        term.backend().vt100().screen().contents()
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
 
