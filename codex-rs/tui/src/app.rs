@@ -1693,6 +1693,21 @@ impl App {
         self.active_thread_id.or(self.chat_widget.thread_id())
     }
 
+    fn ignore_same_thread_resume(
+        &mut self,
+        target_session: &crate::resume_picker::SessionTarget,
+    ) -> bool {
+        if self.active_thread_id != Some(target_session.thread_id) {
+            return false;
+        };
+
+        self.chat_widget.add_info_message(
+            format!("Already viewing {}.", target_session.display_label()),
+            /*hint*/ None,
+        );
+        true
+    }
+
     /// Mirrors the visible thread into the contextual footer row.
     ///
     /// The footer sometimes shows ambient context instead of an instructional hint. In multi-agent
@@ -4074,6 +4089,10 @@ impl App {
                 .await?
                 {
                     SessionSelection::Resume(target_session) => {
+                        if self.ignore_same_thread_resume(&target_session) {
+                            tui.frame_requester().schedule_frame();
+                            return Ok(AppRunControl::Continue);
+                        }
                         let current_cwd = self.config.cwd.to_path_buf();
                         let resume_cwd = if self.remote_app_server_url.is_some() {
                             current_cwd.clone()
@@ -6518,6 +6537,53 @@ mod tests {
             ),
             true
         );
+    }
+
+    #[tokio::test]
+    async fn ignore_same_thread_resume_reports_noop_for_current_thread() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
+        app.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                session,
+                Vec::new(),
+            ),
+        );
+        app.activate_thread_channel(thread_id).await;
+        while app_event_rx.try_recv().is_ok() {}
+
+        let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
+            path: Some(PathBuf::from("/tmp/project")),
+            thread_id,
+        });
+
+        assert!(ignored);
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected info message after same-thread resume, saw {other:?}"),
+        };
+        let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+        assert!(rendered.contains("Already viewing /tmp/project."));
+    }
+
+    #[tokio::test]
+    async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session);
+
+        let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
+            path: Some(PathBuf::from("/tmp/project")),
+            thread_id,
+        });
+
+        assert!(!ignored);
+        assert!(app.transcript_cells.is_empty());
     }
 
     #[tokio::test]
