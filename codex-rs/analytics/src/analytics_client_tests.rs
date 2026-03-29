@@ -29,6 +29,7 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
+use codex_login::default_client::DEFAULT_ORIGINATOR;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -273,7 +274,7 @@ fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(thread_initialized_event_request(
         &super::ConnectionState {
             app_server_client: super::CodexAppServerClientMetadata {
-                product_client_id: "codex-tui".to_string(),
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
                 client_name: Some("codex-tui".to_string()),
                 client_version: Some("1.0.0".to_string()),
                 rpc_transport: super::AppServerRpcTransport::Stdio,
@@ -306,7 +307,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-0",
                 "app_server_client": {
-                    "product_client_id": "codex-tui",
+                    "product_client_id": DEFAULT_ORIGINATOR,
                     "client_name": "codex-tui",
                     "client_version": "1.0.0",
                     "rpc_transport": "stdio",
@@ -365,6 +366,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                         opt_out_notification_methods: None,
                     }),
                 },
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
                 runtime: super::CodexRuntimeMetadata {
                     codex_rs_version: "0.99.0".to_string(),
                     runtime_os: "linux".to_string(),
@@ -393,7 +395,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["product_client_id"],
-        "codex-tui"
+        DEFAULT_ORIGINATOR
     );
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["client_name"],

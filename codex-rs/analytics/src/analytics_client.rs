@@ -86,6 +86,7 @@ pub enum AnalyticsFact {
     Initialize {
         connection_id: u64,
         params: InitializeParams,
+        product_client_id: String,
         runtime: CodexRuntimeMetadata,
         rpc_transport: AppServerRpcTransport,
     },
@@ -263,11 +264,13 @@ impl AnalyticsEventsClient {
         &self,
         connection_id: u64,
         params: InitializeParams,
+        product_client_id: String,
         rpc_transport: AppServerRpcTransport,
     ) {
         self.record_fact(AnalyticsFact::Initialize {
             connection_id,
             params,
+            product_client_id,
             runtime: current_runtime_metadata(),
             rpc_transport,
         });
@@ -490,10 +493,17 @@ impl AnalyticsReducer {
             AnalyticsFact::Initialize {
                 connection_id,
                 params,
+                product_client_id,
                 runtime,
                 rpc_transport,
             } => {
-                self.ingest_initialize(connection_id, params, runtime, rpc_transport);
+                self.ingest_initialize(
+                    connection_id,
+                    params,
+                    product_client_id,
+                    runtime,
+                    rpc_transport,
+                );
             }
             AnalyticsFact::Request {
                 connection_id: _connection_id,
@@ -531,6 +541,7 @@ impl AnalyticsReducer {
         &mut self,
         connection_id: u64,
         params: InitializeParams,
+        product_client_id: String,
         runtime: CodexRuntimeMetadata,
         rpc_transport: AppServerRpcTransport,
     ) {
@@ -538,7 +549,7 @@ impl AnalyticsReducer {
             connection_id,
             ConnectionState {
                 app_server_client: CodexAppServerClientMetadata {
-                    product_client_id: params.client_info.name.clone(),
+                    product_client_id,
                     client_name: Some(params.client_info.name),
                     client_version: Some(params.client_info.version),
                     rpc_transport,
