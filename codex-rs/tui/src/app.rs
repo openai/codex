@@ -1247,7 +1247,7 @@ fn derive_subagent_name(prompt: &str, ordinal: i32) -> String {
     }
 
     let joined = tokens.join("-");
-    truncate_text(&joined, 40)
+    truncate_text(&joined, /*max_graphemes*/ 40)
 }
 
 fn clean_token(token: &str) -> String {
