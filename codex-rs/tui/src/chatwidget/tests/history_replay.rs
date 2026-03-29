@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -168,6 +169,40 @@ async fn thread_snapshot_replay_deduplicates_agent_inbox_compatibility_items() {
     assert_chatwidget_snapshot!(
         "thread_snapshot_replay_agent_inbox_dedupes_compatibility_items",
         rendered
+    );
+}
+
+#[tokio::test]
+async fn live_raw_response_item_completed_renders_agent_inbox_message() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let sender =
+        ThreadId::from_string("019cbff7-558b-77d3-8653-8238ab5361ec").expect("valid thread id");
+    let message = "Please review the latest diff";
+
+    chat.handle_server_notification(
+        ServerNotification::RawResponseItemCompleted(RawResponseItemCompletedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            item: agent_inbox_function_call_output(sender, message),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected live agent inbox item to render one history row"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Agent message: Please review the latest diff"),
+        "expected rendered agent inbox message, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("from 019cbff7"),
+        "expected rendered sender hint, got {rendered:?}"
     );
 }
 

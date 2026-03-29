@@ -129,20 +129,15 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
-#[cfg(test)]
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
-#[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
-#[cfg(test)]
 use codex_protocol::protocol::AGENT_INBOX_KIND;
-#[cfg(test)]
 use codex_protocol::protocol::AGENT_INBOX_MESSAGE_PREFIX;
-#[cfg(test)]
 use codex_protocol::protocol::AgentInboxPayload;
 #[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
@@ -461,7 +456,6 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
     )
 }
 
-#[cfg(test)]
 fn agent_inbox_message_from_item(item: &ResponseItem) -> Option<(Option<String>, String)> {
     match item {
         ResponseItem::FunctionCallOutput { output, .. } => {
@@ -6623,7 +6617,6 @@ impl ChatWidget {
             | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadUnarchived(_)
-            | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::McpToolCallProgress(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
@@ -6636,6 +6629,15 @@ impl ChatWidget {
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
+            ServerNotification::RawResponseItemCompleted(notification) => {
+                if let Some((sender, message)) = agent_inbox_message_from_item(&notification.item) {
+                    let hint = sender.map(|sender| format!("from {sender}"));
+                    self.add_to_history(history_cell::new_info_event(
+                        format!("Agent message: {message}"),
+                        hint,
+                    ));
+                }
+            }
         }
     }
 
