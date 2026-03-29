@@ -7926,7 +7926,7 @@ mod tests {
         app.subagents.set_root_thread(root_thread_id);
 
         let mut info = SubagentInfo::new(
-            1,
+            /*ordinal*/ 1,
             "watchdog-agent".to_string(),
             "watchdog idle".to_string(),
             CollabAgentSpawnMode::Watchdog,
