@@ -1108,6 +1108,8 @@ pub struct AgentRoleConfig {
     pub config_file: Option<PathBuf>,
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
+    /// Default fork-context behavior for this role.
+    pub fork_context: Option<bool>,
 }
 
 fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
