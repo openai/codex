@@ -874,9 +874,6 @@ impl MessageProcessor {
         match self.config_api.write_value(params).await {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
@@ -905,9 +902,6 @@ impl MessageProcessor {
         {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
                 self.outgoing.send_response(request_id, response).await;
                 if should_refresh_apps_list {
                     self.refresh_apps_list_after_experimental_feature_enablement_set()
@@ -988,9 +982,6 @@ impl MessageProcessor {
         match result {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,

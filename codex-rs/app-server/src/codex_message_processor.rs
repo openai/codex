@@ -479,19 +479,6 @@ impl CodexMessageProcessor {
         self.thread_manager.skills_manager().clear_cache();
     }
 
-    pub(crate) async fn maybe_start_plugin_startup_tasks_for_latest_config(&self) {
-        match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => self
-                .thread_manager
-                .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(
-                    &config,
-                    self.thread_manager.auth_manager(),
-                ),
-            Err(err) => warn!("failed to load latest config for plugin startup tasks: {err:?}"),
-        }
-    }
-
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
@@ -5982,6 +5969,7 @@ impl CodexMessageProcessor {
             force_remote_sync,
         } = params;
         let roots = cwds.unwrap_or_default();
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
