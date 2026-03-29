@@ -1135,6 +1135,9 @@ impl SubagentRegistry {
                 name: info.name.clone(),
                 status: info.status.clone(),
                 is_watchdog: info.is_watchdog(),
+                watchdog_countdown_started_at: info
+                    .is_watchdog()
+                    .then_some(info.running_started_at()),
                 preview: running_preview(info),
                 latest_update_at: info.latest_update_at,
             })

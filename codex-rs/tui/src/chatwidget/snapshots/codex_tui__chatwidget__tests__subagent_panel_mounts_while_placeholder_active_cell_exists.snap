@@ -1,7 +1,9 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 2568
 expression: terminal.backend().vt100().screen().contents()
 ---
+
 ╭───────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.0.0)              │
 │                                       │
@@ -10,7 +12,7 @@ expression: terminal.backend().vt100().screen().contents()
 ╰───────────────────────────────────────╯
 
 • Subagents (0s • no subagents running • esc to interrupt)
-• [#1] [watchdog] watchdog-agent idle — watchdog idle
+• [#1] [watchdog] watchdog-agent idle (59s) — watchdog idle
 
 
 › show current subagent state
