@@ -10904,12 +10904,14 @@ impl ChatWidget {
             None => RenderableItem::Owned(Box::new(())),
         };
         let subagent_panel_renderable = match &self.subagent_panel {
-            Some(panel) => RenderableItem::Borrowed(panel).inset(Insets::tlbr(1, 0, 0, 0)),
+            Some(panel) => RenderableItem::Borrowed(panel).inset(Insets::tlbr(
+                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+            )),
             None => RenderableItem::Owned(Box::new(())),
         };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
-        flex.push(0, subagent_panel_renderable);
+        flex.push(/*flex*/ 0, subagent_panel_renderable);
         flex.push(
             /*flex*/ 0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(
