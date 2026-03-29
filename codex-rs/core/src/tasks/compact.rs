@@ -42,6 +42,11 @@ impl SessionTask for CompactTask {
             );
             crate::compact::run_compact_task(session.clone(), ctx, input).await
         };
+        session
+            .services
+            .agent_control
+            .finish_watchdog_parent_compaction(session.conversation_id)
+            .await;
         None
     }
 }

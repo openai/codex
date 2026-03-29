@@ -1615,7 +1615,10 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
         "researcher".to_string(),
         AgentRoleConfig {
             description: Some("Research role".to_string()),
+            model: None,
             config_file: None,
+            spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: Some(vec!["Atlas".to_string()]),
         },
     );

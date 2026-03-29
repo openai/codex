@@ -1,15 +1,16 @@
 use super::*;
+use crate::agent::agent_resolver::resolve_agent_target;
 use crate::agent::status::is_final;
 use codex_protocol::error::CodexErr;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
-
 use tokio::time::timeout_at;
 
 pub(crate) struct Handler;
@@ -35,7 +36,22 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
-        let receiver_thread_ids = parse_agent_id_targets(args.targets)?;
+
+        if let Some(owner_thread_id) = session
+            .services
+            .agent_control
+            .watchdog_owner_for_active_helper(session.conversation_id)
+            .await
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "wait_agent is not available to watchdog check-in agents. This thread is a one-shot watchdog check-in for owner {owner_thread_id}. Send the result to the parent/root agent with `send_input`. If you finish without `send_input`, runtime will forward your conclusory message to the owner as the mandatory fallback wake-up path. Exiting without either `send_input` or a final message is a bug; every watchdog check-in must wake the owner thread."
+            )));
+        }
+
+        let mut receiver_thread_ids = Vec::with_capacity(args.targets.len());
+        for target in args.targets {
+            receiver_thread_ids.push(resolve_agent_target(&session, &turn, &target).await?);
+        }
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
         let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {
@@ -59,6 +75,22 @@ impl ToolHandler for Handler {
             });
         }
 
+        let watchdog_target_ids = session
+            .services
+            .agent_control
+            .watchdog_targets(&receiver_thread_ids)
+            .await;
+        let mut waited_thread_ids = Vec::new();
+        let mut watchdog_statuses = Vec::new();
+        split_wait_ids(
+            &session,
+            receiver_thread_ids,
+            &watchdog_target_ids,
+            &mut waited_thread_ids,
+            &mut watchdog_statuses,
+        )
+        .await;
+
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
         let timeout_ms = match timeout_ms {
             ms if ms <= 0 => {
@@ -74,7 +106,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabWaitingBeginEvent {
                     sender_thread_id: session.conversation_id,
-                    receiver_thread_ids: receiver_thread_ids.clone(),
+                    receiver_thread_ids: waited_thread_ids.clone(),
                     receiver_agents: receiver_agents.clone(),
                     call_id: call_id.clone(),
                 }
@@ -82,9 +114,31 @@ impl ToolHandler for Handler {
             )
             .await;
 
-        let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
+        if waited_thread_ids.is_empty() {
+            let statuses_map = watchdog_statuses.iter().cloned().collect::<HashMap<_, _>>();
+            let content = serde_json::to_string(&statuses_map).map_err(|err| {
+                FunctionCallError::Fatal(format!("failed to serialize wait_agent status: {err}"))
+            })?;
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingEndEvent {
+                        sender_thread_id: session.conversation_id,
+                        call_id,
+                        agent_statuses: Vec::new(),
+                        statuses: statuses_map,
+                    }
+                    .into(),
+                )
+                .await;
+            return Err(FunctionCallError::RespondToModel(format!(
+                "wait_agent cannot be used to wait for watchdog check-ins. You passed only watchdog handle ids. Watchdog check-ins only happen after the current turn ends and the owner thread is idle for at least watchdog_interval_s. `wait_agent` on a watchdog handle is status-only and cannot confirm a new check-in. Do not poll with `wait_agent`, `list_agents`, or shell `sleep`: the owner thread is still active during this turn, so those calls cannot make the watchdog fire. Current watchdog handle statuses: {content}"
+            )));
+        }
+
+        let mut status_rxs = Vec::with_capacity(waited_thread_ids.len());
         let mut initial_final_statuses = Vec::new();
-        for id in &receiver_thread_ids {
+        for id in &waited_thread_ids {
             match session.services.agent_control.subscribe_status(*id).await {
                 Ok(rx) => {
                     let status = rx.borrow().clone();
@@ -97,8 +151,9 @@ impl ToolHandler for Handler {
                     initial_final_statuses.push((*id, AgentStatus::NotFound));
                 }
                 Err(err) => {
-                    let mut statuses = HashMap::with_capacity(1);
+                    let mut statuses = HashMap::with_capacity(1 + watchdog_statuses.len());
                     statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                    statuses.extend(watchdog_statuses.iter().cloned());
                     session
                         .send_event(
                             &turn,
@@ -123,7 +178,7 @@ impl ToolHandler for Handler {
             initial_final_statuses
         } else {
             let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs.into_iter() {
+            for (id, rx) in status_rxs {
                 let session = session.clone();
                 futures.push(wait_for_final_status(session, id, rx));
             }
@@ -152,16 +207,17 @@ impl ToolHandler for Handler {
         };
 
         let timed_out = statuses.is_empty();
-        let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let mut statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        statuses_by_id.extend(watchdog_statuses);
         let agent_statuses = build_wait_agent_statuses(&statuses_by_id, &receiver_agents);
         let result = WaitAgentResult {
-            status: statuses
-                .into_iter()
+            status: statuses_by_id
+                .iter()
                 .filter_map(|(thread_id, status)| {
                     target_by_thread_id
-                        .get(&thread_id)
+                        .get(thread_id)
                         .cloned()
-                        .map(|target| (target, status))
+                        .map(|target| (target, status.clone()))
                 })
                 .collect(),
             timed_out,
@@ -233,6 +289,23 @@ async fn wait_for_final_status(
         status = status_rx.borrow().clone();
         if is_final(&status) {
             return Some((thread_id, status));
+        }
+    }
+}
+
+async fn split_wait_ids(
+    session: &Arc<Session>,
+    requested_thread_ids: Vec<ThreadId>,
+    watchdog_target_ids: &HashSet<ThreadId>,
+    waited_thread_ids: &mut Vec<ThreadId>,
+    watchdog_statuses: &mut Vec<(ThreadId, AgentStatus)>,
+) {
+    for thread_id in requested_thread_ids {
+        if watchdog_target_ids.contains(&thread_id) {
+            let status = session.services.agent_control.get_status(thread_id).await;
+            watchdog_statuses.push((thread_id, status));
+        } else {
+            waited_thread_ids.push(thread_id);
         }
     }
 }

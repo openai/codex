@@ -433,7 +433,9 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         "expected permissions developer message, got {developer_contents:?}"
     );
     assert!(
-        developer_contents.contains(&"Foreshadow upcoming tool calls."),
+        developer_contents
+            .iter()
+            .any(|content| content.contains("Foreshadow upcoming tool calls.")),
         "expected developer instructions in developer messages, got {developer_contents:?}"
     );
 

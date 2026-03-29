@@ -145,6 +145,7 @@ use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
 #[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 #[cfg(test)]
@@ -3762,6 +3763,10 @@ impl ChatWidget {
                             prompt: prompt.unwrap_or_default(),
                             model: String::new(),
                             reasoning_effort: ReasoningEffortConfig::Medium,
+                            // Thread history items do not carry spawn_mode yet, so the
+                            // replay path must choose an explicit fallback for reconstructed
+                            // spawn rows. Plain spawn is the least surprising default.
+                            spawn_mode: AgentSpawnMode::Spawn,
                             status: first_receiver
                                 .as_ref()
                                 .and_then(|thread_id| agents_states.get(&thread_id.to_string()))

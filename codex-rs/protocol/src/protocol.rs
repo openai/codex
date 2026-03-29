@@ -3422,6 +3422,16 @@ pub struct CollabAgentSpawnBeginEvent {
     pub reasoning_effort: ReasoningEffortConfig,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AgentSpawnMode {
+    #[default]
+    Spawn,
+    Fork,
+    Watchdog,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct CollabAgentRef {
     /// Thread ID of the receiver/new agent.
@@ -3469,6 +3479,9 @@ pub struct CollabAgentSpawnEndEvent {
     pub model: String,
     /// Effective reasoning effort used by the spawned agent after inheritance and role overrides.
     pub reasoning_effort: ReasoningEffortConfig,
+    /// Spawn mode used for this agent.
+    #[serde(default)]
+    pub spawn_mode: AgentSpawnMode,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
 }
