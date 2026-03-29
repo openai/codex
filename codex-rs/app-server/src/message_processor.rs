@@ -577,7 +577,7 @@ impl MessageProcessor {
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
                 let originator = name.clone();
-                if let Err(error) = set_default_originator(originator) {
+                if let Err(error) = set_default_originator(originator.clone()) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {

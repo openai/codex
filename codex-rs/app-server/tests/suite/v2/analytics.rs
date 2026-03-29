@@ -142,6 +142,10 @@ pub(crate) fn assert_basic_thread_initialized_event(
         DEFAULT_CLIENT_NAME
     );
     assert_eq!(
+        event["event_params"]["app_server_client"]["client_name"],
+        DEFAULT_CLIENT_NAME
+    );
+    assert_eq!(
         event["event_params"]["app_server_client"]["rpc_transport"],
         "stdio"
     );
