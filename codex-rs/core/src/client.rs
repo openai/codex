@@ -87,6 +87,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Instrument;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
@@ -1023,6 +1024,7 @@ impl ModelClientSession {
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
+            let api_base_url = client_setup.api_provider.base_url.clone();
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
@@ -1052,10 +1054,20 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let request_span = crate::network_trace::responses_http_request_span(
+                &self.client.state.conversation_id,
+                turn_metadata_header,
+                &self.client.state.provider.name,
+                &model_info.slug,
+                &api_base_url,
+            );
+            let stream_result = async { client.stream_request(request, options).await }
+                .instrument(request_span.clone())
+                .await;
 
             match stream_result {
                 Ok(stream) => {
+                    let _entered = request_span.enter();
                     let (stream, _) = map_response_stream(stream, session_telemetry.clone());
                     return Ok(stream);
                 }
@@ -1414,72 +1426,76 @@ where
 {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
+    let current_span = tracing::Span::current();
 
-    tokio::spawn(async move {
-        let mut logged_error = false;
-        let mut tx_last_response = Some(tx_last_response);
-        let mut items_added: Vec<ResponseItem> = Vec::new();
-        let mut api_stream = api_stream;
-        while let Some(event) = api_stream.next().await {
-            match event {
-                Ok(ResponseEvent::OutputItemDone(item)) => {
-                    items_added.push(item.clone());
-                    if tx_event
-                        .send(Ok(ResponseEvent::OutputItemDone(item)))
-                        .await
-                        .is_err()
-                    {
-                        return;
+    tokio::spawn(
+        async move {
+            let mut logged_error = false;
+            let mut tx_last_response = Some(tx_last_response);
+            let mut items_added: Vec<ResponseItem> = Vec::new();
+            let mut api_stream = api_stream;
+            while let Some(event) = api_stream.next().await {
+                match event {
+                    Ok(ResponseEvent::OutputItemDone(item)) => {
+                        items_added.push(item.clone());
+                        if tx_event
+                            .send(Ok(ResponseEvent::OutputItemDone(item)))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
-                }
-                Ok(ResponseEvent::Completed {
-                    response_id,
-                    token_usage,
-                }) => {
-                    if let Some(usage) = &token_usage {
-                        session_telemetry.sse_event_completed(
-                            usage.input_tokens,
-                            usage.output_tokens,
-                            Some(usage.cached_input_tokens),
-                            Some(usage.reasoning_output_tokens),
-                            usage.total_tokens,
-                        );
+                    Ok(ResponseEvent::Completed {
+                        response_id,
+                        token_usage,
+                    }) => {
+                        if let Some(usage) = &token_usage {
+                            session_telemetry.sse_event_completed(
+                                usage.input_tokens,
+                                usage.output_tokens,
+                                Some(usage.cached_input_tokens),
+                                Some(usage.reasoning_output_tokens),
+                                usage.total_tokens,
+                            );
+                        }
+                        if let Some(sender) = tx_last_response.take() {
+                            let _ = sender.send(LastResponse {
+                                response_id: response_id.clone(),
+                                items_added: std::mem::take(&mut items_added),
+                            });
+                        }
+                        if tx_event
+                            .send(Ok(ResponseEvent::Completed {
+                                response_id,
+                                token_usage,
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
-                    if let Some(sender) = tx_last_response.take() {
-                        let _ = sender.send(LastResponse {
-                            response_id: response_id.clone(),
-                            items_added: std::mem::take(&mut items_added),
-                        });
+                    Ok(event) => {
+                        if tx_event.send(Ok(event)).await.is_err() {
+                            return;
+                        }
                     }
-                    if tx_event
-                        .send(Ok(ResponseEvent::Completed {
-                            response_id,
-                            token_usage,
-                        }))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                Ok(event) => {
-                    if tx_event.send(Ok(event)).await.is_err() {
-                        return;
-                    }
-                }
-                Err(err) => {
-                    let mapped = map_api_error(err);
-                    if !logged_error {
-                        session_telemetry.see_event_completed_failed(&mapped);
-                        logged_error = true;
-                    }
-                    if tx_event.send(Err(mapped)).await.is_err() {
-                        return;
+                    Err(err) => {
+                        let mapped = map_api_error(err);
+                        if !logged_error {
+                            session_telemetry.see_event_completed_failed(&mapped);
+                            logged_error = true;
+                        }
+                        if tx_event.send(Err(mapped)).await.is_err() {
+                            return;
+                        }
                     }
                 }
             }
         }
-    });
+        .instrument(current_span),
+    );
 
     (ResponseStream { rx_event }, rx_last_response)
 }

@@ -197,11 +197,12 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            // Task-owned turn spans keep a core-owned span open for the
-            // full task lifecycle after the submission dispatch span ends.
+            // Task-owned turn spans keep a core-owned parent span open for the
+            // full turn lifecycle after the submission dispatch span ends.
             let task_span = info_span!(
                 "turn",
                 otel.name = span_name,
+                conversation.id = %self.conversation_id,
                 thread.id = %self.conversation_id,
                 turn.id = %turn_context.sub_id,
                 model = %turn_context.model_info.slug,

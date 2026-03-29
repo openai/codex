@@ -10,6 +10,9 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_otel::current_span_w3c_trace_context;
+use codex_otel::span_w3c_trace_context;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -64,6 +67,8 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time;
+use tracing::Instrument;
+use tracing::field::Empty;
 use tracing::info;
 use tracing::warn;
 
@@ -82,6 +87,14 @@ const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
+const TRACEPARENT_HEADER: &str = "traceparent";
+const TRACESTATE_HEADER: &str = "tracestate";
+const TRACEPARENT_META_KEY: &str = "x-codex-traceparent";
+const TRACESTATE_META_KEY: &str = "x-codex-tracestate";
+
+tokio::task_local! {
+    static SERVICE_OPERATION_TRACE_CONTEXT: Option<W3cTraceContext>;
+}
 
 #[derive(Clone)]
 struct StreamableHttpResponseClient {
@@ -97,6 +110,24 @@ impl StreamableHttpResponseClient {
         error: reqwest::Error,
     ) -> StreamableHttpError<StreamableHttpResponseClientError> {
         StreamableHttpError::Client(StreamableHttpResponseClientError::from(error))
+    }
+
+    fn apply_trace_context(
+        request: reqwest::RequestBuilder,
+        trace: Option<&W3cTraceContext>,
+    ) -> reqwest::RequestBuilder {
+        let Some(trace) = trace else {
+            return request;
+        };
+
+        let mut request = request;
+        if let Some(traceparent) = trace.traceparent.as_deref() {
+            request = request.header(TRACEPARENT_HEADER, traceparent);
+        }
+        if let Some(tracestate) = trace.tracestate.as_deref() {
+            request = request.header(TRACESTATE_HEADER, tracestate);
+        }
+        request
     }
 }
 
@@ -123,6 +154,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let trace = current_service_operation_trace_context();
         let mut request = self
             .inner
             .post(uri.as_ref())
@@ -133,6 +165,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         if let Some(session_id_value) = session_id.as_ref() {
             request = request.header(HEADER_SESSION_ID, session_id_value.as_ref());
         }
+        request = Self::apply_trace_context(request, trace.as_ref());
 
         let response = request
             .json(&message)
@@ -224,10 +257,12 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         session: Arc<str>,
         auth_token: Option<String>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
+        let trace = current_service_operation_trace_context();
         let mut request_builder = self.inner.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
+        request_builder = Self::apply_trace_context(request_builder, trace.as_ref());
         let response = request_builder
             .header(HEADER_SESSION_ID, session.as_ref())
             .send()
@@ -254,6 +289,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
     > {
+        let trace = current_service_operation_trace_context();
         let mut request_builder = self
             .inner
             .get(uri.as_ref())
@@ -265,6 +301,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
+        request_builder = Self::apply_trace_context(request_builder, trace.as_ref());
 
         let response = request_builder
             .send()
@@ -733,6 +770,8 @@ impl RmcpClient {
                 let rmcp_params = rmcp_params.clone();
                 let meta = meta.clone();
                 async move {
+                    let trace = current_service_operation_trace_context();
+                    let meta = merge_trace_context_into_meta(meta, trace.as_ref());
                     let result = service
                         .peer()
                         .send_request_with_option(
@@ -1052,41 +1091,104 @@ impl RmcpClient {
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let service = self.service().await?;
-        match Self::run_service_operation_once(Arc::clone(&service), label, timeout, &operation)
-            .await
+        let operation_span = self.service_operation_span(label);
+        let operation_trace = span_w3c_trace_context(&operation_span);
+        match Self::run_service_operation_once(
+            Arc::clone(&service),
+            label,
+            timeout,
+            operation_span,
+            operation_trace,
+            &operation,
+        )
+        .await
         {
             Ok(result) => Ok(result),
             Err(error) if Self::is_session_expired_404(&error) => {
                 self.reinitialize_after_session_expiry(&service).await?;
                 let recovered_service = self.service().await?;
-                Self::run_service_operation_once(recovered_service, label, timeout, &operation)
-                    .await
-                    .map_err(Into::into)
+                let operation_span = self.service_operation_span(label);
+                let operation_trace = span_w3c_trace_context(&operation_span);
+                Self::run_service_operation_once(
+                    recovered_service,
+                    label,
+                    timeout,
+                    operation_span,
+                    operation_trace,
+                    &operation,
+                )
+                .await
+                .map_err(Into::into)
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    fn service_operation_span(&self, label: &str) -> tracing::Span {
+        let span = tracing::info_span!(
+            "mcp.client.operation",
+            otel.kind = "client",
+            rpc.system = "jsonrpc",
+            rpc.method = label,
+            mcp.transport = Empty,
+            mcp.server.name = Empty,
+            server.address = Empty,
+            server.port = Empty,
+        );
+
+        match &self.transport_recipe {
+            TransportRecipe::Stdio { .. } => {
+                span.record("mcp.transport", "stdio");
+            }
+            TransportRecipe::StreamableHttp {
+                server_name, url, ..
+            } => {
+                span.record("mcp.transport", "streamable_http");
+                span.record("mcp.server.name", server_name.as_str());
+                if let Ok(parsed_url) = reqwest::Url::parse(url) {
+                    if let Some(host) = parsed_url.host_str() {
+                        span.record("server.address", host);
+                    }
+                    if let Some(port) = parsed_url.port_or_known_default() {
+                        span.record("server.port", port as i64);
+                    }
+                }
+            }
+        }
+
+        span
     }
 
     async fn run_service_operation_once<T, F, Fut>(
         service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
         label: &str,
         timeout: Option<Duration>,
+        operation_span: tracing::Span,
+        operation_trace: Option<W3cTraceContext>,
         operation: &F,
     ) -> std::result::Result<T, ClientOperationError>
     where
         F: Fn(Arc<RunningService<RoleClient, LoggingClientHandler>>) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
-        match timeout {
-            Some(duration) => time::timeout(duration, operation(service))
+        SERVICE_OPERATION_TRACE_CONTEXT
+            .scope(operation_trace, async move {
+                async move {
+                    match timeout {
+                        Some(duration) => time::timeout(duration, operation(service))
+                            .await
+                            .map_err(|_| ClientOperationError::Timeout {
+                                label: label.to_string(),
+                                duration,
+                            })?
+                            .map_err(ClientOperationError::from),
+                        None => operation(service).await.map_err(ClientOperationError::from),
+                    }
+                }
+                .instrument(operation_span)
                 .await
-                .map_err(|_| ClientOperationError::Timeout {
-                    label: label.to_string(),
-                    duration,
-                })?
-                .map_err(ClientOperationError::from),
-            None => operation(service).await.map_err(ClientOperationError::from),
-        }
+            })
+            .await
     }
 
     fn is_session_expired_404(error: &ClientOperationError) -> bool {
@@ -1161,6 +1263,39 @@ impl RmcpClient {
     }
 }
 
+fn merge_trace_context_into_meta(
+    meta: Option<rmcp::model::Meta>,
+    trace: Option<&W3cTraceContext>,
+) -> Option<rmcp::model::Meta> {
+    let mut meta = meta.unwrap_or_default();
+    let Some(trace) = trace else {
+        return (!meta.is_empty()).then_some(meta);
+    };
+
+    if let Some(traceparent) = trace.traceparent.as_ref() {
+        meta.insert(
+            TRACEPARENT_META_KEY.to_string(),
+            serde_json::Value::String(traceparent.clone()),
+        );
+    }
+    if let Some(tracestate) = trace.tracestate.as_ref() {
+        meta.insert(
+            TRACESTATE_META_KEY.to_string(),
+            serde_json::Value::String(tracestate.clone()),
+        );
+    }
+
+    (!meta.is_empty()).then_some(meta)
+}
+
+fn current_service_operation_trace_context() -> Option<W3cTraceContext> {
+    SERVICE_OPERATION_TRACE_CONTEXT
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
+        .or_else(current_span_w3c_trace_context)
+}
+
 async fn create_oauth_transport_and_runtime(
     server_name: &str,
     url: &str,
@@ -1206,4 +1341,76 @@ async fn create_oauth_transport_and_runtime(
     );
 
     Ok((transport, runtime))
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::StreamableHttpResponseClient;
+    use super::TRACEPARENT_HEADER;
+    use super::TRACEPARENT_META_KEY;
+    use super::TRACESTATE_HEADER;
+    use super::TRACESTATE_META_KEY;
+    use super::merge_trace_context_into_meta;
+    use codex_protocol::protocol::W3cTraceContext;
+    use pretty_assertions::assert_eq;
+    use reqwest::Client;
+    use serde_json::Value;
+
+    #[test]
+    fn merge_trace_context_into_meta_preserves_existing_fields() {
+        let trace = W3cTraceContext {
+            traceparent: Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let meta = rmcp::model::Meta(serde_json::Map::from_iter([(
+            "existing".to_string(),
+            Value::String("value".into()),
+        )]));
+
+        let merged = merge_trace_context_into_meta(Some(meta), Some(&trace)).expect("meta");
+
+        assert_eq!(
+            merged,
+            rmcp::model::Meta(serde_json::Map::from_iter([
+                ("existing".to_string(), Value::String("value".into())),
+                (
+                    TRACEPARENT_META_KEY.to_string(),
+                    Value::String("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01".into())
+                ),
+                (
+                    TRACESTATE_META_KEY.to_string(),
+                    Value::String("vendor=value".into())
+                ),
+            ]))
+        );
+    }
+
+    #[test]
+    fn apply_trace_context_injects_http_headers() {
+        let trace = W3cTraceContext {
+            traceparent: Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let request = StreamableHttpResponseClient::apply_trace_context(
+            Client::new().post("http://example.com"),
+            Some(&trace),
+        )
+        .build()
+        .expect("request");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(TRACEPARENT_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(TRACESTATE_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("vendor=value")
+        );
+    }
 }

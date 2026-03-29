@@ -315,7 +315,7 @@ impl ServerHandler for TestToolServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
             "echo" | "echo-tool" => {
@@ -333,9 +333,19 @@ impl ServerHandler for TestToolServer {
                 };
 
                 let env_snapshot: HashMap<String, String> = std::env::vars().collect();
+                let traceparent = context
+                    .meta
+                    .get("x-codex-traceparent")
+                    .and_then(serde_json::Value::as_str);
+                let tracestate = context
+                    .meta
+                    .get("x-codex-tracestate")
+                    .and_then(serde_json::Value::as_str);
                 let structured_content = json!({
                     "echo": format!("ECHOING: {}", args.message),
                     "env": env_snapshot.get("MCP_TEST_VALUE"),
+                    "traceparent": traceparent,
+                    "tracestate": tracestate,
                 });
 
                 Ok(CallToolResult {
