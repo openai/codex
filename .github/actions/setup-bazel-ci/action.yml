@@ -57,9 +57,11 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        # Use a very short path to reduce argv/path length issues, but avoid the
-        # drive root because some Windows test launchers mis-handle MANIFEST paths there.
-        "BAZEL_OUTPUT_USER_ROOT=D:\b" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        # Use the shortest available drive to reduce argv/path length issues,
+        # but avoid the drive root because some Windows test launchers mis-handle
+        # MANIFEST paths there.
+        $bazelOutputUserRoot = if (Test-Path 'D:\') { 'D:\b' } else { 'C:\b' }
+        "BAZEL_OUTPUT_USER_ROOT=$bazelOutputUserRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Enable Git long paths (Windows)
       if: runner.os == 'Windows'

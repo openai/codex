@@ -2208,6 +2208,43 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
 }
 
 #[test]
+fn configured_curated_plugin_ids_from_codex_home_reads_latest_user_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."slack@openai-curated"]
+enabled = true
+
+[plugins."sample@debug"]
+enabled = true
+"#,
+    );
+
+    assert_eq!(
+        configured_curated_plugin_ids_from_codex_home(tmp.path())
+            .into_iter()
+            .map(|plugin_id| plugin_id.as_key())
+            .collect::<Vec<_>>(),
+        vec!["slack@openai-curated".to_string()]
+    );
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+
+    assert_eq!(
+        configured_curated_plugin_ids_from_codex_home(tmp.path()),
+        Vec::<PluginId>::new()
+    );
+}
+
+#[test]
 fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_current() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());

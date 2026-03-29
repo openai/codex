@@ -612,7 +612,7 @@ fn mcp_init_error_display_includes_startup_timeout_hint() {
     let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
 
     assert_eq!(
-        "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
+        "MCP client for `slow` timed out after 30 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
         display
     );
 }

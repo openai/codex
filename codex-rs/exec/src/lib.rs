@@ -1975,10 +1975,14 @@ mod tests {
         let cwd = tempdir().expect("create temp cwd");
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                ..Default::default()
+            })
             .fallback_cwd(Some(cwd.path().to_path_buf()))
             .build()
             .await
-            .expect("build default config");
+            .expect("build config with manual-only review policy");
 
         let params = thread_start_params_from_config(&config);
 
@@ -1992,17 +1996,16 @@ mod tests {
     async fn thread_start_params_include_review_policy_when_auto_review_is_enabled() {
         let codex_home = tempdir().expect("create temp codex home");
         let cwd = tempdir().expect("create temp cwd");
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            "approvals_reviewer = \"guardian_subagent\"\n",
-        )
-        .expect("write auto-review config");
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                ..Default::default()
+            })
             .fallback_cwd(Some(cwd.path().to_path_buf()))
             .build()
             .await
-            .expect("build auto-review config");
+            .expect("build config with guardian review policy");
 
         let params = thread_start_params_from_config(&config);
 

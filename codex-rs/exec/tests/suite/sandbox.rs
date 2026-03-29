@@ -51,9 +51,9 @@ async fn spawn_command_under_sandbox(
         command_cwd,
         sandbox_policy,
         sandbox_cwd,
-        false,
+        /*use_legacy_landlock*/ false,
         stdio_policy,
-        None,
+        /*network*/ None,
         env,
     )
     .await

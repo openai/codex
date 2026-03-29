@@ -83,6 +83,26 @@ class WrapperCommonTest(unittest.TestCase):
             ],
         )
 
+    def test_explicit_package_manifest_does_not_force_workspace(self) -> None:
+        parsed = wrapper_common.parse_wrapper_args(
+            [
+                "--manifest-path",
+                "/tmp/custom/Cargo.toml",
+            ]
+        )
+        final_args = wrapper_common.build_final_args(parsed, Path("/repo/codex-rs/Cargo.toml"))
+
+        self.assertEqual(
+            final_args,
+            [
+                "--no-deps",
+                "--manifest-path",
+                "/tmp/custom/Cargo.toml",
+                "--",
+                "--all-targets",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

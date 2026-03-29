@@ -363,7 +363,7 @@ impl ChatWidget {
             return;
         }
 
-        let placeholder_id = self.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+        let placeholder_id = self.bottom_pane.insert_recording_meter_placeholder("⠤⠤⠤⠤");
         self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
         self.request_redraw();
 
@@ -374,7 +374,7 @@ impl ChatWidget {
             Ok(capture) => capture,
             Err(err) => {
                 self.realtime_conversation.meter_placeholder_id = None;
-                self.remove_transcription_placeholder(&placeholder_id);
+                self.remove_recording_meter_placeholder(&placeholder_id);
                 self.fail_realtime_conversation(format!(
                     "Failed to start microphone capture: {err}"
                 ));
@@ -464,10 +464,10 @@ impl ChatWidget {
             flag.store(true, Ordering::Relaxed);
         }
         if let Some(capture) = self.realtime_conversation.capture.take() {
-            let _ = capture.stop();
+            capture.stop();
         }
         if let Some(id) = self.realtime_conversation.meter_placeholder_id.take() {
-            self.remove_transcription_placeholder(&id);
+            self.remove_recording_meter_placeholder(&id);
         }
     }
 

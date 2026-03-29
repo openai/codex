@@ -57,6 +57,9 @@ def _workspace_root_test_impl(ctx):
     )
 
     runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
+    for data_dep in ctx.attr.data:
+        runfiles = runfiles.merge(ctx.runfiles(files = data_dep[DefaultInfo].files.to_list()))
+        runfiles = runfiles.merge(data_dep[DefaultInfo].default_runfiles)
 
     return [
         DefaultInfo(
@@ -73,6 +76,9 @@ workspace_root_test = rule(
     implementation = _workspace_root_test_impl,
     test = True,
     attrs = {
+        "data": attr.label_list(
+            allow_files = True,
+        ),
         "env": attr.string_dict(),
         "test_bin": attr.label(
             cfg = "target",
@@ -157,9 +163,28 @@ def codex_rust_crate(
         "INSTA_SNAPSHOT_PATH": "src",
     }
 
+    native.filegroup(
+        name = "package-files",
+        srcs = native.glob(
+            ["**"],
+            exclude = [
+                "**/BUILD.bazel",
+                "BUILD.bazel",
+                "target/**",
+            ],
+            allow_empty = True,
+        ),
+        visibility = ["//visibility:public"],
+    )
+
     rustc_env = {
         "BAZEL_PACKAGE": native.package_name(),
     } | rustc_env
+
+    manifest_relpath = native.package_name()
+    if manifest_relpath.startswith("codex-rs/"):
+        manifest_relpath = manifest_relpath[len("codex-rs/"):]
+    manifest_path = manifest_relpath + "/Cargo.toml"
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
 

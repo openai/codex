@@ -4617,9 +4617,6 @@ impl ChatWidget {
             last_non_retry_error: None,
         };
 
-        widget.bottom_pane.set_voice_transcription_enabled(
-            widget.config.features.enabled(Feature::VoiceTranscription),
-        );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -6821,9 +6818,6 @@ impl ChatWidget {
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
-            EventMsg::ListCustomPromptsResponse(_) => {
-                tracing::warn!("ignoring unsupported custom prompt list response in TUI");
-            }
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
@@ -9170,9 +9164,6 @@ impl ChatWidget {
             );
         }
         let enabled = self.config.features.enabled(feature);
-        if feature == Feature::VoiceTranscription {
-            self.bottom_pane.set_voice_transcription_enabled(enabled);
-        }
         if feature == Feature::RealtimeConversation {
             let realtime_conversation_enabled = self.realtime_conversation_enabled();
             self.bottom_pane
@@ -10660,22 +10651,16 @@ impl ChatWidget {
 
 #[cfg(not(target_os = "linux"))]
 impl ChatWidget {
-    pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
-        self.bottom_pane.replace_transcription(id, text);
-        // Ensure the UI redraws to reflect the updated transcription.
-        self.request_redraw();
-    }
-
-    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
-        let updated = self.bottom_pane.update_transcription_in_place(id, text);
+    pub(crate) fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.bottom_pane.update_recording_meter_in_place(id, text);
         if updated {
             self.request_redraw();
         }
         updated
     }
 
-    pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
-        self.bottom_pane.remove_transcription_placeholder(id);
+    pub(crate) fn remove_recording_meter_placeholder(&mut self, id: &str) {
+        self.bottom_pane.remove_recording_meter_placeholder(id);
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
     }
