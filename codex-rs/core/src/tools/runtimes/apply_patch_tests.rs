@@ -126,8 +126,8 @@ fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
         timeout_ms: None,
     };
 
-    let command =
-        ApplyPatchRuntime::build_sandbox_command(&request, None).expect("build sandbox command");
+    let command = ApplyPatchRuntime::build_sandbox_command(&request, /*codex_self_exe*/ None)
+        .expect("build sandbox command");
 
     assert_eq!(
         command.program,

@@ -722,15 +722,15 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     let mut ws1 = connect_websocket(bind_addr).await?;
     let mut ws2 = connect_websocket(bind_addr).await?;
 
-    send_initialize_request(&mut ws1, 1, "ws_client_one").await?;
-    read_initialize_response(&mut ws1, 1).await?;
-    send_initialize_request(&mut ws2, 2, "ws_client_two").await?;
-    read_initialize_response(&mut ws2, 2).await?;
+    send_initialize_request(&mut ws1, /*id*/ 1, "ws_client_one").await?;
+    read_initialize_response(&mut ws1, /*request_id*/ 1).await?;
+    send_initialize_request(&mut ws2, /*id*/ 2, "ws_client_two").await?;
+    read_initialize_response(&mut ws2, /*request_id*/ 2).await?;
 
     send_request(
         &mut ws1,
         "command/exec",
-        101,
+        /*id*/ 101,
         Some(serde_json::json!({
             "command": [
                 "python3",
@@ -749,12 +749,12 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     assert_eq!(delta.stream, CommandExecOutputStream::Stdout);
     let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
     assert!(delta_text.contains("ready"));
-    wait_for_process_marker(&marker, true).await?;
+    wait_for_process_marker(&marker, /*should_exist*/ true).await?;
 
     send_request(
         &mut ws2,
         "command/exec/terminate",
-        102,
+        /*id*/ 102,
         Some(serde_json::json!({
             "processId": "shared-process",
         })),
@@ -773,12 +773,12 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
         terminate_error.error.message,
         "no active command/exec for process id \"shared-process\""
     );
-    wait_for_process_marker(&marker, true).await?;
+    wait_for_process_marker(&marker, /*should_exist*/ true).await?;
 
     assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
     ws1.close(None).await?;
 
-    wait_for_process_marker(&marker, false).await?;
+    wait_for_process_marker(&marker, /*should_exist*/ false).await?;
 
     process
         .kill()

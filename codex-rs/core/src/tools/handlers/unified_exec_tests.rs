@@ -31,7 +31,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -52,7 +52,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -78,7 +78,7 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -98,7 +98,7 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -115,7 +115,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        false,
+        /*allow_login_shell*/ false,
     )
     .expect_err("explicit login should be rejected");
 
@@ -144,8 +144,13 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         })?,
     });
 
-    let command = get_command(&args, Arc::new(default_user_shell()), &shell_mode, true)
-        .map_err(anyhow::Error::msg)?;
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &shell_mode,
+        /*allow_login_shell*/ true,
+    )
+    .map_err(anyhow::Error::msg)?;
 
     assert_eq!(
         command,

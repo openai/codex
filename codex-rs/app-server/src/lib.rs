@@ -869,7 +869,10 @@ mod tests {
 
     #[test]
     fn log_format_from_env_value_defaults_for_non_json_values() {
-        assert_eq!(LogFormat::from_env_value(None), LogFormat::Default);
+        assert_eq!(
+            LogFormat::from_env_value(/*value*/ None),
+            LogFormat::Default
+        );
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);

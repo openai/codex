@@ -71,7 +71,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         format!("while [ ! -f '{release_marker_escaped}' ]; do sleep 0.01; done");
     let response = create_shell_command_sse_response(
         vec!["/bin/sh".to_string(), "-c".to_string(), wait_for_interrupt],
-        None,
+        /*workdir*/ None,
         Some(5000),
         "call-zsh-fork",
     )?;
@@ -197,7 +197,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-zsh-fork-decline",
         )?,
@@ -332,7 +332,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
             "-c".to_string(),
             "print(42)".to_string(),
         ],
-        None,
+        /*workdir*/ None,
         Some(5000),
         "call-zsh-fork-cancel",
     )?];
@@ -805,7 +805,7 @@ fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
         );
         return Ok(None);
     }
-    match core_test_support::fetch_dotslash_file(&dotslash_zsh, None) {
+    match core_test_support::fetch_dotslash_file(&dotslash_zsh, /*dotslash_cache*/ None) {
         Ok(path) => return Ok(Some(path)),
         Err(error) => {
             eprintln!("failed to fetch vendored zsh via dotslash: {error:#}");

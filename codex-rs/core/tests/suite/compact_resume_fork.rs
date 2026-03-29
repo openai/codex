@@ -180,7 +180,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_thread(&manager, &config, resumed_path, 2).await;
+    let forked = fork_thread(&manager, &config, resumed_path, /*nth_user_message*/ 2).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
@@ -316,7 +316,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let request_log = mount_second_compact_sequence(&server).await;
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
-    let (_home, config, manager, base) = start_test_conversation(&server, None).await;
+    let (_home, config, manager, base) = start_test_conversation(&server, /*model*/ None).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -335,7 +335,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "second compact test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_thread(&manager, &config, resumed_path, 3).await;
+    let forked = fork_thread(&manager, &config, resumed_path, /*nth_user_message*/ 3).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     compact_conversation(&forked).await;
@@ -468,7 +468,7 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
 
     let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
-    let (_home, _config, _manager, base) = start_test_conversation(&server, None).await;
+    let (_home, _config, _manager, base) = start_test_conversation(&server, /*model*/ None).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -845,10 +845,15 @@ async fn resume_conversation(
     let auth_manager = codex_core::test_support::auth_manager_from_auth(
         codex_core::CodexAuth::from_api_key("dummy"),
     );
-    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager, None))
-        .await
-        .expect("resume conversation")
-        .thread
+    Box::pin(manager.resume_thread_from_rollout(
+        config.clone(),
+        path,
+        auth_manager,
+        /*parent_trace*/ None,
+    ))
+    .await
+    .expect("resume conversation")
+    .thread
 }
 
 #[cfg(test)]
@@ -858,8 +863,14 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
-        .await
-        .expect("fork conversation")
-        .thread
+    Box::pin(manager.fork_thread(
+        nth_user_message,
+        config.clone(),
+        path,
+        /*persist_extended_history*/ false,
+        /*parent_trace*/ None,
+    ))
+    .await
+    .expect("fork conversation")
+    .thread
 }

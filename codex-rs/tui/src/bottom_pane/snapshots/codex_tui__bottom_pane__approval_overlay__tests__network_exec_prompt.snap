@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/approval_overlay.rs
-assertion_line: 821
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {

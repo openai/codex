@@ -960,7 +960,7 @@ impl RefreshTokenTestContext {
 
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
-            false,
+            /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
         );
 

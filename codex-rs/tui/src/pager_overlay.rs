@@ -914,7 +914,7 @@ mod tests {
             lines: vec![Line::from("alpha")],
         })]);
         overlay.sync_live_tail(
-            40,
+            /*width*/ 40,
             Some(ActiveCellTranscriptKey {
                 revision: 1,
                 is_stream_continuation: false,
@@ -942,11 +942,11 @@ mod tests {
             animation_tick: None,
         };
 
-        overlay.sync_live_tail(40, Some(key), |_| {
+        overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
             calls.set(calls.get() + 1);
             Some(vec![Line::from("tail")])
         });
-        overlay.sync_live_tail(40, Some(key), |_| {
+        overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
             calls.set(calls.get() + 1);
             Some(vec![Line::from("tail2")])
         });
@@ -1012,8 +1012,8 @@ mod tests {
             vec!["bash".into(), "-lc".into(), "ls".into()],
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
             ExecCommandSource::Agent,
-            None,
-            true,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ true,
         );
         exec_cell.complete_call(
             "exec-1",
@@ -1212,30 +1212,33 @@ mod tests {
     #[test]
     fn pager_view_content_height_counts_renderables() {
         let pv = PagerView::new(
-            vec![paragraph_block("a", 2), paragraph_block("b", 3)],
+            vec![
+                paragraph_block("a", /*lines*/ 2),
+                paragraph_block("b", /*lines*/ 3),
+            ],
             "T".to_string(),
-            0,
+            /*scroll_offset*/ 0,
         );
 
-        assert_eq!(pv.content_height(80), 5);
+        assert_eq!(pv.content_height(/*width*/ 80), 5);
     }
 
     #[test]
     fn pager_view_ensure_chunk_visible_scrolls_down_when_needed() {
         let mut pv = PagerView::new(
             vec![
-                paragraph_block("a", 1),
-                paragraph_block("b", 3),
-                paragraph_block("c", 3),
+                paragraph_block("a", /*lines*/ 1),
+                paragraph_block("b", /*lines*/ 3),
+                paragraph_block("c", /*lines*/ 3),
             ],
             "T".to_string(),
-            0,
+            /*scroll_offset*/ 0,
         );
         let area = Rect::new(0, 0, 20, 8);
 
         pv.scroll_offset = 0;
         let content_area = pv.content_area(area);
-        pv.ensure_chunk_visible(2, content_area);
+        pv.ensure_chunk_visible(/*idx*/ 2, content_area);
 
         let mut buf = Buffer::empty(area);
         pv.render(area, &mut buf);
@@ -1259,24 +1262,28 @@ mod tests {
     fn pager_view_ensure_chunk_visible_scrolls_up_when_needed() {
         let mut pv = PagerView::new(
             vec![
-                paragraph_block("a", 2),
-                paragraph_block("b", 3),
-                paragraph_block("c", 3),
+                paragraph_block("a", /*lines*/ 2),
+                paragraph_block("b", /*lines*/ 3),
+                paragraph_block("c", /*lines*/ 3),
             ],
             "T".to_string(),
-            0,
+            /*scroll_offset*/ 0,
         );
         let area = Rect::new(0, 0, 20, 3);
 
         pv.scroll_offset = 6;
-        pv.ensure_chunk_visible(0, area);
+        pv.ensure_chunk_visible(/*idx*/ 0, area);
 
         assert_eq!(pv.scroll_offset, 0);
     }
 
     #[test]
     fn pager_view_is_scrolled_to_bottom_accounts_for_wrapped_height() {
-        let mut pv = PagerView::new(vec![paragraph_block("a", 10)], "T".to_string(), 0);
+        let mut pv = PagerView::new(
+            vec![paragraph_block("a", /*lines*/ 10)],
+            "T".to_string(),
+            /*scroll_offset*/ 0,
+        );
         let area = Rect::new(0, 0, 20, 8);
         let mut buf = Buffer::empty(area);
 

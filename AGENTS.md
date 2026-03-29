@@ -70,8 +70,6 @@ See `codex-rs/tui/styles.md`.
 
 ## TUI code conventions
 
-- When a change lands in `codex-rs/tui` and `codex-rs/tui_app_server` has a parallel implementation of the same behavior, reflect the change in `codex-rs/tui_app_server` too unless there is a documented reason not to.
-
 - Use concise styling helpers from ratatui’s Stylize trait.
   - Basic spans: use "text".into()
   - Styled spans: use "text".red(), "text".green(), "text".magenta(), "text".dim(), etc.

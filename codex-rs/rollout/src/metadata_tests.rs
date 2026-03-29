@@ -186,14 +186,14 @@ async fn backfill_sessions_resumes_from_watermark_and_marks_complete() {
         "2026-01-27T12-34-56",
         "2026-01-27T12:34:56Z",
         first_uuid,
-        None,
+        /*git*/ None,
     );
     let second_path = write_rollout_in_sessions(
         codex_home.as_path(),
         "2026-01-27T12-35-56",
         "2026-01-27T12:35:56Z",
         second_uuid,
-        None,
+        /*git*/ None,
     );
 
     let runtime = codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())
@@ -306,7 +306,7 @@ async fn backfill_sessions_normalizes_cwd_before_upsert() {
         "2026-01-27T12:34:56Z",
         thread_uuid,
         session_cwd.clone(),
-        None,
+        /*git*/ None,
     );
 
     let runtime = codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())

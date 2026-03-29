@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn resolve_oauth_scopes_prefers_configured_over_discovered() {
         let resolved = resolve_oauth_scopes(
-            None,
+            /*explicit_scopes*/ None,
             Some(vec!["configured".to_string()]),
             Some(vec!["discovered".to_string()]),
         );
@@ -225,7 +225,11 @@ mod tests {
 
     #[test]
     fn resolve_oauth_scopes_uses_discovered_when_needed() {
-        let resolved = resolve_oauth_scopes(None, None, Some(vec!["discovered".to_string()]));
+        let resolved = resolve_oauth_scopes(
+            /*explicit_scopes*/ None,
+            /*configured_scopes*/ None,
+            Some(vec!["discovered".to_string()]),
+        );
 
         assert_eq!(
             resolved,
@@ -238,7 +242,11 @@ mod tests {
 
     #[test]
     fn resolve_oauth_scopes_preserves_explicitly_empty_configured_scopes() {
-        let resolved = resolve_oauth_scopes(None, Some(Vec::new()), Some(vec!["ignored".into()]));
+        let resolved = resolve_oauth_scopes(
+            /*explicit_scopes*/ None,
+            Some(Vec::new()),
+            Some(vec!["ignored".into()]),
+        );
 
         assert_eq!(
             resolved,
@@ -251,7 +259,10 @@ mod tests {
 
     #[test]
     fn resolve_oauth_scopes_falls_back_to_empty() {
-        let resolved = resolve_oauth_scopes(None, None, None);
+        let resolved = resolve_oauth_scopes(
+            /*explicit_scopes*/ None, /*configured_scopes*/ None,
+            /*discovered_scopes*/ None,
+        );
 
         assert_eq!(
             resolved,

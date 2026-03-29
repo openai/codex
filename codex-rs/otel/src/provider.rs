@@ -406,7 +406,11 @@ mod tests {
 
     #[test]
     fn resource_attributes_omit_host_name_when_missing_or_empty() {
-        let missing = resource_attributes(&test_otel_settings(), None, ResourceKind::Logs);
+        let missing = resource_attributes(
+            &test_otel_settings(),
+            /*host_name*/ None,
+            ResourceKind::Logs,
+        );
         let empty = resource_attributes(&test_otel_settings(), Some("   "), ResourceKind::Logs);
         let trace_attrs = resource_attributes(
             &test_otel_settings(),

@@ -1436,15 +1436,34 @@ mod tests {
     }
 
     #[test]
+    fn serialize_account_login_chatgpt_device_code() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(4),
+            params: v2::LoginAccountParams::ChatgptDeviceCode,
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 4,
+                "params": {
+                    "type": "chatgptDeviceCode"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_account_logout() -> Result<()> {
         let request = ClientRequest::LogoutAccount {
-            request_id: RequestId::Integer(4),
+            request_id: RequestId::Integer(5),
             params: None,
         };
         assert_eq!(
             json!({
                 "method": "account/logout",
-                "id": 4,
+                "id": 5,
             }),
             serde_json::to_value(&request)?,
         );
@@ -1454,7 +1473,7 @@ mod tests {
     #[test]
     fn serialize_account_login_chatgpt_auth_tokens() -> Result<()> {
         let request = ClientRequest::LoginAccount {
-            request_id: RequestId::Integer(5),
+            request_id: RequestId::Integer(6),
             params: v2::LoginAccountParams::ChatgptAuthTokens {
                 access_token: "access-token".to_string(),
                 chatgpt_account_id: "org-123".to_string(),
@@ -1464,7 +1483,7 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/login/start",
-                "id": 5,
+                "id": 6,
                 "params": {
                     "type": "chatgptAuthTokens",
                     "accessToken": "access-token",

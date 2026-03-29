@@ -278,11 +278,10 @@ impl ChatComposerHistory {
             self.last_history_text = Some(entry.text.clone());
             return Some(entry);
         } else if let Some(log_id) = self.history_log_id {
-            let op = Op::GetHistoryEntryRequest {
+            app_event_tx.send(AppEvent::CodexOp(Op::GetHistoryEntryRequest {
                 offset: global_idx,
                 log_id,
-            };
-            app_event_tx.send(AppEvent::CodexOp(op));
+            }));
         }
         None
     }
@@ -292,7 +291,6 @@ impl ChatComposerHistory {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_protocol::protocol::Op;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -332,50 +330,50 @@ mod tests {
 
         let mut history = ChatComposerHistory::new();
         // Pretend there are 3 persistent entries.
-        history.set_metadata(1, 3);
+        history.set_metadata(/*log_id*/ 1, /*entry_count*/ 3);
 
         // First Up should request offset 2 (latest) and await async data.
-        assert!(history.should_handle_navigation("", 0));
+        assert!(history.should_handle_navigation("", /*cursor*/ 0));
         assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
-        // Verify that an AppEvent::CodexOp with the correct GetHistoryEntryRequest was sent.
+        // Verify that a history lookup request was sent.
         let event = rx.try_recv().expect("expected AppEvent to be sent");
-        let AppEvent::CodexOp(history_request1) = event else {
+        let AppEvent::CodexOp(op) = event else {
             panic!("unexpected event variant");
         };
         assert_eq!(
             Op::GetHistoryEntryRequest {
                 log_id: 1,
-                offset: 2
+                offset: 2,
             },
-            history_request1
+            op
         );
 
         // Inject the async response.
         assert_eq!(
             Some(HistoryEntry::new("latest".to_string())),
-            history.on_entry_response(1, 2, Some("latest".into()))
+            history.on_entry_response(/*log_id*/ 1, /*offset*/ 2, Some("latest".into()))
         );
 
         // Next Up should move to offset 1.
         assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
-        // Verify second CodexOp event for offset 1.
+        // Verify second lookup request for offset 1.
         let event2 = rx.try_recv().expect("expected second event");
-        let AppEvent::CodexOp(history_request_2) = event2 else {
+        let AppEvent::CodexOp(op) = event2 else {
             panic!("unexpected event variant");
         };
         assert_eq!(
             Op::GetHistoryEntryRequest {
                 log_id: 1,
-                offset: 1
+                offset: 1,
             },
-            history_request_2
+            op
         );
 
         assert_eq!(
             Some(HistoryEntry::new("older".to_string())),
-            history.on_entry_response(1, 1, Some("older".into()))
+            history.on_entry_response(/*log_id*/ 1, /*offset*/ 1, Some("older".into()))
         );
     }
 
@@ -385,7 +383,7 @@ mod tests {
         let tx = AppEventSender::new(tx);
 
         let mut history = ChatComposerHistory::new();
-        history.set_metadata(1, 3);
+        history.set_metadata(/*log_id*/ 1, /*entry_count*/ 3);
         history
             .fetched_history
             .insert(1, HistoryEntry::new("command2".to_string()));
@@ -418,9 +416,9 @@ mod tests {
         history.record_local_submission(HistoryEntry::new("hello".to_string()));
         history.last_history_text = Some("hello".to_string());
 
-        assert!(history.should_handle_navigation("hello", 0));
+        assert!(history.should_handle_navigation("hello", /*cursor*/ 0));
         assert!(history.should_handle_navigation("hello", "hello".len()));
-        assert!(!history.should_handle_navigation("hello", 1));
-        assert!(!history.should_handle_navigation("other", 0));
+        assert!(!history.should_handle_navigation("hello", /*cursor*/ 1));
+        assert!(!history.should_handle_navigation("other", /*cursor*/ 0));
     }
 }

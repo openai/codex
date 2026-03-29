@@ -277,7 +277,7 @@ mod tests {
             HeaderValue::from_static("1704069000"),
         );
 
-        let snapshot = parse_rate_limit_for_limit(&headers, None).expect("snapshot");
+        let snapshot = parse_rate_limit_for_limit(&headers, /*limit_id*/ None).expect("snapshot");
         assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
         assert_eq!(snapshot.limit_name, None);
         let primary = snapshot.primary.expect("primary");

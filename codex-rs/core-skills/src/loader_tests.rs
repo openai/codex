@@ -115,7 +115,7 @@ fn load_skills_for_test(config: &TestConfig) -> SkillLoadOutcome {
     super::load_skills_from_roots(super::skill_roots_with_home_dir(
         &config.config_layer_stack,
         &config.cwd,
-        None,
+        /*home_dir*/ None,
         Vec::new(),
     ))
 }

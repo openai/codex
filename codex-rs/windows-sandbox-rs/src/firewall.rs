@@ -4,25 +4,25 @@ use anyhow::Result;
 use std::fs::File;
 use std::io::Write;
 
-use windows::core::Interface;
-use windows::core::BSTR;
 use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRules;
-use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
-use windows::Win32::NetworkManagement::WindowsFirewall::NetFwRule;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_ANY;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_TCP;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_UDP;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_PROFILE2_ALL;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIR_OUT;
+use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
+use windows::Win32::NetworkManagement::WindowsFirewall::NetFwRule;
+use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
+use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 use windows::Win32::System::Com::CoCreateInstance;
 use windows::Win32::System::Com::CoInitializeEx;
 use windows::Win32::System::Com::CoUninitialize;
-use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
-use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
+use windows::core::BSTR;
+use windows::core::Interface;
 
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupFailure;
@@ -40,8 +40,7 @@ const OFFLINE_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY: &str =
 const OFFLINE_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY: &str = "Codex Sandbox Offline - Block Loopback UDP";
 const OFFLINE_PROXY_ALLOW_RULE_NAME: &str = "codex_sandbox_offline_allow_loopback_proxy";
 const LOOPBACK_REMOTE_ADDRESSES: &str = "127.0.0.0/8,::1";
-const NON_LOOPBACK_REMOTE_ADDRESSES: &str =
-    "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+const NON_LOOPBACK_REMOTE_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
 
 struct BlockRuleSpec<'a> {
     internal_name: &'a str,

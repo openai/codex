@@ -131,7 +131,10 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
 }"#,
     );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    );
 
     assert_eq!(
         outcome.plugins(),
@@ -340,7 +343,10 @@ fn capability_summary_sanitizes_plugin_descriptions_to_one_line() {
         "---\nname: sample-search\ndescription: search sample data\n---\n",
     );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    );
 
     assert_eq!(
         outcome.plugins()[0].manifest_description.as_deref(),
@@ -375,7 +381,10 @@ fn capability_summary_truncates_overlong_plugin_descriptions() {
         "---\nname: sample-search\ndescription: search sample data\n---\n",
     );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    );
 
     assert_eq!(
         outcome.plugins()[0].manifest_description.as_deref(),
@@ -455,7 +464,10 @@ fn load_plugins_uses_manifest_configured_component_paths() {
 }"#,
     );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    );
 
     assert_eq!(
         outcome.plugins()[0].skill_roots,
@@ -562,7 +574,10 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
 }"#,
     );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    );
 
     assert_eq!(
         outcome.plugins()[0].skill_roots,
@@ -622,7 +637,12 @@ fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
 }"#,
     );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(false, true), codex_home.path());
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(
+            /*enabled*/ false, /*plugins_feature_enabled*/ true,
+        ),
+        codex_home.path(),
+    );
 
     assert_eq!(
         outcome.plugins(),
@@ -831,7 +851,9 @@ fn load_plugins_returns_empty_when_feature_disabled() {
     );
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
-        &plugin_config_toml(true, false),
+        &plugin_config_toml(
+            /*enabled*/ true, /*plugins_feature_enabled*/ false,
+        ),
     );
 
     let config = load_config_blocking(codex_home.path(), codex_home.path());
@@ -1326,7 +1348,7 @@ plugins = false
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let outcome = PluginsManager::new(tmp.path().to_path_buf())
-        .sync_plugins_from_remote(&config, None, /*additive_only*/ false)
+        .sync_plugins_from_remote(&config, /*auth*/ None, /*additive_only*/ false)
         .await
         .unwrap();
 
@@ -2110,10 +2132,13 @@ plugins = true
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
-    let manager = PluginsManager::new_with_restriction_product(tmp.path().to_path_buf(), None);
+    let manager = PluginsManager::new_with_restriction_product(
+        tmp.path().to_path_buf(),
+        /*restriction_product*/ None,
+    );
 
     let featured_plugin_ids = manager
-        .featured_plugin_ids_for_config(&config, None)
+        .featured_plugin_ids_for_config(&config, /*auth*/ None)
         .await
         .unwrap();
 
@@ -2183,6 +2208,43 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
 }
 
 #[test]
+fn configured_curated_plugin_ids_from_codex_home_reads_latest_user_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."slack@openai-curated"]
+enabled = true
+
+[plugins."sample@debug"]
+enabled = true
+"#,
+    );
+
+    assert_eq!(
+        configured_curated_plugin_ids_from_codex_home(tmp.path())
+            .into_iter()
+            .map(|plugin_id| plugin_id.as_key())
+            .collect::<Vec<_>>(),
+        vec!["slack@openai-curated".to_string()]
+    );
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+
+    assert_eq!(
+        configured_curated_plugin_ids_from_codex_home(tmp.path()),
+        Vec::<PluginId>::new()
+    );
+}
+
+#[test]
 fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_current() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
@@ -2219,7 +2281,7 @@ fn load_plugins_ignores_project_config_files() {
     );
     write_file(
         &project_root.join(".codex/config.toml"),
-        &plugin_config_toml(true, true),
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
     );
 
     let stack = ConfigLayerStack::new(
@@ -2227,7 +2289,10 @@ fn load_plugins_ignores_project_config_files() {
             ConfigLayerSource::Project {
                 dot_codex_folder: AbsolutePathBuf::try_from(project_root.join(".codex")).unwrap(),
             },
-            toml::from_str(&plugin_config_toml(true, true)).expect("project config should parse"),
+            toml::from_str(&plugin_config_toml(
+                /*enabled*/ true, /*plugins_feature_enabled*/ true,
+            ))
+            .expect("project config should parse"),
         )],
         ConfigRequirements::default(),
         ConfigRequirementsToml::default(),

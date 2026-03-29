@@ -1,7 +1,7 @@
-use super::ParsedMcpTool;
 use super::mcp_call_tool_result_output_schema;
 use super::parse_mcp_tool;
 use crate::JsonSchema;
+use crate::ToolDefinition;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -31,14 +31,16 @@ fn parse_mcp_tool_inserts_empty_properties() {
 
     assert_eq!(
         parse_mcp_tool(&tool).expect("parse MCP tool"),
-        ParsedMcpTool {
+        ToolDefinition {
+            name: "no_props".to_string(),
             description: "No properties".to_string(),
             input_schema: JsonSchema::Object {
                 properties: BTreeMap::new(),
                 required: None,
                 additional_properties: None,
             },
-            output_schema: mcp_call_tool_result_output_schema(serde_json::json!({})),
+            output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+            defer_loading: false,
         }
     );
 }
@@ -67,14 +69,15 @@ fn parse_mcp_tool_preserves_top_level_output_schema() {
 
     assert_eq!(
         parse_mcp_tool(&tool).expect("parse MCP tool"),
-        ParsedMcpTool {
+        ToolDefinition {
+            name: "with_output".to_string(),
             description: "Has output schema".to_string(),
             input_schema: JsonSchema::Object {
                 properties: BTreeMap::new(),
                 required: None,
                 additional_properties: None,
             },
-            output_schema: mcp_call_tool_result_output_schema(serde_json::json!({
+            output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "properties": {
                     "result": {
                         "properties": {
@@ -83,7 +86,8 @@ fn parse_mcp_tool_preserves_top_level_output_schema() {
                     }
                 },
                 "required": ["result"]
-            })),
+            }))),
+            defer_loading: false,
         }
     );
 }
@@ -105,16 +109,18 @@ fn parse_mcp_tool_preserves_output_schema_without_inferred_type() {
 
     assert_eq!(
         parse_mcp_tool(&tool).expect("parse MCP tool"),
-        ParsedMcpTool {
+        ToolDefinition {
+            name: "with_enum_output".to_string(),
             description: "Has enum output schema".to_string(),
             input_schema: JsonSchema::Object {
                 properties: BTreeMap::new(),
                 required: None,
                 additional_properties: None,
             },
-            output_schema: mcp_call_tool_result_output_schema(serde_json::json!({
+            output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "enum": ["ok", "error"]
-            })),
+            }))),
+            defer_loading: false,
         }
     );
 }

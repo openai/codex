@@ -498,7 +498,7 @@ mod tests {
         let legacy_config = build_debug_sandbox_config(
             Vec::new(),
             ConfigOverrides {
-                sandbox_mode: Some(create_sandbox_mode(false)),
+                sandbox_mode: Some(create_sandbox_mode(/*full_auto*/ false)),
                 ..Default::default()
             },
             Some(codex_home_path.clone()),
@@ -507,8 +507,8 @@ mod tests {
 
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
-            None,
-            false,
+            /*codex_linux_sandbox_exe*/ None,
+            /*full_auto*/ false,
             Some(codex_home_path),
         )
         .await?;
@@ -541,8 +541,8 @@ mod tests {
 
         let err = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
-            None,
-            true,
+            /*codex_linux_sandbox_exe*/ None,
+            /*full_auto*/ true,
             Some(codex_home.path().to_path_buf()),
         )
         .await

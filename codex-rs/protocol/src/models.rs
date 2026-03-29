@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
+use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -29,6 +31,19 @@ use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
+
+static SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end())
+        .unwrap_or_else(|err| panic!("danger-full-access sandbox template must parse: {err}"))
+});
+static SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(SANDBOX_MODE_WORKSPACE_WRITE.trim_end())
+        .unwrap_or_else(|err| panic!("workspace-write sandbox template must parse: {err}"))
+});
+static SANDBOX_MODE_READ_ONLY_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(SANDBOX_MODE_READ_ONLY.trim_end())
+        .unwrap_or_else(|err| panic!("read-only sandbox template must parse: {err}"))
+});
 
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
@@ -583,11 +598,14 @@ impl DeveloperInstructions {
 
     fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
         let template = match mode {
-            SandboxMode::DangerFullAccess => SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end(),
-            SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
-            SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
+            SandboxMode::DangerFullAccess => &*SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE,
+            SandboxMode::WorkspaceWrite => &*SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE,
+            SandboxMode::ReadOnly => &*SANDBOX_MODE_READ_ONLY_TEMPLATE,
         };
-        let text = template.replace("{network_access}", &network_access.to_string());
+        let network_access = network_access.to_string();
+        let text = template
+            .render([("network_access", network_access.as_str())])
+            .unwrap_or_else(|err| panic!("sandbox template must render: {err}"));
 
         DeveloperInstructions::new(text)
     }
@@ -1654,6 +1672,14 @@ mod tests {
                 "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
             )
         );
+
+        let danger_full_access: DeveloperInstructions = SandboxMode::DangerFullAccess.into();
+        assert_eq!(
+            danger_full_access,
+            DeveloperInstructions::new(
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled."
+            )
+        );
     }
 
     #[test]
@@ -1668,7 +1694,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: false,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1698,8 +1724,8 @@ mod tests {
             ApprovalsReviewer::User,
             &Policy::empty(),
             &PathBuf::from("/tmp"),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
@@ -1725,7 +1751,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: false,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1746,7 +1772,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1766,7 +1792,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1786,7 +1812,7 @@ mod tests {
                 exec_permission_approvals_enabled: true,
                 request_permissions_tool_enabled: false,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1806,7 +1832,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1828,7 +1854,7 @@ mod tests {
                 exec_permission_approvals_enabled: true,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1842,8 +1868,8 @@ mod tests {
             AskForApproval::OnRequest,
             ApprovalsReviewer::GuardianSubagent,
             &Policy::empty(),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1857,8 +1883,8 @@ mod tests {
             AskForApproval::Never,
             ApprovalsReviewer::GuardianSubagent,
             &Policy::empty(),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1909,8 +1935,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            false,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1943,8 +1969,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            false,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1958,8 +1984,8 @@ mod tests {
                     "- `mcp_elicitations`",
                 ],
                 &[],
-                true,
-                false,
+                /*include_shell_permission_request_instructions*/ true,
+                /*include_request_permissions_tool_section*/ false,
             )
         );
     }
@@ -1976,8 +2002,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1991,8 +2017,8 @@ mod tests {
                     "- `mcp_elicitations`",
                 ],
                 &[],
-                false,
-                false,
+                /*include_shell_permission_request_instructions*/ false,
+                /*include_request_permissions_tool_section*/ false,
             )
         );
     }
@@ -2009,8 +2035,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            true,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ true,
         )
         .into_text();
         assert!(allowed.contains("# request_permissions Tool"));
@@ -2025,8 +2051,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            true,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ true,
         )
         .into_text();
         assert!(!rejected.contains("# request_permissions Tool"));
@@ -2045,8 +2071,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            false,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -2626,7 +2652,7 @@ mod tests {
                 assert_eq!(
                     content.get(3),
                     Some(&ContentItem::InputText {
-                        text: local_image_open_tag_text(2),
+                        text: local_image_open_tag_text(/*label_number*/ 2),
                     })
                 );
                 assert!(matches!(
