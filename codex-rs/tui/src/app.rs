@@ -11,6 +11,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::ThreadSessionState;
+use crate::app_server_session::app_server_rate_limit_snapshots_to_core;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -58,6 +59,7 @@ use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
@@ -111,6 +113,7 @@ use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
@@ -1874,6 +1877,20 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+        });
+    }
+
+    fn refresh_rate_limits(&mut self, app_server: &AppServerSession, show_status: bool) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_account_rate_limits(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::RateLimitsLoaded {
+                result,
+                show_status,
+            });
         });
     }
 
@@ -4364,8 +4381,26 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            AppEvent::RefreshRateLimits { show_status } => {
+                self.refresh_rate_limits(app_server, show_status);
+            }
+            AppEvent::RateLimitsLoaded {
+                result,
+                show_status,
+            } => {
+                match result {
+                    Ok(snapshots) => {
+                        for snapshot in snapshots {
+                            self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+                    }
+                }
+                if show_status {
+                    self.chat_widget.add_status_output();
+                }
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
@@ -5955,6 +5990,21 @@ async fn fetch_all_mcp_server_statuses(
     }
 
     Ok(statuses)
+}
+
+async fn fetch_account_rate_limits(
+    request_handle: AppServerRequestHandle,
+) -> Result<Vec<RateLimitSnapshot>> {
+    let request_id = RequestId::String(format!("account-rate-limits-{}", Uuid::new_v4()));
+    let response: GetAccountRateLimitsResponse = request_handle
+        .request_typed(ClientRequest::GetAccountRateLimits {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/rateLimits/read failed in TUI")?;
+
+    Ok(app_server_rate_limit_snapshots_to_core(response))
 }
 
 async fn fetch_plugins_list(

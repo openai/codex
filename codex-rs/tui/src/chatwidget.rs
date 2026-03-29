@@ -5328,7 +5328,12 @@ impl ChatWidget {
                 self.open_skills_menu();
             }
             SlashCommand::Status => {
-                self.add_status_output();
+                if self.should_prefetch_rate_limits() {
+                    self.app_event_tx
+                        .send(AppEvent::RefreshRateLimits { show_status: true });
+                } else {
+                    self.add_status_output();
+                }
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();

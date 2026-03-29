@@ -2273,6 +2273,37 @@ async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
 }
 
 #[tokio::test]
+async fn status_command_refreshes_rate_limits_before_rendering_for_chatgpt_auth() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Status);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RefreshRateLimits { show_status: true })
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "status output should wait for fresh limits"
+    );
+}
+
+#[tokio::test]
+async fn status_command_renders_immediately_without_rate_limit_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Status);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert!(
+        !std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::RefreshRateLimits { .. })),
+        "non-ChatGPT sessions should not request a rate-limit refresh for /status"
+    );
+}
+
+#[tokio::test]
 async fn worked_elapsed_from_resets_when_timer_restarts() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 5), 5);
