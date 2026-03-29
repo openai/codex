@@ -649,17 +649,6 @@ mod tests {
     fn feedback_view_with_connectivity_diagnostics() {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let _diagnostics = FeedbackDiagnostics::new(vec![
-            FeedbackDiagnostic {
-                headline: "Proxy environment variables are set and may affect connectivity."
-                    .to_string(),
-                details: vec!["HTTP_PROXY = http://proxy.example.com:8080".to_string()],
-            },
-            FeedbackDiagnostic {
-                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
-            },
-        ]);
         let view = FeedbackNoteView::new(FeedbackCategory::Bug, tx, /*include_logs*/ false);
         let rendered = render(&view, /*width*/ 60);
 
