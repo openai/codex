@@ -23,6 +23,7 @@ use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
+use crate::chatwidget::extract_first_bold;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
@@ -31,6 +32,9 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::SubagentPanelAgent;
+use crate::history_cell::SubagentPanelState;
+use crate::history_cell::SubagentStatusCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::model_catalog::ModelCatalog;
@@ -48,6 +52,7 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
+use crate::text_formatting::truncate_text;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -57,6 +62,9 @@ use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
+use codex_app_server_protocol::CollabAgentState;
+use codex_app_server_protocol::CollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
@@ -107,7 +115,17 @@ use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentSpawnMode as CollabAgentSpawnMode;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
@@ -119,6 +137,9 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -132,10 +153,12 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -209,6 +232,20 @@ fn command_execution_decision_to_review_decision(
         codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel => {
             codex_protocol::protocol::ReviewDecision::Abort
         }
+    }
+}
+
+fn app_server_collab_state_to_agent_status(state: &CollabAgentState) -> AgentStatus {
+    match state.status {
+        CollabAgentStatus::PendingInit => AgentStatus::PendingInit,
+        CollabAgentStatus::Running => AgentStatus::Running,
+        CollabAgentStatus::Completed => AgentStatus::Completed(state.message.clone()),
+        CollabAgentStatus::Errored => {
+            AgentStatus::Errored(state.message.clone().unwrap_or_default())
+        }
+        CollabAgentStatus::Interrupted => AgentStatus::Interrupted,
+        CollabAgentStatus::Shutdown => AgentStatus::Shutdown,
+        CollabAgentStatus::NotFound => AgentStatus::NotFound,
     }
 }
 
@@ -1150,6 +1187,7 @@ fn terminal_summary(status: &AgentStatus) -> String {
         AgentStatus::Errored(message) => {
             truncate_text(message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET)
         }
+        AgentStatus::Interrupted => "interrupted".to_string(),
         AgentStatus::Shutdown => "shutdown".to_string(),
         AgentStatus::NotFound => "not found".to_string(),
         AgentStatus::PendingInit | AgentStatus::Running => "running".to_string(),
@@ -1478,6 +1516,8 @@ pub(crate) struct App {
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
+    /// Controls the animation thread that updates the live subagent panel.
+    pub(crate) subagent_anim_running: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid terminal-title config warnings only emit once.
@@ -1511,6 +1551,7 @@ pub(crate) struct App {
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
+    subagents: SubagentRegistry,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
@@ -2107,6 +2148,7 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = receiver;
         self.refresh_pending_thread_approvals().await;
+        self.sync_subagent_panel_state();
     }
 
     async fn store_active_thread_receiver(&mut self) {
@@ -2143,6 +2185,158 @@ impl App {
         }
         self.active_thread_rx = None;
         self.refresh_pending_thread_approvals().await;
+        self.sync_subagent_panel_state();
+    }
+
+    fn subagents_root_active(&self) -> bool {
+        self.primary_thread_id.is_some() && self.active_thread_id == self.primary_thread_id
+    }
+
+    fn emit_or_queue_subagent_history(&mut self, cell: Box<dyn HistoryCell>) {
+        if self.subagents_root_active() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        } else {
+            self.subagents.queue_history(cell);
+        }
+    }
+
+    fn flush_subagent_history_if_root_active(&mut self) {
+        if !self.subagents_root_active() {
+            return;
+        }
+        let pending = self.subagents.take_pending_history();
+        for cell in pending {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        }
+    }
+
+    fn update_subagent_animation(&mut self, root_active: bool) {
+        let should_run = root_active && self.subagents.has_animating_agents();
+        let is_running = self.subagent_anim_running.load(Ordering::Relaxed);
+        if should_run && !is_running {
+            self.app_event_tx.send(AppEvent::StartSubagentAnimation);
+        } else if !should_run && is_running {
+            self.app_event_tx.send(AppEvent::StopSubagentAnimation);
+        }
+    }
+
+    fn sync_subagent_panel_state(&mut self) {
+        let root_active = self.subagents_root_active();
+        self.subagents.rebuild_panel_state();
+
+        if root_active {
+            self.flush_subagent_history_if_root_active();
+            if let Some(panel) = self.subagents.panel_cell() {
+                self.app_event_tx.send(AppEvent::UpdateSubagentPanel(panel));
+            } else {
+                self.app_event_tx.send(AppEvent::ClearSubagentPanel);
+            }
+        } else {
+            self.app_event_tx.send(AppEvent::ClearSubagentPanel);
+        }
+
+        self.update_subagent_animation(root_active);
+    }
+
+    fn process_subagent_side_effects(&mut self, thread_id: ThreadId, event: &Event) {
+        if self.primary_thread_id == Some(thread_id) {
+            self.subagents.set_root_thread(thread_id);
+        }
+
+        if self.subagents.is_root_thread(thread_id) {
+            match &event.msg {
+                EventMsg::CollabAgentSpawnEnd(ev) => {
+                    let _ = self.subagents.on_spawn_end(ev);
+                }
+                EventMsg::CollabWaitingEnd(ev) => {
+                    self.subagents.on_wait_end(ev);
+                }
+                EventMsg::CollabCloseEnd(ev) => {
+                    let _ = self.subagents.on_close_end(ev);
+                }
+                _ => {}
+            }
+        } else {
+            let updates = self.subagents.on_agent_event(thread_id, &event.msg);
+            for cell in updates {
+                self.emit_or_queue_subagent_history(cell);
+            }
+        }
+
+        self.sync_subagent_panel_state();
+    }
+
+    fn process_subagent_notification_side_effects(
+        &mut self,
+        thread_id: ThreadId,
+        notification: &ServerNotification,
+    ) {
+        if self.primary_thread_id == Some(thread_id) {
+            self.subagents.set_root_thread(thread_id);
+        }
+
+        if !self.subagents.is_root_thread(thread_id) {
+            return;
+        }
+
+        let item = match notification {
+            ServerNotification::ItemStarted(notification) => &notification.item,
+            ServerNotification::ItemCompleted(notification) => &notification.item,
+            _ => {
+                self.sync_subagent_panel_state();
+                return;
+            }
+        };
+
+        let ThreadItem::CollabAgentToolCall {
+            id,
+            tool: CollabAgentTool::SpawnAgent,
+            sender_thread_id,
+            receiver_thread_ids,
+            prompt,
+            agents_states,
+            ..
+        } = item
+        else {
+            self.sync_subagent_panel_state();
+            return;
+        };
+
+        let Some(new_thread_id) = receiver_thread_ids
+            .first()
+            .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
+        else {
+            self.sync_subagent_panel_state();
+            return;
+        };
+
+        let sender_thread_id = ThreadId::from_string(sender_thread_id).unwrap_or(thread_id);
+        let entry = self.agent_navigation.get(&new_thread_id);
+        let spawn_mode = if entry.and_then(|entry| entry.agent_role.as_deref()) == Some("watchdog")
+        {
+            CollabAgentSpawnMode::Watchdog
+        } else {
+            CollabAgentSpawnMode::Spawn
+        };
+        let status = agents_states
+            .get(&new_thread_id.to_string())
+            .map(app_server_collab_state_to_agent_status)
+            .unwrap_or(AgentStatus::PendingInit);
+
+        let _ = self.subagents.on_spawn_end(&CollabAgentSpawnEndEvent {
+            call_id: id.clone(),
+            sender_thread_id,
+            new_thread_id: Some(new_thread_id),
+            new_agent_nickname: entry.and_then(|entry| entry.agent_nickname.clone()),
+            new_agent_role: entry.and_then(|entry| entry.agent_role.clone()),
+            prompt: prompt.clone().unwrap_or_default(),
+            model: String::new(),
+            reasoning_effort: ReasoningEffortConfig::Medium,
+            spawn_mode,
+            status,
+        });
+
+        self.sync_subagent_panel_state();
     }
 
     async fn note_thread_outbound_op(&mut self, thread_id: ThreadId, op: &AppCommand) {
@@ -3767,7 +3961,9 @@ impl App {
 
     fn reset_thread_event_state(&mut self) {
         self.abort_all_thread_event_listeners();
+        self.subagent_anim_running.store(false, Ordering::Release);
         self.thread_event_channels.clear();
+        self.subagents = SubagentRegistry::new(self.config.animations);
         self.agent_navigation.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
@@ -3776,6 +3972,7 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.chat_widget.clear_subagent_panel();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -4268,6 +4465,7 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        let animations_enabled = config.animations;
 
         let mut app = Self {
             model_catalog,
@@ -4287,6 +4485,7 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            subagent_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
@@ -4300,6 +4499,7 @@ impl App {
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
+            subagents: SubagentRegistry::new(animations_enabled),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -4774,6 +4974,38 @@ impl App {
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
+            }
+            AppEvent::StartSubagentAnimation => {
+                if self
+                    .subagent_anim_running
+                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    let tx = self.app_event_tx.clone();
+                    let running = self.subagent_anim_running.clone();
+                    thread::spawn(move || {
+                        while running.load(Ordering::Relaxed) {
+                            thread::sleep(SUBAGENT_ANIMATION_TICK);
+                            tx.send(AppEvent::SubagentTick);
+                        }
+                    });
+                }
+            }
+            AppEvent::StopSubagentAnimation => {
+                self.subagent_anim_running.store(false, Ordering::Release);
+            }
+            AppEvent::SubagentTick => {
+                let root_active = self.subagents_root_active();
+                self.update_subagent_animation(root_active);
+                if root_active && self.subagents.has_animating_agents() {
+                    self.chat_widget.on_subagent_tick();
+                }
+            }
+            AppEvent::UpdateSubagentPanel(panel) => {
+                self.chat_widget.on_subagent_panel_updated(panel);
+            }
+            AppEvent::ClearSubagentPanel => {
+                self.chat_widget.clear_subagent_panel();
             }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
@@ -6211,6 +6443,9 @@ impl App {
         if let ThreadBufferedEvent::Notification(notification) = &event {
             self.hydrate_collab_agent_metadata_for_notification(app_server, notification)
                 .await;
+            if let Some(active_thread_id) = self.active_thread_id {
+                self.process_subagent_notification_side_effects(active_thread_id, notification);
+            }
         }
 
         self.handle_thread_event_now(event);
@@ -9635,6 +9870,7 @@ guardian_approval = true
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
+        let animations_enabled = config.animations;
 
         App {
             model_catalog: chat_widget.model_catalog(),
@@ -9654,6 +9890,7 @@ guardian_approval = true
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            subagent_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
@@ -9667,6 +9904,7 @@ guardian_approval = true
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
+            subagents: SubagentRegistry::new(animations_enabled),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -9688,6 +9926,7 @@ guardian_approval = true
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
+        let animations_enabled = config.animations;
 
         (
             App {
@@ -9708,6 +9947,7 @@ guardian_approval = true
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                subagent_anim_running: Arc::new(AtomicBool::new(false)),
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
@@ -9721,6 +9961,7 @@ guardian_approval = true
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
+                subagents: SubagentRegistry::new(animations_enabled),
                 agent_navigation: AgentNavigationState::default(),
                 active_thread_id: None,
                 active_thread_rx: None,

@@ -2,12 +2,12 @@
 source: tui/src/chatwidget/tests.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
-╭──────────────────────────────────────────────╮
-│ >_ OpenAI Codex (v0.0.0)                     │
-│                                              │
-│ model:     loading   /model to change        │
-│ directory: ~/code/codex-split/…/codex-rs/tui │
-╰──────────────────────────────────────────────╯
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: /tmp/project               │
+╰───────────────────────────────────────╯
 
 • Subagents (0s • no subagents running • esc to interrupt)
 • [#1] [watchdog] watchdog-agent idle — watchdog idle
@@ -15,4 +15,4 @@ expression: terminal.backend().vt100().screen().contents()
 
 › show current subagent state
 
-                                                             100% context left
+  gpt-5.3-codex default · 100% left · /tmp/project
