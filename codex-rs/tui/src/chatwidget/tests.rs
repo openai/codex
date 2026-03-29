@@ -6094,7 +6094,7 @@ async fn realtime_error_closes_without_followup_closed_info() {
 async fn deleted_realtime_meter_uses_shared_stop_path() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
-    let placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+    let placeholder_id = chat.bottom_pane.insert_recording_meter_placeholder("⠤⠤⠤⠤");
     chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
 
     assert!(chat.stop_realtime_conversation_for_deleted_meter(&placeholder_id));

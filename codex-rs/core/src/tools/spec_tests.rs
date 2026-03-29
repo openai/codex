@@ -16,14 +16,27 @@ use codex_tools::ConfiguredToolSpec;
 use codex_tools::FreeformTool;
 use codex_tools::ResponsesApiWebSearchFilters;
 use codex_tools::ResponsesApiWebSearchUserLocation;
+use codex_tools::SpawnAgentToolOptions;
 use codex_tools::ViewImageToolOptions;
+use codex_tools::WaitAgentTimeoutOptions;
+use codex_tools::create_close_agent_tool_v1;
+use codex_tools::create_close_agent_tool_v2;
 use codex_tools::create_exec_command_tool;
 use codex_tools::create_request_permissions_tool;
+use codex_tools::create_request_user_input_tool;
+use codex_tools::create_resume_agent_tool;
+use codex_tools::create_send_input_tool_v1;
+use codex_tools::create_send_message_tool;
+use codex_tools::create_spawn_agent_tool_v1;
+use codex_tools::create_spawn_agent_tool_v2;
 use codex_tools::create_view_image_tool;
+use codex_tools::create_wait_agent_tool_v1;
+use codex_tools::create_wait_agent_tool_v2;
 use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::PathBuf;
 
 use super::*;
@@ -150,6 +163,27 @@ fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         ConfigShellToolType::UnifiedExec => None,
         ConfigShellToolType::Disabled => None,
         ConfigShellToolType::ShellCommand => Some("shell_command"),
+    }
+}
+
+fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
+    create_request_user_input_tool(request_user_input_tool_description(
+        default_mode_request_user_input,
+    ))
+}
+
+fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
+    SpawnAgentToolOptions {
+        available_models: &config.available_models,
+        agent_type_description: crate::agent::role::spawn_tool_spec::build(&config.agent_roles),
+    }
+}
+
+fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
+    WaitAgentTimeoutOptions {
+        default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+        min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+        max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
     }
 }
 
@@ -307,7 +341,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         }),
         create_write_stdin_tool(),
         PLAN_TOOL.clone(),
-        create_request_user_input_tool(CollaborationModesConfig::default()),
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
@@ -324,16 +358,16 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     }
     let collab_specs = if config.multi_agent_v2 {
         vec![
-            create_spawn_agent_tool_v2(&config),
+            create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
             create_send_message_tool(),
-            create_wait_agent_tool_v2(),
+            create_wait_agent_tool_v2(wait_agent_timeout_options()),
             create_close_agent_tool_v2(),
         ]
     } else {
         vec![
-            create_spawn_agent_tool_v1(&config),
+            create_spawn_agent_tool_v1(spawn_agent_tool_options(&config)),
             create_send_input_tool_v1(),
-            create_wait_agent_tool_v1(),
+            create_wait_agent_tool_v1(wait_agent_timeout_options()),
             create_close_agent_tool_v1(),
         ]
     };
@@ -734,7 +768,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, "request_user_input");
     assert_eq!(
         request_user_input_tool.spec,
-        create_request_user_input_tool(CollaborationModesConfig::default())
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ false)
     );
 
     features.enable(Feature::DefaultModeRequestUserInput);
@@ -758,9 +792,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, "request_user_input");
     assert_eq!(
         request_user_input_tool.spec,
-        create_request_user_input_tool(CollaborationModesConfig {
-            default_mode_request_user_input: true,
-        })
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ true)
     );
 }
 

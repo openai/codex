@@ -1,16 +1,34 @@
 //! Shared tool definitions and Responses API tool primitives that can live
 //! outside `codex-core`.
 
+mod agent_job_tool;
+mod agent_tool;
 mod code_mode;
 mod dynamic_tool;
 mod json_schema;
 mod local_tool;
 mod mcp_tool;
+mod request_user_input_tool;
 mod responses_api;
 mod tool_definition;
 mod tool_spec;
 mod view_image;
 
+pub use agent_job_tool::create_report_agent_job_result_tool;
+pub use agent_job_tool::create_spawn_agents_on_csv_tool;
+pub use agent_tool::SpawnAgentToolOptions;
+pub use agent_tool::WaitAgentTimeoutOptions;
+pub use agent_tool::create_assign_task_tool;
+pub use agent_tool::create_close_agent_tool_v1;
+pub use agent_tool::create_close_agent_tool_v2;
+pub use agent_tool::create_list_agents_tool;
+pub use agent_tool::create_resume_agent_tool;
+pub use agent_tool::create_send_input_tool_v1;
+pub use agent_tool::create_send_message_tool;
+pub use agent_tool::create_spawn_agent_tool_v1;
+pub use agent_tool::create_spawn_agent_tool_v2;
+pub use agent_tool::create_wait_agent_tool_v1;
+pub use agent_tool::create_wait_agent_tool_v2;
 pub use code_mode::augment_tool_spec_for_code_mode;
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
 pub use dynamic_tool::parse_dynamic_tool;
@@ -26,6 +44,7 @@ pub use local_tool::create_shell_tool;
 pub use local_tool::create_write_stdin_tool;
 pub use mcp_tool::mcp_call_tool_result_output_schema;
 pub use mcp_tool::parse_mcp_tool;
+pub use request_user_input_tool::create_request_user_input_tool;
 pub use responses_api::FreeformTool;
 pub use responses_api::FreeformToolFormat;
 pub use responses_api::ResponsesApiNamespace;
