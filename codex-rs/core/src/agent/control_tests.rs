@@ -440,6 +440,48 @@ async fn send_input_submits_user_message() {
     assert_eq!(captured, Some(expected));
 }
 
+#[tokio::test]
+async fn send_input_resets_watchdog_owner_idle_state() {
+    let harness = AgentControlHarness::new().await;
+    let (owner_thread_id, _thread) = harness.start_thread().await;
+    let target_thread_id = ThreadId::new();
+
+    harness
+        .control
+        .register_watchdog(WatchdogRegistration {
+            owner_thread_id,
+            target_thread_id,
+            child_depth: 0,
+            interval_s: 30,
+            prompt: String::new(),
+            config: harness.config.clone(),
+        })
+        .await
+        .expect("watchdog registration should succeed");
+
+    assert_eq!(
+        harness
+            .control
+            .watchdog_owner_idle_since_is_none_for_tests(target_thread_id)
+            .await,
+        Some(false)
+    );
+
+    harness
+        .control
+        .send_input(owner_thread_id, text_input("ping"))
+        .await
+        .expect("send_input should succeed");
+
+    assert_eq!(
+        harness
+            .control
+            .watchdog_owner_idle_since_is_none_for_tests(target_thread_id)
+            .await,
+        Some(true)
+    );
+}
+
 #[test]
 fn build_agent_inbox_items_emits_function_call_and_output() {
     let sender_thread_id = ThreadId::new();
