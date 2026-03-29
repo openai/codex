@@ -298,7 +298,6 @@ use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
-use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -550,7 +549,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) model_catalog: Arc<ModelCatalog>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
     pub(crate) initial_plan_type: Option<PlanType>,
     pub(crate) model: Option<String>,
@@ -902,7 +900,6 @@ pub(crate) struct ChatWidget {
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
-    feedback_audience: FeedbackAudience,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
@@ -2102,28 +2099,18 @@ impl ChatWidget {
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
     ) {
-        let snapshot = self.feedback.snapshot(self.thread_id);
-        self.show_feedback_note(category, include_logs, snapshot);
+        self.show_feedback_note(category, include_logs);
     }
 
     fn show_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
-        snapshot: codex_feedback::FeedbackSnapshot,
     ) {
-        let rollout = if include_logs {
-            self.current_rollout_path.clone()
-        } else {
-            None
-        };
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
-            snapshot,
-            rollout,
             self.app_event_tx.clone(),
             include_logs,
-            self.feedback_audience,
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
@@ -4463,7 +4450,6 @@ impl ChatWidget {
             model_catalog,
             feedback,
             is_first_run,
-            feedback_audience,
             status_account_display,
             initial_plan_type,
             model,
@@ -4597,7 +4583,6 @@ impl ChatWidget {
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
-            feedback_audience,
             current_rollout_path: None,
             current_cwd,
             session_network_proxy: None,

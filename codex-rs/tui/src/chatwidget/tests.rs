@@ -10,7 +10,6 @@ use crate::app_event::ExitMode;
 #[cfg(not(target_os = "linux"))]
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::chatwidget::realtime::RealtimeConversationPhase;
@@ -2007,7 +2006,6 @@ async fn helpers_are_available_and_do_not_panic() {
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         status_account_display: None,
         initial_plan_type: None,
         model: Some(resolved_model),
@@ -2176,7 +2174,6 @@ async fn make_chatwidget_manual(
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
-        feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         current_cwd: None,
         session_network_proxy: None,
@@ -6945,7 +6942,6 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         status_account_display: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
@@ -6990,7 +6986,6 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         status_account_display: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
