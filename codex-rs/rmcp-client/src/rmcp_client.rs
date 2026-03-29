@@ -452,6 +452,8 @@ impl From<ElicitationResponse> for CreateElicitationResult {
 pub type SendElicitation = Box<
     dyn Fn(RequestId, Elicitation) -> BoxFuture<'static, Result<ElicitationResponse>> + Send + Sync,
 >;
+pub type SendProgressNotification =
+    Arc<dyn Fn(rmcp::model::ProgressNotificationParam) -> BoxFuture<'static, ()> + Send + Sync>;
 
 pub struct ToolWithConnectorId {
     pub tool: Tool,
@@ -702,6 +704,7 @@ impl RmcpClient {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
         timeout: Option<Duration>,
+        progress_notification: Option<SendProgressNotification>,
     ) -> Result<CallToolResult> {
         self.refresh_oauth_if_needed().await;
         let arguments = match arguments {
@@ -728,12 +731,21 @@ impl RmcpClient {
             arguments,
             task: None,
         };
+        let progress_handler = self
+            .initialize_context
+            .lock()
+            .await
+            .as_ref()
+            .map(|context| context.handler.progress_handler())
+            .ok_or_else(|| anyhow!("client not initialized"))?;
         let result = self
             .run_service_operation("tools/call", timeout, move |service| {
                 let rmcp_params = rmcp_params.clone();
                 let meta = meta.clone();
+                let progress_handler = progress_handler.clone();
+                let progress_notification = progress_notification.clone();
                 async move {
-                    let result = service
+                    let handle = service
                         .peer()
                         .send_request_with_option(
                             ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
@@ -746,9 +758,25 @@ impl RmcpClient {
                                 meta,
                             },
                         )
-                        .await?
-                        .await_response()
                         .await?;
+                    let result = if let Some(progress_notification) = progress_notification {
+                        let mut progress_subscriber = progress_handler
+                            .subscribe(handle.progress_token.clone())
+                            .await;
+                        let mut response = handle.await_response().boxed();
+                        loop {
+                            tokio::select! {
+                                result = &mut response => break result?,
+                                notification = progress_subscriber.next() => {
+                                    if let Some(notification) = notification {
+                                        progress_notification(notification).await;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        handle.await_response().await?
+                    };
                     match result {
                         ServerResult::CallToolResult(result) => Ok(result),
                         _ => Err(rmcp::service::ServiceError::UnexpectedResponse),

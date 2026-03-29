@@ -129,6 +129,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_rmcp_client::SendProgressNotification;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
@@ -4280,12 +4281,13 @@ impl Session {
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
+        progress_notification: Option<SendProgressNotification>,
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .call_tool(server, tool, arguments, meta)
+            .call_tool(server, tool, arguments, meta, progress_notification)
             .await
     }
 
@@ -7050,6 +7052,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::McpToolCallBegin(_)
+        | EventMsg::McpToolCallProgress(_)
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::WebSearchBegin(_)
         | EventMsg::WebSearchEnd(_)

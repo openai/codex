@@ -369,6 +369,24 @@ async fn forward_events(
                             break;
                         }
                     }
+                    Event {
+                        id,
+                        msg: EventMsg::McpToolCallProgress(event),
+                    } => {
+                        if !forward_event_or_shutdown(
+                            &codex,
+                            &tx_sub,
+                            &cancel_token,
+                            Event {
+                                id,
+                                msg: EventMsg::McpToolCallProgress(event),
+                            },
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
                     other => {
                         if !forward_event_or_shutdown(&codex, &tx_sub, &cancel_token, other).await
                         {

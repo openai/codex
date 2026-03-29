@@ -50,6 +50,7 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::SendElicitation;
+use codex_rmcp_client::SendProgressNotification;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -1012,6 +1013,7 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
+        progress_notification: Option<SendProgressNotification>,
     ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
         if !client.tool_filter.allows(tool) {
@@ -1022,7 +1024,13 @@ impl McpConnectionManager {
 
         let result: rmcp::model::CallToolResult = client
             .client
-            .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
+            .call_tool(
+                tool.to_string(),
+                arguments,
+                meta,
+                client.tool_timeout,
+                progress_notification,
+            )
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 

@@ -334,6 +334,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)
                     | EventMsg::McpToolCallBegin(_)
+                    | EventMsg::McpToolCallProgress(_)
                     | EventMsg::McpToolCallEnd(_)
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListSkillsResponse(_)

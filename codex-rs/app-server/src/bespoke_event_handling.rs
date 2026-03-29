@@ -55,6 +55,7 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::McpToolCallError;
+use codex_app_server_protocol::McpToolCallProgressNotification;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
@@ -122,6 +123,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::McpToolCallProgressEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -978,6 +980,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::McpToolCallProgress(progress_event) => {
+            let notification = construct_mcp_tool_call_progress_notification(
+                progress_event,
+                conversation_id.to_string(),
+                event_turn_id.clone(),
+            );
+            outgoing
+                .send_server_notification(ServerNotification::McpToolCallProgress(notification))
                 .await;
         }
         EventMsg::CollabAgentSpawnBegin(begin_event) => {
@@ -2823,6 +2835,19 @@ async fn construct_mcp_tool_call_end_notification(
     }
 }
 
+fn construct_mcp_tool_call_progress_notification(
+    progress_event: McpToolCallProgressEvent,
+    thread_id: String,
+    turn_id: String,
+) -> McpToolCallProgressNotification {
+    McpToolCallProgressNotification {
+        thread_id,
+        turn_id,
+        item_id: progress_event.call_id,
+        message: progress_event.message,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4203,6 +4228,32 @@ mod tests {
         };
 
         assert_eq!(notification, expected);
+    }
+
+    #[test]
+    fn test_construct_mcp_tool_call_progress_notification() {
+        let progress_event = McpToolCallProgressEvent {
+            call_id: "call_progress".to_string(),
+            message: "indexing".to_string(),
+        };
+
+        let thread_id = ThreadId::new().to_string();
+        let turn_id = "turn_5".to_string();
+        let notification = construct_mcp_tool_call_progress_notification(
+            progress_event.clone(),
+            thread_id.clone(),
+            turn_id.clone(),
+        );
+
+        assert_eq!(
+            notification,
+            McpToolCallProgressNotification {
+                thread_id,
+                turn_id,
+                item_id: progress_event.call_id,
+                message: progress_event.message,
+            }
+        );
     }
 
     #[tokio::test]

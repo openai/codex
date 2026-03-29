@@ -174,6 +174,7 @@ impl ThreadHistoryBuilder {
                 self.handle_dynamic_tool_call_response(payload)
             }
             EventMsg::McpToolCallBegin(payload) => self.handle_mcp_tool_call_begin(payload),
+            EventMsg::McpToolCallProgress(_) => {}
             EventMsg::McpToolCallEnd(payload) => self.handle_mcp_tool_call_end(payload),
             EventMsg::ViewImageToolCall(payload) => self.handle_view_image_tool_call(payload),
             EventMsg::ImageGenerationBegin(payload) => self.handle_image_generation_begin(payload),

@@ -12,6 +12,7 @@ use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ProgressNotificationParam;
 use rmcp::model::RawResource;
 use rmcp::model::RawResourceTemplate;
 use rmcp::model::ReadResourceRequestParams;
@@ -26,6 +27,8 @@ use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task;
+use tokio::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Clone)]
 struct TestToolServer {
@@ -47,6 +50,7 @@ impl TestToolServer {
         let tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
+            Self::progress_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
         ];
@@ -111,6 +115,24 @@ impl TestToolServer {
         );
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
+    }
+
+    fn progress_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "steps": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+        }))
+        .expect("progress tool schema should deserialize");
+
+        Tool::new(
+            Cow::Borrowed("progress"),
+            Cow::Borrowed("Emit progress notifications before completing."),
+            Arc::new(schema),
+        )
     }
 
     /// Tool intended for manual testing of Codex TUI rendering for MCP image tool results.
@@ -208,6 +230,16 @@ struct EchoArgs {
     message: String,
     #[allow(dead_code)]
     env_var: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProgressArgs {
+    #[serde(default = "default_progress_steps")]
+    steps: u64,
+}
+
+fn default_progress_steps() -> u64 {
+    3
 }
 
 #[derive(Deserialize, Debug)]
@@ -315,7 +347,7 @@ impl ServerHandler for TestToolServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
             "echo" | "echo-tool" => {
@@ -341,6 +373,40 @@ impl ServerHandler for TestToolServer {
                 Ok(CallToolResult {
                     content: Vec::new(),
                     structured_content: Some(structured_content),
+                    is_error: Some(false),
+                    meta: None,
+                })
+            }
+            "progress" => {
+                let args = match request.arguments {
+                    Some(arguments) => serde_json::from_value(serde_json::Value::Object(
+                        arguments.into_iter().collect(),
+                    ))
+                    .map_err(|err| McpError::invalid_params(err.to_string(), None))?,
+                    None => ProgressArgs {
+                        steps: default_progress_steps(),
+                    },
+                };
+                let progress_token = context.meta.get_progress_token().ok_or_else(|| {
+                    McpError::invalid_params("missing progress token for progress tool", None)
+                })?;
+                for step in 1..=args.steps {
+                    context
+                        .peer
+                        .notify_progress(ProgressNotificationParam {
+                            progress_token: progress_token.clone(),
+                            progress: step as f64,
+                            total: Some(args.steps as f64),
+                            message: Some(format!("step {step}")),
+                        })
+                        .await
+                        .map_err(|err| McpError::internal_error(err.to_string(), None))?;
+                    sleep(Duration::from_millis(10)).await;
+                }
+
+                Ok(CallToolResult {
+                    content: Vec::new(),
+                    structured_content: Some(json!({ "steps": args.steps })),
                     is_error: Some(false),
                     meta: None,
                 })
