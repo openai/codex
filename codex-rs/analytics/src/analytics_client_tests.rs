@@ -8,6 +8,7 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
+use super::CodexRuntimeMetadata;
 use super::CustomAnalyticsFact;
 use super::InvocationType;
 use super::PluginState;
@@ -16,14 +17,14 @@ use super::PluginUsedInput;
 use super::SkillInvocation;
 use super::SkillInvokedInput;
 use super::ThreadInitializationMode;
-use super::ThreadInitializedInput;
+use super::ThreadInitializedEvent;
+use super::ThreadInitializedEventParams;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::normalize_path_for_skill_id;
-use super::thread_initialized_event_request;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -43,7 +44,6 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
-use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -279,8 +279,10 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(thread_initialized_event_request(
-        &super::ConnectionState {
+    let event = TrackEventRequest::ThreadInitialized(ThreadInitializedEvent {
+        event_type: "codex_thread_initialized",
+        event_params: ThreadInitializedEventParams {
+            thread_id: "thread-0".to_string(),
             app_server_client: super::CodexAppServerClientMetadata {
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
                 client_name: Some("codex-tui".to_string()),
@@ -288,23 +290,21 @@ fn thread_initialized_event_serializes_expected_shape() {
                 rpc_transport: super::AppServerRpcTransport::Stdio,
                 experimental_api_enabled: Some(true),
             },
-            runtime: super::CodexRuntimeMetadata {
+            runtime: CodexRuntimeMetadata {
                 codex_rs_version: "0.1.0".to_string(),
                 runtime_os: "macos".to_string(),
                 runtime_os_version: "15.3.1".to_string(),
                 runtime_arch: "aarch64".to_string(),
             },
-        },
-        ThreadInitializedInput {
-            connection_id: 1,
-            thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: true,
-            thread_source: SessionSource::Exec,
+            thread_source: Some("user"),
             initialization_mode: ThreadInitializationMode::New,
+            subagent_source: None,
+            parent_thread_id: None,
             created_at: 1,
         },
-    ));
+    });
 
     let payload = serde_json::to_value(&event).expect("serialize thread initialized event");
 
