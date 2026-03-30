@@ -13,7 +13,10 @@ import sys
 import tempfile
 from typing import MutableMapping, Sequence
 
-STRICT_LINT = "uncommented-anonymous-literal-argument"
+STRICT_LINTS = [
+    "argument-comment-mismatch",
+    "uncommented-anonymous-literal-argument",
+]
 NOISE_LINT = "unknown_lints"
 TOOLCHAIN_CHANNEL = "nightly-2025-09-18"
 
@@ -129,7 +132,8 @@ def append_env_flag(env: MutableMapping[str, str], key: str, flag: str) -> None:
 
 
 def set_default_lint_env(env: MutableMapping[str, str]) -> None:
-    append_env_flag(env, "DYLINT_RUSTFLAGS", f"-D {STRICT_LINT}")
+    for strict_lint in STRICT_LINTS:
+        append_env_flag(env, "DYLINT_RUSTFLAGS", f"-D {strict_lint}")
     append_env_flag(env, "DYLINT_RUSTFLAGS", f"-A {NOISE_LINT}")
     if not env.get("CARGO_INCREMENTAL"):
         env["CARGO_INCREMENTAL"] = "0"

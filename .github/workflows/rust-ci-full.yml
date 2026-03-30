@@ -116,6 +116,7 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
+          bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
           ./.github/scripts/run-bazel-ci.sh \
             -- \
             build \
@@ -123,7 +124,7 @@ jobs:
             --keep_going \
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
             -- \
-            //codex-rs/...
+            ${bazel_targets}
       - name: Run argument comment lint on codex-rs via packaged wrapper
         if: ${{ runner.os == 'Windows' }}
         shell: bash

@@ -129,7 +129,8 @@ Run the lint against `codex-rs` from the repo root:
 
 ```bash
 just argument-comment-lint
-bazel build --config=argument-comment-lint -- //codex-rs/...
+bazel build --config=argument-comment-lint -- \
+  $(./tools/argument-comment-lint/list-bazel-targets.sh)
 ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core
 just argument-comment-lint -p codex-core
 ```
@@ -138,10 +139,13 @@ If no package selection is provided, `just argument-comment-lint` now defaults
 to the Bazel aspect path over `//codex-rs/...`. The Python wrappers remain the
 package-scoped escape hatch and still default the underlying Cargo invocation
 to `--all-targets` unless you explicitly narrow the target set, so targeted
-wrapper runs cover test-only call sites by default.
+wrapper runs cover test-only call sites by default. The Bazel entrypoints use
+`tools/argument-comment-lint/list-bazel-targets.sh` to add the internal
+manual `*-unit-tests-bin` Rust targets explicitly, so inline `#[cfg(test)]`
+call sites are covered without pulling in unrelated manual release targets.
 
-Repo runs also promote `uncommented_anonymous_literal_argument` to an error by
-default:
+Repo runs also promote `argument_comment_mismatch` and
+`uncommented_anonymous_literal_argument` to errors by default:
 
 ```bash
 ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core
@@ -154,7 +158,7 @@ rustc incremental compilation ICE locally. To override that behavior for an ad
 hoc run:
 
 ```bash
-DYLINT_RUSTFLAGS="-A uncommented-anonymous-literal-argument" \
+DYLINT_RUSTFLAGS="-A argument-comment-mismatch -A uncommented-anonymous-literal-argument" \
 CARGO_INCREMENTAL=1 \
   ./tools/argument-comment-lint/run.py -p codex-core
 ```
