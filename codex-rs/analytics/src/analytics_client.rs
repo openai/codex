@@ -171,9 +171,9 @@ impl AnalyticsEventsQueue {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
         tokio::spawn(async move {
             let mut reducer = AnalyticsReducer::default();
-            while let Some(job) = receiver.recv().await {
+            while let Some(input) = receiver.recv().await {
                 let mut events = Vec::new();
-                reducer.ingest(job, &mut events).await;
+                reducer.ingest(input, &mut events).await;
                 send_track_events(&auth_manager, &base_url, events).await;
             }
         });
