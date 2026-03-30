@@ -1872,6 +1872,7 @@ model_provider = "mock_provider"
 
 [features]
 personality = true
+general_analytics = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

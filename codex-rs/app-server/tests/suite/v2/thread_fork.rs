@@ -564,6 +564,9 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
+[features]
+general_analytics = true
+
 model_provider = "mock_provider"
 
 [model_providers.mock_provider]

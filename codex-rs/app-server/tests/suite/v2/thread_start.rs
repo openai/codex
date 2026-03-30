@@ -26,6 +26,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::path::Path;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -183,6 +184,39 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     assert_eq!(payload["events"].as_array().expect("events array").len(), 1);
     let event = thread_initialized_event(&payload)?;
     assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "new");
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_does_not_track_thread_initialized_analytics_without_feature() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_chatgpt_base_url_without_general_analytics(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let _ = to_response::<ThreadStartResponse>(resp)?;
+
+    let payload = wait_for_analytics_payload(&server, Duration::from_millis(250)).await;
+    assert!(
+        payload.is_err(),
+        "thread analytics should be gated off when general_analytics is disabled"
+    );
     Ok(())
 }
 
@@ -568,6 +602,37 @@ stream_max_retries = 0
 }
 
 fn create_config_toml_with_chatgpt_base_url(
+    codex_home: &Path,
+    server_uri: &str,
+    chatgpt_base_url: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+chatgpt_base_url = "{chatgpt_base_url}"
+
+[features]
+general_analytics = true
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_chatgpt_base_url_without_general_analytics(
     codex_home: &Path,
     server_uri: &str,
     chatgpt_base_url: &str,
