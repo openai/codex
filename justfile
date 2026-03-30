@@ -67,17 +67,21 @@ bazel-lock-check:
     ./scripts/check-module-bazel-lock.sh
 
 bazel-test:
-    bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint --keep_going -- //... -//third_party/v8:all
 
 bazel-clippy:
     bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
 
 [no-cd]
 bazel-argument-comment-lint:
-    bazel build --config=argument-comment-lint -- //codex-rs/...
+    ./.github/scripts/run-bazel-ci.sh -- build --config=argument-comment-lint --keep_going -- //codex-rs/...
 
+# Fast local iteration helper: prefer the fully remote Linux path, even on
+# macOS, to keep local CPU/RAM use down. For best same-clone reruns, keep
+# BuildBuddy auth plus `build/test --watchfs` in `~/.bazelrc`.
+[no-cd]
 bazel-remote-test:
-    bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
+    ./.github/scripts/run-bazel-ci.sh --print-failed-test-logs --use-node-test-env --ci-config=ci-linux -- test --test_tag_filters=-argument-comment-lint --test_verbose_timeout_warnings -- //... -//third_party/v8:all
 
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
@@ -102,7 +106,7 @@ write-hooks-schema:
 [no-cd]
 argument-comment-lint *args:
     if [ "$#" -eq 0 ]; then \
-      bazel build --config=argument-comment-lint -- //codex-rs/...; \
+      ./.github/scripts/run-bazel-ci.sh -- build --config=argument-comment-lint --keep_going -- //codex-rs/...; \
     else \
       ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
     fi
