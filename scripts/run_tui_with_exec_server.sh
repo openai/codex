@@ -58,4 +58,4 @@ export CODEX_EXEC_SERVER_URL="$exec_server_url"
 echo "Starting codex-tui with CODEX_EXEC_SERVER_URL=$CODEX_EXEC_SERVER_URL" >&2
 
 cd "$cargo_root"
-cargo run -p codex-tui --bin codex-tui -- -c features.tui_app_server=true -c mcp_oauth_credentials_store=file "$@"
+cargo run -p codex-tui --bin codex-tui -- -c mcp_oauth_credentials_store=file "$@"

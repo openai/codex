@@ -26,7 +26,7 @@ async fn windows_sandbox_setup_start_emits_completion_notification() -> Result<(
         codex_home.path(),
         &server.uri(),
         &BTreeMap::new(),
-        500_000,
+        /*auto_compact_limit*/ 500_000,
         Some(false),
         "mock_provider",
         "compact prompt",

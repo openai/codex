@@ -53,9 +53,9 @@ jobs:
               labels: codex-windows-x64
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           toolchain: nightly-2025-09-18
           targets: ${{ matrix.target }}
@@ -97,7 +97,7 @@ jobs:
             (cd "${RUNNER_TEMP}" && tar -czf "$GITHUB_WORKSPACE/$archive_path" argument-comment-lint)
           fi
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: argument-comment-lint-${{ matrix.target }}
           path: dist/argument-comment-lint/${{ matrix.target }}/*

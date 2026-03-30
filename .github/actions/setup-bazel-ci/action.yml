@@ -1,0 +1,69 @@
+name: setup-bazel-ci
+description: Prepare a Bazel CI runner with shared caches and optional test prerequisites.
+inputs:
+  target:
+    description: Target triple used for cache namespacing.
+    required: true
+  install-test-prereqs:
+    description: Install Node.js and DotSlash for Bazel-backed test jobs.
+    required: false
+    default: "false"
+outputs:
+  cache-hit:
+    description: Whether the Bazel repository cache key was restored exactly.
+    value: ${{ steps.cache_bazel_repository_restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js for js_repl tests
+      if: inputs.install-test-prereqs == 'true'
+      uses: actions/setup-node@v6
+      with:
+        node-version-file: codex-rs/node-version.txt
+
+    # Some integration tests rely on DotSlash being installed.
+    # See https://github.com/openai/codex/pull/7617.
+    - name: Install DotSlash
+      if: inputs.install-test-prereqs == 'true'
+      uses: facebook/install-dotslash@v2
+
+    - name: Make DotSlash available in PATH (Unix)
+      if: inputs.install-test-prereqs == 'true' && runner.os != 'Windows'
+      shell: bash
+      run: cp "$(which dotslash)" /usr/local/bin
+
+    - name: Make DotSlash available in PATH (Windows)
+      if: inputs.install-test-prereqs == 'true' && runner.os == 'Windows'
+      shell: pwsh
+      run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
+
+    - name: Set up Bazel
+      uses: bazelbuild/setup-bazelisk@v3
+
+    # Restore bazel repository cache so we don't have to redownload all the external dependencies
+    # on every CI run.
+    - name: Restore bazel repository cache
+      id: cache_bazel_repository_restore
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ~/.cache/bazel-repo-cache
+        key: bazel-cache-${{ inputs.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+        restore-keys: |
+          bazel-cache-${{ inputs.target }}
+
+    - name: Configure Bazel output root (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Use the shortest available drive to reduce argv/path length issues,
+        # but avoid the drive root because some Windows test launchers mis-handle
+        # MANIFEST paths there.
+        $bazelOutputUserRoot = if (Test-Path 'D:\') { 'D:\b' } else { 'C:\b' }
+        "BAZEL_OUTPUT_USER_ROOT=$bazelOutputUserRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Enable Git long paths (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: git config --global core.longpaths true

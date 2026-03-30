@@ -86,8 +86,8 @@ fn detects_hook_prompt_fragment_and_roundtrips_escaping() {
     let ContentItem::InputText { text } = content_item else {
         panic!("expected input text content item");
     };
-    let parsed =
-        parse_visible_hook_prompt_message(None, content.as_slice()).expect("visible hook prompt");
+    let parsed = parse_visible_hook_prompt_message(/*id*/ None, content.as_slice())
+        .expect("visible hook prompt");
     assert_eq!(
         parsed.fragments,
         vec![HookPromptFragment {

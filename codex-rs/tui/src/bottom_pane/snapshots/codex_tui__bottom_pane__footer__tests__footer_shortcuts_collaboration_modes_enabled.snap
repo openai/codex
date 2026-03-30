@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/footer.rs
-assertion_line: 535
 expression: terminal.backend()
 ---
 "  / for commands                             ! for shell commands               "

@@ -31,6 +31,7 @@ use rustc_span::Span;
 use crate::comment_parser::parse_argument_comment;
 use crate::comment_parser::parse_argument_comment_prefix;
 
+#[cfg(not(feature = "bazel_native"))]
 dylint_linting::dylint_library!();
 
 #[unsafe(no_mangle)]

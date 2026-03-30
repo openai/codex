@@ -60,11 +60,13 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
     // Leave small chance for a random tooltip to be shown.
     if rng.random_ratio(8, 10) {
         match plan {
-            Some(PlanType::Plus)
-            | Some(PlanType::Business)
-            | Some(PlanType::Team)
-            | Some(PlanType::Enterprise)
-            | Some(PlanType::Pro) => {
+            Some(plan_type)
+                if matches!(
+                    plan_type,
+                    PlanType::Plus | PlanType::Enterprise | PlanType::Pro
+                ) || plan_type.is_team_like()
+                    || plan_type.is_business_like() =>
+            {
                 return Some(pick_paid_tooltip(&mut rng, fast_mode_enabled).to_string());
             }
             Some(PlanType::Go) | Some(PlanType::Free) => {
@@ -289,7 +291,9 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for seed in 0..32 {
             let mut rng = StdRng::seed_from_u64(seed);
-            seen.insert(pick_paid_tooltip(&mut rng, false));
+            seen.insert(pick_paid_tooltip(
+                &mut rng, /*fast_mode_enabled*/ false,
+            ));
         }
 
         let expected = std::collections::BTreeSet::from([paid_app_tooltip(), FAST_TOOLTIP]);
@@ -301,7 +305,7 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for seed in 0..8 {
             let mut rng = StdRng::seed_from_u64(seed);
-            seen.insert(pick_paid_tooltip(&mut rng, true));
+            seen.insert(pick_paid_tooltip(&mut rng, /*fast_mode_enabled*/ true));
         }
 
         let expected = std::collections::BTreeSet::from([paid_app_tooltip()]);

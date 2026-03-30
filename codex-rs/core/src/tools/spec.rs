@@ -1,17 +1,12 @@
-use crate::client_common::tools::FreeformTool;
-use crate::client_common::tools::FreeformToolFormat;
-use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
-use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::discoverable::DiscoverableToolAction;
@@ -36,7 +31,6 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -46,15 +40,49 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_tools::ParsedToolDefinition;
-use codex_tools::parse_dynamic_tool;
-use codex_tools::parse_mcp_tool;
+use codex_tools::CommandToolOptions;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ShellToolOptions;
+use codex_tools::SpawnAgentToolOptions;
+use codex_tools::ViewImageToolOptions;
+use codex_tools::WaitAgentTimeoutOptions;
+use codex_tools::augment_tool_spec_for_code_mode;
+use codex_tools::create_assign_task_tool;
+use codex_tools::create_close_agent_tool_v1;
+use codex_tools::create_close_agent_tool_v2;
+use codex_tools::create_code_mode_tool;
+use codex_tools::create_exec_command_tool;
+use codex_tools::create_js_repl_reset_tool;
+use codex_tools::create_js_repl_tool;
+use codex_tools::create_list_agents_tool;
+use codex_tools::create_list_dir_tool;
+use codex_tools::create_list_mcp_resource_templates_tool;
+use codex_tools::create_list_mcp_resources_tool;
+use codex_tools::create_read_mcp_resource_tool;
+use codex_tools::create_report_agent_job_result_tool;
+use codex_tools::create_request_permissions_tool;
+use codex_tools::create_request_user_input_tool;
+use codex_tools::create_resume_agent_tool;
+use codex_tools::create_send_input_tool_v1;
+use codex_tools::create_send_message_tool;
+use codex_tools::create_shell_command_tool;
+use codex_tools::create_shell_tool;
+use codex_tools::create_spawn_agent_tool_v1;
+use codex_tools::create_spawn_agent_tool_v2;
+use codex_tools::create_spawn_agents_on_csv_tool;
+use codex_tools::create_test_sync_tool;
+use codex_tools::create_view_image_tool;
+use codex_tools::create_wait_agent_tool_v1;
+use codex_tools::create_wait_agent_tool_v2;
+use codex_tools::create_wait_tool;
+use codex_tools::create_write_stdin_tool;
+use codex_tools::dynamic_tool_to_responses_api_tool;
+use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_tools::tool_spec_to_code_mode_tool_definition;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value as JsonValue;
-use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -80,220 +108,6 @@ static TOOL_SUGGEST_DESCRIPTION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| 
         .unwrap_or_else(|err| panic!("tool_suggest description template must parse: {err}"))
 });
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
-
-fn unified_exec_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "chunk_id": {
-                "type": "string",
-                "description": "Chunk identifier included when the response reports one."
-            },
-            "wall_time_seconds": {
-                "type": "number",
-                "description": "Elapsed wall time spent waiting for output in seconds."
-            },
-            "exit_code": {
-                "type": "number",
-                "description": "Process exit code when the command finished during this call."
-            },
-            "session_id": {
-                "type": "number",
-                "description": "Session identifier to pass to write_stdin when the process is still running."
-            },
-            "original_token_count": {
-                "type": "number",
-                "description": "Approximate token count before output truncation."
-            },
-            "output": {
-                "type": "string",
-                "description": "Command output text, possibly truncated."
-            }
-        },
-        "required": ["wall_time_seconds", "output"],
-        "additionalProperties": false
-    })
-}
-
-fn agent_status_output_schema() -> JsonValue {
-    json!({
-        "oneOf": [
-            {
-                "type": "string",
-                "enum": ["pending_init", "running", "shutdown", "not_found"]
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "completed": {
-                        "type": ["string", "null"]
-                    }
-                },
-                "required": ["completed"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "errored": {
-                        "type": "string"
-                    }
-                },
-                "required": ["errored"],
-                "additionalProperties": false
-            }
-        ]
-    })
-}
-
-fn spawn_agent_output_schema_v1() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "agent_id": {
-                "type": "string",
-                "description": "Thread identifier for the spawned agent."
-            },
-            "nickname": {
-                "type": ["string", "null"],
-                "description": "User-facing nickname for the spawned agent when available."
-            }
-        },
-        "required": ["agent_id", "nickname"],
-        "additionalProperties": false
-    })
-}
-
-fn spawn_agent_output_schema_v2() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "agent_id": {
-                "type": ["string", "null"],
-                "description": "Legacy thread identifier for the spawned agent."
-            },
-            "task_name": {
-                "type": "string",
-                "description": "Canonical task name for the spawned agent."
-            },
-            "nickname": {
-                "type": ["string", "null"],
-                "description": "User-facing nickname for the spawned agent when available."
-            }
-        },
-        "required": ["agent_id", "task_name", "nickname"],
-        "additionalProperties": false
-    })
-}
-
-fn send_input_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "submission_id": {
-                "type": "string",
-                "description": "Identifier for the queued input submission."
-            }
-        },
-        "required": ["submission_id"],
-        "additionalProperties": false
-    })
-}
-
-fn list_agents_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "agents": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "agent_name": {
-                            "type": "string",
-                            "description": "Canonical task name for the agent when available, otherwise the agent id."
-                        },
-                        "agent_status": {
-                            "description": "Last known status of the agent.",
-                            "allOf": [agent_status_output_schema()]
-                        },
-                        "last_task_message": {
-                            "type": ["string", "null"],
-                            "description": "Most recent user or inter-agent instruction received by the agent, when available."
-                        }
-                    },
-                    "required": ["agent_name", "agent_status", "last_task_message"],
-                    "additionalProperties": false
-                },
-                "description": "Live agents visible in the current root thread tree."
-            }
-        },
-        "required": ["agents"],
-        "additionalProperties": false
-    })
-}
-
-fn resume_agent_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": agent_status_output_schema()
-        },
-        "required": ["status"],
-        "additionalProperties": false
-    })
-}
-
-fn wait_output_schema_v1() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "object",
-                "description": "Final statuses keyed by agent id.",
-                "additionalProperties": agent_status_output_schema()
-            },
-            "timed_out": {
-                "type": "boolean",
-                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
-            }
-        },
-        "required": ["status", "timed_out"],
-        "additionalProperties": false
-    })
-}
-
-fn wait_output_schema_v2() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "message": {
-                "type": "string",
-                "description": "Brief wait summary without the agent's final content."
-            },
-            "timed_out": {
-                "type": "boolean",
-                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
-            }
-        },
-        "required": ["message", "timed_out"],
-        "additionalProperties": false
-    })
-}
-
-fn close_agent_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "previous_status": {
-                "description": "The agent status observed before shutdown was requested.",
-                "allOf": [agent_status_output_schema()]
-            }
-        },
-        "required": ["previous_status"],
-        "additionalProperties": false
-    })
-}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
@@ -559,1334 +373,6 @@ fn supports_image_generation(model_info: &ModelInfo) -> bool {
     model_info.input_modalities.contains(&InputModality::Image)
 }
 
-fn create_network_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([(
-            "enabled".to_string(),
-            JsonSchema::Boolean {
-                description: Some("Set to true to request network access.".to_string()),
-            },
-        )]),
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn create_file_system_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([
-            (
-                "read".to_string(),
-                JsonSchema::Array {
-                    items: Box::new(JsonSchema::String { description: None }),
-                    description: Some("Absolute paths to grant read access to.".to_string()),
-                },
-            ),
-            (
-                "write".to_string(),
-                JsonSchema::Array {
-                    items: Box::new(JsonSchema::String { description: None }),
-                    description: Some("Absolute paths to grant write access to.".to_string()),
-                },
-            ),
-        ]),
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn create_additional_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([
-            ("network".to_string(), create_network_permissions_schema()),
-            (
-                "file_system".to_string(),
-                create_file_system_permissions_schema(),
-            ),
-        ]),
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn create_request_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([
-            ("network".to_string(), create_network_permissions_schema()),
-            (
-                "file_system".to_string(),
-                create_file_system_permissions_schema(),
-            ),
-        ]),
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn windows_destructive_filesystem_guidance() -> &'static str {
-    r#"Windows safety rules:
-- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.
-- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked."#
-}
-
-fn create_approval_parameters(
-    exec_permission_approvals_enabled: bool,
-) -> BTreeMap<String, JsonSchema> {
-    let mut properties = BTreeMap::from([
-        (
-            "sandbox_permissions".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    if exec_permission_approvals_enabled {
-                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem or network permissions (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
-                    } else {
-                        "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
-                    }
-                    .to_string(),
-                ),
-            },
-        ),
-        (
-            "justification".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    r#"Only set if sandbox_permissions is \"require_escalated\".
-                    Request approval from the user to run this command outside the sandbox.
-                    Phrased as a simple question that summarizes the purpose of the
-                    command as it relates to the task at hand - e.g. 'Do you want to
-                    fetch and pull the latest version of this git branch?'"#
-                    .to_string(),
-                ),
-            },
-        ),
-        (
-            "prefix_rule".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
-                description: Some(
-                    r#"Only specify when sandbox_permissions is `require_escalated`.
-                        Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
-                        Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
-                ),
-            },
-        )
-    ]);
-
-    if exec_permission_approvals_enabled {
-        properties.insert(
-            "additional_permissions".to_string(),
-            create_additional_permissions_schema(),
-        );
-    }
-
-    properties
-}
-
-fn create_exec_command_tool(
-    allow_login_shell: bool,
-    exec_permission_approvals_enabled: bool,
-) -> ToolSpec {
-    let mut properties = BTreeMap::from([
-        (
-            "cmd".to_string(),
-            JsonSchema::String {
-                description: Some("Shell command to execute.".to_string()),
-            },
-        ),
-        (
-            "workdir".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional working directory to run the command in; defaults to the turn cwd."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "shell".to_string(),
-            JsonSchema::String {
-                description: Some("Shell binary to launch. Defaults to the user's default shell.".to_string()),
-            },
-        ),
-        (
-            "tty".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Whether to allocate a TTY for the command. Defaults to false (plain pipes); set to true to open a PTY and access TTY process."
-                        .to_string(),
-                ),
-            }
-        ),
-        (
-            "yield_time_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "How long to wait (in milliseconds) for output before yielding.".to_string(),
-                ),
-            },
-        ),
-        (
-            "max_output_tokens".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum number of tokens to return. Excess output will be truncated."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-    if allow_login_shell {
-        properties.insert(
-            "login".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
-                ),
-            },
-        );
-    }
-    properties.extend(create_approval_parameters(
-        exec_permission_approvals_enabled,
-    ));
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "exec_command".to_string(),
-        description: if cfg!(windows) {
-            format!(
-                "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{}",
-                windows_destructive_filesystem_guidance()
-            )
-        } else {
-            "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-                .to_string()
-        },
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["cmd".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(unified_exec_output_schema()),
-    })
-}
-
-fn create_write_stdin_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "session_id".to_string(),
-            JsonSchema::Number {
-                description: Some("Identifier of the running unified exec session.".to_string()),
-            },
-        ),
-        (
-            "chars".to_string(),
-            JsonSchema::String {
-                description: Some("Bytes to write to stdin (may be empty to poll).".to_string()),
-            },
-        ),
-        (
-            "yield_time_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "How long to wait (in milliseconds) for output before yielding.".to_string(),
-                ),
-            },
-        ),
-        (
-            "max_output_tokens".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum number of tokens to return. Excess output will be truncated."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "write_stdin".to_string(),
-        description:
-            "Writes characters to an existing unified exec session and returns recent output."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["session_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(unified_exec_output_schema()),
-    })
-}
-
-fn create_wait_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "cell_id".to_string(),
-            JsonSchema::String {
-                description: Some("Identifier of the running exec cell.".to_string()),
-            },
-        ),
-        (
-            "yield_time_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "How long to wait (in milliseconds) for more output before yielding again."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "max_tokens".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum number of output tokens to return for this wait call.".to_string(),
-                ),
-            },
-        ),
-        (
-            "terminate".to_string(),
-            JsonSchema::Boolean {
-                description: Some("Whether to terminate the running exec cell.".to_string()),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: WAIT_TOOL_NAME.to_string(),
-        description: format!(
-            "Waits on a yielded `{PUBLIC_TOOL_NAME}` cell and returns new output or completion.\n{}",
-            codex_code_mode::build_wait_tool_description().trim()
-        ),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["cell_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-        defer_loading: None,
-    })
-}
-
-fn create_shell_tool(exec_permission_approvals_enabled: bool) -> ToolSpec {
-    let mut properties = BTreeMap::from([
-        (
-            "command".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
-                description: Some("The command to execute".to_string()),
-            },
-        ),
-        (
-            "workdir".to_string(),
-            JsonSchema::String {
-                description: Some("The working directory to execute the command in".to_string()),
-            },
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::Number {
-                description: Some("The timeout for the command in milliseconds".to_string()),
-            },
-        ),
-    ]);
-    properties.extend(create_approval_parameters(
-        exec_permission_approvals_enabled,
-    ));
-
-    let description = if cfg!(windows) {
-        format!(
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-
-Examples of valid command strings:
-
-- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
-- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
-- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
-- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
-
-{}"#,
-            windows_destructive_filesystem_guidance()
-        )
-    } else {
-        r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-            .to_string()
-    };
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "shell".to_string(),
-        description,
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_shell_command_tool(
-    allow_login_shell: bool,
-    exec_permission_approvals_enabled: bool,
-) -> ToolSpec {
-    let mut properties = BTreeMap::from([
-        (
-            "command".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "The shell script to execute in the user's default shell".to_string(),
-                ),
-            },
-        ),
-        (
-            "workdir".to_string(),
-            JsonSchema::String {
-                description: Some("The working directory to execute the command in".to_string()),
-            },
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::Number {
-                description: Some("The timeout for the command in milliseconds".to_string()),
-            },
-        ),
-    ]);
-    if allow_login_shell {
-        properties.insert(
-            "login".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Whether to run the shell with login shell semantics. Defaults to true."
-                        .to_string(),
-                ),
-            },
-        );
-    }
-    properties.extend(create_approval_parameters(
-        exec_permission_approvals_enabled,
-    ));
-
-    let description = if cfg!(windows) {
-        format!(
-            r#"Runs a Powershell command (Windows) and returns its output.
-
-Examples of valid command strings:
-
-- ls -a (show hidden): "Get-ChildItem -Force"
-- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
-- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"
-- setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
-
-{}"#,
-            windows_destructive_filesystem_guidance()
-        )
-    } else {
-        r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
-            .to_string()
-    };
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "shell_command".to_string(),
-        description,
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
-    // Support only local filesystem path.
-    let mut properties = BTreeMap::from([(
-        "path".to_string(),
-        JsonSchema::String {
-            description: Some("Local filesystem path to an image file".to_string()),
-        },
-    )]);
-    if can_request_original_image_detail {
-        properties.insert(
-            "detail".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
-                ),
-            },
-        );
-    }
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: VIEW_IMAGE_TOOL_NAME.to_string(),
-        description: "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["path".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "image_url": {
-                    "type": "string",
-                    "description": "Data URL for the loaded image."
-                },
-                "detail": {
-                    "type": ["string", "null"],
-                    "description": "Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`."
-                }
-            },
-            "required": ["image_url", "detail"],
-            "additionalProperties": false
-        })),
-    })
-}
-
-fn create_collab_input_items_schema() -> JsonSchema {
-    let properties = BTreeMap::from([
-        (
-            "type".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Input item type: text, image, local_image, skill, or mention.".to_string(),
-                ),
-            },
-        ),
-        (
-            "text".to_string(),
-            JsonSchema::String {
-                description: Some("Text content when type is text.".to_string()),
-            },
-        ),
-        (
-            "image_url".to_string(),
-            JsonSchema::String {
-                description: Some("Image URL when type is image.".to_string()),
-            },
-        ),
-        (
-            "path".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Path when type is local_image/skill, or structured mention target such as app://<connector-id> or plugin://<plugin-name>@<marketplace-name> when type is mention."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "name".to_string(),
-            JsonSchema::String {
-                description: Some("Display name when type is skill or mention.".to_string()),
-            },
-        ),
-    ]);
-
-    JsonSchema::Array {
-        items: Box::new(JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        }),
-        description: Some(
-            "Structured input items. Use this to pass explicit mentions (for example app:// connector paths)."
-                .to_string(),
-        ),
-    }
-}
-
-fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonSchema> {
-    BTreeMap::from([
-        (
-            "message".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Initial plain-text task for the new agent. Use either message or items."
-                        .to_string(),
-                ),
-            },
-        ),
-        ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "agent_type".to_string(),
-            JsonSchema::String {
-                description: Some(crate::agent::role::spawn_tool_spec::build(
-                    &config.agent_roles,
-                )),
-            },
-        ),
-        (
-            "fork_context".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "model".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional model override for the new agent. Replaces the inherited model."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "reasoning_effort".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
-                        .to_string(),
-                ),
-            },
-        ),
-    ])
-}
-
-fn spawn_agent_tool_description(
-    available_models_description: &str,
-    return_value_description: &str,
-) -> String {
-    format!(
-        r#"
-        Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
-        Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
-        Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
-        Spawn a sub-agent for a well-scoped task. {return_value_description} This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
-
-{available_models_description}
-### When to delegate vs. do the subtask yourself
-- First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
-- Use the smaller subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.
-- Do not delegate urgent blocking work when your immediate next step depends on that result. If the very next action is blocked on that task, the main rollout should usually do it locally to keep the critical path moving.
-- Keep work local when the subtask is too difficult to delegate well and when it is tightly coupled, urgent, or likely to block your immediate next step.
-
-### Designing delegated subtasks
-- Subtasks must be concrete, well-defined, and self-contained.
-- Delegated subtasks must materially advance the main task.
-- Do not duplicate work between the main rollout and delegated subtasks.
-- Avoid issuing multiple delegate calls on the same unresolved thread unless the new delegated task is genuinely different and necessary.
-- Narrow the delegated ask to the concrete output you need next.
-- For coding tasks, prefer delegating concrete code-change worker subtasks over read-only explorer analysis when the subagent can make a bounded patch in a clear write scope.
-- When delegating coding work, instruct the submodel to edit files directly in its forked workspace and list the file paths it changed in the final answer.
-- For code-edit subtasks, decompose work so each delegated task has a disjoint write set.
-
-### After you delegate
-- Call wait_agent very sparingly. Only call wait_agent when you need the result immediately for the next critical-path step and you are blocked until it returns.
-- Do not redo delegated subagent tasks yourself; focus on integrating results or tackling non-overlapping work.
-- While the subagent is running in the background, do meaningful non-overlapping work immediately.
-- Do not repeatedly wait by reflex.
-- When a delegated coding task returns, quickly review the uploaded changes, then integrate or refine them.
-
-### Parallel delegation patterns
-- Run multiple independent information-seeking subtasks in parallel when you have distinct questions that can be answered independently.
-- Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
-- Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
-- The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
-    )
-}
-
-fn create_spawn_agent_tool_v1(config: &ToolsConfig) -> ToolSpec {
-    let available_models_description = spawn_agent_models_description(&config.available_models);
-    let return_value_description =
-        "Returns the spawned agent id plus the user-facing nickname when available.";
-    let properties = spawn_agent_common_properties(config);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spawn_agent".to_string(),
-        description: spawn_agent_tool_description(
-            &available_models_description,
-            return_value_description,
-        ),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(spawn_agent_output_schema_v1()),
-    })
-}
-
-fn create_spawn_agent_tool_v2(config: &ToolsConfig) -> ToolSpec {
-    let available_models_description = spawn_agent_models_description(&config.available_models);
-    let return_value_description = "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available.";
-    let mut properties = spawn_agent_common_properties(config);
-    properties.insert(
-        "task_name".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Task name for the new agent. Use lowercase letters, digits, and underscores."
-                    .to_string(),
-            ),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spawn_agent".to_string(),
-        description: spawn_agent_tool_description(
-            &available_models_description,
-            return_value_description,
-        ),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["task_name".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(spawn_agent_output_schema_v2()),
-    })
-}
-
-fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
-    let visible_models: Vec<&ModelPreset> =
-        models.iter().filter(|model| model.show_in_picker).collect();
-    if visible_models.is_empty() {
-        return "No picker-visible models are currently loaded.".to_string();
-    }
-
-    visible_models
-        .into_iter()
-        .map(|model| {
-            let efforts = model
-                .supported_reasoning_efforts
-                .iter()
-                .map(|preset| format!("{} ({})", preset.effort, preset.description))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}.",
-                model.display_name,
-                model.model,
-                model.description,
-                model.default_reasoning_effort,
-                efforts
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn create_spawn_agents_on_csv_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "csv_path".to_string(),
-        JsonSchema::String {
-            description: Some("Path to the CSV file containing input rows.".to_string()),
-        },
-    );
-    properties.insert(
-        "instruction".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Instruction template to apply to each CSV row. Use {column_name} placeholders to inject values from the row."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "id_column".to_string(),
-        JsonSchema::String {
-            description: Some("Optional column name to use as stable item id.".to_string()),
-        },
-    );
-    properties.insert(
-        "output_csv_path".to_string(),
-        JsonSchema::String {
-            description: Some("Optional output CSV path for exported results.".to_string()),
-        },
-    );
-    properties.insert(
-        "max_concurrency".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "max_workers".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "max_runtime_seconds".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum runtime per worker before it is failed. Defaults to 1800 seconds."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "output_schema".to_string(),
-        JsonSchema::Object {
-            properties: BTreeMap::new(),
-            required: None,
-            additional_properties: None,
-        },
-    );
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spawn_agents_on_csv".to_string(),
-        description: "Process a CSV by spawning one worker sub-agent per row. The instruction string is a template where `{column}` placeholders are replaced with row values. Each worker must call `report_agent_job_result` with a JSON object (matching `output_schema` when provided); missing reports are treated as failures. This call blocks until all rows finish and automatically exports results to `output_csv_path` (or a default path)."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_report_agent_job_result_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "job_id".to_string(),
-        JsonSchema::String {
-            description: Some("Identifier of the job.".to_string()),
-        },
-    );
-    properties.insert(
-        "item_id".to_string(),
-        JsonSchema::String {
-            description: Some("Identifier of the job item.".to_string()),
-        },
-    );
-    properties.insert(
-        "result".to_string(),
-        JsonSchema::Object {
-            properties: BTreeMap::new(),
-            required: None,
-            additional_properties: None,
-        },
-    );
-    properties.insert(
-        "stop".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Optional. When true, cancels the remaining job items after this result is recorded."
-                    .to_string(),
-            ),
-        },
-    );
-    ToolSpec::Function(ResponsesApiTool {
-        name: "report_agent_job_result".to_string(),
-        description:
-            "Worker-only tool to report a result for an agent job item. Main agents should not call this."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec![
-                "job_id".to_string(),
-                "item_id".to_string(),
-                "result".to_string(),
-            ]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_send_input_tool_v1() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "target".to_string(),
-            JsonSchema::String {
-                description: Some("Agent id to message (from spawn_agent).".to_string()),
-            },
-        ),
-        (
-            "message".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Legacy plain-text message to send to the agent. Use either message or items."
-                        .to_string(),
-                ),
-            },
-        ),
-        ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "send_input".to_string(),
-        description: "Send a message to an existing agent. Use interrupt=true to redirect work immediately. You should reuse the agent by send_input if you believe your assigned task is highly dependent on the context of a previous task."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["target".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(send_input_output_schema()),
-    })
-}
-
-fn create_send_message_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "target".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
-                ),
-            },
-        ),
-        ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "send_message".to_string(),
-        description: "Add a message to an existing agent without triggering a new turn. Use interrupt=true to stop the current task first. In MultiAgentV2, this tool currently supports text content only."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["target".to_string(), "items".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(send_input_output_schema()),
-    })
-}
-
-fn create_assign_task_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "target".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
-                ),
-            },
-        ),
-        ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "assign_task".to_string(),
-        description: "Add a message to an existing agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. In MultiAgentV2, this tool currently supports text content only."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["target".to_string(), "items".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(send_input_output_schema()),
-    })
-}
-
-fn create_resume_agent_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Agent id to resume.".to_string()),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "resume_agent".to_string(),
-        description:
-            "Resume a previously closed agent by id so it can receive send_input and wait_agent calls."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(resume_agent_output_schema()),
-    })
-}
-
-fn wait_agent_tool_parameters_v1() -> JsonSchema {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "targets".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
-            description: Some(
-                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some(format!(
-                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, max {MAX_WAIT_TIMEOUT_MS}. Prefer longer waits (minutes) to avoid busy polling."
-            )),
-        },
-    );
-
-    JsonSchema::Object {
-        properties,
-        required: Some(vec!["targets".to_string()]),
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn wait_agent_tool_parameters_v2() -> JsonSchema {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some(format!(
-                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, max {MAX_WAIT_TIMEOUT_MS}. Prefer longer waits (minutes) to avoid busy polling."
-            )),
-        },
-    );
-
-    JsonSchema::Object {
-        properties,
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn create_wait_agent_tool_v1() -> ToolSpec {
-    ToolSpec::Function(ResponsesApiTool {
-        name: "wait_agent".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: wait_agent_tool_parameters_v1(),
-        output_schema: Some(wait_output_schema_v1()),
-    })
-}
-
-fn create_wait_agent_tool_v2() -> ToolSpec {
-    ToolSpec::Function(ResponsesApiTool {
-        name: "wait_agent".to_string(),
-        description: "Wait for the next collaboration message to arrive in the mailbox. Returns a brief wait summary instead of the message content. Returns a timeout summary when no mailbox activity arrives before the deadline."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: wait_agent_tool_parameters_v2(),
-        output_schema: Some(wait_output_schema_v2()),
-    })
-}
-
-fn create_list_agents_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
-        "path_prefix".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional task-path prefix. Accepts the same relative or absolute task-path syntax as other MultiAgentV2 agent targets."
-                    .to_string(),
-            ),
-        },
-    )]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "list_agents".to_string(),
-        description: "List live agents in the current root thread tree. Optionally filter by task-path prefix."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(list_agents_output_schema()),
-    })
-}
-
-fn create_request_user_input_tool(
-    collaboration_modes_config: CollaborationModesConfig,
-) -> ToolSpec {
-    let mut option_props = BTreeMap::new();
-    option_props.insert(
-        "label".to_string(),
-        JsonSchema::String {
-            description: Some("User-facing label (1-5 words).".to_string()),
-        },
-    );
-    option_props.insert(
-        "description".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "One short sentence explaining impact/tradeoff if selected.".to_string(),
-            ),
-        },
-    );
-
-    let options_schema = JsonSchema::Array {
-        description: Some(
-            "Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; the client will add a free-form \"Other\" option automatically."
-                .to_string(),
-        ),
-        items: Box::new(JsonSchema::Object {
-            properties: option_props,
-            required: Some(vec!["label".to_string(), "description".to_string()]),
-            additional_properties: Some(false.into()),
-        }),
-    };
-
-    let mut question_props = BTreeMap::new();
-    question_props.insert(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Stable identifier for mapping answers (snake_case).".to_string()),
-        },
-    );
-    question_props.insert(
-        "header".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Short header label shown in the UI (12 or fewer chars).".to_string(),
-            ),
-        },
-    );
-    question_props.insert(
-        "question".to_string(),
-        JsonSchema::String {
-            description: Some("Single-sentence prompt shown to the user.".to_string()),
-        },
-    );
-    question_props.insert("options".to_string(), options_schema);
-
-    let questions_schema = JsonSchema::Array {
-        description: Some("Questions to show the user. Prefer 1 and do not exceed 3".to_string()),
-        items: Box::new(JsonSchema::Object {
-            properties: question_props,
-            required: Some(vec![
-                "id".to_string(),
-                "header".to_string(),
-                "question".to_string(),
-                "options".to_string(),
-            ]),
-            additional_properties: Some(false.into()),
-        }),
-    };
-
-    let mut properties = BTreeMap::new();
-    properties.insert("questions".to_string(), questions_schema);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "request_user_input".to_string(),
-        description: request_user_input_tool_description(
-            collaboration_modes_config.default_mode_request_user_input,
-        ),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["questions".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_request_permissions_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "reason".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional short explanation for why additional permissions are needed.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "permissions".to_string(),
-        create_request_permissions_schema(),
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "request_permissions".to_string(),
-        description: request_permissions_tool_description(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["permissions".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_close_agent_tool_v1() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "target".to_string(),
-        JsonSchema::String {
-            description: Some("Agent id to close (from spawn_agent).".to_string()),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["target".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(close_agent_output_schema()),
-    })
-}
-
-fn create_close_agent_tool_v2() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "target".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Agent id or canonical task name to close (from spawn_agent).".to_string(),
-            ),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["target".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(close_agent_output_schema()),
-    })
-}
-
-fn create_test_sync_tool() -> ToolSpec {
-    let barrier_properties = BTreeMap::from([
-        (
-            "id".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Identifier shared by concurrent calls that should rendezvous".to_string(),
-                ),
-            },
-        ),
-        (
-            "participants".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Number of tool calls that must arrive before the barrier opens".to_string(),
-                ),
-            },
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum time in milliseconds to wait at the barrier".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    let properties = BTreeMap::from([
-        (
-            "sleep_before_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Optional delay in milliseconds before any other action".to_string(),
-                ),
-            },
-        ),
-        (
-            "sleep_after_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Optional delay in milliseconds after completing the barrier".to_string(),
-                ),
-            },
-        ),
-        (
-            "barrier".to_string(),
-            JsonSchema::Object {
-                properties: barrier_properties,
-                required: Some(vec!["id".to_string(), "participants".to_string()]),
-                additional_properties: Some(false.into()),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "test_sync_tool".to_string(),
-        description: "Internal synchronization helper used by Codex integration tests.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2101,261 +587,10 @@ fn format_plugin_summary(plugin: &DiscoverablePluginInfo) -> String {
     }
 }
 
-fn create_list_dir_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "dir_path".to_string(),
-            JsonSchema::String {
-                description: Some("Absolute path to the directory to list.".to_string()),
-            },
-        ),
-        (
-            "offset".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "The entry number to start listing from. Must be 1 or greater.".to_string(),
-                ),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some("The maximum number of entries to return.".to_string()),
-            },
-        ),
-        (
-            "depth".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "The maximum directory depth to traverse. Must be 1 or greater.".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "list_dir".to_string(),
-        description:
-            "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["dir_path".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_js_repl_tool() -> ToolSpec {
-    // Keep JS input freeform, but block the most common malformed payload shapes
-    // (JSON wrappers, quoted strings, and markdown fences) before they reach the
-    // runtime `reject_json_or_quoted_source` validation. The API's regex engine
-    // does not support look-around, so this uses a "first significant token"
-    // pattern rather than negative lookaheads.
-    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"
-start: pragma_source | plain_source
-
-pragma_source: PRAGMA_LINE NEWLINE js_source
-plain_source: PLAIN_JS_SOURCE
-
-js_source: JS_SOURCE
-
-PRAGMA_LINE: /[ \t]*\/\/ codex-js-repl:[^\r\n]*/
-NEWLINE: /\r?\n/
-PLAIN_JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
-JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
-"#;
-
-    ToolSpec::Freeform(FreeformTool {
-        name: "js_repl".to_string(),
-        description: "Runs JavaScript in a persistent Node kernel with top-level await. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-js-repl: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
-            .to_string(),
-        format: FreeformToolFormat {
-            r#type: "grammar".to_string(),
-            syntax: "lark".to_string(),
-            definition: JS_REPL_FREEFORM_GRAMMAR.to_string(),
-        },
-    })
-}
-
-fn create_js_repl_reset_tool() -> ToolSpec {
-    ToolSpec::Function(ResponsesApiTool {
-        name: "js_repl_reset".to_string(),
-        description:
-            "Restarts the js_repl kernel for this run and clears persisted top-level bindings."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties: BTreeMap::new(),
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_code_mode_tool(
-    enabled_tools: &[(String, String)],
-    code_mode_only_enabled: bool,
-) -> ToolSpec {
-    const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
-start: pragma_source | plain_source
-pragma_source: PRAGMA_LINE NEWLINE SOURCE
-plain_source: SOURCE
-
-PRAGMA_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
-NEWLINE: /\r?\n/
-SOURCE: /[\s\S]+/
-"#;
-
-    ToolSpec::Freeform(FreeformTool {
-        name: PUBLIC_TOOL_NAME.to_string(),
-        description: codex_code_mode::build_exec_tool_description(
-            enabled_tools,
-            code_mode_only_enabled,
-        ),
-        format: FreeformToolFormat {
-            r#type: "grammar".to_string(),
-            syntax: "lark".to_string(),
-            definition: CODE_MODE_FREEFORM_GRAMMAR.to_string(),
-        },
-    })
-}
-
-fn create_list_mcp_resources_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "server".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional MCP server name. When omitted, lists resources from every configured server."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "cursor".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Opaque cursor returned by a previous list_mcp_resources call for the same server."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "list_mcp_resources".to_string(),
-        description: "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_list_mcp_resource_templates_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "server".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional MCP server name. When omitted, lists resource templates from all configured servers."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "cursor".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "list_mcp_resource_templates".to_string(),
-        description: "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_read_mcp_resource_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "server".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "uri".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "read_mcp_resource".to_string(),
-        description:
-            "Read a specific resource from an MCP server given the server name and resource URI."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["server".to_string(), "uri".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
-}
-
-/// Returns JSON values that are compatible with Function Calling in the
-/// Responses API:
-/// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
-pub fn create_tools_json_for_responses_api(
-    tools: &[ToolSpec],
-) -> crate::error::Result<Vec<serde_json::Value>> {
-    let mut tools_json = Vec::new();
-
-    for tool in tools {
-        let json = serde_json::to_value(tool)?;
-        tools_json.push(json);
-    }
-
-    Ok(tools_json)
 }
 
 fn push_tool_spec(
@@ -2364,57 +599,15 @@ fn push_tool_spec(
     supports_parallel_tool_calls: bool,
     code_mode_enabled: bool,
 ) {
-    let spec = augment_tool_spec_for_code_mode(spec, code_mode_enabled);
+    let spec = if code_mode_enabled {
+        augment_tool_spec_for_code_mode(spec)
+    } else {
+        spec
+    };
     if supports_parallel_tool_calls {
         builder.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ true);
     } else {
         builder.push_spec(spec);
-    }
-}
-
-pub(crate) fn mcp_tool_to_openai_tool(
-    fully_qualified_name: String,
-    tool: rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(parsed_tool_to_openai_tool(
-        fully_qualified_name,
-        parse_mcp_tool(&tool)?,
-    ))
-}
-
-pub(crate) fn mcp_tool_to_deferred_openai_tool(
-    name: String,
-    tool: rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    let parsed_tool = parse_mcp_tool(&tool)?;
-
-    Ok(parsed_tool_to_openai_tool(
-        name,
-        ParsedToolDefinition {
-            output_schema: None,
-            defer_loading: true,
-            ..parsed_tool
-        },
-    ))
-}
-
-fn dynamic_tool_to_openai_tool(
-    tool: &DynamicToolSpec,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(parsed_tool_to_openai_tool(
-        tool.name.clone(),
-        parse_dynamic_tool(tool)?,
-    ))
-}
-
-fn parsed_tool_to_openai_tool(name: String, parsed_tool: ParsedToolDefinition) -> ResponsesApiTool {
-    ResponsesApiTool {
-        name,
-        description: parsed_tool.description,
-        strict: false,
-        defer_loading: parsed_tool.defer_loading.then_some(true),
-        parameters: parsed_tool.input_schema,
-        output_schema: parsed_tool.output_schema,
     }
 }
 
@@ -2426,7 +619,13 @@ pub(crate) fn build_specs(
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_tools(config, mcp_tools, app_tools, None, dynamic_tools)
+    build_specs_with_discoverable_tools(
+        config,
+        mcp_tools,
+        app_tools,
+        /*discoverable_tools*/ None,
+        dynamic_tools,
+    )
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(
@@ -2502,16 +701,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .build();
         let mut enabled_tools = nested_specs
             .into_iter()
-            .filter_map(|spec| {
-                let (name, description) = match augment_tool_spec_for_code_mode(
-                    spec.spec, /*code_mode_enabled*/ true,
-                ) {
-                    ToolSpec::Function(tool) => (tool.name, tool.description),
-                    ToolSpec::Freeform(tool) => (tool.name, tool.description),
-                    _ => return None,
-                };
-                codex_code_mode::is_code_mode_nested_tool(&name).then_some((name, description))
-            })
+            .filter_map(|spec| tool_spec_to_code_mode_tool_definition(&spec.spec))
+            .map(|tool| (tool.name, tool.description))
             .collect::<Vec<_>>();
         enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));
         enabled_tools.dedup_by(|left, right| left.0 == right.0);
@@ -2535,7 +726,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::Default => {
             push_tool_spec(
                 &mut builder,
-                create_shell_tool(exec_permission_approvals_enabled),
+                create_shell_tool(ShellToolOptions {
+                    exec_permission_approvals_enabled,
+                }),
                 /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
@@ -2551,10 +744,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::UnifiedExec => {
             push_tool_spec(
                 &mut builder,
-                create_exec_command_tool(
-                    config.allow_login_shell,
+                create_exec_command_tool(CommandToolOptions {
+                    allow_login_shell: config.allow_login_shell,
                     exec_permission_approvals_enabled,
-                ),
+                }),
                 /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
@@ -2573,10 +766,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::ShellCommand => {
             push_tool_spec(
                 &mut builder,
-                create_shell_command_tool(
-                    config.allow_login_shell,
+                create_shell_command_tool(CommandToolOptions {
+                    allow_login_shell: config.allow_login_shell,
                     exec_permission_approvals_enabled,
-                ),
+                }),
                 /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
@@ -2643,9 +836,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.request_user_input {
         push_tool_spec(
             &mut builder,
-            create_request_user_input_tool(CollaborationModesConfig {
-                default_mode_request_user_input: config.default_mode_request_user_input,
-            }),
+            create_request_user_input_tool(request_user_input_tool_description(
+                config.default_mode_request_user_input,
+            )),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -2655,7 +848,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.request_permissions_tool_enabled {
         push_tool_spec(
             &mut builder,
-            create_request_permissions_tool(),
+            create_request_permissions_tool(request_permissions_tool_description()),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -2798,7 +991,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     push_tool_spec(
         &mut builder,
-        create_view_image_tool(config.can_request_original_image_detail),
+        create_view_image_tool(ViewImageToolOptions {
+            can_request_original_image_detail: config.can_request_original_image_detail,
+        }),
         /*supports_parallel_tool_calls*/ true,
         config.code_mode_enabled,
     );
@@ -2808,7 +1003,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         if config.multi_agent_v2 {
             push_tool_spec(
                 &mut builder,
-                create_spawn_agent_tool_v2(config),
+                create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+                    available_models: &config.available_models,
+                    agent_type_description: crate::agent::role::spawn_tool_spec::build(
+                        &config.agent_roles,
+                    ),
+                }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
@@ -2826,7 +1026,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
             );
             push_tool_spec(
                 &mut builder,
-                create_wait_agent_tool_v2(),
+                create_wait_agent_tool_v2(WaitAgentTimeoutOptions {
+                    default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+                    min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+                    max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+                }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
@@ -2851,7 +1055,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         } else {
             push_tool_spec(
                 &mut builder,
-                create_spawn_agent_tool_v1(config),
+                create_spawn_agent_tool_v1(SpawnAgentToolOptions {
+                    available_models: &config.available_models,
+                    agent_type_description: crate::agent::role::spawn_tool_spec::build(
+                        &config.agent_roles,
+                    ),
+                }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
@@ -2870,7 +1079,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
             builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
             push_tool_spec(
                 &mut builder,
-                create_wait_agent_tool_v1(),
+                create_wait_agent_tool_v1(WaitAgentTimeoutOptions {
+                    default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+                    min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+                    max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+                }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
@@ -2912,7 +1125,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool) in entries.into_iter() {
-            match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
+            match mcp_tool_to_responses_api_tool(name.clone(), &tool) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,
@@ -2931,7 +1144,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     if !dynamic_tools.is_empty() {
         for tool in dynamic_tools {
-            match dynamic_tool_to_openai_tool(tool) {
+            match dynamic_tool_to_responses_api_tool(tool) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,

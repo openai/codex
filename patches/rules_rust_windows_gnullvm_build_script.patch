@@ -1,0 +1,38 @@
+diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_script.bzl
+--- a/cargo/private/cargo_build_script.bzl
++++ b/cargo/private/cargo_build_script.bzl
+@@ -120,6 +120,25 @@
+     executable = True,
+ )
+ 
++def _strip_stack_protector_for_windows_llvm_mingw(toolchain, args):
++    """Drop stack protector flags unsupported by llvm-mingw build-script probes."""
++    if "windows-gnullvm" not in toolchain.target_flag_value:
++        return args
++
++    uses_llvm_mingw = False
++    for arg in args:
++        if "mingw-w64-" in arg:
++            uses_llvm_mingw = True
++            break
++
++    if not uses_llvm_mingw:
++        return args
++
++    # llvm-mingw does not ship libssp_nonshared, so forwarding stack-protector
++    # flags through CFLAGS/CXXFLAGS breaks build.rs probe binaries compiled via
++    # cc-rs.
++    return [arg for arg in args if not arg.startswith("-fstack-protector")]
++
+ def get_cc_compile_args_and_env(cc_toolchain, feature_configuration):
+     """Gather cc environment variables from the given `cc_toolchain`
+ 
+@@ -503,6 +522,8 @@
+         if not env["AR"]:
+             env["AR"] = cc_toolchain.ar_executable
+ 
++        cc_c_args = _strip_stack_protector_for_windows_llvm_mingw(toolchain, cc_c_args)
++        cc_cxx_args = _strip_stack_protector_for_windows_llvm_mingw(toolchain, cc_cxx_args)
+         # Populate CFLAGS and CXXFLAGS that cc-rs relies on when building from source, in particular
+         # to determine the deployment target when building for apple platforms (`macosx-version-min`
+         # for example, itself derived from the `macos_minimum_os` Bazel argument).

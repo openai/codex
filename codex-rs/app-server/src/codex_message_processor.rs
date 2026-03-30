@@ -8747,7 +8747,7 @@ mod tests {
     fn config_load_error_marks_non_auth_cloud_requirements_failures_without_relogin() {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::RequestFailed,
-            None,
+            /*status_code*/ None,
             "failed to load your workspace-managed config",
         ));
 
@@ -8961,7 +8961,8 @@ mod tests {
     fn merge_persisted_resume_metadata_skips_missing_values() -> Result<()> {
         let mut request_overrides = None;
         let mut typesafe_overrides = ConfigOverrides::default();
-        let persisted_metadata = test_thread_metadata(None, None)?;
+        let persisted_metadata =
+            test_thread_metadata(/*model*/ None, /*reasoning_effort*/ None)?;
 
         merge_persisted_resume_metadata(
             &mut request_overrides,
@@ -9013,7 +9014,7 @@ mod tests {
             path.clone(),
             &head,
             &session_meta,
-            None,
+            /*git*/ None,
             "test-provider",
             timestamp.clone(),
         )
@@ -9223,9 +9224,9 @@ mod tests {
             source,
             Some("atlas".to_string()),
             Some("explorer".to_string()),
-            None,
-            None,
-            None,
+            /*git_sha*/ None,
+            /*git_branch*/ None,
+            /*git_origin_url*/ None,
         );
 
         let thread = summary_to_thread(summary);
@@ -9244,7 +9245,9 @@ mod tests {
 
         manager.connection_initialized(connection).await;
         manager
-            .try_ensure_connection_subscribed(thread_id, connection, false)
+            .try_ensure_connection_subscribed(
+                thread_id, connection, /*experimental_raw_events*/ false,
+            )
             .await
             .expect("connection should be live");
         {
@@ -9288,11 +9291,19 @@ mod tests {
         manager.connection_initialized(connection_a).await;
         manager.connection_initialized(connection_b).await;
         manager
-            .try_ensure_connection_subscribed(thread_id, connection_a, false)
+            .try_ensure_connection_subscribed(
+                thread_id,
+                connection_a,
+                /*experimental_raw_events*/ false,
+            )
             .await
             .expect("connection_a should be live");
         manager
-            .try_ensure_connection_subscribed(thread_id, connection_b, false)
+            .try_ensure_connection_subscribed(
+                thread_id,
+                connection_b,
+                /*experimental_raw_events*/ false,
+            )
             .await
             .expect("connection_b should be live");
         {
@@ -9325,7 +9336,9 @@ mod tests {
 
         assert!(
             manager
-                .try_ensure_connection_subscribed(thread_id, connection, false)
+                .try_ensure_connection_subscribed(
+                    thread_id, connection, /*experimental_raw_events*/ false
+                )
                 .await
                 .is_none()
         );

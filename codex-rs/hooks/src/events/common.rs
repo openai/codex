@@ -117,8 +117,8 @@ mod tests {
 
     #[test]
     fn matcher_omitted_matches_all_occurrences() {
-        assert!(matches_matcher(None, Some("Bash")));
-        assert!(matches_matcher(None, Some("Write")));
+        assert!(matches_matcher(/*matcher*/ None, Some("Bash")));
+        assert!(matches_matcher(/*matcher*/ None, Some("Write")));
     }
 
     #[test]

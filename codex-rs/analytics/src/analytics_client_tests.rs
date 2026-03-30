@@ -49,7 +49,11 @@ fn normalize_path_for_skill_id_repo_scoped_uses_relative_path() {
 fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
     let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
 
-    let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
+    let path = normalize_path_for_skill_id(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        skill_path.as_path(),
+    );
     let expected = expected_absolute_path(&skill_path);
 
     assert_eq!(path, expected);
@@ -59,7 +63,11 @@ fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
 fn normalize_path_for_skill_id_admin_scoped_uses_absolute_path() {
     let skill_path = PathBuf::from("/etc/codex/skills/doc/SKILL.md");
 
-    let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
+    let path = normalize_path_for_skill_id(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        skill_path.as_path(),
+    );
     let expected = expected_absolute_path(&skill_path);
 
     assert_eq!(path, expected);

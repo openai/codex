@@ -433,6 +433,8 @@ mod tests {
     use codex_core::config_loader::NetworkConstraints;
     use codex_core::config_loader::NetworkDomainPermissionToml;
     use codex_core::config_loader::NetworkDomainPermissionsToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionsToml;
     use codex_core::config_loader::RequirementSource;
     use codex_core::config_loader::ResidencyRequirement;
     use codex_core::config_loader::SandboxModeRequirement;
@@ -622,6 +624,41 @@ mod tests {
         ));
         assert!(!rendered.contains("  - rules:"));
     }
+
+    #[test]
+    fn debug_config_output_formats_unix_socket_permissions() {
+        let requirements = ConfigRequirements {
+            network: Some(Sourced::new(
+                NetworkConstraints {
+                    unix_sockets: Some(NetworkUnixSocketPermissionsToml {
+                        entries: BTreeMap::from([
+                            (
+                                "/tmp/codex.sock".to_string(),
+                                NetworkUnixSocketPermissionToml::Allow,
+                            ),
+                            (
+                                "/tmp/blocked.sock".to_string(),
+                                NetworkUnixSocketPermissionToml::None,
+                            ),
+                        ]),
+                    }),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            )),
+            ..ConfigRequirements::default()
+        };
+
+        let stack =
+            ConfigLayerStack::new(Vec::new(), requirements, ConfigRequirementsToml::default())
+                .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(rendered.contains(
+            "experimental_network: unix_sockets={/tmp/blocked.sock=none, /tmp/codex.sock=allow} (source: cloud requirements)"
+        ));
+    }
+
     #[test]
     fn debug_config_output_lists_session_flag_key_value_pairs() {
         let session_flags = toml::from_str::<TomlValue>(
@@ -715,7 +752,11 @@ approval_policy = "never"
     #[test]
     fn session_all_proxy_url_uses_socks_when_enabled() {
         assert_eq!(
-            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", true),
+            session_all_proxy_url(
+                "127.0.0.1:3128",
+                "127.0.0.1:8081",
+                /*socks_enabled*/ true
+            ),
             "socks5h://127.0.0.1:8081".to_string()
         );
     }
@@ -723,7 +764,11 @@ approval_policy = "never"
     #[test]
     fn session_all_proxy_url_uses_http_when_socks_disabled() {
         assert_eq!(
-            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", false),
+            session_all_proxy_url(
+                "127.0.0.1:3128",
+                "127.0.0.1:8081",
+                /*socks_enabled*/ false
+            ),
             "http://127.0.0.1:3128".to_string()
         );
     }

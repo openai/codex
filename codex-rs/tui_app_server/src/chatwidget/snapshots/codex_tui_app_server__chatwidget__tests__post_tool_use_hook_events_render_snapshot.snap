@@ -1,9 +1,0 @@
----
-source: tui_app_server/src/chatwidget/tests.rs
-expression: combined
----
-• Running PostToolUse hook: warming the shell
-
-PostToolUse hook (completed)
-  warning: Heads up from the hook
-  hook context: Remember the startup checklist.

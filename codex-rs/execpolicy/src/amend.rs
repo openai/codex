@@ -327,7 +327,7 @@ network_rule(host="api.github.com", protocol="https", decision="allow", justific
             "*.example.com",
             NetworkRuleProtocol::Https,
             Decision::Allow,
-            None,
+            /*justification*/ None,
         )
         .expect_err("wildcards should be rejected");
         assert_eq!(

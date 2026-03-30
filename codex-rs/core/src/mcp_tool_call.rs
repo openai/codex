@@ -700,14 +700,14 @@ async fn maybe_request_mcp_tool_approval(
 
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
     let approval_required = requires_mcp_tool_approval(annotations);
+    if !approval_required && approval_mode != AppToolApproval::Prompt {
+        return None;
+    }
+
     let mut monitor_reason = None;
     let auto_approved_by_policy = approval_mode == AppToolApproval::Approve;
 
     if auto_approved_by_policy {
-        if !approval_required {
-            return None;
-        }
-
         match maybe_monitor_auto_approved_mcp_tool_call(
             sess,
             turn_context,
@@ -727,10 +727,6 @@ async fn maybe_request_mcp_tool_approval(
                 ));
             }
         }
-    }
-
-    if approval_mode == AppToolApproval::Auto && !approval_required {
-        return None;
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);

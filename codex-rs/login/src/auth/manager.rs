@@ -266,7 +266,11 @@ impl CodexAuth {
             InternalKnownPlan::Plus => AccountPlanType::Plus,
             InternalKnownPlan::Pro => AccountPlanType::Pro,
             InternalKnownPlan::Team => AccountPlanType::Team,
+            InternalKnownPlan::SelfServeBusinessUsageBased => {
+                AccountPlanType::SelfServeBusinessUsageBased
+            }
             InternalKnownPlan::Business => AccountPlanType::Business,
+            InternalKnownPlan::EnterpriseCbpUsageBased => AccountPlanType::EnterpriseCbpUsageBased,
             InternalKnownPlan::Enterprise => AccountPlanType::Enterprise,
             InternalKnownPlan::Edu => AccountPlanType::Edu,
         };

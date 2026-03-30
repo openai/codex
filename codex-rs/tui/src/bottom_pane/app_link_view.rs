@@ -1,6 +1,7 @@
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::mcp::RequestId as McpRequestId;
+#[cfg(test)]
 use codex_protocol::protocol::Op;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -150,16 +151,14 @@ impl AppLinkView {
         let Some(target) = self.elicitation_target.as_ref() else {
             return;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id: target.thread_id,
-            op: Op::ResolveElicitation {
-                server_name: target.server_name.clone(),
-                request_id: target.request_id.clone(),
-                decision,
-                content: None,
-                meta: None,
-            },
-        });
+        self.app_event_tx.resolve_elicitation(
+            target.thread_id,
+            target.server_name.clone(),
+            target.request_id.clone(),
+            decision,
+            /*content*/ None,
+            /*meta*/ None,
+        );
     }
 
     fn decline_tool_suggestion(&mut self) {
@@ -670,7 +669,7 @@ mod tests {
         view.screen = AppLinkScreen::InstallConfirmation;
 
         let rendered: Vec<String> = view
-            .content_lines(40)
+            .content_lines(/*width*/ 40)
             .into_iter()
             .map(|line| {
                 line.spans
@@ -912,7 +911,10 @@ mod tests {
 
         assert_snapshot!(
             "app_link_view_install_suggestion_with_reason",
-            render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))
+            render_snapshot(
+                &view,
+                Rect::new(0, 0, 72, view.desired_height(/*width*/ 72))
+            )
         );
     }
 
@@ -938,7 +940,10 @@ mod tests {
 
         assert_snapshot!(
             "app_link_view_enable_suggestion_with_reason",
-            render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))
+            render_snapshot(
+                &view,
+                Rect::new(0, 0, 72, view.desired_height(/*width*/ 72))
+            )
         );
     }
 }

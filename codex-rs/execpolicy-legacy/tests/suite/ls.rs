@@ -86,7 +86,11 @@ fn test_ls_one_file_arg() -> Result<()> {
         Ok(MatchedExec::Match {
             exec: ValidExec::new(
                 "ls",
-                vec![MatchedArg::new(0, ArgType::ReadableFile, "foo")?],
+                vec![MatchedArg::new(
+                    /*index*/ 0,
+                    ArgType::ReadableFile,
+                    "foo"
+                )?],
                 &["/bin/ls", "/usr/bin/ls"]
             )
         }),
@@ -105,9 +109,9 @@ fn test_ls_multiple_file_args() -> Result<()> {
             exec: ValidExec::new(
                 "ls",
                 vec![
-                    MatchedArg::new(0, ArgType::ReadableFile, "foo")?,
-                    MatchedArg::new(1, ArgType::ReadableFile, "bar")?,
-                    MatchedArg::new(2, ArgType::ReadableFile, "baz")?,
+                    MatchedArg::new(/*index*/ 0, ArgType::ReadableFile, "foo")?,
+                    MatchedArg::new(/*index*/ 1, ArgType::ReadableFile, "bar")?,
+                    MatchedArg::new(/*index*/ 2, ArgType::ReadableFile, "baz")?,
                 ],
                 &["/bin/ls", "/usr/bin/ls"]
             )
@@ -128,9 +132,9 @@ fn test_ls_multiple_flags_and_file_args() -> Result<()> {
                 program: "ls".into(),
                 flags: vec![MatchedFlag::new("-l"), MatchedFlag::new("-a")],
                 args: vec![
-                    MatchedArg::new(2, ArgType::ReadableFile, "foo")?,
-                    MatchedArg::new(3, ArgType::ReadableFile, "bar")?,
-                    MatchedArg::new(4, ArgType::ReadableFile, "baz")?,
+                    MatchedArg::new(/*index*/ 2, ArgType::ReadableFile, "foo")?,
+                    MatchedArg::new(/*index*/ 3, ArgType::ReadableFile, "bar")?,
+                    MatchedArg::new(/*index*/ 4, ArgType::ReadableFile, "baz")?,
                 ],
                 system_path: ["/bin/ls".into(), "/usr/bin/ls".into()].into(),
                 ..Default::default()
@@ -156,7 +160,11 @@ fn test_flags_after_file_args() -> Result<()> {
             exec: ValidExec {
                 program: "ls".into(),
                 flags: vec![MatchedFlag::new("-l")],
-                args: vec![MatchedArg::new(0, ArgType::ReadableFile, "foo")?],
+                args: vec![MatchedArg::new(
+                    /*index*/ 0,
+                    ArgType::ReadableFile,
+                    "foo"
+                )?],
                 system_path: ["/bin/ls".into(), "/usr/bin/ls".into()].into(),
                 ..Default::default()
             }

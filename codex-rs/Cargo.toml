@@ -50,7 +50,6 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
-    "tui_app_server",
     "tools",
     "v8-poc",
     "utils/absolute-path",
@@ -151,7 +150,6 @@ codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
-codex-tui-app-server = { path = "tui_app_server" }
 codex-v8-poc = { path = "v8-poc" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }

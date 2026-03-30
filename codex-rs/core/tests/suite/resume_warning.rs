@@ -98,7 +98,13 @@ async fn emits_warning_when_resumed_model_differs() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, initial_history, auth_manager, false, None)
+        .resume_thread_with_history(
+            config,
+            initial_history,
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
         .await
         .expect("resume conversation");
 
