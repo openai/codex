@@ -74,7 +74,7 @@ bazel-clippy:
 
 [no-cd]
 bazel-argument-comment-lint:
-    bazel build --config=argument-comment-lint -- //codex-rs/...
+    bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh)
 
 bazel-remote-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
@@ -102,7 +102,7 @@ write-hooks-schema:
 [no-cd]
 argument-comment-lint *args:
     if [ "$#" -eq 0 ]; then \
-      bazel build --config=argument-comment-lint -- //codex-rs/...; \
+      bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh); \
     else \
       ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
     fi
