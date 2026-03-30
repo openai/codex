@@ -114,6 +114,47 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_get_model_info_preserves_inline_image_request_limits() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let mut remote_model = test_remote_model("gpt-5.3-codex", ModelVisibility::List, 1_000);
+    remote_model.inline_image_request_limit_bytes = Some(8);
+    remote_model.inline_image_request_limit_image_count = Some(9);
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let config = load_default_config_for_test(&codex_home).await;
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
+    };
+    let manager = codex_core::test_support::models_manager_with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::test_support::auth_manager_from_auth(auth),
+        provider,
+    );
+
+    manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+
+    let model_info = manager.get_model_info("gpt-5.3-codex", &config).await;
+
+    assert_eq!(model_info.inline_image_request_limit_bytes, Some(8));
+    assert_eq!(model_info.inline_image_request_limit_image_count, Some(9));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -307,6 +348,8 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
+        inline_image_request_limit_bytes: None,
+        inline_image_request_limit_image_count: None,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -551,6 +594,8 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
+        inline_image_request_limit_bytes: None,
+        inline_image_request_limit_image_count: None,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -1031,6 +1076,8 @@ fn test_remote_model_with_policy(
         truncation_policy,
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
+        inline_image_request_limit_bytes: None,
+        inline_image_request_limit_image_count: None,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,

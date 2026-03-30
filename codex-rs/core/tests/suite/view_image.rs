@@ -647,6 +647,146 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_tool_over_limit_replaces_output_with_text_and_continues() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let model_slug = "image-limit-model";
+    let model = ModelInfo {
+        slug: model_slug.to_string(),
+        display_name: "Image limit model".to_string(),
+        description: Some("Remote model with a tiny inline image cap".to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        input_modalities: vec![InputModality::Text, InputModality::Image],
+        used_fallback_model_metadata: false,
+        supports_search_tool: false,
+        priority: 1,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_messages: None,
+        supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
+        support_verbosity: false,
+        default_verbosity: None,
+        availability_nux: None,
+        apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
+        inline_image_request_limit_bytes: Some(8),
+        inline_image_request_limit_image_count: None,
+        context_window: Some(272_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    };
+    let model_catalog = ModelsResponse {
+        models: vec![model],
+    };
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model = Some(model_slug.to_string());
+            config.model_catalog = Some(model_catalog);
+        });
+    let test = builder.build_remote_aware(&server).await?;
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = &test;
+
+    let rel_path = "assets/over-limit.png";
+    write_workspace_png(&test, rel_path, 20, 20, [0u8, 128, 255, 255]).await?;
+
+    let call_id = "view-image-over-limit";
+    let arguments = serde_json::json!({ "path": rel_path }).to_string();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "view_image", &arguments),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "used the fallback text"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "view the image".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: config.cwd.clone(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+            approvals_reviewer: None,
+        })
+        .await?;
+
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = second_mock.single_request();
+    let body = request.body_json();
+    let call_output = request.call_output(call_id, "function_call_output");
+    let output_text = request
+        .function_call_output_text(call_id)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected string tool output after inline-image recovery, got {}",
+                serde_json::to_string_pretty(&call_output).expect("serialize call output")
+            )
+        });
+
+    assert!(
+        output_text.contains(
+            "Tool image output omitted because total inline image data in this request is"
+        ),
+        "unexpected tool output: {output_text}"
+    );
+    assert!(
+        output_text.contains("8 byte limit"),
+        "expected limit to be included in tool output: {output_text}"
+    );
+    assert!(
+        !body.to_string().contains("\"type\":\"input_image\""),
+        "over-limit request should not include inline images: {body}"
+    );
+    assert!(
+        find_image_message(&body).is_none(),
+        "over-limit tool output should not include input_image items"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1362,6 +1502,8 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
+        inline_image_request_limit_bytes: None,
+        inline_image_request_limit_image_count: None,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,

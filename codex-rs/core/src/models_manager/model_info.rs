@@ -83,6 +83,8 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
+        inline_image_request_limit_bytes: None,
+        inline_image_request_limit_image_count: None,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,

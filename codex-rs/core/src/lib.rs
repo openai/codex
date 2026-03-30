@@ -43,6 +43,7 @@ mod flags;
 mod git_info_tests;
 mod guardian;
 mod hook_runtime;
+mod inline_image_request_limit;
 pub mod instructions;
 pub mod landlock;
 pub mod mcp;

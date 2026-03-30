@@ -270,6 +270,10 @@ pub struct ModelInfo {
     #[serde(default)]
     pub supports_image_detail_original: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_image_request_limit_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_image_request_limit_image_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
     /// from `context_window` (90%). When provided, core clamps it to 90% of the
@@ -540,6 +544,8 @@ mod tests {
             truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
+            inline_image_request_limit_bytes: None,
+            inline_image_request_limit_image_count: None,
             context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
@@ -752,6 +758,8 @@ mod tests {
             },
             "supports_parallel_tool_calls": false,
             "supports_image_detail_original": false,
+            "inline_image_request_limit_bytes": null,
+            "inline_image_request_limit_image_count": null,
             "context_window": null,
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
@@ -762,6 +770,8 @@ mod tests {
 
         assert_eq!(model.availability_nux, None);
         assert!(!model.supports_image_detail_original);
+        assert_eq!(model.inline_image_request_limit_bytes, None);
+        assert_eq!(model.inline_image_request_limit_image_count, None);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
     }
