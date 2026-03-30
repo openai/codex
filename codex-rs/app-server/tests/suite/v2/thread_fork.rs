@@ -575,9 +575,9 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
-{general_analytics_toml}
 
 model_provider = "mock_provider"
+{general_analytics_toml}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
