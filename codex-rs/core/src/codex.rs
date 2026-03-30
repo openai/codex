@@ -4700,8 +4700,8 @@ mod handlers {
         }
     }
 
-    /// Records an inter-agent assistant envelope and, when requested, wakes the recipient by
-    /// starting a regular turn if the session is currently idle.
+    /// Records an inter-agent assistant envelope, then lets the shared pending-work scheduler
+    /// decide whether an idle session should start a regular turn.
     pub async fn inter_agent_communication(
         sess: &Arc<Session>,
         sub_id: String,
@@ -4710,7 +4710,7 @@ mod handlers {
         let trigger_turn = communication.trigger_turn;
         sess.enqueue_mailbox_communication(communication);
         if trigger_turn {
-            sess.ensure_task_for_pending_inputs_with_sub_id(sub_id)
+            sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
                 .await;
         }
     }

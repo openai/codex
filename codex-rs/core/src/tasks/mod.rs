@@ -262,21 +262,24 @@ impl Session {
         *active = Some(turn);
     }
 
-    /// Starts a regular turn when queued next-turn items or trigger-turn mailbox mail are waiting.
+    /// Starts a regular turn when the session is idle and pending work is waiting.
+    ///
+    /// Pending work currently includes queued next-turn items and mailbox mail marked with
+    /// `trigger_turn`.
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
-    pub(crate) async fn ensure_task_for_pending_inputs(self: &Arc<Self>) {
-        self.ensure_task_for_pending_inputs_with_sub_id(uuid::Uuid::new_v4().to_string())
+    pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
+        self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
             .await;
     }
 
-    /// Starts a regular turn with the provided sub-id when pending input should wake an idle
+    /// Starts a regular turn with the provided sub-id when pending work should wake an idle
     /// session.
     ///
     /// The turn is created only when there are queued next-turn items or mailbox mail marked with
     /// `trigger_turn`, and only if the session is currently idle.
-    pub(crate) async fn ensure_task_for_pending_inputs_with_sub_id(
+    pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
     ) {
@@ -307,7 +310,7 @@ impl Session {
             active_turn.clear_pending().await;
         }
         if reason == TurnAbortReason::Interrupted {
-            self.ensure_task_for_pending_inputs().await;
+            self.maybe_start_turn_for_pending_work().await;
         }
     }
 
@@ -436,6 +439,10 @@ impl Session {
             last_agent_message,
         });
         self.send_event(turn_context.as_ref(), event).await;
+
+        if should_clear_active_turn {
+            self.maybe_start_turn_for_pending_work().await;
+        }
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
