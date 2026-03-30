@@ -2057,7 +2057,7 @@ impl App {
         match op.view() {
             AppCommandView::Interrupt => {
                 let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await else {
-                    return Ok(false);
+                    return Ok(true);
                 };
                 app_server.turn_interrupt(thread_id, turn_id).await?;
                 Ok(true)
@@ -10309,6 +10309,24 @@ guardian_approval = true
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn interrupt_without_active_turn_is_treated_as_handled() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let op = AppCommand::interrupt();
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            .await
+            .expect("interrupt submission should not fail");
+
+        assert_eq!(handled, true);
     }
 
     #[tokio::test]
