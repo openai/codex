@@ -23,7 +23,6 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::ServiceTier;
 use crate::config_types::WindowsSandboxLevel;
-use crate::custom_prompts::CustomPrompt;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
@@ -474,9 +473,6 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
-    /// Request the list of available custom prompts.
-    ListCustomPrompts,
-
     /// Request the list of skills for the provided `cwd` values or the session default.
     ListSkills {
         /// Working directories to scope repo skills discovery.
@@ -619,7 +615,6 @@ impl Op {
             Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
-            Self::ListCustomPrompts => "list_custom_prompts",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
@@ -1393,9 +1388,6 @@ pub enum EventMsg {
 
     /// List of MCP tools available to the agent.
     McpListToolsResponse(McpListToolsResponseEvent),
-
-    /// List of custom prompts available to the agent.
-    ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
 
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
@@ -3126,12 +3118,6 @@ impl fmt::Display for McpAuthStatus {
     }
 }
 
-/// Response payload for `Op::ListCustomPrompts`.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ListCustomPromptsResponseEvent {
-    pub custom_prompts: Vec<CustomPrompt>,
-}
-
 /// Response payload for `Op::ListSkills`.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListSkillsResponseEvent {
@@ -3434,6 +3420,16 @@ pub struct CollabAgentSpawnBeginEvent {
     pub reasoning_effort: ReasoningEffortConfig,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AgentSpawnMode {
+    #[default]
+    Spawn,
+    Fork,
+    Watchdog,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct CollabAgentRef {
     /// Thread ID of the receiver/new agent.
@@ -3481,6 +3477,9 @@ pub struct CollabAgentSpawnEndEvent {
     pub model: String,
     /// Effective reasoning effort used by the spawned agent after inheritance and role overrides.
     pub reasoning_effort: ReasoningEffortConfig,
+    /// Spawn mode used for this agent.
+    #[serde(default)]
+    pub spawn_mode: AgentSpawnMode,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
 }

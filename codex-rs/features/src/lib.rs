@@ -142,6 +142,10 @@ pub enum Feature {
     SpawnCsv,
     /// Deliver inbound agent messages via a synthetic function-call inbox envelope.
     AgentFunctionCallInbox,
+    /// Enable prepending agent-specific developer instructions for agent sessions.
+    AgentPromptInjection,
+    /// Enable watchdog spawning and watchdog-only agent tools.
+    AgentWatchdog,
     /// Enable apps.
     Apps,
     /// Enable the tool_search tool for apps.
@@ -174,8 +178,6 @@ pub enum Feature {
     Artifact,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
-    /// Enable voice transcription in the TUI composer.
-    VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
     /// Removed compatibility flag. The TUI now always uses the app-server implementation.
@@ -728,6 +730,18 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::AgentPromptInjection,
+        key: "agent_prompt_injection",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AgentWatchdog,
+        key: "agent_watchdog",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Apps,
         key: "apps",
         stage: Stage::Stable,
@@ -820,12 +834,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "fast_mode",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::VoiceTranscription,
-        key: "voice_transcription",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RealtimeConversation,
@@ -977,7 +985,7 @@ mod inbox_feature_tests {
         let stage = spec.stage;
 
         assert!(matches!(stage, Stage::Experimental { .. }));
-        assert_eq!(stage.experimental_menu_name(), Some("Smart Approvals"));
+        assert_eq!(stage.experimental_menu_name(), Some("Guardian Approvals"));
         assert_eq!(
             stage.experimental_menu_description().map(str::to_owned),
             Some(
@@ -1034,6 +1042,18 @@ mod inbox_feature_tests {
         assert_eq!(
             feature_for_key("agent_function_call_inbox"),
             Some(Feature::AgentFunctionCallInbox)
+        );
+    }
+
+    #[test]
+    fn agent_prompt_and_watchdog_features_use_canonical_keys() {
+        assert_eq!(
+            feature_for_key("agent_prompt_injection"),
+            Some(Feature::AgentPromptInjection)
+        );
+        assert_eq!(
+            feature_for_key("agent_watchdog"),
+            Some(Feature::AgentWatchdog)
         );
     }
 }

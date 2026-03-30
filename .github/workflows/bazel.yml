@@ -81,6 +81,7 @@ jobs:
             --use-node-test-env \
             -- \
             test \
+            --test_tag_filters=-argument-comment-lint \
             --test_verbose_timeout_warnings \
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
             -- \
@@ -98,6 +99,7 @@ jobs:
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
 
   clippy:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

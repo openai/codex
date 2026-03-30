@@ -36,6 +36,7 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+const AGENTS_NAMESPACE_TOOL_NAME: &str = "agents";
 const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
 const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
@@ -217,7 +218,7 @@ async fn tool_search_disabled_by_default_exposes_apps_tools_directly() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
+async fn search_tool_keeps_agents_namespace_for_api_key_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -247,8 +248,12 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        !tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "tools list should not include {TOOL_SEARCH_TOOL_NAME} for API key auth: {tools:?}"
+        tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "tools list should include {TOOL_SEARCH_TOOL_NAME} for the always-present agents namespace: {tools:?}"
+    );
+    assert!(
+        tools.iter().any(|name| name == AGENTS_NAMESPACE_TOOL_NAME),
+        "tools list should include the {AGENTS_NAMESPACE_TOOL_NAME} namespace: {tools:?}"
     );
 
     Ok(())

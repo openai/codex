@@ -4,7 +4,9 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::agent::role::default_fork_context_for_role;
 use codex_protocol::AgentPath;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 
@@ -64,14 +66,19 @@ impl ToolHandler for Handler {
             .await;
         let mut config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-        apply_requested_spawn_agent_model_overrides(
-            &session,
-            turn.as_ref(),
-            &mut config,
-            args.model.as_deref(),
-            args.reasoning_effort,
-        )
-        .await?;
+        let fork_context = args
+            .fork_context
+            .unwrap_or_else(|| default_fork_context_for_role(&turn.config, role_name));
+        if !fork_context {
+            apply_requested_spawn_agent_model_overrides(
+                &session,
+                turn.as_ref(),
+                &mut config,
+                args.model.as_deref(),
+                args.reasoning_effort,
+            )
+            .await?;
+        }
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
@@ -112,7 +119,8 @@ impl ToolHandler for Handler {
                 },
                 Some(spawn_source),
                 SpawnAgentOptions {
-                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                    fork_parent_spawn_call_id: fork_context.then(|| call_id.clone()),
+                    ..Default::default()
                 },
             )
             .await
@@ -170,6 +178,11 @@ impl ToolHandler for Handler {
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
+                    spawn_mode: if fork_context {
+                        AgentSpawnMode::Fork
+                    } else {
+                        AgentSpawnMode::Spawn
+                    },
                     status,
                 }
                 .into(),
@@ -204,8 +217,7 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
-    #[serde(default)]
-    fork_context: bool,
+    fork_context: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

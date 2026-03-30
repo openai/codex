@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -136,6 +138,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
+use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -324,6 +327,83 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
+
+const ROOT_AGENT_PROMPT_FALLBACK: &str = include_str!("../root_agent_prompt.md");
+const ROOT_AGENT_WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../root_agent_watchdog_prompt.md");
+const SUBAGENT_PROMPT_FALLBACK: &str = include_str!("../subagent_prompt.md");
+const SUBAGENT_WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../subagent_watchdog_prompt.md");
+const WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../watchdog_agent_prompt.md");
+
+async fn load_agent_prompt_fallback(
+    codex_home: &Path,
+    fallback: &str,
+    override_filename: &str,
+) -> String {
+    let override_path = codex_home.join(override_filename);
+    if let Ok(contents) = fs::read_to_string(&override_path).await
+        && !contents.trim().is_empty()
+    {
+        return contents;
+    }
+
+    fallback.to_string()
+}
+
+async fn maybe_load_agent_prompt_fragment(
+    codex_home: &Path,
+    fallback: &str,
+    override_filename: &str,
+    enabled: bool,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    let fragment = load_agent_prompt_fallback(codex_home, fallback, override_filename).await;
+    if fragment.trim().is_empty() {
+        None
+    } else {
+        Some(fragment)
+    }
+}
+
+async fn load_root_agent_prompt(codex_home: &Path, include_watchdog: bool) -> String {
+    let mut prompt =
+        load_agent_prompt_fallback(codex_home, ROOT_AGENT_PROMPT_FALLBACK, "AGENTS.root.md").await;
+    if let Some(fragment) = maybe_load_agent_prompt_fragment(
+        codex_home,
+        ROOT_AGENT_WATCHDOG_PROMPT_FALLBACK,
+        "AGENTS.root.watchdog.md",
+        include_watchdog,
+    )
+    .await
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(fragment.trim());
+    }
+    prompt
+}
+
+pub(crate) async fn load_subagent_prompt(codex_home: &Path, include_watchdog: bool) -> String {
+    let mut prompt =
+        load_agent_prompt_fallback(codex_home, SUBAGENT_PROMPT_FALLBACK, "AGENTS.subagent.md")
+            .await;
+    if let Some(fragment) = maybe_load_agent_prompt_fragment(
+        codex_home,
+        SUBAGENT_WATCHDOG_PROMPT_FALLBACK,
+        "AGENTS.subagent.watchdog.md",
+        include_watchdog,
+    )
+    .await
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(fragment.trim());
+    }
+    prompt
+}
+
+pub(crate) async fn load_watchdog_prompt(codex_home: &Path) -> String {
+    load_agent_prompt_fallback(codex_home, WATCHDOG_PROMPT_FALLBACK, "AGENTS.watchdog.md").await
+}
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -556,6 +636,40 @@ impl Codex {
         let model = models_manager
             .get_default_model(&config.model, refresh_strategy)
             .await;
+        let forked_subagent = matches!(session_source, SessionSource::SubAgent(_))
+            && matches!(conversation_history, InitialHistory::Forked(_));
+        let role_prompt = if config.features.enabled(Feature::Collab)
+            && config.features.enabled(Feature::AgentPromptInjection)
+            && !forked_subagent
+        {
+            match session_source {
+                SessionSource::SubAgent(_) => Some(
+                    load_subagent_prompt(
+                        &config.codex_home,
+                        config.features.enabled(Feature::AgentWatchdog),
+                    )
+                    .await,
+                ),
+                _ => Some(
+                    load_root_agent_prompt(
+                        &config.codex_home,
+                        config.features.enabled(Feature::AgentWatchdog),
+                    )
+                    .await,
+                ),
+            }
+        } else {
+            None
+        };
+        let developer_instructions = if forked_subagent {
+            None
+        } else {
+            match (role_prompt, config.developer_instructions.clone()) {
+                (Some(prompt), Some(existing)) => Some(format!("{prompt}\n\n{existing}")),
+                (Some(prompt), None) => Some(prompt),
+                (None, existing) => existing,
+            }
+        };
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
@@ -610,7 +724,7 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
-            developer_instructions: config.developer_instructions.clone(),
+            developer_instructions,
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -811,6 +925,8 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    turn_used_agent_send_input: AtomicBool,
+    last_completed_turn_used_agent_send_input: AtomicBool,
 }
 
 #[derive(Clone, Debug)]
@@ -1925,6 +2041,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            turn_used_agent_send_input: AtomicBool::new(false),
+            last_completed_turn_used_agent_send_input: AtomicBool::new(false),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -2069,7 +2187,24 @@ impl Session {
         self.services.state_db.clone()
     }
 
-    /// Ensure rollout file writes are durably flushed.
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
+    }
+
+    pub(crate) fn snapshot_agent_send_input_on_turn_complete(&self) {
+        let used_agent_send_input = self
+            .turn_used_agent_send_input
+            .swap(false, Ordering::AcqRel);
+        self.last_completed_turn_used_agent_send_input
+            .store(used_agent_send_input, Ordering::Release);
+    }
+
+    pub(crate) fn last_completed_turn_used_agent_send_input(&self) -> bool {
+        self.last_completed_turn_used_agent_send_input
+            .load(Ordering::Acquire)
+    }
+
+    /// Ensure all rollout writes are durably flushed.
     pub(crate) async fn flush_rollout(&self) {
         let recorder = {
             let guard = self.services.rollout.lock().await;
@@ -4392,10 +4527,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::reload_user_config(&sess).await;
                     false
                 }
-                Op::ListCustomPrompts => {
-                    handlers::list_custom_prompts(&sess, sub.id.clone()).await;
-                    false
-                }
                 Op::ListSkills { cwds, force_reload } => {
                     handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
                     false
@@ -4521,13 +4652,11 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::InterAgentCommunication;
-    use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
@@ -4983,23 +5112,6 @@ mod handlers {
         let event = Event {
             id: sub_id,
             msg: EventMsg::McpListToolsResponse(snapshot),
-        };
-        sess.send_event_raw(event).await;
-    }
-
-    pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
-        let custom_prompts: Vec<CustomPrompt> =
-            if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                crate::custom_prompts::discover_prompts_in(&dir).await
-            } else {
-                Vec::new()
-            };
-
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
-                custom_prompts,
-            }),
         };
         sess.send_event_raw(event).await;
     }
@@ -6925,7 +7037,6 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TurnDiff(_)
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
-        | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)

@@ -27,6 +27,11 @@ use toml::Value as TomlValue;
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
+pub(crate) fn watchdog_interval_for_role(config: &Config, role_name: Option<&str>) -> Option<i64> {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    resolve_role_config(config, role_name).and_then(|role| role.watchdog_interval_s)
+}
+
 /// Applies a named role layer to `config` while preserving caller-owned model selection.
 ///
 /// The role layer is inserted at session-flag precedence so it can override persisted config, but
@@ -60,9 +65,13 @@ async fn apply_role_to_config_inner(
 ) -> anyhow::Result<()> {
     let is_built_in = !config.agent_roles.contains_key(role_name);
     let Some(config_file) = role.config_file.as_ref() else {
+        if let Some(model) = &role.model {
+            config.model = Some(model.clone());
+        }
         return Ok(());
     };
-    let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
+    let role_layer_toml =
+        load_role_layer_toml(config, config_file, is_built_in, role_name, role).await?;
     let (preserve_current_profile, preserve_current_provider) =
         preservation_policy(config, &role_layer_toml);
 
@@ -80,6 +89,7 @@ async fn load_role_layer_toml(
     config_file: &Path,
     is_built_in: bool,
     role_name: &str,
+    role: &AgentRoleConfig,
 ) -> anyhow::Result<TomlValue> {
     let (role_config_toml, role_config_base) = if is_built_in {
         let role_config_contents = built_in::config_file_contents(config_file)
@@ -103,10 +113,14 @@ async fn load_role_layer_toml(
     };
 
     deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)?;
-    Ok(resolve_relative_paths_in_config_toml(
-        role_config_toml,
-        role_config_base,
-    )?)
+    let mut role_layer_toml =
+        resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)?;
+    if let Some(model) = &role.model
+        && let Some(table) = role_layer_toml.as_table_mut()
+    {
+        table.insert("model".to_string(), TomlValue::String(model.clone()));
+    }
+    Ok(role_layer_toml)
 }
 
 pub(crate) fn resolve_role_config<'a>(
@@ -117,6 +131,13 @@ pub(crate) fn resolve_role_config<'a>(
         .agent_roles
         .get(role_name)
         .or_else(|| built_in::configs().get(role_name))
+}
+
+pub(crate) fn default_fork_context_for_role(config: &Config, role_name: Option<&str>) -> bool {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    resolve_role_config(config, role_name)
+        .and_then(|role| role.fork_context)
+        .unwrap_or(false)
 }
 
 fn preservation_policy(config: &Config, role_layer_toml: &TomlValue) -> (bool, bool) {
@@ -350,8 +371,12 @@ mod built_in {
                     DEFAULT_ROLE_NAME.to_string(),
                     AgentRoleConfig {
                         description: Some("Default agent.".to_string()),
+                        model: None,
                         config_file: None,
+                        spawn_mode: None,
+                        watchdog_interval_s: None,
                         nickname_candidates: None,
+                        fork_context: Some(true),
                     }
                 ),
                 (
@@ -364,8 +389,12 @@ Rules:
 - In order to avoid redundant work, you should avoid exploring the same problem that explorers have already covered. Typically, you should trust the explorer results without additional verification. You are still allowed to inspect the code yourself to gain the needed context!
 - You are encouraged to spawn up multiple explorers in parallel when you have multiple distinct questions to ask about the codebase that can be answered independently. This allows you to get more information faster without waiting for one question to finish before asking the next. While waiting for the explorer results, you can continue working on other local tasks that do not depend on those results. This parallelism is a key advantage of delegation, so use it whenever you have multiple questions to ask.
 - Reuse existing explorers for related questions."#.to_string()),
+                        model: None,
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
+                        spawn_mode: None,
+                        watchdog_interval_s: None,
                         nickname_candidates: None,
+                        fork_context: Some(true),
                     }
                 ),
                 (
@@ -379,8 +408,29 @@ Typical tasks:
 Rules:
 - Explicitly assign **ownership** of the task (files / responsibility). When the subtask involves code changes, you should clearly specify which files or modules the worker is responsible for. This helps avoid merge conflicts and ensures accountability. For example, you can say "Worker 1 is responsible for updating the authentication module, while Worker 2 will handle the database layer." By defining clear ownership, you can delegate more effectively and reduce coordination overhead.
 - Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product."#.to_string()),
+                        model: None,
                         config_file: None,
+                        spawn_mode: None,
+                        watchdog_interval_s: None,
                         nickname_candidates: None,
+                        fork_context: Some(true),
+                    }
+                ),
+                (
+                    "watchdog".to_string(),
+                    AgentRoleConfig {
+                        description: Some(r#"Use `watchdog` for long-running work that needs periodic oversight.
+This role creates an idle-time watchdog handle instead of a conversational worker.
+Rules:
+- Watchdog check-ins are asynchronous and only happen after the current turn ends and the owner thread is idle.
+- Do not call `wait` or `send_input` on the watchdog handle.
+- Close the watchdog handle only when it is no longer needed or when replacing it with a new watchdog."#.to_string()),
+                        model: None,
+                        config_file: None,
+                        spawn_mode: None,
+                        watchdog_interval_s: Some(crate::config::DEFAULT_WATCHDOG_INTERVAL_S),
+                        nickname_candidates: None,
+                        fork_context: Some(true),
                     }
                 ),
                 // Awaiter is temp removed

@@ -783,6 +783,7 @@ async fn spawn_agent_can_fork_parent_thread_history() {
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
+                ..Default::default()
             },
         )
         .await
@@ -868,6 +869,7 @@ async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                ..Default::default()
             },
         )
         .await
@@ -940,6 +942,7 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                ..Default::default()
             },
         )
         .await
@@ -1547,8 +1550,12 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
         "researcher".to_string(),
         AgentRoleConfig {
             description: Some("Research role".to_string()),
+            model: None,
             config_file: None,
+            spawn_mode: None,
+            watchdog_interval_s: None,
             nickname_candidates: Some(vec!["Atlas".to_string()]),
+            fork_context: None,
         },
     );
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;

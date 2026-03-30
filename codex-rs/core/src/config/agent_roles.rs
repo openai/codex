@@ -152,11 +152,15 @@ fn read_declared_role(
 
 fn merge_missing_role_fields(role: &mut AgentRoleConfig, fallback: &AgentRoleConfig) {
     role.description = role.description.clone().or(fallback.description.clone());
+    role.model = role.model.clone().or(fallback.model.clone());
     role.config_file = role.config_file.clone().or(fallback.config_file.clone());
+    role.spawn_mode = role.spawn_mode.or(fallback.spawn_mode);
+    role.watchdog_interval_s = role.watchdog_interval_s.or(fallback.watchdog_interval_s);
     role.nickname_candidates = role
         .nickname_candidates
         .clone()
         .or(fallback.nickname_candidates.clone());
+    role.fork_context = role.fork_context.or(fallback.fork_context);
 }
 
 fn agents_toml_from_layer(layer_toml: &TomlValue) -> std::io::Result<Option<AgentsToml>> {
@@ -188,8 +192,12 @@ fn agent_role_config_from_toml(
 
     Ok(AgentRoleConfig {
         description,
+        model: role.model.clone(),
         config_file,
+        spawn_mode: role.spawn_mode,
+        watchdog_interval_s: role.watchdog_interval_s,
         nickname_candidates,
+        fork_context: role.fork_context,
     })
 }
 
@@ -478,8 +486,12 @@ fn discover_agent_roles_in_dir(
             role_name,
             AgentRoleConfig {
                 description: parsed_file.description,
+                model: None,
                 config_file: Some(agent_file),
+                spawn_mode: None,
+                watchdog_interval_s: None,
                 nickname_candidates: parsed_file.nickname_candidates,
+                fork_context: None,
             },
         );
     }

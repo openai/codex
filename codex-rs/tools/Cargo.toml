@@ -8,6 +8,7 @@ version.workspace = true
 workspace = true
 
 [dependencies]
+codex-code-mode = { workspace = true }
 codex-protocol = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "base64",

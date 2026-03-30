@@ -2341,6 +2341,7 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             new_agent_nickname: Some("Robie".to_string()),
             new_agent_role: Some("explorer".to_string()),
             prompt: "Explore the repo".to_string(),
+            spawn_mode: codex_protocol::protocol::AgentSpawnMode::Spawn,
             model: "gpt-5".to_string(),
             reasoning_effort: ReasoningEffortConfig::High,
             status: AgentStatus::PendingInit,
@@ -6087,7 +6088,7 @@ async fn realtime_error_closes_without_followup_closed_info() {
 async fn deleted_realtime_meter_uses_shared_stop_path() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
-    let placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+    let placeholder_id = chat.bottom_pane.insert_recording_meter_placeholder("⠤⠤⠤⠤");
     chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
 
     assert!(chat.stop_realtime_conversation_for_deleted_meter(&placeholder_id));

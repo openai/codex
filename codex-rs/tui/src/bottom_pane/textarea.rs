@@ -945,6 +945,7 @@ impl TextArea {
         self.set_cursor(end);
     }
 
+    #[cfg(not(target_os = "linux"))]
     pub fn replace_element_by_id(&mut self, id: &str, text: &str) -> bool {
         if let Some(idx) = self
             .elements

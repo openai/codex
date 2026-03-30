@@ -583,6 +583,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
 mod tests {
     use super::*;
     use crate::history_cell::HistoryCell;
+    use codex_protocol::protocol::AgentSpawnMode;
     #[cfg(target_os = "macos")]
     use crossterm::event::KeyEvent;
     #[cfg(target_os = "macos")]
@@ -609,6 +610,7 @@ mod tests {
                 new_agent_nickname: Some("Robie".to_string()),
                 new_agent_role: Some("explorer".to_string()),
                 prompt: "Compute 11! and reply with just the integer result.".to_string(),
+                spawn_mode: AgentSpawnMode::Spawn,
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
                 status: AgentStatus::PendingInit,
@@ -747,6 +749,7 @@ mod tests {
                 new_agent_nickname: Some("Robie".to_string()),
                 new_agent_role: Some("explorer".to_string()),
                 prompt: String::new(),
+                spawn_mode: AgentSpawnMode::Spawn,
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
                 status: AgentStatus::PendingInit,
