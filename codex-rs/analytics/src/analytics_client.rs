@@ -43,7 +43,7 @@ struct ThreadInitializedInput {
 }
 
 #[derive(Clone)]
-pub struct SubagentSessionStartedInput {
+pub struct SubAgentThreadStartedInput {
     pub thread_id: String,
     pub product_client_id: String,
     pub model: String,
@@ -118,7 +118,7 @@ pub enum AnalyticsFact {
 pub enum CustomAnalyticsFact {
     // Subagent thread/session starts are not fully represented on the
     // app-server request/response surface, so core emits this custom fact.
-    SubagentSessionStarted(SubagentSessionStartedInput),
+    SubAgentThreadStarted(SubAgentThreadStartedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -289,9 +289,9 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_subagent_session_started(&self, input: SubagentSessionStartedInput) {
+    pub fn track_subagent_session_started(&self, input: SubAgentThreadStartedInput) {
         self.record_fact(AnalyticsFact::Custom(
-            CustomAnalyticsFact::SubagentSessionStarted(input),
+            CustomAnalyticsFact::SubAgentThreadStarted(input),
         ));
     }
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
@@ -536,7 +536,7 @@ impl AnalyticsReducer {
             }
             AnalyticsFact::Notification(_notification) => {}
             AnalyticsFact::Custom(input) => match input {
-                CustomAnalyticsFact::SubagentSessionStarted(input) => {
+                CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_session_started(input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
@@ -598,7 +598,7 @@ impl AnalyticsReducer {
 
     fn ingest_subagent_session_started(
         &mut self,
-        input: SubagentSessionStartedInput,
+        input: SubAgentThreadStartedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
         out.push(TrackEventRequest::ThreadInitialized(
@@ -782,7 +782,7 @@ fn thread_initialized_event_params(
 }
 
 fn subagent_session_started_event_request(
-    input: SubagentSessionStartedInput,
+    input: SubAgentThreadStartedInput,
 ) -> ThreadInitializedEvent {
     let event_params = ThreadInitializedEventParams {
         thread_id: input.thread_id,

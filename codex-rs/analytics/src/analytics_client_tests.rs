@@ -16,7 +16,7 @@ use super::PluginStateChangedInput;
 use super::PluginUsedInput;
 use super::SkillInvocation;
 use super::SkillInvokedInput;
-use super::SubagentSessionStartedInput;
+use super::SubAgentThreadStartedInput;
 use super::ThreadInitializedInput;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
@@ -448,7 +448,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 #[test]
 fn subagent_session_started_review_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
-        SubagentSessionStartedInput {
+        SubAgentThreadStartedInput {
             thread_id: "thread-review".to_string(),
             product_client_id: "codex-tui".to_string(),
             model: "gpt-5".to_string(),
@@ -478,7 +478,7 @@ fn subagent_session_started_thread_spawn_serializes_parent_thread_id() {
         codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
             .expect("valid thread id");
     let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
-        SubagentSessionStartedInput {
+        SubAgentThreadStartedInput {
             thread_id: "thread-spawn".to_string(),
             product_client_id: "codex-tui".to_string(),
             model: "gpt-5".to_string(),
@@ -505,7 +505,7 @@ fn subagent_session_started_thread_spawn_serializes_parent_thread_id() {
 #[test]
 fn subagent_session_started_memory_consolidation_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
-        SubagentSessionStartedInput {
+        SubAgentThreadStartedInput {
             thread_id: "thread-memory".to_string(),
             product_client_id: "codex-tui".to_string(),
             model: "gpt-5".to_string(),
@@ -526,7 +526,7 @@ fn subagent_session_started_memory_consolidation_serializes_expected_shape() {
 #[test]
 fn subagent_session_started_other_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
-        SubagentSessionStartedInput {
+        SubAgentThreadStartedInput {
             thread_id: "thread-guardian".to_string(),
             product_client_id: "codex-tui".to_string(),
             model: "gpt-5".to_string(),
@@ -546,8 +546,8 @@ async fn subagent_session_started_publishes_without_initialize() {
 
     reducer
         .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::SubagentSessionStarted(
-                SubagentSessionStartedInput {
+            AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
+                SubAgentThreadStartedInput {
                     thread_id: "thread-review".to_string(),
                     product_client_id: "codex-tui".to_string(),
                     model: "gpt-5".to_string(),

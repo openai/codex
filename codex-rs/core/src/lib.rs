@@ -136,7 +136,7 @@ pub use codex_analytics::AnalyticsEventsClient;
 pub use codex_analytics::AnalyticsFact;
 pub use codex_analytics::AppServerRpcTransport;
 pub use codex_analytics::CustomAnalyticsFact;
-pub use codex_analytics::SubagentSessionStartedInput;
+pub use codex_analytics::SubAgentThreadStartedInput;
 mod default_client_forwarding;
 
 /// Default Codex HTTP client headers and reqwest construction.

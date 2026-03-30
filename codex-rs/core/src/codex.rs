@@ -53,7 +53,7 @@ use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
-use codex_analytics::SubagentSessionStartedInput;
+use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -4259,7 +4259,7 @@ pub(crate) fn emit_subagent_session_started(
     thread_config: ThreadConfigSnapshot,
     subagent_source: SubAgentSource,
 ) {
-    analytics_events_client.track_subagent_session_started(SubagentSessionStartedInput {
+    analytics_events_client.track_subagent_session_started(SubAgentThreadStartedInput {
         thread_id: thread_id.to_string(),
         product_client_id,
         model: thread_config.model,
