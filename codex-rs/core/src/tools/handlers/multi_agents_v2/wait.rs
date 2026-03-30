@@ -38,6 +38,8 @@ impl ToolHandler for Handler {
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
+        let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
+
         session
             .send_event(
                 &turn,
@@ -51,7 +53,6 @@ impl ToolHandler for Handler {
             )
             .await;
 
-        let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
         let timed_out = !wait_for_mailbox_change(&mut mailbox_seq_rx, deadline).await;
         let result = WaitAgentResult::from_timed_out(timed_out);
