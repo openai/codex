@@ -170,7 +170,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         "Saved user message",
         Vec::new(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;

@@ -196,7 +196,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         "2025-01-05T12:00:00Z",
         "Saved user message",
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
