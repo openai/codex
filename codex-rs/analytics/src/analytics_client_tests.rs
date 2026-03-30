@@ -454,6 +454,7 @@ fn subagent_session_started_review_serializes_expected_shape() {
             model: "gpt-5".to_string(),
             ephemeral: false,
             subagent_source: SubAgentSource::Review,
+            created_at: 123,
         },
     ));
 
@@ -467,6 +468,7 @@ fn subagent_session_started_review_serializes_expected_shape() {
         payload["event_params"]["app_server_client"]["rpc_transport"],
         "in_process"
     );
+    assert_eq!(payload["event_params"]["created_at"], 123);
     assert_eq!(payload["event_params"]["initialization_mode"], "new");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
@@ -490,6 +492,7 @@ fn subagent_session_started_thread_spawn_serializes_parent_thread_id() {
                 agent_nickname: None,
                 agent_role: None,
             },
+            created_at: 124,
         },
     ));
 
@@ -511,6 +514,7 @@ fn subagent_session_started_memory_consolidation_serializes_expected_shape() {
             model: "gpt-5".to_string(),
             ephemeral: false,
             subagent_source: SubAgentSource::MemoryConsolidation,
+            created_at: 125,
         },
     ));
 
@@ -532,6 +536,7 @@ fn subagent_session_started_other_serializes_expected_shape() {
             model: "gpt-5".to_string(),
             ephemeral: false,
             subagent_source: SubAgentSource::Other("guardian".to_string()),
+            created_at: 126,
         },
     ));
 
@@ -553,6 +558,7 @@ async fn subagent_session_started_publishes_without_initialize() {
                     model: "gpt-5".to_string(),
                     ephemeral: false,
                     subagent_source: SubAgentSource::Review,
+                    created_at: 127,
                 },
             )),
             &mut events,

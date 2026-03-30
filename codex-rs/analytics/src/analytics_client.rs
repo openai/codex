@@ -49,6 +49,7 @@ pub struct SubAgentThreadStartedInput {
     pub model: String,
     pub ephemeral: bool,
     pub subagent_source: SubAgentSource,
+    pub created_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -800,7 +801,7 @@ fn subagent_session_started_event_request(
         initialization_mode: InitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
         parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
-        created_at: now_unix_timestamp_secs(),
+        created_at: input.created_at,
     };
     ThreadInitializedEvent {
         event_type: "codex_thread_initialized",
@@ -880,12 +881,6 @@ fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String>
     }
 }
 
-fn now_unix_timestamp_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
 async fn send_track_events(
     auth_manager: &AuthManager,
     base_url: &str,

@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -4259,12 +4261,17 @@ pub(crate) fn emit_subagent_session_started(
     thread_config: ThreadConfigSnapshot,
     subagent_source: SubAgentSource,
 ) {
+    let created_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     analytics_events_client.track_subagent_session_started(SubAgentThreadStartedInput {
         thread_id: thread_id.to_string(),
         product_client_id,
         model: thread_config.model,
         ephemeral: thread_config.ephemeral,
         subagent_source,
+        created_at,
     });
 }
 
