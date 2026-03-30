@@ -8,6 +8,8 @@ use crate::plugins::test_support::write_plugins_feature_config;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client;
 use codex_app_server_protocol::AppInfo;
+use codex_tools::DiscoverableToolAction;
+use codex_tools::DiscoverableToolType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
