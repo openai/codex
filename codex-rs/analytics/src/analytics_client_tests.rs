@@ -342,7 +342,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                 connection_id: 7,
                 response: Box::new(sample_thread_start_response(
                     "thread-no-client",
-                    false,
+                    /*ephemeral*/ false,
                     "gpt-5",
                 )),
             },
@@ -384,7 +384,9 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         .ingest(
             AnalyticsFact::Response {
                 connection_id: 7,
-                response: Box::new(sample_thread_resume_response("thread-1", true, "gpt-5")),
+                response: Box::new(sample_thread_resume_response(
+                    "thread-1", /*ephemeral*/ true, "gpt-5",
+                )),
             },
             &mut events,
         )
