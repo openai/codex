@@ -38,7 +38,7 @@ struct ThreadInitializedInput {
     pub model: String,
     pub ephemeral: bool,
     pub thread_source: SessionSource,
-    pub initialization_mode: InitializationMode,
+    pub initialization_mode: ThreadInitializationMode,
     pub created_at: u64,
 }
 
@@ -54,7 +54,7 @@ pub struct SubAgentThreadStartedInput {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum InitializationMode {
+pub enum ThreadInitializationMode {
     New,
     Forked,
     Resumed,
@@ -439,7 +439,7 @@ struct ThreadInitializedEventParams {
     model: String,
     ephemeral: bool,
     thread_source: Option<&'static str>,
-    initialization_mode: InitializationMode,
+    initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
     created_at: u64,
@@ -615,13 +615,13 @@ impl AnalyticsReducer {
     ) {
         let (thread, model, initialization_mode) = match response {
             ClientResponse::ThreadStart { response, .. } => {
-                (response.thread, response.model, InitializationMode::New)
+                (response.thread, response.model, ThreadInitializationMode::New)
             }
             ClientResponse::ThreadResume { response, .. } => {
-                (response.thread, response.model, InitializationMode::Resumed)
+                (response.thread, response.model, ThreadInitializationMode::Resumed)
             }
             ClientResponse::ThreadFork { response, .. } => {
-                (response.thread, response.model, InitializationMode::Forked)
+                (response.thread, response.model, ThreadInitializationMode::Forked)
             }
             _ => return,
         };
@@ -798,7 +798,7 @@ fn subagent_session_started_event_request(
         model: input.model,
         ephemeral: input.ephemeral,
         thread_source: Some("subagent"),
-        initialization_mode: InitializationMode::New,
+        initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
         parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
         created_at: input.created_at,

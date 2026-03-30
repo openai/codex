@@ -9,7 +9,6 @@ use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::CustomAnalyticsFact;
-use super::InitializationMode;
 use super::InvocationType;
 use super::PluginState;
 use super::PluginStateChangedInput;
@@ -17,6 +16,7 @@ use super::PluginUsedInput;
 use super::SkillInvocation;
 use super::SkillInvokedInput;
 use super::SubAgentThreadStartedInput;
+use super::ThreadInitializationMode;
 use super::ThreadInitializedInput;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
@@ -304,7 +304,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             model: "gpt-5".to_string(),
             ephemeral: true,
             thread_source: SessionSource::Exec,
-            initialization_mode: InitializationMode::New,
+            initialization_mode: ThreadInitializationMode::New,
             created_at: 1,
         },
     ));
