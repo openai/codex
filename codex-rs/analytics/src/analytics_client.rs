@@ -562,51 +562,6 @@ impl AnalyticsReducer {
         );
     }
 
-    fn ingest_thread_initialized(
-        &mut self,
-        input: ThreadInitializedInput,
-        out: &mut Vec<TrackEventRequest>,
-    ) {
-        let Some(connection_state) = self.connections.get(&input.connection_id) else {
-            return;
-        };
-        out.push(TrackEventRequest::ThreadInitialized(
-            thread_initialized_event_request(connection_state, input),
-        ));
-    }
-
-    fn ingest_response(
-        &mut self,
-        connection_id: u64,
-        response: ClientResponse,
-        out: &mut Vec<TrackEventRequest>,
-    ) {
-        let (thread, model, initialization_mode) = match response {
-            ClientResponse::ThreadStart { response, .. } => {
-                (response.thread, response.model, InitializationMode::New)
-            }
-            ClientResponse::ThreadResume { response, .. } => {
-                (response.thread, response.model, InitializationMode::Resumed)
-            }
-            ClientResponse::ThreadFork { response, .. } => {
-                (response.thread, response.model, InitializationMode::Forked)
-            }
-            _ => return,
-        };
-        self.ingest_thread_initialized(
-            ThreadInitializedInput {
-                connection_id,
-                thread_id: thread.id,
-                model,
-                ephemeral: thread.ephemeral,
-                thread_source: thread.source.into(),
-                initialization_mode,
-                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
-            },
-            out,
-        );
-    }
-
     async fn ingest_skill_invoked(
         &mut self,
         input: SkillInvokedInput,
@@ -699,6 +654,51 @@ impl AnalyticsReducer {
             PluginState::Disabled => TrackEventRequest::PluginDisabled(event),
         });
     }
+
+    fn ingest_thread_initialized(
+        &mut self,
+        input: ThreadInitializedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(connection_state) = self.connections.get(&input.connection_id) else {
+            return;
+        };
+        out.push(TrackEventRequest::ThreadInitialized(
+            thread_initialized_event_request(connection_state, input),
+        ));
+    }
+
+    fn ingest_response(
+        &mut self,
+        connection_id: u64,
+        response: ClientResponse,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let (thread, model, initialization_mode) = match response {
+            ClientResponse::ThreadStart { response, .. } => {
+                (response.thread, response.model, InitializationMode::New)
+            }
+            ClientResponse::ThreadResume { response, .. } => {
+                (response.thread, response.model, InitializationMode::Resumed)
+            }
+            ClientResponse::ThreadFork { response, .. } => {
+                (response.thread, response.model, InitializationMode::Forked)
+            }
+            _ => return,
+        };
+        self.ingest_thread_initialized(
+            ThreadInitializedInput {
+                connection_id,
+                thread_id: thread.id,
+                model,
+                ephemeral: thread.ephemeral,
+                thread_source: thread.source.into(),
+                initialization_mode,
+                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+            },
+            out,
+        );
+    }
 }
 
 fn plugin_state_event_type(state: PluginState) -> &'static str {
@@ -788,10 +788,8 @@ fn codex_plugin_used_metadata(
 fn thread_source_name(thread_source: &SessionSource) -> Option<&'static str> {
     match thread_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
-        SessionSource::SubAgent(_)
-        | SessionSource::Mcp
-        | SessionSource::Custom(_)
-        | SessionSource::Unknown => None,
+        SessionSource::SubAgent(_) => Some("subagent"),
+        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
     }
 }
 
