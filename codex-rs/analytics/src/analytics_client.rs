@@ -40,6 +40,7 @@ pub struct SubAgentThreadStartedInput {
     pub subagent_source: SubAgentSource,
     pub created_at: u64,
 }
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadInitializationMode {
@@ -283,6 +284,7 @@ impl AnalyticsEventsClient {
             CustomAnalyticsFact::SubAgentThreadStarted(input),
         ));
     }
+
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         if mentions.is_empty() {
             return;
@@ -582,46 +584,6 @@ impl AnalyticsReducer {
         ));
     }
 
-    fn ingest_response(
-        &mut self,
-        connection_id: u64,
-        response: ClientResponse,
-        out: &mut Vec<TrackEventRequest>,
-    ) {
-        let (thread, model, initialization_mode) = match response {
-            ClientResponse::ThreadStart { response, .. } => {
-                (response.thread, response.model, ThreadInitializationMode::New)
-            }
-            ClientResponse::ThreadResume { response, .. } => {
-                (response.thread, response.model, ThreadInitializationMode::Resumed)
-            }
-            ClientResponse::ThreadFork { response, .. } => {
-                (response.thread, response.model, ThreadInitializationMode::Forked)
-            }
-            _ => return,
-        };
-        let Some(connection_state) = self.connections.get(&connection_id) else {
-            return;
-        };
-        let thread_source: SessionSource = thread.source.into();
-        out.push(TrackEventRequest::ThreadInitialized(
-            ThreadInitializedEvent {
-                event_type: "codex_thread_initialized",
-                event_params: ThreadInitializedEventParams {
-                    thread_id: thread.id,
-                    app_server_client: connection_state.app_server_client.clone(),
-                    runtime: connection_state.runtime.clone(),
-                    model,
-                    ephemeral: thread.ephemeral,
-                    thread_source: thread_source_name(&thread_source),
-                    initialization_mode,
-                    subagent_source: None,
-                    parent_thread_id: None,
-                    created_at: u64::try_from(thread.created_at).unwrap_or_default(),
-                },
-            },
-        ));
-    }
     async fn ingest_skill_invoked(
         &mut self,
         input: SkillInvokedInput,
@@ -715,6 +677,53 @@ impl AnalyticsReducer {
             PluginState::Disabled => TrackEventRequest::PluginDisabled(event),
         });
     }
+
+    fn ingest_response(
+        &mut self,
+        connection_id: u64,
+        response: ClientResponse,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let (thread, model, initialization_mode) = match response {
+            ClientResponse::ThreadStart { response, .. } => (
+                response.thread,
+                response.model,
+                ThreadInitializationMode::New,
+            ),
+            ClientResponse::ThreadResume { response, .. } => (
+                response.thread,
+                response.model,
+                ThreadInitializationMode::Resumed,
+            ),
+            ClientResponse::ThreadFork { response, .. } => (
+                response.thread,
+                response.model,
+                ThreadInitializationMode::Forked,
+            ),
+            _ => return,
+        };
+        let thread_source: SessionSource = thread.source.into();
+        let Some(connection_state) = self.connections.get(&connection_id) else {
+            return;
+        };
+        out.push(TrackEventRequest::ThreadInitialized(
+            ThreadInitializedEvent {
+                event_type: "codex_thread_initialized",
+                event_params: ThreadInitializedEventParams {
+                    thread_id: thread.id,
+                    app_server_client: connection_state.app_server_client.clone(),
+                    runtime: connection_state.runtime.clone(),
+                    model,
+                    ephemeral: thread.ephemeral,
+                    thread_source: thread_source_name(&thread_source),
+                    initialization_mode,
+                    subagent_source: None,
+                    parent_thread_id: None,
+                    created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                },
+            },
+        ));
+    }
 }
 
 fn plugin_state_event_type(state: PluginState) -> &'static str {
@@ -764,6 +773,7 @@ fn subagent_session_started_event_request(
         event_params,
     }
 }
+
 fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
     let capability_summary = plugin.capability_summary;
     CodexPluginMetadata {
