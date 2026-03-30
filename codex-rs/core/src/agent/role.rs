@@ -7,7 +7,6 @@
 //! which role to use; the multi-agent tool handler owns that orchestration.
 
 use crate::config::AgentRoleConfig;
-use crate::config::AgentRoleSpawnMode;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::agent_roles::parse_agent_role_file_contents;
@@ -27,16 +26,6 @@ use toml::Value as TomlValue;
 /// The role name used when a caller omits `agent_type`.
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
-
-pub(crate) fn default_spawn_mode_for_role(
-    config: &Config,
-    role_name: Option<&str>,
-) -> AgentRoleSpawnMode {
-    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    resolve_role_config(config, role_name)
-        .and_then(|role| role.spawn_mode)
-        .unwrap_or_default()
-}
 
 pub(crate) fn watchdog_interval_for_role(config: &Config, role_name: Option<&str>) -> Option<i64> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
@@ -379,7 +368,6 @@ mod built_in {
                         description: Some("Default agent.".to_string()),
                         model: None,
                         config_file: None,
-                        spawn_mode: None,
                         watchdog_interval_s: None,
                         nickname_candidates: None,
                     }
@@ -396,7 +384,6 @@ Rules:
 - Reuse existing explorers for related questions."#.to_string()),
                         model: None,
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
-                        spawn_mode: None,
                         watchdog_interval_s: None,
                         nickname_candidates: None,
                     }
@@ -414,7 +401,6 @@ Rules:
 - Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product."#.to_string()),
                         model: None,
                         config_file: None,
-                        spawn_mode: None,
                         watchdog_interval_s: None,
                         nickname_candidates: None,
                     }
@@ -430,7 +416,6 @@ Rules:
 - Close the watchdog handle only when it is no longer needed or when replacing it with a new watchdog."#.to_string()),
                         model: None,
                         config_file: None,
-                        spawn_mode: None,
                         watchdog_interval_s: Some(crate::config::DEFAULT_WATCHDOG_INTERVAL_S),
                         nickname_candidates: None,
                     }

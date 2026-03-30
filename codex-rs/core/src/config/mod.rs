@@ -1641,14 +1641,6 @@ pub struct AgentsToml {
     pub roles: BTreeMap<String, AgentRoleToml>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentRoleSpawnMode {
-    #[default]
-    Spawn,
-    Fork,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRoleConfig {
     /// Human-facing role documentation used in spawn tool guidance.
@@ -1658,8 +1650,6 @@ pub struct AgentRoleConfig {
     pub model: Option<String>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
-    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
-    pub spawn_mode: Option<AgentRoleSpawnMode>,
     /// Optional watchdog interval for roles that should spawn as idle-time watchdog handles.
     pub watchdog_interval_s: Option<i64>,
     /// Candidate nicknames for agents spawned with this role.
@@ -1679,9 +1669,6 @@ pub struct AgentRoleToml {
     /// Path to a role-specific config layer.
     /// Relative paths are resolved relative to the `config.toml` that defines them.
     pub config_file: Option<AbsolutePathBuf>,
-
-    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
-    pub spawn_mode: Option<AgentRoleSpawnMode>,
 
     /// Optional watchdog interval in seconds for roles that should behave as watchdogs.
     #[schemars(range(min = 1))]
