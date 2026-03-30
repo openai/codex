@@ -1848,7 +1848,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
         AgentPath::root(),
         Vec::new(),
         "hello from worker".to_string(),
-        false,
+        /*trigger_turn*/ false,
     ));
 
     let output = wait_task
@@ -2099,7 +2099,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
         AgentPath::root(),
         Vec::new(),
         "completed".to_string(),
-        false,
+        /*trigger_turn*/ false,
     ));
 
     let wait_output = wait_task
@@ -2169,7 +2169,7 @@ async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
         AgentPath::root(),
         Vec::new(),
         "already queued".to_string(),
-        false,
+        /*trigger_turn*/ false,
     ));
 
     let wait_task = tokio::spawn({
@@ -2198,7 +2198,7 @@ async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
         AgentPath::root(),
         Vec::new(),
         "new mail".to_string(),
-        false,
+        /*trigger_turn*/ false,
     ));
 
     let output = wait_task
@@ -2286,7 +2286,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
         AgentPath::root(),
         Vec::new(),
         "from worker b".to_string(),
-        false,
+        /*trigger_turn*/ false,
     ));
 
     let output = wait_task
@@ -2371,7 +2371,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
         AgentPath::root(),
         Vec::new(),
         "sensitive child output".to_string(),
-        false,
+        /*trigger_turn*/ false,
     ));
 
     let output = wait_task

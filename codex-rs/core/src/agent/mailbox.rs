@@ -100,13 +100,13 @@ mod tests {
             AgentPath::root(),
             AgentPath::try_from("/root/worker").expect("agent path"),
             "one",
-            false,
+            /*trigger_turn*/ false,
         ));
         let seq_b = mailbox.send(make_mail(
             AgentPath::root(),
             AgentPath::try_from("/root/worker").expect("agent path"),
             "two",
-            false,
+            /*trigger_turn*/ false,
         ));
 
         seq_rx.changed().await.expect("first seq update");
@@ -122,13 +122,13 @@ mod tests {
             AgentPath::root(),
             AgentPath::try_from("/root/worker").expect("agent path"),
             "one",
-            false,
+            /*trigger_turn*/ false,
         );
         let mail_two = make_mail(
             AgentPath::try_from("/root/worker").expect("agent path"),
             AgentPath::root(),
             "two",
-            false,
+            /*trigger_turn*/ false,
         );
 
         mailbox.send(mail_one.clone());
@@ -146,7 +146,7 @@ mod tests {
             AgentPath::root(),
             AgentPath::try_from("/root/worker").expect("agent path"),
             "queued",
-            false,
+            /*trigger_turn*/ false,
         ));
         assert!(!receiver.has_pending_trigger_turn());
 
@@ -154,7 +154,7 @@ mod tests {
             AgentPath::root(),
             AgentPath::try_from("/root/worker").expect("agent path"),
             "wake",
-            true,
+            /*trigger_turn*/ true,
         ));
         assert!(receiver.has_pending_trigger_turn());
     }
