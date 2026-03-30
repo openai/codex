@@ -290,12 +290,13 @@ impl Session {
             return;
         }
 
-        let mut active_turn = self.active_turn.lock().await;
-        if active_turn.is_some() {
-            return;
+        {
+            let mut active_turn = self.active_turn.lock().await;
+            if active_turn.is_some() {
+                return;
+            }
+            *active_turn = Some(ActiveTurn::default());
         }
-        *active_turn = Some(ActiveTurn::default());
-        drop(active_turn);
 
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
