@@ -600,12 +600,14 @@ impl MessageProcessor {
                         }
                     }
                 }
-                self.analytics_events_client.track_initialize(
-                    connection_id.0,
-                    analytics_initialize_params,
-                    originator,
-                    self.rpc_transport,
-                );
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_initialize(
+                        connection_id.0,
+                        analytics_initialize_params,
+                        originator,
+                        self.rpc_transport,
+                    );
+                }
                 set_default_client_residency_requirement(self.config.enforce_residency.value());
                 let user_agent_suffix = format!("{name}; {version}");
                 if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
