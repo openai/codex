@@ -164,7 +164,12 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    create_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+        /*general_analytics_enabled*/ true,
+    )?;
     enable_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -192,10 +197,11 @@ async fn thread_start_does_not_track_thread_initialized_analytics_without_featur
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url_without_general_analytics(
+    create_config_toml_with_chatgpt_base_url(
         codex_home.path(),
         &server.uri(),
         &server.uri(),
+        /*general_analytics_enabled*/ false,
     )?;
     enable_analytics_capture(&server, codex_home.path()).await?;
 
@@ -605,7 +611,13 @@ fn create_config_toml_with_chatgpt_base_url(
     codex_home: &Path,
     server_uri: &str,
     chatgpt_base_url: &str,
+    general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
+    let general_analytics_toml = if general_analytics_enabled {
+        "\n[features]\ngeneral_analytics = true\n".to_string()
+    } else {
+        String::new()
+    };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -615,37 +627,7 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
-
-[features]
-general_analytics = true
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
-}
-
-fn create_config_toml_with_chatgpt_base_url_without_general_analytics(
-    codex_home: &Path,
-    server_uri: &str,
-    chatgpt_base_url: &str,
-) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-chatgpt_base_url = "{chatgpt_base_url}"
+{general_analytics_toml}
 
 model_provider = "mock_provider"
 
