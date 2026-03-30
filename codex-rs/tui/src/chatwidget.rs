@@ -1283,16 +1283,6 @@ fn thread_session_state_to_legacy_event(
     }
 }
 
-fn convert_via_json<T, U>(value: T) -> Option<U>
-where
-    T: serde::Serialize,
-    U: serde::de::DeserializeOwned,
-{
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| serde_json::from_value(value).ok())
-}
-
 fn hook_output_entry_from_notification(
     entry: codex_app_server_protocol::HookOutputEntry,
 ) -> codex_protocol::protocol::HookOutputEntry {
@@ -1369,10 +1359,8 @@ fn exec_approval_request_from_params(
             .unwrap_or_default(),
         cwd: params.cwd.unwrap_or_default(),
         reason: params.reason,
-        network_approval_context: params
-            .network_approval_context
-            .and_then(convert_via_json),
-        additional_permissions: params.additional_permissions.and_then(convert_via_json),
+        network_approval_context: params.network_approval_context.map(Into::into),
+        additional_permissions: params.additional_permissions.map(Into::into),
         turn_id: params.turn_id,
         approval_id: params.approval_id,
         proposed_execpolicy_amendment: params
@@ -1559,10 +1547,7 @@ fn request_permissions_from_params(
         turn_id: params.turn_id,
         call_id: params.item_id,
         reason: params.reason,
-        permissions: serde_json::from_value(
-            serde_json::to_value(params.permissions).unwrap_or(serde_json::Value::Null),
-        )
-        .unwrap_or_default(),
+        permissions: params.permissions.into(),
     }
 }
 

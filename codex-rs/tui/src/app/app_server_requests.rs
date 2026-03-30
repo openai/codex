@@ -153,14 +153,7 @@ impl PendingAppServerRequests {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(PermissionsRequestApprovalResponse {
-                            permissions: serde_json::from_value::<GrantedPermissionProfile>(
-                                serde_json::to_value(&response.permissions).map_err(|err| {
-                                    format!("failed to encode granted permissions: {err}")
-                                })?,
-                            )
-                            .map_err(|err| {
-                                format!("failed to decode granted permissions for app-server: {err}")
-                            })?,
+                            permissions: GrantedPermissionProfile::from(response.permissions.clone()),
                             scope: response.scope.into(),
                         })
                         .map_err(|err| {
@@ -276,6 +269,8 @@ fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalD
 #[cfg(test)]
 mod tests {
     use super::PendingAppServerRequests;
+    use codex_app_server_protocol::AdditionalFileSystemPermissions;
+    use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
     use codex_app_server_protocol::McpElicitationObjectType;
@@ -293,11 +288,16 @@ mod tests {
     use codex_protocol::approvals::ElicitationAction;
     use codex_protocol::approvals::ExecPolicyAmendment;
     use codex_protocol::mcp::RequestId as McpRequestId;
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
+    use codex_protocol::request_permissions::RequestPermissionProfile;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     #[test]
     fn resolves_exec_approval_through_app_server_request_id() {
@@ -339,6 +339,19 @@ mod tests {
     #[test]
     fn resolves_permissions_and_user_input_through_app_server_request_id() {
         let mut pending = PendingAppServerRequests::default();
+        let read_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
+        };
+        let write_path = if cfg!(windows) {
+            r"C:\tmp\write"
+        } else {
+            "/tmp/write"
+        };
+        let absolute_path = |path: &str| {
+            AbsolutePathBuf::try_from(PathBuf::from(path)).expect("path must be absolute")
+        };
 
         assert_eq!(
             pending.note_server_request(&ServerRequest::PermissionsRequestApproval {
@@ -373,10 +386,15 @@ mod tests {
             .take_resolution(&Op::RequestPermissionsResponse {
                 id: "perm-1".to_string(),
                 response: codex_protocol::request_permissions::RequestPermissionsResponse {
-                    permissions: serde_json::from_value(json!({
-                        "network": { "enabled": null }
-                    }))
-                    .expect("valid permissions"),
+                    permissions: RequestPermissionProfile {
+                        network: Some(NetworkPermissions {
+                            enabled: Some(true),
+                        }),
+                        file_system: Some(FileSystemPermissions {
+                            read: Some(vec![absolute_path(read_path)]),
+                            write: Some(vec![absolute_path(write_path)]),
+                        }),
+                    },
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
                 },
             })
@@ -387,10 +405,15 @@ mod tests {
             serde_json::from_value::<PermissionsRequestApprovalResponse>(permissions.result)
                 .expect("permissions response should decode"),
             PermissionsRequestApprovalResponse {
-                permissions: serde_json::from_value(json!({
-                    "network": { "enabled": null }
-                }))
-                .expect("valid permissions"),
+                permissions: codex_app_server_protocol::GrantedPermissionProfile {
+                    network: Some(AdditionalNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: Some(vec![absolute_path(read_path)]),
+                        write: Some(vec![absolute_path(write_path)]),
+                    }),
+                },
                 scope: PermissionGrantScope::Session,
             }
         );

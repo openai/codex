@@ -235,16 +235,6 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
     }
 }
 
-fn convert_via_json<T, U>(value: T) -> Option<U>
-where
-    T: serde::Serialize,
-    U: serde::de::DeserializeOwned,
-{
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| serde_json::from_value(value).ok())
-}
-
 fn default_exec_approval_decisions(
     network_approval_context: Option<&codex_protocol::protocol::NetworkApprovalContext>,
     proposed_execpolicy_amendment: Option<&codex_protocol::approvals::ExecPolicyAmendment>,
@@ -1699,14 +1689,9 @@ impl App {
         let thread_label = Some(self.thread_label(thread_id));
         match request {
             ServerRequest::CommandExecutionRequestApproval { params, .. } => {
-                let network_approval_context = params
-                    .network_approval_context
-                    .clone()
-                    .and_then(convert_via_json);
-                let additional_permissions = params
-                    .additional_permissions
-                    .clone()
-                    .and_then(convert_via_json);
+                let network_approval_context =
+                    params.network_approval_context.clone().map(Into::into);
+                let additional_permissions = params.additional_permissions.clone().map(Into::into);
                 let proposed_execpolicy_amendment = params
                     .proposed_execpolicy_amendment
                     .clone()
@@ -1801,10 +1786,7 @@ impl App {
                     thread_label,
                     call_id: params.item_id.clone(),
                     reason: params.reason.clone(),
-                    permissions: serde_json::from_value(
-                        serde_json::to_value(&params.permissions).ok()?,
-                    )
-                    .ok()?,
+                    permissions: params.permissions.clone().into(),
                 }),
             ),
             _ => None,
@@ -6164,6 +6146,7 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -6185,6 +6168,7 @@ mod tests {
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
     use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
+    use codex_app_server_protocol::PermissionsRequestApprovalParams;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -6211,6 +6195,7 @@ mod tests {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -6226,8 +6211,10 @@ mod tests {
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use codex_protocol::request_permissions::RequestPermissionProfile;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -6237,6 +6224,10 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
     use tokio::time;
+
+    fn test_absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -8314,13 +8305,16 @@ guardian_approval = true
         };
         params.network_approval_context = Some(AppServerNetworkApprovalContext {
             host: "example.com".to_string(),
-            protocol: AppServerNetworkApprovalProtocol::Https,
+            protocol: AppServerNetworkApprovalProtocol::Socks5Tcp,
         });
         params.additional_permissions = Some(AdditionalPermissionProfile {
             network: Some(AdditionalNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: None,
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                write: Some(vec![test_absolute_path("/tmp/write")]),
+            }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
             host: "example.com".to_string(),
@@ -8343,7 +8337,7 @@ guardian_approval = true
             network_approval_context,
             Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
-                protocol: NetworkApprovalProtocol::Https,
+                protocol: NetworkApprovalProtocol::Socks5Tcp,
             })
         );
         assert_eq!(
@@ -8352,7 +8346,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: None,
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                    write: Some(vec![test_absolute_path("/tmp/write")]),
+                }),
             })
         );
         assert_eq!(
@@ -8403,6 +8400,53 @@ guardian_approval = true
                 "-lc".to_string(),
                 script.to_string(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_permissions_approval_preserves_file_system_permissions() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let request = ServerRequest::PermissionsRequestApproval {
+            request_id: AppServerRequestId::Integer(7),
+            params: PermissionsRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-approval".to_string(),
+                item_id: "call-approval".to_string(),
+                reason: Some("Need access to .git".to_string()),
+                permissions: codex_app_server_protocol::RequestPermissionProfile {
+                    network: Some(AdditionalNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                        write: Some(vec![test_absolute_path("/tmp/write")]),
+                    }),
+                },
+            },
+        };
+
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
+            permissions,
+            ..
+        })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected permissions approval request");
+        };
+
+        assert_eq!(
+            permissions,
+            RequestPermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                    write: Some(vec![test_absolute_path("/tmp/write")]),
+                }),
+            }
         );
     }
 
