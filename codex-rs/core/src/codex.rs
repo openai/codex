@@ -124,6 +124,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_terminal_detection::user_agent;
+use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -6579,7 +6580,7 @@ pub(crate) async fn built_tools(
             )
             .await
             .map(|discoverable_tools| {
-                crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client(
+                filter_tool_suggest_discoverable_tools_for_client(
                     discoverable_tools,
                     turn_context.app_server_client_name.as_deref(),
                 )

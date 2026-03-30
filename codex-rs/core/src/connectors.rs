@@ -18,6 +18,7 @@ use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
 use codex_login::token_data::TokenData;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -44,8 +45,6 @@ use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
-use crate::tools::discoverable::DiscoverablePluginInfo;
-use crate::tools::discoverable::DiscoverableTool;
 use codex_features::Feature;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
@@ -133,7 +132,6 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     .map(DiscoverableTool::from);
     let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)?
         .into_iter()
-        .map(DiscoverablePluginInfo::from)
         .map(DiscoverableTool::from);
     Ok(discoverable_connectors
         .chain(discoverable_plugins)
