@@ -645,39 +645,6 @@ impl AnalyticsReducer {
         });
     }
 
-    fn ingest_thread_initialized(
-        &mut self,
-        connection_id: u64,
-        thread_id: String,
-        model: String,
-        ephemeral: bool,
-        thread_source: SessionSource,
-        initialization_mode: ThreadInitializationMode,
-        created_at: u64,
-        out: &mut Vec<TrackEventRequest>,
-    ) {
-        let Some(connection_state) = self.connections.get(&connection_id) else {
-            return;
-        };
-        out.push(TrackEventRequest::ThreadInitialized(
-            ThreadInitializedEvent {
-                event_type: "codex_thread_initialized",
-                event_params: ThreadInitializedEventParams {
-                    thread_id,
-                    app_server_client: connection_state.app_server_client.clone(),
-                    runtime: connection_state.runtime.clone(),
-                    model,
-                    ephemeral,
-                    thread_source: thread_source_name(&thread_source),
-                    initialization_mode,
-                    subagent_source: None,
-                    parent_thread_id: None,
-                    created_at,
-                },
-            },
-        ));
-    }
-
     fn ingest_response(
         &mut self,
         connection_id: u64,
@@ -702,16 +669,27 @@ impl AnalyticsReducer {
             ),
             _ => return,
         };
-        self.ingest_thread_initialized(
-            connection_id,
-            thread.id,
-            model,
-            thread.ephemeral,
-            thread.source.into(),
-            initialization_mode,
-            u64::try_from(thread.created_at).unwrap_or_default(),
-            out,
-        );
+        let thread_source: SessionSource = thread.source.into();
+        let Some(connection_state) = self.connections.get(&connection_id) else {
+            return;
+        };
+        out.push(TrackEventRequest::ThreadInitialized(
+            ThreadInitializedEvent {
+                event_type: "codex_thread_initialized",
+                event_params: ThreadInitializedEventParams {
+                    thread_id: thread.id,
+                    app_server_client: connection_state.app_server_client.clone(),
+                    runtime: connection_state.runtime.clone(),
+                    model,
+                    ephemeral: thread.ephemeral,
+                    thread_source: thread_source_name(&thread_source),
+                    initialization_mode,
+                    subagent_source: None,
+                    parent_thread_id: None,
+                    created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                },
+            },
+        ));
     }
 }
 
