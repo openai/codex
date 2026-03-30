@@ -6,8 +6,8 @@ use tempfile::tempdir;
 
 #[test]
 fn system_bwrap_warning_reports_missing_system_bwrap() {
-    let warning =
-        system_bwrap_warning_for_lookup(None).expect("missing system bwrap should emit a warning");
+    let warning = system_bwrap_warning_for_lookup(/*system_bwrap_path*/ None)
+        .expect("missing system bwrap should emit a warning");
 
     assert!(warning.contains("could not find system bubblewrap"));
 }
@@ -33,7 +33,7 @@ exit 1
 }
 
 #[test]
-fn finds_first_executable_bwrap_in_search_paths() {
+fn finds_first_executable_bwrap_in_joined_search_path() {
     let temp_dir = tempdir().expect("temp dir");
     let cwd = temp_dir.path().join("cwd");
     let first_dir = temp_dir.path().join("first");
@@ -43,15 +43,16 @@ fn finds_first_executable_bwrap_in_search_paths() {
     std::fs::create_dir_all(&second_dir).expect("create second dir");
     std::fs::write(first_dir.join("bwrap"), "not executable").expect("write non-executable bwrap");
     let expected_bwrap = write_named_fake_bwrap_in(&second_dir);
+    let search_path = std::env::join_paths([first_dir, second_dir]).expect("join search path");
 
     assert_eq!(
-        find_system_bwrap_in_search_paths(vec![first_dir, second_dir], &cwd),
+        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd),
         Some(expected_bwrap)
     );
 }
 
 #[test]
-fn skips_workspace_local_bwrap_in_search_paths() {
+fn skips_workspace_local_bwrap_in_joined_search_path() {
     let temp_dir = tempdir().expect("temp dir");
     let cwd = temp_dir.path().join("cwd");
     let trusted_dir = temp_dir.path().join("trusted");
@@ -59,9 +60,10 @@ fn skips_workspace_local_bwrap_in_search_paths() {
     std::fs::create_dir_all(&trusted_dir).expect("create trusted dir");
     let _workspace_bwrap = write_named_fake_bwrap_in(&cwd);
     let expected_bwrap = write_named_fake_bwrap_in(&trusted_dir);
+    let search_path = std::env::join_paths([cwd.clone(), trusted_dir]).expect("join search path");
 
     assert_eq!(
-        find_system_bwrap_in_search_paths(vec![cwd.clone(), trusted_dir], &cwd),
+        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd),
         Some(expected_bwrap)
     );
 }

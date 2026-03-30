@@ -37,7 +37,7 @@ struct ThreadInitializedInput {
     pub thread_id: String,
     pub model: String,
     pub ephemeral: bool,
-    pub session_source: SessionSource,
+    pub thread_source: SessionSource,
     pub initialization_mode: InitializationMode,
     pub created_at: u64,
 }
@@ -96,6 +96,9 @@ pub enum AnalyticsFact {
     Initialize {
         connection_id: u64,
         params: InitializeParams,
+        product_client_id: String,
+        runtime: CodexRuntimeMetadata,
+        rpc_transport: AppServerRpcTransport,
     },
     Request {
         connection_id: u64,
@@ -156,16 +159,22 @@ pub enum PluginState {
     Disabled,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppServerRpcTransport {
+    Stdio,
+    Websocket,
+    InProcess,
+}
+
 #[derive(Default)]
 pub struct AnalyticsReducer {
     connections: HashMap<u64, ConnectionState>,
 }
 
 struct ConnectionState {
-    product_client_id: String,
-    client_name: Option<String>,
-    client_version: Option<String>,
-    experimental_api_enabled: Option<bool>,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
 }
 
 #[derive(Clone)]
@@ -264,10 +273,19 @@ impl AnalyticsEventsClient {
         )));
     }
 
-    pub fn track_initialize(&self, connection_id: u64, params: InitializeParams) {
+    pub fn track_initialize(
+        &self,
+        connection_id: u64,
+        params: InitializeParams,
+        product_client_id: String,
+        rpc_transport: AppServerRpcTransport,
+    ) {
         self.record_fact(AnalyticsFact::Initialize {
             connection_id,
             params,
+            product_client_id,
+            runtime: current_runtime_metadata(),
+            rpc_transport,
         });
     }
 
@@ -395,16 +413,31 @@ struct SkillInvocationEventParams {
     model_slug: Option<String>,
 }
 
-#[derive(Serialize)]
-struct ThreadInitializedEventParams {
-    thread_id: String,
+#[derive(Clone, Serialize)]
+struct CodexAppServerClientMetadata {
     product_client_id: String,
     client_name: Option<String>,
     client_version: Option<String>,
+    rpc_transport: AppServerRpcTransport,
     experimental_api_enabled: Option<bool>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct CodexRuntimeMetadata {
+    codex_rs_version: String,
+    runtime_os: String,
+    runtime_os_version: String,
+    runtime_arch: String,
+}
+
+#[derive(Serialize)]
+struct ThreadInitializedEventParams {
+    thread_id: String,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
     model: String,
     ephemeral: bool,
-    session_source: Option<&'static str>,
+    thread_source: Option<&'static str>,
     initialization_mode: InitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
@@ -478,8 +511,17 @@ impl AnalyticsReducer {
             AnalyticsFact::Initialize {
                 connection_id,
                 params,
+                product_client_id,
+                runtime,
+                rpc_transport,
             } => {
-                self.ingest_initialize(connection_id, params);
+                self.ingest_initialize(
+                    connection_id,
+                    params,
+                    product_client_id,
+                    runtime,
+                    rpc_transport,
+                );
             }
             AnalyticsFact::Request {
                 connection_id: _connection_id,
@@ -516,16 +558,27 @@ impl AnalyticsReducer {
         }
     }
 
-    fn ingest_initialize(&mut self, connection_id: u64, params: InitializeParams) {
+    fn ingest_initialize(
+        &mut self,
+        connection_id: u64,
+        params: InitializeParams,
+        product_client_id: String,
+        runtime: CodexRuntimeMetadata,
+        rpc_transport: AppServerRpcTransport,
+    ) {
         self.connections.insert(
             connection_id,
             ConnectionState {
-                product_client_id: params.client_info.name.clone(),
-                client_name: Some(params.client_info.name),
-                client_version: Some(params.client_info.version),
-                experimental_api_enabled: params
-                    .capabilities
-                    .map(|capabilities| capabilities.experimental_api),
+                app_server_client: CodexAppServerClientMetadata {
+                    product_client_id,
+                    client_name: Some(params.client_info.name),
+                    client_version: Some(params.client_info.version),
+                    rpc_transport,
+                    experimental_api_enabled: params
+                        .capabilities
+                        .map(|capabilities| capabilities.experimental_api),
+                },
+                runtime,
             },
         );
     }
@@ -577,14 +630,13 @@ impl AnalyticsReducer {
                 thread_id: thread.id,
                 model,
                 ephemeral: thread.ephemeral,
-                session_source: thread.source.into(),
+                thread_source: thread.source.into(),
                 initialization_mode,
                 created_at: u64::try_from(thread.created_at).unwrap_or_default(),
             },
             out,
         );
     }
-
     async fn ingest_skill_invoked(
         &mut self,
         input: SkillInvokedInput,
@@ -717,13 +769,11 @@ fn thread_initialized_event_params(
 ) -> ThreadInitializedEventParams {
     ThreadInitializedEventParams {
         thread_id: input.thread_id,
-        product_client_id: connection_state.product_client_id.clone(),
-        client_name: connection_state.client_name.clone(),
-        client_version: connection_state.client_version.clone(),
-        experimental_api_enabled: connection_state.experimental_api_enabled,
+        app_server_client: connection_state.app_server_client.clone(),
+        runtime: connection_state.runtime.clone(),
         model: input.model,
         ephemeral: input.ephemeral,
-        session_source: session_source_name(&input.session_source),
+        thread_source: thread_source_name(&input.thread_source),
         initialization_mode: input.initialization_mode,
         subagent_source: None,
         parent_thread_id: None,
@@ -736,13 +786,17 @@ fn subagent_session_started_event_request(
 ) -> ThreadInitializedEvent {
     let event_params = ThreadInitializedEventParams {
         thread_id: input.thread_id,
-        product_client_id: input.product_client_id,
-        client_name: None,
-        client_version: None,
-        experimental_api_enabled: None,
+        app_server_client: CodexAppServerClientMetadata {
+            product_client_id: input.product_client_id,
+            client_name: None,
+            client_version: None,
+            rpc_transport: AppServerRpcTransport::InProcess,
+            experimental_api_enabled: None,
+        },
+        runtime: current_runtime_metadata(),
         model: input.model,
         ephemeral: input.ephemeral,
-        session_source: Some("subagent"),
+        thread_source: Some("subagent"),
         initialization_mode: InitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
         parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
@@ -789,13 +843,21 @@ fn codex_plugin_used_metadata(
     }
 }
 
-fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
-    match session_source {
+fn thread_source_name(thread_source: &SessionSource) -> Option<&'static str> {
+    match thread_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
-        SessionSource::SubAgent(_)
-        | SessionSource::Mcp
-        | SessionSource::Custom(_)
-        | SessionSource::Unknown => None,
+        SessionSource::SubAgent(_) => Some("subagent"),
+        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
+    }
+}
+
+fn current_runtime_metadata() -> CodexRuntimeMetadata {
+    let os_info = os_info::get();
+    CodexRuntimeMetadata {
+        codex_rs_version: env!("CARGO_PKG_VERSION").to_string(),
+        runtime_os: std::env::consts::OS.to_string(),
+        runtime_os_version: os_info.version().to_string(),
+        runtime_arch: std::env::consts::ARCH.to_string(),
     }
 }
 

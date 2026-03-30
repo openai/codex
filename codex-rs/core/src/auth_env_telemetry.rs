@@ -76,7 +76,8 @@ mod tests {
             supports_websockets: false,
         };
 
-        let telemetry = collect_auth_env_telemetry(&provider, false);
+        let telemetry =
+            collect_auth_env_telemetry(&provider, /*codex_api_key_env_enabled*/ false);
 
         assert_eq!(
             telemetry.provider_env_key_name,

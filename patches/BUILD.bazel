@@ -1,5 +1,9 @@
 exports_files([
+    "abseil_windows_gnullvm_thread_identity.patch",
     "aws-lc-sys_memcmp_check.patch",
+    "llvm_windows_symlink_extract.patch",
+    "rules_rust_windows_gnullvm_build_script.patch",
+    "rules_rs_windows_gnullvm_exec.patch",
     "rusty_v8_prebuilt_out_dir.patch",
     "v8_bazel_rules.patch",
     "v8_module_deps.patch",

@@ -131,7 +131,12 @@ impl ActionKind {
                     "from pathlib import Path; path = Path({path_str:?}); content = {content:?}; path.write_text(content, encoding='utf-8'); print(path.read_text(encoding='utf-8'), end='')",
                 );
                 let command = format!("python3 -c {script:?}");
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event = shell_event(
+                    call_id,
+                    &command,
+                    /*timeout_ms*/ 5_000,
+                    sandbox_permissions,
+                )?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
@@ -153,7 +158,12 @@ impl ActionKind {
                 );
 
                 let command = format!("python3 -c \"{script}\"");
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event = shell_event(
+                    call_id,
+                    &command,
+                    /*timeout_ms*/ 5_000,
+                    sandbox_permissions,
+                )?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrlNoProxy {
@@ -175,11 +185,21 @@ impl ActionKind {
                 );
 
                 let command = format!("python3 -c \"{script}\"");
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event = shell_event(
+                    call_id,
+                    &command,
+                    /*timeout_ms*/ 5_000,
+                    sandbox_permissions,
+                )?;
                 Ok((event, Some(command)))
             }
             ActionKind::RunCommand { command } => {
-                let event = shell_event(call_id, command, 1_000, sandbox_permissions)?;
+                let event = shell_event(
+                    call_id,
+                    command,
+                    /*timeout_ms*/ 2_000,
+                    sandbox_permissions,
+                )?;
                 Ok((event, Some(command.to_string())))
             }
             ActionKind::RunUnifiedExecCommand {
@@ -206,7 +226,12 @@ impl ActionKind {
                 let _ = fs::remove_file(&path);
                 let patch = build_add_file_patch(&patch_path, content);
                 let command = shell_apply_patch_command(&patch);
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event = shell_event(
+                    call_id,
+                    &command,
+                    /*timeout_ms*/ 5_000,
+                    sandbox_permissions,
+                )?;
                 Ok((event, Some(command)))
             }
         }
@@ -233,7 +258,13 @@ fn shell_event(
     timeout_ms: u64,
     sandbox_permissions: SandboxPermissions,
 ) -> Result<Value> {
-    shell_event_with_prefix_rule(call_id, command, timeout_ms, sandbox_permissions, None)
+    shell_event_with_prefix_rule(
+        call_id,
+        command,
+        timeout_ms,
+        sandbox_permissions,
+        /*prefix_rule*/ None,
+    )
 }
 
 fn shell_event_with_prefix_rule(
@@ -2259,7 +2290,12 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     .await?;
 
     let call_id = "zsh-fork-prefix-rule-unsandboxed";
-    let event = shell_event(call_id, &command, 1_000, SandboxPermissions::UseDefault)?;
+    let event = shell_event(
+        call_id,
+        &command,
+        /*timeout_ms*/ 1_000,
+        SandboxPermissions::UseDefault,
+    )?;
     let _ = mount_sse_once(
         &server,
         sse(vec![
@@ -2318,7 +2354,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
-        1_000,
+        /*timeout_ms*/ 1_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
     )?;
@@ -2369,7 +2405,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
-        1_000,
+        /*timeout_ms*/ 1_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
     )?;
@@ -2416,7 +2452,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
-        1_000,
+        /*timeout_ms*/ 1_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
     )?;
@@ -2498,7 +2534,10 @@ allow_local_binding = true
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         let layers = config
             .config_layer_stack
-            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
             .into_iter()
             .cloned()
             .collect();
@@ -2542,7 +2581,7 @@ allow_local_binding = true
     let first_event = shell_event(
         call_id_first,
         &fetch_command,
-        30_000,
+        /*timeout_ms*/ 30_000,
         SandboxPermissions::UseDefault,
     )?;
 
@@ -2682,7 +2721,7 @@ allow_local_binding = true
     let second_event = shell_event(
         call_id_second,
         &fetch_command,
-        30_000,
+        /*timeout_ms*/ 30_000,
         SandboxPermissions::UseDefault,
     )?;
 

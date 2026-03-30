@@ -237,7 +237,11 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     let root_path = root.path().to_string_lossy().to_string();
     // Send fuzzyFileSearch request.
     let request_id = mcp
-        .send_fuzzy_file_search_request("abe", vec![root_path.clone()], None)
+        .send_fuzzy_file_search_request(
+            "abe",
+            vec![root_path.clone()],
+            /*cancellation_token*/ None,
+        )
         .await?;
 
     // Read response and verify shape and ordering.
@@ -298,7 +302,11 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 
     let root_path = root.path().to_string_lossy().to_string();
     let request_id = mcp
-        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], None)
+        .send_fuzzy_file_search_request(
+            "alp",
+            vec![root_path.clone()],
+            /*cancellation_token*/ None,
+        )
         .await?;
 
     let request_id_2 = mcp

@@ -172,11 +172,9 @@ pub enum Feature {
     Artifact,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
-    /// Enable voice transcription in the TUI composer.
-    VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
-    /// Route interactive startup to the app-server-backed TUI implementation.
+    /// Removed compatibility flag. The TUI now always uses the app-server implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
@@ -371,10 +369,16 @@ impl Features {
                         Feature::WebSearchCached,
                     );
                 }
+                "tui_app_server" => {
+                    continue;
+                }
                 _ => {}
             }
             match feature_for_key(k) {
                 Some(feat) => {
+                    if matches!(feat, Feature::TuiAppServer) {
+                        continue;
+                    }
                     if k != feat.key() {
                         self.record_legacy_usage(k.as_str(), feat);
                     }
@@ -808,12 +812,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::VoiceTranscription,
-        key: "voice_transcription",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
@@ -822,7 +820,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiAppServer,
         key: "tui_app_server",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: true,
     },
     FeatureSpec {

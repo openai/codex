@@ -1,6 +1,3 @@
-use crate::client_common::tools::ResponsesApiNamespace;
-use crate::client_common::tools::ResponsesApiNamespaceTool;
-use crate::client_common::tools::ToolSearchOutputTool;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::tools::context::ToolInvocation;
@@ -8,16 +5,16 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::mcp_tool_to_deferred_openai_tool;
 use async_trait::async_trait;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ToolSearchOutputTool;
+use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-
-#[cfg(test)]
-use crate::client_common::tools::ResponsesApiTool;
 
 pub struct ToolSearchHandler {
     tools: HashMap<String, ToolInfo>,
@@ -129,7 +126,7 @@ fn serialize_tool_search_output_tools(
         let tools = tools
             .iter()
             .map(|tool| {
-                mcp_tool_to_deferred_openai_tool(tool.tool_name.clone(), tool.tool.clone())
+                mcp_tool_to_deferred_responses_api_tool(tool.tool_name.clone(), &tool.tool)
                     .map(ResponsesApiNamespaceTool::Function)
             })
             .collect::<Result<Vec<_>, _>>()?;

@@ -746,9 +746,13 @@ mod tests {
     #[test]
     fn guardian_review_session_config_change_invalidates_cached_session() {
         let parent_config = crate::config::test_config();
-        let cached_spawn_config =
-            build_guardian_review_session_config(&parent_config, None, "active-model", None)
-                .expect("cached guardian config");
+        let cached_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("cached guardian config");
         let cached_reuse_key =
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
 
@@ -757,9 +761,9 @@ mod tests {
             Some("https://guardian.example.invalid/v1".to_string());
         let next_spawn_config = build_guardian_review_session_config(
             &changed_parent_config,
-            None,
+            /*live_network_config*/ None,
             "active-model",
-            None,
+            /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
@@ -775,7 +779,7 @@ mod tests {
     async fn run_before_review_deadline_times_out_before_future_completes() {
         let outcome = run_before_review_deadline(
             tokio::time::Instant::now() + Duration::from_millis(10),
-            None,
+            /*external_cancel*/ None,
             async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             },
@@ -816,7 +820,7 @@ mod tests {
 
         let outcome = run_before_review_deadline_with_cancel(
             tokio::time::Instant::now() + Duration::from_millis(10),
-            None,
+            /*external_cancel*/ None,
             &cancel_token,
             async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -862,7 +866,7 @@ mod tests {
 
         let outcome = run_before_review_deadline_with_cancel(
             tokio::time::Instant::now() + Duration::from_secs(1),
-            None,
+            /*external_cancel*/ None,
             &cancel_token,
             async { 42usize },
         )

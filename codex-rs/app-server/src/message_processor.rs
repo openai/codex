@@ -56,12 +56,12 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
 use codex_core::AnalyticsEventsClient;
+use codex_core::AppServerRpcTransport;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
-use codex_core::default_client::DEFAULT_ORIGINATOR;
 use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
@@ -88,7 +88,6 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
-const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -165,6 +164,7 @@ pub(crate) struct MessageProcessor {
     fs_watch_manager: FsWatchManager,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    rpc_transport: AppServerRpcTransport,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -189,6 +189,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) enable_codex_api_key_env: bool,
+    pub(crate) rpc_transport: AppServerRpcTransport,
 }
 
 impl MessageProcessor {
@@ -208,6 +209,7 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             enable_codex_api_key_env,
+            rpc_transport,
         } = args;
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -283,6 +285,7 @@ impl MessageProcessor {
             fs_watch_manager,
             config,
             config_warnings: Arc::new(config_warnings),
+            rpc_transport,
         }
     }
 
@@ -573,13 +576,7 @@ impl MessageProcessor {
                 } = params.client_info;
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
-                let originator = if name == TUI_APP_SERVER_CLIENT_NAME {
-                    // TODO: Remove this temporary workaround once app-server clients no longer
-                    // need to retain the legacy TUI `codex_cli_rs` originator behavior.
-                    DEFAULT_ORIGINATOR.to_string()
-                } else {
-                    name.clone()
-                };
+                let originator = name.clone();
                 if let Err(error) = set_default_originator(originator.clone()) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
@@ -603,8 +600,12 @@ impl MessageProcessor {
                         }
                     }
                 }
-                self.analytics_events_client
-                    .track_initialize(connection_id.0, analytics_initialize_params);
+                self.analytics_events_client.track_initialize(
+                    connection_id.0,
+                    analytics_initialize_params,
+                    originator,
+                    self.rpc_transport,
+                );
                 set_default_client_residency_requirement(self.config.enforce_residency.value());
                 let user_agent_suffix = format!("{name}; {version}");
                 if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {

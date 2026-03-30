@@ -133,7 +133,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let thread_id = match session
         .services
         .agent_control
-        .spawn_agent(agent_config, prompt, Some(source))
+        .spawn_agent(agent_config, prompt.into(), Some(source))
         .await
     {
         Ok(thread_id) => thread_id,

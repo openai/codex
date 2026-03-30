@@ -244,6 +244,34 @@ fn usage_limit_reached_error_formats_business_plan_without_reset() {
 }
 
 #[test]
+fn usage_limit_reached_error_formats_self_serve_business_usage_based_plan() {
+    let err = UsageLimitReachedError {
+        plan_type: Some(PlanType::Known(KnownPlan::SelfServeBusinessUsageBased)),
+        resets_at: None,
+        rate_limits: Some(Box::new(rate_limit_snapshot())),
+        promo_message: None,
+    };
+    assert_eq!(
+        err.to_string(),
+        "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
+    );
+}
+
+#[test]
+fn usage_limit_reached_error_formats_enterprise_cbp_usage_based_plan() {
+    let err = UsageLimitReachedError {
+        plan_type: Some(PlanType::Known(KnownPlan::EnterpriseCbpUsageBased)),
+        resets_at: None,
+        rate_limits: Some(Box::new(rate_limit_snapshot())),
+        promo_message: None,
+    };
+    assert_eq!(
+        err.to_string(),
+        "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
+    );
+}
+
+#[test]
 fn usage_limit_reached_error_formats_default_for_other_plans() {
     let err = UsageLimitReachedError {
         plan_type: Some(PlanType::Known(KnownPlan::Enterprise)),

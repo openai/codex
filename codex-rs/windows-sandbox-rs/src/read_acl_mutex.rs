@@ -1,14 +1,14 @@
 use anyhow::Result;
 use std::ffi::OsStr;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::ERROR_ALREADY_EXISTS;
 use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
 use windows_sys::Win32::System::Threading::OpenMutexW;
 use windows_sys::Win32::System::Threading::ReleaseMutex;
-use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
 
 use super::to_wide;
 

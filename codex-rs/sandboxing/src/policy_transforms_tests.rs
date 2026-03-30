@@ -38,7 +38,11 @@ fn full_access_restricted_policy_skips_platform_sandbox_when_network_is_enabled(
     }]);
 
     assert_eq!(
-        should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Enabled, false),
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Enabled,
+            /*has_managed_network_requirements*/ false
+        ),
         false
     );
 }
@@ -64,7 +68,11 @@ fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
     ]);
 
     assert_eq!(
-        should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Enabled, false),
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Enabled,
+            /*has_managed_network_requirements*/ false
+        ),
         true
     );
 }
@@ -79,7 +87,11 @@ fn full_access_restricted_policy_still_uses_platform_sandbox_for_restricted_netw
     }]);
 
     assert_eq!(
-        should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Restricted, false),
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Restricted,
+            /*has_managed_network_requirements*/ false
+        ),
         true
     );
 }
@@ -363,7 +375,8 @@ fn effective_file_system_sandbox_policy_returns_base_policy_without_additional_p
         },
     ]);
 
-    let effective_policy = effective_file_system_sandbox_policy(&base_policy, None);
+    let effective_policy =
+        effective_file_system_sandbox_policy(&base_policy, /*additional_permissions*/ None);
 
     assert_eq!(effective_policy, base_policy);
 }

@@ -5,14 +5,39 @@ shared across multiple crates and does not need to stay coupled to
 `codex-core`.
 
 Today this crate is intentionally small. It currently owns the shared tool
-schema primitives that no longer need to live in `core/src/tools/spec.rs`:
+schema and Responses API tool primitives that no longer need to live in
+`core/src/tools/spec.rs` or `core/src/client_common.rs`:
 
 - `JsonSchema`
 - `AdditionalProperties`
+- `ToolDefinition`
+- `ToolSpec`
+- `ConfiguredToolSpec`
+- `ResponsesApiTool`
+- `FreeformTool`
+- `FreeformToolFormat`
+- `ToolSearchOutputTool`
+- `ResponsesApiWebSearchFilters`
+- `ResponsesApiWebSearchUserLocation`
+- `ResponsesApiNamespace`
+- `ResponsesApiNamespaceTool`
+- code-mode `ToolSpec` adapters and `exec` / `wait` spec builders
+- JS REPL spec builders
+- MCP resource, `list_dir`, and `test_sync_tool` spec builders
+- local host tool spec builders for shell/exec/request-permissions/view-image
+- collaboration and agent-job `ToolSpec` builders for spawn/send/wait/close,
+  `request_user_input`, and CSV fanout/reporting
 - `parse_tool_input_schema()`
-- `ParsedMcpTool`
+- `parse_dynamic_tool()`
 - `parse_mcp_tool()`
+- `create_tools_json_for_responses_api()`
 - `mcp_call_tool_result_output_schema()`
+- `tool_definition_to_responses_api_tool()`
+- `dynamic_tool_to_responses_api_tool()`
+- `mcp_tool_to_responses_api_tool()`
+- `mcp_tool_to_deferred_responses_api_tool()`
+- `augment_tool_spec_for_code_mode()`
+- `tool_spec_to_code_mode_tool_definition()`
 
 That extraction is the first step in a longer migration. The goal is not to
 move all of `core/src/tools` into this crate in one shot. Instead, the plan is

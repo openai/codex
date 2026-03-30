@@ -25,10 +25,10 @@ jobs:
       v8_version: ${{ steps.v8_version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
@@ -75,13 +75,13 @@ jobs:
             target: aarch64-unknown-linux-musl
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Set up Bazel
-        uses: bazelbuild/setup-bazelisk@v3
+        uses: bazelbuild/setup-bazelisk@6ecf4fd8b7d1f9721785f1dd656a689acf9add47 # v3
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
@@ -135,7 +135,7 @@ jobs:
             --output-dir "dist/${TARGET}"
 
       - name: Upload staged musl artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
@@ -174,12 +174,12 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           tag_name: ${{ needs.metadata.outputs.release_tag }}
           name: ${{ needs.metadata.outputs.release_tag }}

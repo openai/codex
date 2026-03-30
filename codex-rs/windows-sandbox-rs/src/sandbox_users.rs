@@ -1,27 +1,27 @@
 #![cfg(target_os = "windows")]
 
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use rand::rngs::SmallRng;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use serde::Serialize;
-use std::ffi::c_void;
 use std::ffi::OsStr;
+use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
-use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
+use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAdd;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAddMembers;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserAdd;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserSetInfo;
-use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
-use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_DONT_EXPIRE_PASSWD;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_SCRIPT;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
@@ -34,14 +34,14 @@ use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
 
+use codex_windows_sandbox::SETUP_VERSION;
+use codex_windows_sandbox::SetupErrorCode;
+use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::dpapi_protect;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
-use codex_windows_sandbox::SetupErrorCode;
-use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";

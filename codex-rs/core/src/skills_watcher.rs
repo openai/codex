@@ -102,7 +102,7 @@ mod tests {
         let mut rx = skills_watcher.subscribe();
         let _registration = skills_watcher
             .subscriber
-            .register_path(PathBuf::from("/tmp/skill"), true);
+            .register_path(PathBuf::from("/tmp/skill"), /*recursive*/ true);
 
         file_watcher
             .send_paths_for_test(vec![PathBuf::from("/tmp/skill/SKILL.md")])

@@ -75,7 +75,7 @@ fn truncates_before_requested_user_message() {
         .collect();
     let truncated = truncate_before_nth_user_message(
         InitialHistory::Forked(initial),
-        1,
+        /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -100,7 +100,7 @@ fn truncates_before_requested_user_message() {
         .collect();
     let truncated2 = truncate_before_nth_user_message(
         InitialHistory::Forked(initial2.clone()),
-        2,
+        /*n*/ 2,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -210,7 +210,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
 
     let truncated = truncate_before_nth_user_message(
         InitialHistory::Forked(rollout_items),
-        1,
+        /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,

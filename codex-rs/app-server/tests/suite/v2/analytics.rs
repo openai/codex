@@ -44,7 +44,7 @@ async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
         &config,
         SERVICE_VERSION,
         Some("codex-app-server"),
-        false,
+        /*default_analytics_enabled*/ false,
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
@@ -69,7 +69,7 @@ async fn app_server_default_analytics_enabled_with_flag() -> Result<()> {
         &config,
         SERVICE_VERSION,
         Some("codex-app-server"),
-        true,
+        /*default_analytics_enabled*/ true,
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
@@ -138,12 +138,20 @@ pub(crate) fn assert_basic_thread_initialized_event(
 ) {
     assert_eq!(event["event_params"]["thread_id"], thread_id);
     assert_eq!(
-        event["event_params"]["product_client_id"],
+        event["event_params"]["app_server_client"]["product_client_id"],
         DEFAULT_CLIENT_NAME
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["client_name"],
+        DEFAULT_CLIENT_NAME
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["rpc_transport"],
+        "stdio"
     );
     assert_eq!(event["event_params"]["model"], expected_model);
     assert_eq!(event["event_params"]["ephemeral"], false);
-    assert_eq!(event["event_params"]["session_source"], "user");
+    assert_eq!(event["event_params"]["thread_source"], "user");
     assert_eq!(
         event["event_params"]["subagent_source"],
         serde_json::Value::Null

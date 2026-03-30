@@ -130,7 +130,7 @@ pub unsafe fn world_sid() -> Result<Vec<u8>> {
 /// Caller is responsible for freeing the returned SID with `LocalFree`.
 pub unsafe fn convert_string_sid_to_sid(s: &str) -> Option<*mut c_void> {
     #[link(name = "advapi32")]
-    extern "system" {
+    unsafe extern "system" {
         fn ConvertStringSidToSidW(StringSid: *const u16, Sid: *mut *mut c_void) -> i32;
     }
     let mut psid: *mut c_void = std::ptr::null_mut();
@@ -153,7 +153,7 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
         | TOKEN_ADJUST_PRIVILEGES;
     let mut h: HANDLE = 0;
     #[link(name = "advapi32")]
-    extern "system" {
+    unsafe extern "system" {
         fn OpenProcessToken(
             ProcessHandle: HANDLE,
             DesiredAccess: u32,

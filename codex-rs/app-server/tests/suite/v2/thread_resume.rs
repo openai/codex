@@ -170,7 +170,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         "Saved user message",
         Vec::new(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -216,7 +216,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
             .map(|elem| serde_json::to_value(elem).expect("serialize text element"))
             .collect(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -413,7 +413,9 @@ stream_max_retries = 0
     )?;
     let state_db =
         StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
-    state_db.mark_backfill_complete(None).await?;
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -474,7 +476,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
         "Saved user message",
         Vec::new(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
     let rollout_file_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
     let persisted_rollout = std::fs::read_to_string(&rollout_file_path)?;
@@ -1067,7 +1069,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-1",
         )?,
@@ -1188,7 +1190,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    wait_for_responses_request_count(&server, 3).await?;
+    wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
 
     Ok(())
 }
@@ -1354,7 +1356,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    wait_for_responses_request_count(&server, 3).await?;
+    wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
 
     Ok(())
 }
@@ -1510,7 +1512,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
         "Saved user message",
         Vec::new(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
     let refresh_token_url = format!("{}/oauth/token", server.uri());
     let mut mcp = McpProcess::new_with_env(
@@ -1978,7 +1980,7 @@ fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutF
         preview,
         Vec::new(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
     let rollout_file_path = rollout_path(codex_home, filename_ts, &conversation_id);
     set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;

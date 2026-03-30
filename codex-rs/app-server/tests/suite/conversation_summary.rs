@@ -45,7 +45,7 @@ async fn get_conversation_summary_by_thread_id_reads_rollout() -> Result<()> {
         META_RFC3339,
         PREVIEW,
         Some(MODEL_PROVIDER),
-        None,
+        /*git_info*/ None,
     )?;
     let thread_id = ThreadId::from_string(&conversation_id)?;
     let expected = expected_summary(
@@ -86,7 +86,7 @@ async fn get_conversation_summary_by_relative_rollout_path_resolves_from_codex_h
         META_RFC3339,
         PREVIEW,
         Some(MODEL_PROVIDER),
-        None,
+        /*git_info*/ None,
     )?;
     let thread_id = ThreadId::from_string(&conversation_id)?;
     let rollout_path = rollout_path(codex_home.path(), FILENAME_TS, &conversation_id);

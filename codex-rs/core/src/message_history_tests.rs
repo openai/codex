@@ -37,8 +37,8 @@ async fn lookup_reads_history_entries() {
     let (log_id, count) = history_metadata_for_file(&history_path).await;
     assert_eq!(count, entries.len());
 
-    let second_entry =
-        lookup_history_entry(&history_path, log_id, 1).expect("fetch second history entry");
+    let second_entry = lookup_history_entry(&history_path, log_id, /*offset*/ 1)
+        .expect("fetch second history entry");
     assert_eq!(second_entry, entries[1]);
 }
 
@@ -80,8 +80,8 @@ async fn lookup_uses_stable_log_id_after_appends() {
     )
     .expect("append history entry");
 
-    let fetched =
-        lookup_history_entry(&history_path, log_id, 1).expect("lookup appended history entry");
+    let fetched = lookup_history_entry(&history_path, log_id, /*offset*/ 1)
+        .expect("lookup appended history entry");
     assert_eq!(fetched, appended);
 }
 

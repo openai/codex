@@ -474,7 +474,13 @@ impl Client {
             crate::types::PlanType::Plus => AccountPlanType::Plus,
             crate::types::PlanType::Pro => AccountPlanType::Pro,
             crate::types::PlanType::Team => AccountPlanType::Team,
+            crate::types::PlanType::SelfServeBusinessUsageBased => {
+                AccountPlanType::SelfServeBusinessUsageBased
+            }
             crate::types::PlanType::Business => AccountPlanType::Business,
+            crate::types::PlanType::EnterpriseCbpUsageBased => {
+                AccountPlanType::EnterpriseCbpUsageBased
+            }
             crate::types::PlanType::Enterprise => AccountPlanType::Enterprise,
             crate::types::PlanType::Edu | crate::types::PlanType::Education => AccountPlanType::Edu,
             crate::types::PlanType::Guest
@@ -498,6 +504,18 @@ impl Client {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn map_plan_type_supports_usage_based_business_variants() {
+        assert_eq!(
+            Client::map_plan_type(crate::types::PlanType::SelfServeBusinessUsageBased),
+            AccountPlanType::SelfServeBusinessUsageBased
+        );
+        assert_eq!(
+            Client::map_plan_type(crate::types::PlanType::EnterpriseCbpUsageBased),
+            AccountPlanType::EnterpriseCbpUsageBased
+        );
+    }
 
     #[test]
     fn usage_payload_maps_primary_and_additional_rate_limits() {

@@ -490,13 +490,13 @@ mod tests {
 
     #[test]
     fn ring_buffer_drops_front_when_full() {
-        let fb = CodexFeedback::with_capacity(8);
+        let fb = CodexFeedback::with_capacity(/*max_bytes*/ 8);
         {
             let mut w = fb.make_writer().make_writer();
             w.write_all(b"abcdefgh").unwrap();
             w.write_all(b"ij").unwrap();
         }
-        let snap = fb.snapshot(None);
+        let snap = fb.snapshot(/*session_id*/ None);
         // Capacity 8: after writing 10 bytes, we should keep the last 8.
         pretty_assertions::assert_eq!(std::str::from_utf8(snap.as_bytes()).unwrap(), "cdefghij");
     }
@@ -510,7 +510,7 @@ mod tests {
 
         tracing::info!(target: FEEDBACK_TAGS_TARGET, model = "gpt-5", cached = true, "tags");
 
-        let snap = fb.snapshot(None);
+        let snap = fb.snapshot(/*session_id*/ None);
         pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
         pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
     }
@@ -522,14 +522,14 @@ mod tests {
         fs::write(&extra_path, "rollout").expect("extra attachment should be written");
 
         let snapshot_with_diagnostics = CodexFeedback::new()
-            .snapshot(None)
+            .snapshot(/*session_id*/ None)
             .with_feedback_diagnostics(FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
                 headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
                 details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
             }]));
 
         let attachments_with_diagnostics = snapshot_with_diagnostics.feedback_attachments(
-            true,
+            /*include_logs*/ true,
             std::slice::from_ref(&extra_path),
             Some(vec![1]),
         );
@@ -556,8 +556,8 @@ mod tests {
             OsStr::new(extra_filename.as_str())
         );
         let attachments_without_diagnostics = CodexFeedback::new()
-            .snapshot(None)
-            .feedback_attachments(true, &[], Some(vec![1]));
+            .snapshot(/*session_id*/ None)
+            .feedback_attachments(/*include_logs*/ true, &[], Some(vec![1]));
 
         assert_eq!(
             attachments_without_diagnostics

@@ -1,5 +1,6 @@
 use super::*;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_tools::ResponsesApiTool;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;

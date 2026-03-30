@@ -27,5 +27,8 @@ fn large_untracked_warning_disabled_when_threshold_disabled() {
         ignored_untracked_files: Vec::new(),
     };
 
-    assert_eq!(format_large_untracked_warning(None, &report), None);
+    assert_eq!(
+        format_large_untracked_warning(/*ignore_large_untracked_dirs*/ None, &report),
+        None
+    );
 }

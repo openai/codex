@@ -245,9 +245,9 @@ mod tests {
         let merged = merge_connectors_with_accessible(
             vec![app("alpha")],
             vec![app("alpha"), app("beta")],
-            true,
+            /*all_connectors_loaded*/ true,
         );
-        assert_eq!(merged, vec![merged_app("alpha", true)]);
+        assert_eq!(merged, vec![merged_app("alpha", /*is_accessible*/ true)]);
     }
 
     #[test]
@@ -255,11 +255,14 @@ mod tests {
         let merged = merge_connectors_with_accessible(
             vec![app("alpha")],
             vec![app("alpha"), app("beta")],
-            false,
+            /*all_connectors_loaded*/ false,
         );
         assert_eq!(
             merged,
-            vec![merged_app("alpha", true), merged_app("beta", true)]
+            vec![
+                merged_app("alpha", /*is_accessible*/ true),
+                merged_app("beta", /*is_accessible*/ true)
+            ]
         );
     }
 
@@ -272,7 +275,10 @@ mod tests {
                 AppConnectorId("gmail".to_string()),
             ],
         );
-        assert_eq!(connectors, vec![app("alpha"), merged_app("gmail", false)]);
+        assert_eq!(
+            connectors,
+            vec![app("alpha"), merged_app("gmail", /*is_accessible*/ false)]
+        );
     }
 
     #[test]

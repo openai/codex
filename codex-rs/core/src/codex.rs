@@ -50,7 +50,11 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
+use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::AppInvocation;
+use codex_analytics::InvocationType;
 use codex_analytics::SubagentSessionStartedInput;
+use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
@@ -347,10 +351,6 @@ use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::AppInvocation;
-use codex_analytics::InvocationType;
-use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_otel::SessionTelemetry;
@@ -1030,8 +1030,16 @@ impl TurnContext {
             .network
             .as_ref()?;
         Some(TurnContextNetworkItem {
-            allowed_domains: network.allowed_domains.clone().unwrap_or_default(),
-            denied_domains: network.denied_domains.clone().unwrap_or_default(),
+            allowed_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
+                .unwrap_or_default(),
+            denied_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
+                .unwrap_or_default(),
         })
     }
 }
@@ -3982,17 +3990,6 @@ impl Session {
         }
     }
 
-    pub(crate) async fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
-        let active = self.active_turn.lock().await;
-        match active.as_ref() {
-            Some(at) => {
-                let ts = at.turn_state.lock().await;
-                ts.pending_input_snapshot()
-            }
-            None => Vec::with_capacity(0),
-        }
-    }
-
     /// Queue response items to be injected into the next active turn created for this session.
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
@@ -4005,12 +4002,6 @@ impl Session {
 
     pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
-    }
-
-    pub(crate) async fn queued_response_items_for_next_turn_snapshot(
-        &self,
-    ) -> Vec<ResponseInputItem> {
-        self.idle_pending_input.lock().await.clone()
     }
 
     pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
@@ -4420,10 +4411,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::reload_user_config(&sess).await;
                     false
                 }
-                Op::ListCustomPrompts => {
-                    handlers::list_custom_prompts(&sess, sub.id.clone()).await;
-                    false
-                }
                 Op::ListSkills { cwds, force_reload } => {
                     handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
                     false
@@ -4549,13 +4536,11 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::InterAgentCommunication;
-    use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
@@ -4938,23 +4923,6 @@ mod handlers {
         let event = Event {
             id: sub_id,
             msg: EventMsg::McpListToolsResponse(snapshot),
-        };
-        sess.send_event_raw(event).await;
-    }
-
-    pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
-        let custom_prompts: Vec<CustomPrompt> =
-            if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                crate::custom_prompts::discover_prompts_in(&dir).await
-            } else {
-                Vec::new()
-            };
-
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
-                custom_prompts,
-            }),
         };
         sess.send_event_raw(event).await;
     }
@@ -6880,7 +6848,6 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TurnDiff(_)
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
-        | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)

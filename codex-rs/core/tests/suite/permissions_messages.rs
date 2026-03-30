@@ -503,8 +503,8 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         test.config.approvals_reviewer,
         &Policy::empty(),
         test.config.cwd.as_path(),
-        false,
-        false,
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
     )
     .into_text();
     // Normalize line endings to handle Windows vs Unix differences

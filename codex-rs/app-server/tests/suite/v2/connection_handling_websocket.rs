@@ -58,27 +58,27 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     let mut ws1 = connect_websocket(bind_addr).await?;
     let mut ws2 = connect_websocket(bind_addr).await?;
 
-    send_initialize_request(&mut ws1, 1, "ws_client_one").await?;
-    let first_init = read_response_for_id(&mut ws1, 1).await?;
+    send_initialize_request(&mut ws1, /*id*/ 1, "ws_client_one").await?;
+    let first_init = read_response_for_id(&mut ws1, /*id*/ 1).await?;
     assert_eq!(first_init.id, RequestId::Integer(1));
 
     // Initialize responses are request-scoped and must not leak to other
     // connections.
     assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
 
-    send_config_read_request(&mut ws2, 2).await?;
-    let not_initialized = read_error_for_id(&mut ws2, 2).await?;
+    send_config_read_request(&mut ws2, /*id*/ 2).await?;
+    let not_initialized = read_error_for_id(&mut ws2, /*id*/ 2).await?;
     assert_eq!(not_initialized.error.message, "Not initialized");
 
-    send_initialize_request(&mut ws2, 3, "ws_client_two").await?;
-    let second_init = read_response_for_id(&mut ws2, 3).await?;
+    send_initialize_request(&mut ws2, /*id*/ 3, "ws_client_two").await?;
+    let second_init = read_response_for_id(&mut ws2, /*id*/ 3).await?;
     assert_eq!(second_init.id, RequestId::Integer(3));
 
     // Same request-id on different connections must route independently.
-    send_config_read_request(&mut ws1, 77).await?;
-    send_config_read_request(&mut ws2, 77).await?;
-    let ws1_config = read_response_for_id(&mut ws1, 77).await?;
-    let ws2_config = read_response_for_id(&mut ws2, 77).await?;
+    send_config_read_request(&mut ws1, /*id*/ 77).await?;
+    send_config_read_request(&mut ws2, /*id*/ 77).await?;
+    let ws1_config = read_response_for_id(&mut ws1, /*id*/ 77).await?;
+    let ws2_config = read_response_for_id(&mut ws2, /*id*/ 77).await?;
 
     assert_eq!(ws1_config.id, RequestId::Integer(77));
     assert_eq!(ws2_config.id, RequestId::Integer(77));
@@ -108,8 +108,8 @@ async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Resul
     assert_eq!(healthz.status(), StatusCode::OK);
 
     let mut ws = connect_websocket(bind_addr).await?;
-    send_initialize_request(&mut ws, 1, "ws_health_client").await?;
-    let init = read_response_for_id(&mut ws, 1).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_health_client").await?;
+    let init = read_response_for_id(&mut ws, /*id*/ 1).await?;
     assert_eq!(init.id, RequestId::Integer(1));
 
     process
@@ -128,14 +128,14 @@ async fn websocket_transport_rejects_browser_origin_without_auth() -> Result<()>
     let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
 
     let mut ws = connect_websocket(bind_addr).await?;
-    send_initialize_request(&mut ws, 1, "ws_loopback_client").await?;
-    let init = read_response_for_id(&mut ws, 1).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_loopback_client").await?;
+    let init = read_response_for_id(&mut ws, /*id*/ 1).await?;
     assert_eq!(init.id, RequestId::Integer(1));
     drop(ws);
 
     assert_websocket_connect_rejected_with_headers(
         bind_addr,
-        None,
+        /*bearer_token*/ None,
         Some("https://evil.example"),
         StatusCode::FORBIDDEN,
     )
@@ -165,12 +165,12 @@ async fn websocket_transport_rejects_missing_and_invalid_capability_tokens() -> 
     let (mut process, bind_addr) =
         spawn_websocket_server_with_args(codex_home.path(), "ws://127.0.0.1:0", &auth_args).await?;
 
-    assert_websocket_connect_rejected(bind_addr, None).await?;
+    assert_websocket_connect_rejected(bind_addr, /*bearer_token*/ None).await?;
     assert_websocket_connect_rejected(bind_addr, Some("wrong-token")).await?;
 
     let mut ws = connect_websocket_with_bearer(bind_addr, Some("super-secret-token")).await?;
-    send_initialize_request(&mut ws, 1, "ws_auth_client").await?;
-    let init = read_response_for_id(&mut ws, 1).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_auth_client").await?;
+    let init = read_response_for_id(&mut ws, /*id*/ 1).await?;
     assert_eq!(init.id, RequestId::Integer(1));
 
     process
@@ -266,8 +266,8 @@ async fn websocket_transport_verifies_signed_short_lived_bearer_tokens() -> Resu
         }),
     )?;
     let mut ws = connect_websocket_with_bearer(bind_addr, Some(valid_token.as_str())).await?;
-    send_initialize_request(&mut ws, 1, "ws_signed_auth_client").await?;
-    let init = read_response_for_id(&mut ws, 1).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_signed_auth_client").await?;
+    let init = read_response_for_id(&mut ws, /*id*/ 1).await?;
     assert_eq!(init.id, RequestId::Integer(1));
 
     process
@@ -320,8 +320,8 @@ async fn websocket_transport_allows_unauthenticated_non_loopback_startup_by_defa
         spawn_websocket_server_with_args(codex_home.path(), "ws://0.0.0.0:0", &[]).await?;
 
     let mut ws = connect_websocket(bind_addr).await?;
-    send_initialize_request(&mut ws, 1, "ws_non_loopback_default_client").await?;
-    let init = read_response_for_id(&mut ws, 1).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_non_loopback_default_client").await?;
+    let init = read_response_for_id(&mut ws, /*id*/ 1).await?;
     assert_eq!(init.id, RequestId::Integer(1));
 
     process
@@ -411,7 +411,7 @@ pub(super) async fn spawn_websocket_server_with_args(
 }
 
 pub(super) async fn connect_websocket(bind_addr: SocketAddr) -> Result<WsClient> {
-    connect_websocket_with_bearer(bind_addr, None).await
+    connect_websocket_with_bearer(bind_addr, /*bearer_token*/ None).await
 }
 
 pub(super) async fn connect_websocket_with_bearer(
@@ -419,7 +419,7 @@ pub(super) async fn connect_websocket_with_bearer(
     bearer_token: Option<&str>,
 ) -> Result<WsClient> {
     let url = format!("ws://{}", connectable_bind_addr(bind_addr));
-    let request = websocket_request(url.as_str(), bearer_token, None)?;
+    let request = websocket_request(url.as_str(), bearer_token, /*origin*/ None)?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match connect_async(request.clone()).await {
@@ -441,7 +441,7 @@ async fn assert_websocket_connect_rejected(
     assert_websocket_connect_rejected_with_headers(
         bind_addr,
         bearer_token,
-        None,
+        /*origin*/ None,
         StatusCode::UNAUTHORIZED,
     )
     .await

@@ -23,16 +23,18 @@ fn default_mode_instructions_replace_mode_names_placeholder() {
     .expect("default preset should include instructions")
     .expect("default instructions should be set");
 
-    assert!(!default_instructions.contains(KNOWN_MODE_NAMES_PLACEHOLDER));
-    assert!(!default_instructions.contains(REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER));
-    assert!(!default_instructions.contains(ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER));
+    assert!(!default_instructions.contains("{{KNOWN_MODE_NAMES}}"));
+    assert!(!default_instructions.contains("{{REQUEST_USER_INPUT_AVAILABILITY}}"));
+    assert!(!default_instructions.contains("{{ASKING_QUESTIONS_GUIDANCE}}"));
 
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
     let expected_snippet = format!("Known mode names are {known_mode_names}.");
     assert!(default_instructions.contains(&expected_snippet));
 
-    let expected_availability_message =
-        request_user_input_availability_message(ModeKind::Default, true);
+    let expected_availability_message = request_user_input_availability_message(
+        ModeKind::Default,
+        /*default_mode_request_user_input*/ true,
+    );
     assert!(default_instructions.contains(&expected_availability_message));
     assert!(default_instructions.contains("prefer using the `request_user_input` tool"));
 }

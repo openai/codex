@@ -144,7 +144,7 @@ async fn setup_turn_one_with_spawned_child(
             "message": CHILD_PROMPT,
         }),
         child_response_delay,
-        true,
+        /*wait_for_parent_notification*/ true,
         |builder| builder,
     )
     .await
@@ -253,9 +253,14 @@ async fn spawn_child_and_capture_snapshot(
         core_test_support::test_codex::TestCodexBuilder,
     ) -> core_test_support::test_codex::TestCodexBuilder,
 ) -> Result<ThreadConfigSnapshot> {
-    let (test, spawned_id) =
-        setup_turn_one_with_custom_spawned_child(server, spawn_args, None, false, configure_test)
-            .await?;
+    let (test, spawned_id) = setup_turn_one_with_custom_spawned_child(
+        server,
+        spawn_args,
+        /*child_response_delay*/ None,
+        /*wait_for_parent_notification*/ false,
+        configure_test,
+    )
+    .await?;
     let thread_id = ThreadId::from_string(&spawned_id)?;
     Ok(test
         .thread_manager
@@ -270,7 +275,8 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let (test, _spawned_id) = setup_turn_one_with_spawned_child(&server, None).await?;
+    let (test, _spawned_id) =
+        setup_turn_one_with_spawned_child(&server, /*child_response_delay*/ None).await?;
 
     let turn2 = mount_sse_once_match(
         &server,

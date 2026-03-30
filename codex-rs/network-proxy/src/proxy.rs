@@ -220,7 +220,7 @@ impl NetworkProxyBuilder {
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
             allow_local_binding: current_cfg.network.allow_local_binding,
-            allow_unix_sockets: current_cfg.network.allow_unix_sockets.clone(),
+            allow_unix_sockets: current_cfg.network.allow_unix_sockets(),
             dangerously_allow_all_unix_sockets: current_cfg
                 .network
                 .dangerously_allow_all_unix_sockets,
@@ -705,7 +705,7 @@ mod tests {
         let state = Arc::new(network_proxy_state_for_policy(settings));
         let proxy = NetworkProxy::builder()
             .state(state)
-            .managed_by_codex(false)
+            .managed_by_codex(/*managed_by_codex*/ false)
             .build()
             .await
             .unwrap();
@@ -780,7 +780,7 @@ mod tests {
         let reserved = reserve_windows_managed_listeners(
             SocketAddr::from(([127, 0, 0, 1], busy_port)),
             SocketAddr::from(([127, 0, 0, 1], 48081)),
-            false,
+            /*reserve_socks_listener*/ false,
         )
         .unwrap();
 
@@ -839,8 +839,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(
@@ -889,8 +889,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            false,
-            true,
+            /*socks_enabled*/ false,
+            /*allow_local_binding*/ true,
         );
 
         assert_eq!(
@@ -907,8 +907,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(
@@ -952,8 +952,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(

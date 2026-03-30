@@ -271,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let mut ctrl = StreamController::new(None, &test_cwd());
+        let mut ctrl = StreamController::new(/*width*/ None, &test_cwd());
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)
@@ -370,7 +370,12 @@ mod tests {
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
         let test_cwd = test_cwd();
-        crate::markdown::append_markdown(&source, None, Some(test_cwd.as_path()), &mut rendered);
+        crate::markdown::append_markdown(
+            &source,
+            /*width*/ None,
+            Some(test_cwd.as_path()),
+            &mut rendered,
+        );
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);

@@ -16,7 +16,7 @@ async fn offline_model_info_without_tool_output_override() {
     let manager = ModelsManager::new(
         config.codex_home.clone(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     );
 
@@ -24,7 +24,7 @@ async fn offline_model_info_without_tool_output_override() {
 
     assert_eq!(
         model_info.truncation_policy,
-        TruncationPolicyConfig::bytes(10_000)
+        TruncationPolicyConfig::bytes(/*limit*/ 10_000)
     );
 }
 
@@ -39,7 +39,7 @@ async fn offline_model_info_with_tool_output_override() {
     let manager = ModelsManager::new(
         config.codex_home.clone(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     );
 
@@ -47,6 +47,6 @@ async fn offline_model_info_with_tool_output_override() {
 
     assert_eq!(
         model_info.truncation_policy,
-        TruncationPolicyConfig::tokens(123)
+        TruncationPolicyConfig::tokens(/*limit*/ 123)
     );
 }

@@ -997,7 +997,7 @@ mod tests {
                 OsString::from("show"),
                 OsString::from(format!("{}:ignored.txt", ghost.id())),
             ],
-            None,
+            /*env*/ None,
         )?;
         assert_eq!(cat, ignored_contents.trim());
 
@@ -1049,7 +1049,7 @@ mod tests {
         create_sparse_file(&big, big_size)?;
 
         let (ghost, report) = create_ghost_commit_with_report(
-            &CreateGhostCommitOptions::new(repo).ignore_large_untracked_files(1024),
+            &CreateGhostCommitOptions::new(repo).ignore_large_untracked_files(/*bytes*/ 1024),
         )?;
         assert!(ghost.parent().is_some());
         assert_eq!(
@@ -1183,7 +1183,8 @@ mod tests {
 
         std::fs::write(repo.join("ephemeral.txt"), "temp\n")?;
         restore_ghost_commit_with_options(
-            &RestoreGhostCommitOptions::new(repo).ignore_large_untracked_dirs(0),
+            &RestoreGhostCommitOptions::new(repo)
+                .ignore_large_untracked_dirs(/*file_count*/ 0),
             &ghost,
         )?;
 

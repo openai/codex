@@ -2,6 +2,8 @@ use super::AnalyticsEventsQueue;
 use super::AnalyticsFact;
 use super::AnalyticsReducer;
 use super::AppInvocation;
+use super::AppMentionedInput;
+use super::AppUsedInput;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
@@ -9,6 +11,11 @@ use super::CodexPluginUsedEventRequest;
 use super::CustomAnalyticsFact;
 use super::InitializationMode;
 use super::InvocationType;
+use super::PluginState;
+use super::PluginStateChangedInput;
+use super::PluginUsedInput;
+use super::SkillInvocation;
+use super::SkillInvokedInput;
 use super::SubagentSessionStartedInput;
 use super::ThreadInitializedInput;
 use super::TrackEventRequest;
@@ -32,6 +39,7 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
+use codex_login::default_client::DEFAULT_ORIGINATOR;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -127,7 +135,11 @@ fn normalize_path_for_skill_id_repo_scoped_uses_relative_path() {
 fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
     let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
 
-    let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
+    let path = normalize_path_for_skill_id(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        skill_path.as_path(),
+    );
     let expected = expected_absolute_path(&skill_path);
 
     assert_eq!(path, expected);
@@ -137,7 +149,11 @@ fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
 fn normalize_path_for_skill_id_admin_scoped_uses_absolute_path() {
     let skill_path = PathBuf::from("/etc/codex/skills/doc/SKILL.md");
 
-    let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
+    let path = normalize_path_for_skill_id(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        skill_path.as_path(),
+    );
     let expected = expected_absolute_path(&skill_path);
 
     assert_eq!(path, expected);
@@ -268,17 +284,26 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(thread_initialized_event_request(
         &super::ConnectionState {
-            product_client_id: "codex-tui".to_string(),
-            client_name: Some("codex-tui".to_string()),
-            client_version: Some("1.0.0".to_string()),
-            experimental_api_enabled: Some(true),
+            app_server_client: super::CodexAppServerClientMetadata {
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
+                client_name: Some("codex-tui".to_string()),
+                client_version: Some("1.0.0".to_string()),
+                rpc_transport: super::AppServerRpcTransport::Stdio,
+                experimental_api_enabled: Some(true),
+            },
+            runtime: super::CodexRuntimeMetadata {
+                codex_rs_version: "0.1.0".to_string(),
+                runtime_os: "macos".to_string(),
+                runtime_os_version: "15.3.1".to_string(),
+                runtime_arch: "aarch64".to_string(),
+            },
         },
         ThreadInitializedInput {
             connection_id: 1,
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: true,
-            session_source: SessionSource::Exec,
+            thread_source: SessionSource::Exec,
             initialization_mode: InitializationMode::New,
             created_at: 1,
         },
@@ -292,13 +317,22 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
-                "product_client_id": "codex-tui",
-                "client_name": "codex-tui",
-                "client_version": "1.0.0",
-                "experimental_api_enabled": true,
+                "app_server_client": {
+                    "product_client_id": DEFAULT_ORIGINATOR,
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
                 "model": "gpt-5",
                 "ephemeral": true,
-                "session_source": "user",
+                "thread_source": "user",
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
@@ -319,7 +353,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                 connection_id: 7,
                 response: Box::new(sample_thread_start_response(
                     "thread-no-client",
-                    false,
+                    /*ephemeral*/ false,
                     "gpt-5",
                 )),
             },
@@ -343,6 +377,14 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                         opt_out_notification_methods: None,
                     }),
                 },
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
+                runtime: super::CodexRuntimeMetadata {
+                    codex_rs_version: "0.99.0".to_string(),
+                    runtime_os: "linux".to_string(),
+                    runtime_os_version: "24.04".to_string(),
+                    runtime_arch: "x86_64".to_string(),
+                },
+                rpc_transport: super::AppServerRpcTransport::Websocket,
             },
             &mut events,
         )
@@ -353,7 +395,9 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         .ingest(
             AnalyticsFact::Response {
                 connection_id: 7,
-                response: Box::new(sample_thread_resume_response("thread-1", true, "gpt-5")),
+                response: Box::new(sample_thread_resume_response(
+                    "thread-1", /*ephemeral*/ true, "gpt-5",
+                )),
             },
             &mut events,
         )
@@ -362,15 +406,41 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
-    assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
-    assert_eq!(payload[0]["event_params"]["client_name"], "codex-tui");
-    assert_eq!(payload[0]["event_params"]["client_version"], "1.0.0");
     assert_eq!(
-        payload[0]["event_params"]["experimental_api_enabled"],
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        DEFAULT_ORIGINATOR
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["client_name"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["client_version"],
+        "1.0.0"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["rpc_transport"],
+        "websocket"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["experimental_api_enabled"],
         false
     );
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["codex_rs_version"],
+        "0.99.0"
+    );
+    assert_eq!(payload[0]["event_params"]["runtime"]["runtime_os"], "linux");
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["runtime_os_version"],
+        "24.04"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["runtime_arch"],
+        "x86_64"
+    );
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
-    assert_eq!(payload[0]["event_params"]["session_source"], "user");
+    assert_eq!(payload[0]["event_params"]["thread_source"], "user");
     assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
     assert_eq!(payload[0]["event_params"]["parent_thread_id"], json!(null));
 }
@@ -388,7 +458,15 @@ fn subagent_session_started_review_serializes_expected_shape() {
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize review subagent event");
-    assert_eq!(payload["event_params"]["session_source"], "subagent");
+    assert_eq!(payload["event_params"]["thread_source"], "subagent");
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["product_client_id"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["rpc_transport"],
+        "in_process"
+    );
     assert_eq!(payload["event_params"]["initialization_mode"], "new");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
@@ -416,7 +494,7 @@ fn subagent_session_started_thread_spawn_serializes_parent_thread_id() {
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize thread spawn subagent event");
-    assert_eq!(payload["event_params"]["session_source"], "subagent");
+    assert_eq!(payload["event_params"]["thread_source"], "subagent");
     assert_eq!(payload["event_params"]["subagent_source"], "thread_spawn");
     assert_eq!(
         payload["event_params"]["parent_thread_id"],
@@ -484,8 +562,11 @@ async fn subagent_session_started_publishes_without_initialize() {
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
-    assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
-    assert_eq!(payload[0]["event_params"]["session_source"], "subagent");
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        "codex-tui"
+    );
+    assert_eq!(payload[0]["event_params"]["thread_source"], "subagent");
     assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
 }
 
@@ -573,6 +654,145 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
     assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), true);
     assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), false);
     assert_eq!(queue.should_enqueue_plugin_used(&turn_2, &plugin), true);
+}
+
+#[tokio::test]
+async fn reducer_ingests_skill_invoked_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+    let expected_skill_id = super::skill_id_for_local_skill(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        skill_path.as_path(),
+        "doc",
+    );
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(SkillInvokedInput {
+                tracking,
+                invocations: vec![SkillInvocation {
+                    skill_name: "doc".to_string(),
+                    skill_scope: codex_protocol::protocol::SkillScope::User,
+                    skill_path,
+                    invocation_type: InvocationType::Explicit,
+                }],
+            })),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "skill_invocation",
+            "skill_id": expected_skill_id,
+            "skill_name": "doc",
+            "event_params": {
+                "product_client_id": originator().value,
+                "skill_scope": "user",
+                "repo_url": null,
+                "thread_id": "thread-1",
+                "invoke_type": "explicit",
+                "model_slug": "gpt-5"
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_app_and_plugin_facts() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppMentioned(AppMentionedInput {
+                tracking: tracking.clone(),
+                mentions: vec![AppInvocation {
+                    connector_id: Some("calendar".to_string()),
+                    app_name: Some("Calendar".to_string()),
+                    invocation_type: Some(InvocationType::Explicit),
+                }],
+            })),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(AppUsedInput {
+                tracking: tracking.clone(),
+                app: AppInvocation {
+                    connector_id: Some("drive".to_string()),
+                    app_name: Some("Drive".to_string()),
+                    invocation_type: Some(InvocationType::Implicit),
+                },
+            })),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(PluginUsedInput {
+                tracking,
+                plugin: sample_plugin_metadata(),
+            })),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 3);
+    assert_eq!(payload[0]["event_type"], "codex_app_mentioned");
+    assert_eq!(payload[1]["event_type"], "codex_app_used");
+    assert_eq!(payload[2]["event_type"], "codex_plugin_used");
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_state_changed_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginStateChanged(
+                PluginStateChangedInput {
+                    plugin: sample_plugin_metadata(),
+                    state: PluginState::Disabled,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_plugin_disabled",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": originator().value
+            }
+        }])
+    );
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
