@@ -2,13 +2,21 @@ use super::AnalyticsEventsQueue;
 use super::AnalyticsFact;
 use super::AnalyticsReducer;
 use super::AppInvocation;
+use super::AppMentionedInput;
+use super::AppUsedInput;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::InitializationMode;
 use super::InvocationType;
+use super::PluginState;
+use super::PluginStateChangedInput;
+use super::PluginUsedInput;
+use super::SkillInvocation;
+use super::SkillInvokedInput;
 use super::ThreadInitializedInput;
+use super::CustomAnalyticsFact;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::codex_app_metadata;
@@ -518,6 +526,145 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
     assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), true);
     assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), false);
     assert_eq!(queue.should_enqueue_plugin_used(&turn_2, &plugin), true);
+}
+
+#[tokio::test]
+async fn reducer_ingests_skill_invoked_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+    let expected_skill_id = super::skill_id_for_local_skill(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        skill_path.as_path(),
+        "doc",
+    );
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(SkillInvokedInput {
+                tracking,
+                invocations: vec![SkillInvocation {
+                    skill_name: "doc".to_string(),
+                    skill_scope: codex_protocol::protocol::SkillScope::User,
+                    skill_path,
+                    invocation_type: InvocationType::Explicit,
+                }],
+            })),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "skill_invocation",
+            "skill_id": expected_skill_id,
+            "skill_name": "doc",
+            "event_params": {
+                "product_client_id": originator().value,
+                "skill_scope": "user",
+                "repo_url": null,
+                "thread_id": "thread-1",
+                "invoke_type": "explicit",
+                "model_slug": "gpt-5"
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_app_and_plugin_facts() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppMentioned(AppMentionedInput {
+                tracking: tracking.clone(),
+                mentions: vec![AppInvocation {
+                    connector_id: Some("calendar".to_string()),
+                    app_name: Some("Calendar".to_string()),
+                    invocation_type: Some(InvocationType::Explicit),
+                }],
+            })),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(AppUsedInput {
+                tracking: tracking.clone(),
+                app: AppInvocation {
+                    connector_id: Some("drive".to_string()),
+                    app_name: Some("Drive".to_string()),
+                    invocation_type: Some(InvocationType::Implicit),
+                },
+            })),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(PluginUsedInput {
+                tracking,
+                plugin: sample_plugin_metadata(),
+            })),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 3);
+    assert_eq!(payload[0]["event_type"], "codex_app_mentioned");
+    assert_eq!(payload[1]["event_type"], "codex_app_used");
+    assert_eq!(payload[2]["event_type"], "codex_plugin_used");
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_state_changed_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginStateChanged(
+                PluginStateChangedInput {
+                    plugin: sample_plugin_metadata(),
+                    state: PluginState::Disabled,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_plugin_disabled",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": originator().value
+            }
+        }])
+    );
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {

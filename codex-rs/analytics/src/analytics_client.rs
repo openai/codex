@@ -654,7 +654,6 @@ impl AnalyticsReducer {
             ));
         }
     }
-
     fn ingest_app_mentioned(&mut self, input: AppMentionedInput, out: &mut Vec<TrackEventRequest>) {
         let AppMentionedInput { tracking, mentions } = input;
         out.extend(mentions.into_iter().map(|mention| {
