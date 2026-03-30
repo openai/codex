@@ -21,7 +21,9 @@ schema and Responses API tool primitives that no longer need to live in
 - `ResponsesApiWebSearchUserLocation`
 - `ResponsesApiNamespace`
 - `ResponsesApiNamespaceTool`
-- code-mode `ToolSpec` adapters
+- code-mode `ToolSpec` adapters and `exec` / `wait` spec builders
+- JS REPL spec builders
+- MCP resource, `list_dir`, and `test_sync_tool` spec builders
 - local host tool spec builders for shell/exec/request-permissions/view-image
 - collaboration and agent-job `ToolSpec` builders for spawn/send/wait/close,
   `request_user_input`, and CSV fanout/reporting

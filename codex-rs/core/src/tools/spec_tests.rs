@@ -1049,21 +1049,6 @@ fn image_generation_tools_require_feature_and_supported_model() {
     );
 }
 
-#[test]
-fn js_repl_freeform_grammar_blocks_common_non_js_prefixes() {
-    let ToolSpec::Freeform(FreeformTool { format, .. }) = create_js_repl_tool() else {
-        panic!("js_repl should use a freeform tool spec");
-    };
-
-    assert_eq!(format.syntax, "lark");
-    assert!(format.definition.contains("PRAGMA_LINE"));
-    assert!(format.definition.contains("`[^`]"));
-    assert!(format.definition.contains("``[^`]"));
-    assert!(format.definition.contains("PLAIN_JS_SOURCE"));
-    assert!(format.definition.contains("codex-js-repl:"));
-    assert!(!format.definition.contains("(?!"));
-}
-
 fn assert_model_tools(
     model_slug: &str,
     features: &Features,
