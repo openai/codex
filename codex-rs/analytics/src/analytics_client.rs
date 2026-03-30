@@ -32,17 +32,6 @@ pub struct TrackEventsContext {
 }
 
 #[derive(Clone)]
-struct ThreadInitializedInput {
-    pub connection_id: u64,
-    pub thread_id: String,
-    pub model: String,
-    pub ephemeral: bool,
-    pub thread_source: SessionSource,
-    pub initialization_mode: ThreadInitializationMode,
-    pub created_at: u64,
-}
-
-#[derive(Clone)]
 pub struct SubAgentThreadStartedInput {
     pub thread_id: String,
     pub product_client_id: String,
@@ -51,7 +40,6 @@ pub struct SubAgentThreadStartedInput {
     pub subagent_source: SubAgentSource,
     pub created_at: u64,
 }
-
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadInitializationMode {
@@ -584,19 +572,6 @@ impl AnalyticsReducer {
         );
     }
 
-    fn ingest_thread_initialized(
-        &mut self,
-        input: ThreadInitializedInput,
-        out: &mut Vec<TrackEventRequest>,
-    ) {
-        let Some(connection_state) = self.connections.get(&input.connection_id) else {
-            return;
-        };
-        out.push(TrackEventRequest::ThreadInitialized(
-            thread_initialized_event_request(connection_state, input),
-        ));
-    }
-
     fn ingest_subagent_session_started(
         &mut self,
         input: SubAgentThreadStartedInput,
@@ -625,18 +600,27 @@ impl AnalyticsReducer {
             }
             _ => return,
         };
-        self.ingest_thread_initialized(
-            ThreadInitializedInput {
-                connection_id,
-                thread_id: thread.id,
-                model,
-                ephemeral: thread.ephemeral,
-                thread_source: thread.source.into(),
-                initialization_mode,
-                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+        let Some(connection_state) = self.connections.get(&connection_id) else {
+            return;
+        };
+        let thread_source: SessionSource = thread.source.into();
+        out.push(TrackEventRequest::ThreadInitialized(
+            ThreadInitializedEvent {
+                event_type: "codex_thread_initialized",
+                event_params: ThreadInitializedEventParams {
+                    thread_id: thread.id,
+                    app_server_client: connection_state.app_server_client.clone(),
+                    runtime: connection_state.runtime.clone(),
+                    model,
+                    ephemeral: thread.ephemeral,
+                    thread_source: thread_source_name(&thread_source),
+                    initialization_mode,
+                    subagent_source: None,
+                    parent_thread_id: None,
+                    created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                },
             },
-            out,
-        );
+        ));
     }
     async fn ingest_skill_invoked(
         &mut self,
@@ -754,34 +738,6 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
     }
 }
 
-fn thread_initialized_event_request(
-    connection_state: &ConnectionState,
-    input: ThreadInitializedInput,
-) -> ThreadInitializedEvent {
-    ThreadInitializedEvent {
-        event_type: "codex_thread_initialized",
-        event_params: thread_initialized_event_params(connection_state, input),
-    }
-}
-
-fn thread_initialized_event_params(
-    connection_state: &ConnectionState,
-    input: ThreadInitializedInput,
-) -> ThreadInitializedEventParams {
-    ThreadInitializedEventParams {
-        thread_id: input.thread_id,
-        app_server_client: connection_state.app_server_client.clone(),
-        runtime: connection_state.runtime.clone(),
-        model: input.model,
-        ephemeral: input.ephemeral,
-        thread_source: thread_source_name(&input.thread_source),
-        initialization_mode: input.initialization_mode,
-        subagent_source: None,
-        parent_thread_id: None,
-        created_at: input.created_at,
-    }
-}
-
 fn subagent_session_started_event_request(
     input: SubAgentThreadStartedInput,
 ) -> ThreadInitializedEvent {
@@ -808,7 +764,6 @@ fn subagent_session_started_event_request(
         event_params,
     }
 }
-
 fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
     let capability_summary = plugin.capability_summary;
     CodexPluginMetadata {
