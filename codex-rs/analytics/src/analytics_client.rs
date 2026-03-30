@@ -37,13 +37,13 @@ struct ThreadInitializedInput {
     pub model: String,
     pub ephemeral: bool,
     pub thread_source: SessionSource,
-    pub initialization_mode: InitializationMode,
+    pub initialization_mode: ThreadInitializationMode,
     pub created_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum InitializationMode {
+pub enum ThreadInitializationMode {
     New,
     Forked,
     Resumed,
@@ -420,7 +420,7 @@ struct ThreadInitializedEventParams {
     model: String,
     ephemeral: bool,
     thread_source: Option<&'static str>,
-    initialization_mode: InitializationMode,
+    initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
     created_at: u64,
@@ -676,15 +676,21 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let (thread, model, initialization_mode) = match response {
-            ClientResponse::ThreadStart { response, .. } => {
-                (response.thread, response.model, InitializationMode::New)
-            }
-            ClientResponse::ThreadResume { response, .. } => {
-                (response.thread, response.model, InitializationMode::Resumed)
-            }
-            ClientResponse::ThreadFork { response, .. } => {
-                (response.thread, response.model, InitializationMode::Forked)
-            }
+            ClientResponse::ThreadStart { response, .. } => (
+                response.thread,
+                response.model,
+                ThreadInitializationMode::New,
+            ),
+            ClientResponse::ThreadResume { response, .. } => (
+                response.thread,
+                response.model,
+                ThreadInitializationMode::Resumed,
+            ),
+            ClientResponse::ThreadFork { response, .. } => (
+                response.thread,
+                response.model,
+                ThreadInitializationMode::Forked,
+            ),
             _ => return,
         };
         self.ingest_thread_initialized(
