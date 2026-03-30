@@ -1,3 +1,8 @@
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthManager;
@@ -57,6 +62,22 @@ pub struct AppInvocation {
 }
 
 pub enum AnalyticsFact {
+    Initialize {
+        connection_id: u64,
+        params: InitializeParams,
+    },
+    Request {
+        connection_id: u64,
+        request_id: RequestId,
+        request: Box<ClientRequest>,
+    },
+    Response {
+        connection_id: u64,
+        response: Box<ClientResponse>,
+    },
+    Notification(Box<ServerNotification>),
+    // Facts that do not naturally exist on the app-server protocol surface, or
+    // would require non-trivial protocol reshaping on this branch.
     Custom(CustomAnalyticsFact),
 }
 
@@ -369,6 +390,20 @@ struct CodexPluginUsedEventRequest {
 impl AnalyticsReducer {
     async fn ingest(&mut self, input: AnalyticsFact, out: &mut Vec<TrackEventRequest>) {
         match input {
+            AnalyticsFact::Initialize {
+                connection_id: _connection_id,
+                params: _params,
+            } => {}
+            AnalyticsFact::Request {
+                connection_id: _connection_id,
+                request_id: _request_id,
+                request: _request,
+            } => {}
+            AnalyticsFact::Response {
+                connection_id: _connection_id,
+                response: _response,
+            } => {}
+            AnalyticsFact::Notification(_notification) => {}
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
