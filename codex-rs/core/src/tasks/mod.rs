@@ -289,7 +289,8 @@ impl Session {
             return;
         }
 
-        if self.active_turn.lock().await.is_some() {
+        let has_active_turn = self.active_turn.lock().await.is_some();
+        if has_active_turn {
             return;
         }
 
