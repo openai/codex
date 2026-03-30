@@ -8,6 +8,7 @@ use codex_otel::WellKnownApiRequestError;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::metrics::names::API_CALL_COUNT_METRIC;
+use codex_otel::metrics::names::INLINE_IMAGE_REQUEST_LIMIT_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::BaseInstructions;
@@ -187,7 +188,6 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
 }
 
-#[tokio::test]
 async fn compact_conversation_history_emits_metric_for_upstream_inline_image_limit_rejection() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -258,6 +258,68 @@ async fn compact_conversation_history_emits_metric_for_upstream_inline_image_lim
                 "well_known_error".to_string(),
                 WellKnownApiRequestError::TooManyImages.as_str().to_string(),
             ),
+        ])
+    );
+}
+
+#[tokio::test]
+async fn build_responses_request_emits_metric_for_inline_image_limit_rejection() {
+    let client = test_model_client(SessionSource::Cli);
+    let provider = client
+        .current_client_setup()
+        .await
+        .expect("test client setup")
+        .api_provider;
+    let session = client.new_session();
+    let mut model_info = test_model_info();
+    model_info.inline_image_request_limit_image_count = Some(1);
+    let session_telemetry = test_session_telemetry_with_metrics();
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputImage {
+                    image_url: "https://example.com/one.png".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "https://example.com/two.png".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        }],
+        base_instructions: BaseInstructions::default(),
+        ..Default::default()
+    };
+
+    let err = session
+        .build_responses_request(
+            &provider,
+            &prompt,
+            &model_info,
+            None,
+            ReasoningSummaryConfig::Auto,
+            None,
+            &session_telemetry,
+        )
+        .expect_err("request should be rejected by local inline image preflight");
+    assert!(matches!(
+        err,
+        crate::error::CodexErr::InlineImageRequestLimitExceeded(_)
+    ));
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, INLINE_IMAGE_REQUEST_LIMIT_METRIC);
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("bytes_exceeded".to_string(), "false".to_string()),
+            ("images_exceeded".to_string(), "true".to_string()),
+            ("outcome".to_string(), "rejected".to_string()),
         ])
     );
 }

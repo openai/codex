@@ -1,13 +1,18 @@
 use crate::error::InlineImageRequestLimitExceededError;
+use codex_otel::SessionTelemetry;
+use codex_otel::metrics::names::INLINE_IMAGE_REQUEST_LIMIT_METRIC;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use tracing::warn;
 
 pub(crate) const DEFAULT_INLINE_IMAGE_REQUEST_LIMIT_BYTES: i64 = 512 * 1024 * 1024;
 pub(crate) const DEFAULT_INLINE_IMAGE_REQUEST_LIMIT_IMAGE_COUNT: i64 = 1_500;
+pub(crate) const INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_RECOVERED: &str = "recovered";
+pub(crate) const INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_REJECTED: &str = "rejected";
 
 pub(crate) fn inline_image_request_limit_bytes(model_info: &ModelInfo) -> usize {
     model_info
@@ -134,6 +139,38 @@ pub(crate) fn inline_image_request_limit_error(
     } else {
         InlineImageRequestLimitExceededError::local_preflight_images(total_images, limit_images)
     })
+}
+
+fn bool_metric_tag(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+pub(crate) fn record_inline_image_request_limit_observation(
+    session_telemetry: &SessionTelemetry,
+    error: &InlineImageRequestLimitExceededError,
+    outcome: &'static str,
+) {
+    let bytes_exceeded = error.total_bytes.is_some() && error.limit_bytes.is_some();
+    let images_exceeded = error.total_images.is_some() && error.limit_images.is_some();
+    session_telemetry.counter(
+        INLINE_IMAGE_REQUEST_LIMIT_METRIC,
+        /*inc*/ 1,
+        &[
+            ("outcome", outcome),
+            ("bytes_exceeded", bool_metric_tag(bytes_exceeded)),
+            ("images_exceeded", bool_metric_tag(images_exceeded)),
+        ],
+    );
+    warn!(
+        outcome,
+        bytes_exceeded,
+        images_exceeded,
+        total_bytes = ?error.total_bytes,
+        limit_bytes = ?error.limit_bytes,
+        total_images = ?error.total_images,
+        limit_images = ?error.limit_images,
+        "inline image request limit exceeded"
+    );
 }
 
 #[cfg(test)]

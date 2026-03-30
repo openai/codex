@@ -104,7 +104,9 @@ use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::inline_image_request_limit::INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_REJECTED;
 use crate::inline_image_request_limit::inline_image_request_limit_error;
+use crate::inline_image_request_limit::record_inline_image_request_limit_observation;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::response_debug_context::extract_response_debug_context;
@@ -690,10 +692,16 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
+        session_telemetry: &SessionTelemetry,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
         if let Some(error) = inline_image_request_limit_error(&input, model_info) {
+            record_inline_image_request_limit_observation(
+                session_telemetry,
+                &error,
+                INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_REJECTED,
+            );
             return Err(CodexErr::InlineImageRequestLimitExceeded(error));
         }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
@@ -1051,6 +1059,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier,
+                session_telemetry,
             )?;
             let client = ApiResponsesClient::new(
                 transport,
@@ -1133,6 +1142,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier,
+                session_telemetry,
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
