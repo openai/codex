@@ -233,7 +233,8 @@ impl Session {
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
         let mut active = self.active_turn.lock().await;
-        let mut turn = ActiveTurn::default();
+        let mut turn = active.take().unwrap_or_default();
+        debug_assert!(turn.tasks.is_empty());
         let mut turn_state = turn.turn_state.lock().await;
         turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
         for item in queued_response_items {
@@ -289,10 +290,12 @@ impl Session {
             return;
         }
 
-        let has_active_turn = self.active_turn.lock().await.is_some();
-        if has_active_turn {
+        let mut active_turn = self.active_turn.lock().await;
+        if active_turn.is_some() {
             return;
         }
+        *active_turn = Some(ActiveTurn::default());
+        drop(active_turn);
 
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
