@@ -135,6 +135,7 @@ pub type CodexConversation = CodexThread;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub use codex_analytics::AnalyticsEventsClient;
+pub use codex_analytics::AppServerRpcTransport;
 mod default_client_forwarding;
 
 /// Default Codex HTTP client headers and reqwest construction.

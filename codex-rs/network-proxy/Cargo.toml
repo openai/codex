@@ -1,7 +1,7 @@
 [package]
 name = "codex-network-proxy"
-edition = "2024"
-version = { workspace = true }
+edition.workspace = true
+version.workspace = true
 license.workspace = true
 
 [lib]

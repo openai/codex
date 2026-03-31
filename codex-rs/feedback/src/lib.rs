@@ -95,10 +95,12 @@ impl CodexFeedback {
 
     pub fn snapshot(&self, session_id: Option<ThreadId>) -> FeedbackSnapshot {
         let bytes = {
+            #[allow(clippy::expect_used)]
             let guard = self.inner.ring.lock().expect("mutex poisoned");
             guard.snapshot_bytes()
         };
         let tags = {
+            #[allow(clippy::expect_used)]
             let guard = self.inner.tags.lock().expect("mutex poisoned");
             guard.clone()
         };
@@ -324,7 +326,7 @@ impl FeedbackSnapshot {
             use sentry::protocol::Values;
 
             event.exception = Values::from(vec![Exception {
-                ty: title.clone(),
+                ty: title,
                 value: Some(r.to_string()),
                 ..Default::default()
             }]);
@@ -430,6 +432,7 @@ where
             return;
         }
 
+        #[allow(clippy::expect_used)]
         let mut guard = self.inner.tags.lock().expect("mutex poisoned");
         for (key, value) in visitor.tags {
             if guard.len() >= MAX_FEEDBACK_TAGS && !guard.contains_key(&key) {
