@@ -3519,6 +3519,12 @@ impl ReviewDecision {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct PersistPermissionProfileAction {
+    pub profile_name: String,
+    pub permissions: crate::models::PermissionProfile,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]

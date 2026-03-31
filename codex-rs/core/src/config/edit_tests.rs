@@ -2,7 +2,11 @@ use super::*;
 use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::NetworkPermissions;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::PersistPermissionProfileAction;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -46,6 +50,236 @@ fn builder_with_edits_applies_custom_paths() {
 
     let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
     assert_eq!(contents, "enabled = true\n");
+}
+
+fn absolute_path(path: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+}
+
+fn toml_literal_key(key: &str) -> String {
+    assert!(
+        !key.contains('\''),
+        "test keys must not contain single quotes"
+    );
+    format!("'{key}'")
+}
+
+fn path_key(path: &AbsolutePathBuf) -> String {
+    toml_literal_key(&path.display().to_string())
+}
+
+fn filesystem_entry_config(path: &AbsolutePathBuf, access: &str) -> String {
+    format!(
+        "[permissions.workspace.filesystem]\n{} = \"{access}\"\n",
+        path_key(path)
+    )
+}
+
+fn scoped_filesystem_entry_config(
+    base: &AbsolutePathBuf,
+    relative_path: &str,
+    access: &str,
+) -> String {
+    format!(
+        "[permissions.workspace.filesystem.{}]\n{} = \"{access}\"\n",
+        path_key(base),
+        toml_literal_key(relative_path)
+    )
+}
+
+fn assert_toml_eq(contents: &str, expected: &str) {
+    assert_eq!(
+        toml::from_str::<TomlValue>(contents).expect("parse config"),
+        toml::from_str::<TomlValue>(expected).expect("parse expected config"),
+    );
+}
+
+#[test]
+fn merge_permission_profile_writes_filesystem_and_network_entries() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let read_path = absolute_path("/tmp/read");
+    let write_path = absolute_path("/tmp/write");
+
+    ConfigEditsBuilder::new(codex_home)
+        .merge_permission_profile(PersistPermissionProfileAction {
+            profile_name: "workspace".to_string(),
+            permissions: codex_protocol::models::PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![read_path.clone(), write_path.clone()]),
+                    write: Some(vec![write_path.clone()]),
+                }),
+            },
+        })
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let mut filesystem = toml::map::Map::new();
+    filesystem.insert(
+        read_path.display().to_string(),
+        TomlValue::String("read".to_string()),
+    );
+    filesystem.insert(
+        write_path.display().to_string(),
+        TomlValue::String("write".to_string()),
+    );
+
+    let mut workspace = toml::map::Map::new();
+    workspace.insert("filesystem".to_string(), TomlValue::Table(filesystem));
+    let mut network = toml::map::Map::new();
+    network.insert("enabled".to_string(), TomlValue::Boolean(true));
+    workspace.insert("network".to_string(), TomlValue::Table(network));
+
+    let mut permissions = toml::map::Map::new();
+    permissions.insert("workspace".to_string(), TomlValue::Table(workspace));
+
+    let mut expected = toml::map::Map::new();
+    expected.insert("permissions".to_string(), TomlValue::Table(permissions));
+
+    assert_eq!(
+        toml::from_str::<TomlValue>(&contents).expect("parse config"),
+        TomlValue::Table(expected)
+    );
+}
+
+#[test]
+fn merge_permission_profile_preserves_existing_write_access() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let project_path = absolute_path("/tmp/project");
+    let seed_config = filesystem_entry_config(&project_path, "write");
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), seed_config.as_bytes()).expect("seed config");
+
+    ConfigEditsBuilder::new(codex_home)
+        .merge_permission_profile(PersistPermissionProfileAction {
+            profile_name: "workspace".to_string(),
+            permissions: codex_protocol::models::PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![project_path]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, seed_config);
+}
+
+#[test]
+fn merge_permission_profile_skips_child_read_under_existing_write_parent() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let project_path = absolute_path("/tmp/project");
+    let child_path = absolute_path("/tmp/project/src");
+    let seed_config = filesystem_entry_config(&project_path, "write");
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), seed_config.as_bytes()).expect("seed config");
+
+    ConfigEditsBuilder::new(codex_home)
+        .merge_permission_profile(PersistPermissionProfileAction {
+            profile_name: "workspace".to_string(),
+            permissions: codex_protocol::models::PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![child_path]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, seed_config);
+}
+
+#[test]
+fn merge_permission_profile_skips_child_read_under_existing_scoped_write_parent() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let base_path = absolute_path("/tmp");
+    let child_path = absolute_path("/tmp/project/src");
+    let seed_config = scoped_filesystem_entry_config(&base_path, "project", "write");
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), seed_config.as_bytes()).expect("seed config");
+
+    ConfigEditsBuilder::new(codex_home)
+        .merge_permission_profile(PersistPermissionProfileAction {
+            profile_name: "workspace".to_string(),
+            permissions: codex_protocol::models::PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![child_path]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, seed_config);
+}
+
+#[test]
+fn merge_permission_profile_removes_existing_child_read_under_new_write_parent() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let project_path = absolute_path("/tmp/project");
+    let child_path = absolute_path("/tmp/project/src");
+    let seed_config = filesystem_entry_config(&child_path, "read");
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), seed_config.as_bytes()).expect("seed config");
+
+    ConfigEditsBuilder::new(codex_home)
+        .merge_permission_profile(PersistPermissionProfileAction {
+            profile_name: "workspace".to_string(),
+            permissions: codex_protocol::models::PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    write: Some(vec![project_path.clone()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = filesystem_entry_config(&project_path, "write");
+    assert_toml_eq(&contents, &expected);
+}
+
+#[test]
+fn merge_permission_profile_removes_existing_scoped_child_read_under_new_write_parent() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let base_path = absolute_path("/tmp");
+    let project_path = absolute_path("/tmp/project");
+    let seed_config = scoped_filesystem_entry_config(&base_path, "project/src", "read");
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), seed_config.as_bytes()).expect("seed config");
+
+    ConfigEditsBuilder::new(codex_home)
+        .merge_permission_profile(PersistPermissionProfileAction {
+            profile_name: "workspace".to_string(),
+            permissions: codex_protocol::models::PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    write: Some(vec![project_path.clone()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = filesystem_entry_config(&project_path, "write");
+    assert_toml_eq(&contents, &expected);
 }
 
 #[test]
