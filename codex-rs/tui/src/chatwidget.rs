@@ -762,7 +762,8 @@ pub(crate) struct ChatWidget {
     status_account_display: Option<StatusAccountDisplay>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
-    refreshing_status_outputs: Vec<StatusHistoryHandle>,
+    refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
+    next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
@@ -4708,6 +4709,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
+            next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -5332,10 +5334,14 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
-                    self.add_status_output(/*refreshing_rate_limits*/ true);
-                    self.app_event_tx.send(AppEvent::RefreshRateLimits);
+                    let request_id = self.next_status_refresh_request_id;
+                    self.next_status_refresh_request_id =
+                        self.next_status_refresh_request_id.wrapping_add(1);
+                    self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
+                    self.app_event_tx
+                        .send(AppEvent::RefreshRateLimits { request_id });
                 } else {
-                    self.add_status_output(/*refreshing_rate_limits*/ false);
+                    self.add_status_output(/*refreshing_rate_limits*/ false, None);
                 }
             }
             SlashCommand::DebugConfig => {
@@ -7352,7 +7358,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_status_output(&mut self, refreshing_rate_limits: bool) {
+    pub(crate) fn add_status_output(
+        &mut self,
+        refreshing_rate_limits: bool,
+        request_id: Option<u64>,
+    ) {
         let default_usage = TokenUsage::default();
         let token_info = self.token_info.as_ref();
         let total_usage = token_info
@@ -7381,13 +7391,13 @@ impl ChatWidget {
             reasoning_effort_override,
             refreshing_rate_limits,
         );
-        if refreshing_rate_limits {
-            self.refreshing_status_outputs.push(handle);
+        if let Some(request_id) = request_id {
+            self.refreshing_status_outputs.push((request_id, handle));
         }
         self.add_to_history(cell);
     }
 
-    pub(crate) fn finish_status_rate_limit_refresh(&mut self) {
+    pub(crate) fn finish_status_rate_limit_refresh(&mut self, request_id: u64) {
         if self.refreshing_status_outputs.is_empty() {
             return;
         }
@@ -7398,10 +7408,20 @@ impl ChatWidget {
             .cloned()
             .collect();
         let now = Local::now();
-        for handle in self.refreshing_status_outputs.drain(..) {
-            handle.finish_rate_limit_refresh(rate_limit_snapshots.as_slice(), now);
+        let mut remaining = Vec::with_capacity(self.refreshing_status_outputs.len());
+        let mut updated_any = false;
+        for (pending_request_id, handle) in self.refreshing_status_outputs.drain(..) {
+            if pending_request_id == request_id {
+                updated_any = true;
+                handle.finish_rate_limit_refresh(rate_limit_snapshots.as_slice(), now);
+            } else {
+                remaining.push((pending_request_id, handle));
+            }
         }
-        self.request_redraw();
+        self.refreshing_status_outputs = remaining;
+        if updated_any {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {

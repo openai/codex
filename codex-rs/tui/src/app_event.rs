@@ -138,10 +138,15 @@ pub(crate) enum AppEvent {
     },
 
     /// Refresh account rate limits in the background.
-    RefreshRateLimits,
+    RefreshRateLimits {
+        request_id: u64,
+    },
 
     /// Result of refreshing rate limits.
-    RateLimitsLoaded(Result<Vec<RateLimitSnapshot>, String>),
+    RateLimitsLoaded {
+        request_id: u64,
+        result: Result<Vec<RateLimitSnapshot>, String>,
+    },
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {

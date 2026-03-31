@@ -1880,14 +1880,14 @@ impl App {
         });
     }
 
-    fn refresh_rate_limits(&mut self, app_server: &AppServerSession) {
+    fn refresh_rate_limits(&mut self, app_server: &AppServerSession, request_id: u64) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let result = fetch_account_rate_limits(request_handle)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::RateLimitsLoaded(result));
+            app_event_tx.send(AppEvent::RateLimitsLoaded { request_id, result });
         });
     }
 
@@ -4378,19 +4378,21 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RefreshRateLimits => {
-                self.refresh_rate_limits(app_server);
+            AppEvent::RefreshRateLimits { request_id } => {
+                self.refresh_rate_limits(app_server, request_id);
             }
-            AppEvent::RateLimitsLoaded(result) => match result {
+            AppEvent::RateLimitsLoaded { request_id, result } => match result {
                 Ok(snapshots) => {
                     for snapshot in snapshots {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
-                    self.chat_widget.finish_status_rate_limit_refresh();
+                    self.chat_widget
+                        .finish_status_rate_limit_refresh(request_id);
                 }
                 Err(err) => {
                     tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
-                    self.chat_widget.finish_status_rate_limit_refresh();
+                    self.chat_widget
+                        .finish_status_rate_limit_refresh(request_id);
                 }
             },
             AppEvent::ConnectorsLoaded { result, is_final } => {

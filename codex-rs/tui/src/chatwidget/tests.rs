@@ -1963,7 +1963,7 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
     );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(100));
 
-    chat.add_status_output(/*refreshing_rate_limits*/ false);
+    chat.add_status_output(/*refreshing_rate_limits*/ false, None);
 
     let cells = drain_insert_history(&mut rx);
     let context_line = cells
@@ -2112,6 +2112,7 @@ async fn make_chatwidget_manual(
         token_info: None,
         rate_limit_snapshots_by_limit_id: BTreeMap::new(),
         refreshing_status_outputs: Vec::new(),
+        next_status_refresh_request_id: 0,
         plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
