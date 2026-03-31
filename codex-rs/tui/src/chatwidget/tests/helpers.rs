@@ -1,5 +1,4 @@
 use super::*;
-#[allow(unused_imports)]
 use pretty_assertions::assert_eq;
 
 pub(super) async fn test_config() -> Config {

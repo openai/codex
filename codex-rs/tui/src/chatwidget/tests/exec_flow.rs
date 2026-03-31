@@ -1,8 +1,5 @@
 use super::*;
-#[allow(unused_imports)]
 use pretty_assertions::assert_eq;
-
-// (removed experimental resize snapshot test)
 
 #[tokio::test]
 async fn exec_approval_emits_proposed_command_and_decision_history() {

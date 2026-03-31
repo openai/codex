@@ -1,5 +1,4 @@
 use super::*;
-#[allow(unused_imports)]
 use pretty_assertions::assert_eq;
 
 /// Receiving a TokenCount event without usage clears the context indicator.
