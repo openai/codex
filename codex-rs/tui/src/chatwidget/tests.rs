@@ -196,20 +196,24 @@ pub(super) use tokio::sync::mpsc::error::TryRecvError;
 pub(super) use tokio::sync::mpsc::unbounded_channel;
 pub(super) use toml::Value as TomlValue;
 
+pub(super) fn chatwidget_snapshot_dir() -> PathBuf {
+    codex_utils_cargo_bin::find_resource!("src/chatwidget/snapshots").expect("snapshot dir")
+}
+
 macro_rules! assert_chatwidget_snapshot {
     ($name:expr, $value:expr $(,)?) => {{
-        insta::with_settings!({
-            prepend_module_to_snapshot => false,
-            snapshot_path => "../snapshots"
-        }, {
+        let mut settings = insta::Settings::clone_current();
+        settings.set_prepend_module_to_snapshot(false);
+        settings.set_snapshot_path(crate::chatwidget::tests::chatwidget_snapshot_dir());
+        settings.bind(|| {
             insta::assert_snapshot!(format!("codex_tui__chatwidget__tests__{}", $name), $value);
         });
     }};
     ($name:expr, $value:expr, @$snapshot:literal $(,)?) => {{
-        insta::with_settings!({
-            prepend_module_to_snapshot => false,
-            snapshot_path => "../snapshots"
-        }, {
+        let mut settings = insta::Settings::clone_current();
+        settings.set_prepend_module_to_snapshot(false);
+        settings.set_snapshot_path(crate::chatwidget::tests::chatwidget_snapshot_dir());
+        settings.bind(|| {
             insta::assert_snapshot!(
                 format!("codex_tui__chatwidget__tests__{}", $name),
                 &($value),
