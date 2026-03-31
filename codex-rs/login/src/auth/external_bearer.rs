@@ -24,32 +24,6 @@ impl BearerTokenRefresher {
             state: Arc::new(ExternalBearerAuthState::new(config)),
         }
     }
-
-    pub(crate) async fn resolve_access_token(&self) -> io::Result<String> {
-        let mut cached = self.state.cached_token.lock().await;
-        if let Some(cached_token) = cached.as_ref()
-            && cached_token.fetched_at.elapsed() < self.state.config.refresh_interval()
-        {
-            return Ok(cached_token.access_token.clone());
-        }
-
-        let access_token = run_provider_auth_command(&self.state.config).await?;
-        *cached = Some(CachedExternalBearerToken {
-            access_token: access_token.clone(),
-            fetched_at: Instant::now(),
-        });
-        Ok(access_token)
-    }
-
-    pub(crate) async fn refresh_after_unauthorized(&self) -> io::Result<()> {
-        let access_token = run_provider_auth_command(&self.state.config).await?;
-        let mut cached = self.state.cached_token.lock().await;
-        *cached = Some(CachedExternalBearerToken {
-            access_token,
-            fetched_at: Instant::now(),
-        });
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -59,7 +33,21 @@ impl ExternalAuth for BearerTokenRefresher {
     }
 
     async fn resolve(&self) -> io::Result<Option<ExternalAuthTokens>> {
-        let access_token = self.resolve_access_token().await?;
+        let access_token = {
+            let mut cached = self.state.cached_token.lock().await;
+            if let Some(cached_token) = cached.as_ref()
+                && cached_token.fetched_at.elapsed() < self.state.config.refresh_interval()
+            {
+                cached_token.access_token.clone()
+            } else {
+                let access_token = run_provider_auth_command(&self.state.config).await?;
+                *cached = Some(CachedExternalBearerToken {
+                    access_token: access_token.clone(),
+                    fetched_at: Instant::now(),
+                });
+                access_token
+            }
+        };
         Ok(Some(ExternalAuthTokens::access_token_only(access_token)))
     }
 
@@ -67,8 +55,12 @@ impl ExternalAuth for BearerTokenRefresher {
         &self,
         _context: ExternalAuthRefreshContext,
     ) -> io::Result<ExternalAuthTokens> {
-        self.refresh_after_unauthorized().await?;
-        let access_token = self.resolve_access_token().await?;
+        let access_token = run_provider_auth_command(&self.state.config).await?;
+        let mut cached = self.state.cached_token.lock().await;
+        *cached = Some(CachedExternalBearerToken {
+            access_token: access_token.clone(),
+            fetched_at: Instant::now(),
+        });
         Ok(ExternalAuthTokens::access_token_only(access_token))
     }
 }
