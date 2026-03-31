@@ -257,6 +257,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_notification: None,
         quit_shortcut_expires_at: None,
         quit_shortcut_key: None,
+        last_watchdog_owner_activity_signal_at: None,
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,

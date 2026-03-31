@@ -30,6 +30,7 @@ pub(crate) struct AppCommand(Op);
 #[allow(dead_code)]
 pub(crate) enum AppCommandView<'a> {
     Interrupt,
+    NoteOwnerActivity,
     CleanBackgroundTerminals,
     RealtimeConversationStart(&'a ConversationStartParams),
     RealtimeConversationAudio(&'a ConversationAudioParams),
@@ -111,6 +112,10 @@ pub(crate) enum AppCommandView<'a> {
 impl AppCommand {
     pub(crate) fn interrupt() -> Self {
         Self(Op::Interrupt)
+    }
+
+    pub(crate) fn note_owner_activity() -> Self {
+        Self(Op::NoteOwnerActivity)
     }
 
     pub(crate) fn clean_background_terminals() -> Self {
@@ -286,6 +291,7 @@ impl AppCommand {
     pub(crate) fn view(&self) -> AppCommandView<'_> {
         match &self.0 {
             Op::Interrupt => AppCommandView::Interrupt,
+            Op::NoteOwnerActivity => AppCommandView::NoteOwnerActivity,
             Op::CleanBackgroundTerminals => AppCommandView::CleanBackgroundTerminals,
             Op::RealtimeConversationStart(params) => {
                 AppCommandView::RealtimeConversationStart(params)

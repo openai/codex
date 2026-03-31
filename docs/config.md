@@ -58,9 +58,10 @@ Messages sent to subagents continue to arrive as normal user input.
 
 Watchdog agents use the top-level `watchdog_interval_s` setting to decide how long the owner thread
 must be idle before a check-in helper is spawned when the `agent_watchdog` feature is enabled.
+Owner-side typing/input activity resets the idle timer.
 
 ```toml
-watchdog_interval_s = 60
+watchdog_interval_s = 10
 ```
 
 ## JSON Schema

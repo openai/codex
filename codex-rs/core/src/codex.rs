@@ -4655,6 +4655,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::interrupt(&sess).await;
                     false
                 }
+                Op::NoteOwnerActivity => {
+                    sess.services
+                        .agent_control
+                        .note_owner_input(sess.conversation_id)
+                        .await;
+                    false
+                }
                 Op::CleanBackgroundTerminals => {
                     handlers::clean_background_terminals(&sess).await;
                     false

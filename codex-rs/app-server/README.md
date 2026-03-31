@@ -147,6 +147,7 @@ Example with notification opt-out:
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
+- `thread/inputActivity` — record owner-side draft activity for a thread without starting or steering a turn; returns `{}` and is primarily useful for watchdog idle timers while the user is still typing.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
@@ -603,6 +604,18 @@ not emit `turn/started` and does not accept turn context overrides.
 `expectedTurnId` is required. If there is no active turn, `expectedTurnId` does not match the
 active turn, or the active turn kind does not accept same-turn steering (for example review or
 manual compaction), the request fails with an `invalid request` error.
+
+### Example: Mark owner draft activity
+
+Use `thread/inputActivity` to keep watchdog idle timing honest while the user is still editing a
+draft in the client.
+
+```json
+{ "method": "thread/inputActivity", "id": 33, "params": {
+    "threadId": "thr_123"
+} }
+{ "id": 33, "result": {} }
+```
 
 ### Example: Request a code review
 

@@ -126,6 +126,8 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
+use codex_app_server_protocol::ThreadInputActivityParams;
+use codex_app_server_protocol::ThreadInputActivityResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -760,6 +762,10 @@ impl CodexMessageProcessor {
                     params,
                 )
                 .await;
+            }
+            ClientRequest::ThreadInputActivity { request_id, params } => {
+                self.thread_input_activity(to_connection_request_id(request_id), params)
+                    .await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(to_connection_request_id(request_id), params)
@@ -3318,6 +3324,40 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to clean background terminals: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_input_activity(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadInputActivityParams,
+    ) {
+        let ThreadInputActivityParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::NoteOwnerActivity)
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadInputActivityResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to record thread input activity: {err}"),
                 )
                 .await;
             }

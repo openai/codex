@@ -757,11 +757,15 @@ impl AgentControl {
             )
             .await;
         if result.is_ok() {
-            self.watchdogs.note_owner_input(agent_id).await;
+            self.note_owner_input(agent_id).await;
             self.state
                 .update_last_task_message(agent_id, last_task_message);
         }
         result
+    }
+
+    pub(crate) async fn note_owner_input(&self, agent_id: ThreadId) {
+        self.watchdogs.note_owner_input(agent_id).await;
     }
 
     /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
