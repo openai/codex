@@ -1,3 +1,6 @@
+//! Approval-request focused tests extracted from the main chatwidget test file
+//! to keep the primary module under blob-size policy limits.
+
 use super::*;
 use pretty_assertions::assert_eq;
 

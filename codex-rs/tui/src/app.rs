@@ -8,6 +8,7 @@ use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::ThreadSessionState;
@@ -1689,8 +1690,10 @@ impl App {
         let thread_label = Some(self.thread_label(thread_id));
         match request {
             ServerRequest::CommandExecutionRequestApproval { params, .. } => {
-                let network_approval_context =
-                    params.network_approval_context.clone().map(Into::into);
+                let network_approval_context = params
+                    .network_approval_context
+                    .clone()
+                    .map(network_approval_context_to_core);
                 let additional_permissions = params.additional_permissions.clone().map(Into::into);
                 let proposed_execpolicy_amendment = params
                     .proposed_execpolicy_amendment

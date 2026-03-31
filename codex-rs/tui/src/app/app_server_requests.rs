@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
+use crate::app_server_approval_conversions::granted_permission_profile_from_request;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
@@ -153,7 +153,9 @@ impl PendingAppServerRequests {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(PermissionsRequestApprovalResponse {
-                            permissions: GrantedPermissionProfile::from(response.permissions.clone()),
+                            permissions: granted_permission_profile_from_request(
+                                response.permissions.clone(),
+                            ),
                             scope: response.scope.into(),
                         })
                         .map_err(|err| {

@@ -77,6 +77,7 @@ mod app_backtrack;
 mod app_command;
 mod app_event;
 mod app_event_sender;
+mod app_server_approval_conversions;
 mod app_server_session;
 mod ascii_animation;
 #[cfg(not(target_os = "linux"))]

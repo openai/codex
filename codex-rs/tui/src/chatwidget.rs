@@ -43,6 +43,7 @@ use url::Url;
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
@@ -1359,7 +1360,9 @@ fn exec_approval_request_from_params(
             .unwrap_or_default(),
         cwd: params.cwd.unwrap_or_default(),
         reason: params.reason,
-        network_approval_context: params.network_approval_context.map(Into::into),
+        network_approval_context: params
+            .network_approval_context
+            .map(network_approval_context_to_core),
         additional_permissions: params.additional_permissions.map(Into::into),
         turn_id: params.turn_id,
         approval_id: params.approval_id,

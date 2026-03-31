@@ -1083,15 +1083,6 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
     }
 }
 
-impl From<NetworkApprovalContext> for CoreNetworkApprovalContext {
-    fn from(value: NetworkApprovalContext) -> Self {
-        Self {
-            host: value.host,
-            protocol: value.protocol.to_core(),
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1211,15 +1202,6 @@ impl From<GrantedPermissionProfile> for CorePermissionProfile {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
-        }
-    }
-}
-
-impl From<CoreRequestPermissionProfile> for GrantedPermissionProfile {
-    fn from(value: CoreRequestPermissionProfile) -> Self {
-        Self {
-            network: value.network.map(AdditionalNetworkPermissions::from),
-            file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
         }
     }
 }
