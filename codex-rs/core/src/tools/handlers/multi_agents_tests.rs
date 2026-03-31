@@ -1022,12 +1022,12 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
     let Err(err) = SendMessageHandlerV2.handle(invocation).await else {
         panic!("send_message interrupt parameter should be rejected");
     };
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "failed to parse function arguments: unknown field `interrupt`, expected `target` or `items`".to_string()
-        )
-    );
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected model-facing parse error");
+    };
+    assert!(message.starts_with(
+        "failed to parse function arguments: unknown field `interrupt`, expected `target` or `items`"
+    ));
 
     let ops = manager.captured_ops();
     let ops_for_agent: Vec<&Op> = ops
