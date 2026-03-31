@@ -39,6 +39,17 @@
       },
       "type": "object"
     },
+    "PermissionProfilePersistence": {
+      "properties": {
+        "profileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profileName"
+      ],
+      "type": "object"
+    },
     "RequestPermissionProfile": {
       "additionalProperties": false,
       "properties": {
@@ -72,6 +83,17 @@
     },
     "permissions": {
       "$ref": "#/definitions/RequestPermissionProfile"
+    },
+    "permissionsProfilePersistence": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PermissionProfilePersistence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "reason": {
       "type": [

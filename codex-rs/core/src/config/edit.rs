@@ -997,6 +997,29 @@ pub fn apply_blocking(
         None => String::new(),
     };
 
+    let Some(updated) = apply_edits_to_string(&serialized, profile, edits)? else {
+        return Ok(());
+    };
+
+    write_atomically(&write_paths.write_path, &updated).with_context(|| {
+        format!(
+            "failed to persist config.toml at {}",
+            write_paths.write_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+pub(crate) fn apply_edits_to_string(
+    serialized: &str,
+    profile: Option<&str>,
+    edits: &[ConfigEdit],
+) -> anyhow::Result<Option<String>> {
+    if edits.is_empty() {
+        return Ok(None);
+    }
+
     let doc = if serialized.is_empty() {
         DocumentMut::new()
     } else {
@@ -1016,18 +1039,7 @@ pub fn apply_blocking(
         mutated |= document.apply(edit)?;
     }
 
-    if !mutated {
-        return Ok(());
-    }
-
-    write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
-        format!(
-            "failed to persist config.toml at {}",
-            write_paths.write_path.display()
-        )
-    })?;
-
-    Ok(())
+    Ok(mutated.then(|| document.doc.to_string()))
 }
 
 /// Persist edits asynchronously by offloading the blocking writer.

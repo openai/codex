@@ -39,6 +39,31 @@
       },
       "type": "object"
     },
+    "AdditionalPermissionProfile": {
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "GrantedPermissionProfile": {
       "properties": {
         "fileSystem": {
@@ -65,11 +90,75 @@
       "type": "object"
     },
     "PermissionGrantScope": {
-      "enum": [
-        "turn",
-        "session"
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "turn"
+              ],
+              "title": "TurnPermissionGrantScopeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "TurnPermissionGrantScope",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "session"
+              ],
+              "title": "SessionPermissionGrantScopeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SessionPermissionGrantScope",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "permissionProfileAmendment": {
+              "$ref": "#/definitions/PermissionProfileAmendment"
+            },
+            "type": {
+              "enum": [
+                "persist"
+              ],
+              "title": "PersistPermissionGrantScopeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "permissionProfileAmendment",
+            "type"
+          ],
+          "title": "PersistPermissionGrantScope",
+          "type": "object"
+        }
+      ]
+    },
+    "PermissionProfileAmendment": {
+      "properties": {
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        },
+        "profileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "permissions",
+        "profileName"
       ],
-      "type": "string"
+      "type": "object"
     }
   },
   "properties": {
@@ -82,7 +171,9 @@
           "$ref": "#/definitions/PermissionGrantScope"
         }
       ],
-      "default": "turn"
+      "default": {
+        "type": "turn"
+      }
     }
   },
   "required": [

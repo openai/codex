@@ -11,12 +11,20 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_network_proxy::NetworkProxyConfig;
 #[cfg(test)]
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::PersistPermissionProfileAction;
+use codex_protocol::request_permissions::PermissionProfilePersistence;
 use codex_utils_absolute_path::AbsolutePathBuf;
+
+use crate::config::Config;
+use crate::config::deserialize_config_toml_with_base;
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::apply_edits_to_string;
 
 pub(crate) fn network_proxy_config_from_profile_network(
     network: Option<&NetworkToml>,
@@ -25,6 +33,98 @@ pub(crate) fn network_proxy_config_from_profile_network(
         NetworkProxyConfig::default,
         NetworkToml::to_network_proxy_config,
     )
+}
+
+pub(crate) fn persistence_target_for_permissions(
+    config: &Config,
+    requested_permissions: &PermissionProfile,
+) -> Option<PermissionProfilePersistence> {
+    if !is_supported_filesystem_only_request(requested_permissions) {
+        return None;
+    }
+
+    // TODO: honor inherited default permission profiles instead of only the raw user layer.
+    let user_layer = config.config_layer_stack.get_user_layer()?;
+    let user_config =
+        deserialize_config_toml_with_base(user_layer.config.clone(), &config.codex_home).ok()?;
+    let profile_name = user_config.default_permissions?;
+    let permissions = user_config.permissions?;
+    if !permissions.entries.contains_key(profile_name.as_str()) {
+        return None;
+    }
+
+    let action = PersistPermissionProfileAction {
+        profile_name,
+        permissions: requested_permissions.clone(),
+    };
+    validate_persist_permission_profile_action(config, &action)
+        .ok()
+        .map(|()| PermissionProfilePersistence {
+            profile_name: action.profile_name,
+        })
+}
+
+pub(crate) fn validate_persist_permission_profile_action(
+    config: &Config,
+    action: &PersistPermissionProfileAction,
+) -> io::Result<()> {
+    let user_layer = config.config_layer_stack.get_user_layer().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "permissions profiles can only be persisted to user config",
+        )
+    })?;
+    let serialized_user_config = toml::to_string(&user_layer.config).map_err(invalid_data)?;
+    let user_config =
+        deserialize_config_toml_with_base(user_layer.config.clone(), &config.codex_home)?;
+
+    if user_config.default_permissions.as_deref() != Some(action.profile_name.as_str()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "permissions profile `{}` is not the active default profile",
+                action.profile_name
+            ),
+        ));
+    }
+
+    let Some(permissions) = user_config.permissions.as_ref() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "default_permissions requires a `[permissions]` table",
+        ));
+    };
+    if !permissions
+        .entries
+        .contains_key(action.profile_name.as_str())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "default_permissions refers to undefined profile `{}`",
+                action.profile_name
+            ),
+        ));
+    }
+
+    let edits = [ConfigEdit::MergePermissionProfile(action.clone())];
+    let merged_config =
+        apply_edits_to_string(&serialized_user_config, /*profile*/ None, &edits)
+            .map_err(invalid_data)?
+            .unwrap_or(serialized_user_config);
+    let merged_value = toml::from_str(&merged_config).map_err(invalid_data)?;
+    let merged_user_config = deserialize_config_toml_with_base(merged_value, &config.codex_home)?;
+    let permissions = merged_user_config.permissions.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "default_permissions requires a `[permissions]` table",
+        )
+    })?;
+    let (file_system_sandbox_policy, network_sandbox_policy) =
+        compile_permission_profile(&permissions, action.profile_name.as_str(), &mut Vec::new())?;
+    file_system_sandbox_policy
+        .to_legacy_sandbox_policy(network_sandbox_policy, config.cwd.as_path())?;
+    Ok(())
 }
 
 pub(crate) fn resolve_permission_profile<'a>(
@@ -113,6 +213,31 @@ fn compile_network_sandbox_policy(network: Option<&NetworkToml>) -> NetworkSandb
         Some(true) => NetworkSandboxPolicy::Enabled,
         _ => NetworkSandboxPolicy::Restricted,
     }
+}
+
+fn is_supported_filesystem_only_request(permissions: &PermissionProfile) -> bool {
+    let Some(file_system) = permissions.file_system.as_ref() else {
+        return false;
+    };
+
+    if file_system.is_empty() {
+        return false;
+    }
+
+    if permissions
+        .network
+        .as_ref()
+        .and_then(|network| network.enabled)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    true
+}
+
+fn invalid_data(err: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }
 
 fn compile_filesystem_permission(

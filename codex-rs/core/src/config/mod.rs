@@ -111,7 +111,9 @@ pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
+pub(crate) use permissions::persistence_target_for_permissions;
 pub(crate) use permissions::resolve_permission_profile;
+pub(crate) use permissions::validate_persist_permission_profile_action;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 

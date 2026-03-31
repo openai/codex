@@ -22,6 +22,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
+use crate::config::persistence_target_for_permissions;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
@@ -3294,7 +3295,11 @@ impl Session {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
-            permissions: args.permissions,
+            permissions: args.permissions.clone(),
+            permissions_profile_persistence: persistence_target_for_permissions(
+                turn_context.config.as_ref(),
+                &args.permissions.into(),
+            ),
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
@@ -3449,8 +3454,8 @@ impl Session {
                     let mut ts = at.turn_state.lock().await;
                     let entry = ts.remove_pending_request_permissions(call_id);
                     if entry.is_some() && !response.permissions.is_empty() {
-                        match response.scope {
-                            PermissionGrantScope::Turn => {
+                        match &response.scope {
+                            PermissionGrantScope::Turn | PermissionGrantScope::Persist { .. } => {
                                 ts.record_granted_permissions(response.permissions.clone().into());
                             }
                             PermissionGrantScope::Session => {
@@ -4877,6 +4882,7 @@ mod handlers {
     use crate::SkillError;
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::config::edit::ConfigEditsBuilder;
     use crate::config_loader::CloudRequirementsLoader;
     use crate::config_loader::LoaderOverrides;
     use crate::config_loader::load_config_layers_state;
@@ -4910,6 +4916,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
+    use codex_protocol::request_permissions::PermissionGrantScope;
     use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -5214,6 +5221,42 @@ mod handlers {
         id: String,
         response: RequestPermissionsResponse,
     ) {
+        let persist_permissions = match &response.scope {
+            PermissionGrantScope::Persist {
+                permission_profile_amendment,
+            } => Some(permission_profile_amendment.clone()),
+            PermissionGrantScope::Turn | PermissionGrantScope::Session => None,
+        };
+        if let Some(action) = persist_permissions {
+            let codex_home = sess.codex_home().await;
+            let persist_result = match crate::config::validate_persist_permission_profile_action(
+                sess.get_config().await.as_ref(),
+                &action,
+            ) {
+                Ok(()) => {
+                    ConfigEditsBuilder::new(&codex_home)
+                        .merge_permission_profile(action)
+                        .apply()
+                        .await
+                }
+                Err(err) => Err(err.into()),
+            };
+            if let Err(err) = persist_result {
+                let message = format!("Failed to update permissions profile: {err}");
+                tracing::warn!("{message}");
+                sess.send_event_raw(Event {
+                    id: id.clone(),
+                    msg: EventMsg::Warning(WarningEvent { message }),
+                })
+                .await;
+            } else {
+                sess.reload_user_config_layer().await;
+                if !response.permissions.is_empty() {
+                    let mut state = sess.state.lock().await;
+                    state.record_granted_permissions(response.permissions.clone().into());
+                }
+            }
+        }
         sess.notify_request_permissions_response(&id, response)
             .await;
     }

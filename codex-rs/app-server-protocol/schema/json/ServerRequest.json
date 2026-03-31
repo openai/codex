@@ -1344,6 +1344,17 @@
         }
       ]
     },
+    "PermissionProfilePersistence": {
+      "properties": {
+        "profileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profileName"
+      ],
+      "type": "object"
+    },
     "PermissionsRequestApprovalParams": {
       "properties": {
         "itemId": {
@@ -1351,6 +1362,17 @@
         },
         "permissions": {
           "$ref": "#/definitions/RequestPermissionProfile"
+        },
+        "permissionsProfilePersistence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfilePersistence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "reason": {
           "type": [

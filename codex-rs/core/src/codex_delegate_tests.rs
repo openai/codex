@@ -202,6 +202,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                         }),
                         ..RequestPermissionProfile::default()
                     },
+                    permissions_profile_persistence: None,
                 },
                 &cancel_token,
             )
