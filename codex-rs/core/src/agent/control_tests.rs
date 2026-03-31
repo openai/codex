@@ -821,7 +821,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         AgentPath::try_from("/root/worker").expect("agent path"),
         Vec::new(),
         "queued message".to_string(),
-        false,
+        /*trigger_turn*/ false,
     );
     let queued_turn_context = parent_thread.codex.session.new_default_turn().await;
     parent_thread
@@ -838,7 +838,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         AgentPath::try_from("/root/worker").expect("agent path"),
         Vec::new(),
         "triggered context".to_string(),
-        true,
+        /*trigger_turn*/ true,
     );
     let triggered_turn_context = parent_thread.codex.session.new_default_turn().await;
     parent_thread

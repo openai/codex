@@ -176,15 +176,21 @@ fn truncates_rollout_to_last_n_fork_turns_counts_trigger_turn_messages() {
     let rollout = vec![
         RolloutItem::ResponseItem(user_msg("u1")),
         RolloutItem::ResponseItem(assistant_msg("a1")),
-        RolloutItem::ResponseItem(inter_agent_msg("queued message", false)),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "queued message",
+            /*trigger_turn*/ false,
+        )),
         RolloutItem::ResponseItem(assistant_msg("a2")),
-        RolloutItem::ResponseItem(inter_agent_msg("triggered task", true)),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "triggered task",
+            /*trigger_turn*/ true,
+        )),
         RolloutItem::ResponseItem(assistant_msg("a3")),
         RolloutItem::ResponseItem(user_msg("u2")),
         RolloutItem::ResponseItem(assistant_msg("a4")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, 2);
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
     let expected = rollout[4..].to_vec();
 
     assert_eq!(
@@ -198,7 +204,10 @@ fn truncates_rollout_to_last_n_fork_turns_applies_thread_rollback_markers() {
     let rollout = vec![
         RolloutItem::ResponseItem(user_msg("u1")),
         RolloutItem::ResponseItem(assistant_msg("a1")),
-        RolloutItem::ResponseItem(inter_agent_msg("triggered task", true)),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "triggered task",
+            /*trigger_turn*/ true,
+        )),
         RolloutItem::ResponseItem(assistant_msg("a2")),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
@@ -207,7 +216,7 @@ fn truncates_rollout_to_last_n_fork_turns_applies_thread_rollback_markers() {
         RolloutItem::ResponseItem(assistant_msg("a3")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, 2);
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
@@ -220,7 +229,10 @@ fn truncates_rollout_to_last_n_fork_turns_discards_trigger_boundaries_in_rolled_
     let rollout = vec![
         RolloutItem::ResponseItem(user_msg("u1")),
         RolloutItem::ResponseItem(user_msg("u2")),
-        RolloutItem::ResponseItem(inter_agent_msg("triggered task", true)),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "triggered task",
+            /*trigger_turn*/ true,
+        )),
         RolloutItem::ResponseItem(assistant_msg("a1")),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
@@ -229,7 +241,7 @@ fn truncates_rollout_to_last_n_fork_turns_discards_trigger_boundaries_in_rolled_
         RolloutItem::ResponseItem(assistant_msg("a2")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, 2);
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
@@ -242,11 +254,14 @@ fn truncates_rollout_to_last_n_fork_turns_keeps_full_rollout_when_n_is_large() {
     let rollout = vec![
         RolloutItem::ResponseItem(user_msg("u1")),
         RolloutItem::ResponseItem(assistant_msg("a1")),
-        RolloutItem::ResponseItem(inter_agent_msg("triggered task", true)),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "triggered task",
+            /*trigger_turn*/ true,
+        )),
         RolloutItem::ResponseItem(assistant_msg("a2")),
     ];
 
-    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, 10);
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 10);
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
