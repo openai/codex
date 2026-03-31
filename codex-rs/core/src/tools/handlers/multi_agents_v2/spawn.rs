@@ -40,7 +40,7 @@ impl ToolHandler for Handler {
             .map(str::trim)
             .filter(|role| !role.is_empty());
 
-        let initial_operation = parse_collab_input(None, Some(args.items))?;
+        let initial_operation = parse_collab_input(/*message*/ None, Some(args.items))?;
         let prompt = render_input_preview(&initial_operation);
 
         let session_source = turn.session_source.clone();
