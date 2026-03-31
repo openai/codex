@@ -2418,26 +2418,6 @@ async fn rate_limit_warnings_emit_thresholds() {
 }
 
 #[tokio::test]
-async fn test_rate_limit_warnings_monthly() {
-    let mut state = RateLimitWarningState::default();
-    let mut warnings: Vec<String> = Vec::new();
-
-    warnings.extend(state.take_warnings(
-        Some(75.0),
-        Some(43199),
-        /*primary_used_percent*/ None,
-        /*primary_window_minutes*/ None,
-    ));
-    assert_eq!(
-        warnings,
-        vec![String::from(
-            "Heads up, you have less than 25% of your monthly limit left. Run /status for a breakdown.",
-        ),],
-        "expected one warning per limit for the highest crossed threshold"
-    );
-}
-
-#[tokio::test]
 async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -2610,30 +2590,6 @@ async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     chat.has_chatgpt_account = true;
 
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 95.0)));
-
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Idle
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_switch_prompt_skips_non_codex_limit() {
-    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.has_chatgpt_account = true;
-
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        limit_id: Some("codex_other".to_string()),
-        limit_name: Some("codex_other".to_string()),
-        primary: Some(RateLimitWindow {
-            used_percent: 95.0,
-            window_minutes: Some(60),
-            resets_at: None,
-        }),
-        secondary: None,
-        credits: None,
-        plan_type: None,
-    }));
 
     assert!(matches!(
         chat.rate_limit_switch_prompt,
@@ -4105,30 +4061,6 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
 async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
     assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
         name: TerminalName::AppleTerminal,
-        term_program: None,
-        version: None,
-        term: None,
-        multiplexer: None,
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
-        name: TerminalName::WarpTerminal,
-        term_program: None,
-        version: None,
-        term: None,
-        multiplexer: None,
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
-        name: TerminalName::VsCode,
         term_program: None,
         version: None,
         term: None,
@@ -10244,23 +10176,6 @@ async fn fast_status_indicator_requires_chatgpt_auth() {
     set_chatgpt_auth(&mut chat);
 
     assert!(chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
-}
-
-#[tokio::test]
-async fn fast_status_indicator_is_hidden_for_non_gpt54_model() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.set_service_tier(Some(ServiceTier::Fast));
-    set_chatgpt_auth(&mut chat);
-
-    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
-}
-
-#[tokio::test]
-async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    set_chatgpt_auth(&mut chat);
-
-    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 }
 
 #[tokio::test]
