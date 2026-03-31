@@ -28,7 +28,6 @@ use super::format::line_display_width;
 use super::format::push_label;
 use super::format::truncate_line_to_width;
 use super::helpers::compose_account_display;
-use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
@@ -75,41 +74,6 @@ struct StatusHistoryCell {
     rate_limits: StatusRateLimitData,
 }
 
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn new_status_output(
-    config: &Config,
-    account_display: Option<&StatusAccountDisplay>,
-    token_info: Option<&TokenUsageInfo>,
-    total_usage: &TokenUsage,
-    session_id: &Option<ThreadId>,
-    thread_name: Option<String>,
-    forked_from: Option<ThreadId>,
-    rate_limits: Option<&RateLimitSnapshotDisplay>,
-    _plan_type: Option<PlanType>,
-    now: DateTime<Local>,
-    model_name: &str,
-    collaboration_mode: Option<&str>,
-    reasoning_effort_override: Option<Option<ReasoningEffort>>,
-) -> CompositeHistoryCell {
-    let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
-    new_status_output_with_rate_limits(
-        config,
-        account_display,
-        token_info,
-        total_usage,
-        session_id,
-        thread_name,
-        forked_from,
-        snapshots,
-        _plan_type,
-        now,
-        model_name,
-        collaboration_mode,
-        reasoning_effort_override,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits(
     config: &Config,
@@ -125,6 +89,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     model_name: &str,
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    agents_summary: String,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
@@ -141,6 +106,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        agents_summary,
     );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
@@ -162,6 +128,7 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
+        agents_summary: String,
     ) -> Self {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
@@ -224,7 +191,6 @@ impl StatusHistoryCell {
         } else {
             format!("Custom ({sandbox}, {approval})")
         };
-        let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
         let account = compose_account_display(account_display);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);

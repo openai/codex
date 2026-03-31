@@ -1,4 +1,4 @@
-use super::new_status_output;
+use super::new_status_output_with_rate_limits;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
 use crate::status::StatusAccountDisplay;
@@ -87,6 +87,8 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
         .timestamp()
 }
 
+const NO_AGENTS_SUMMARY: &str = "<none>";
+
 #[tokio::test]
 async fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
@@ -143,7 +145,7 @@ async fn status_snapshot_includes_reasoning_details() {
     let token_info = token_info_for(&model_slug, &config, &usage);
 
     let reasoning_effort_override = Some(Some(ReasoningEffort::High));
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -151,12 +153,13 @@ async fn status_snapshot_includes_reasoning_details() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         reasoning_effort_override,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -200,7 +203,7 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         .expect("timestamp");
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
 
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         /*token_info*/ None,
@@ -208,12 +211,13 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        /*rate_limits*/ None,
+        &[],
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     let permissions_line = rendered_lines
@@ -262,7 +266,7 @@ async fn status_snapshot_includes_forked_from() {
     let forked_from =
         ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
 
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -270,12 +274,13 @@ async fn status_snapshot_includes_forked_from() {
         &Some(session_id),
         /*thread_name*/ None,
         Some(forked_from),
-        /*rate_limits*/ None,
+        &[],
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -324,7 +329,7 @@ async fn status_snapshot_includes_monthly_limit() {
 
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -332,12 +337,13 @@ async fn status_snapshot_includes_monthly_limit() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -374,7 +380,7 @@ async fn status_snapshot_shows_unlimited_credits() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -382,12 +388,13 @@ async fn status_snapshot_shows_unlimited_credits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
@@ -423,7 +430,7 @@ async fn status_snapshot_shows_positive_credits() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -431,12 +438,13 @@ async fn status_snapshot_shows_positive_credits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
@@ -472,7 +480,7 @@ async fn status_snapshot_hides_zero_credits() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -480,12 +488,13 @@ async fn status_snapshot_hides_zero_credits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
@@ -519,7 +528,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -527,12 +536,13 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
@@ -564,7 +574,7 @@ async fn status_card_token_usage_excludes_cached_tokens() {
 
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -572,12 +582,13 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        /*rate_limits*/ None,
+        &[],
         None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120));
 
@@ -626,7 +637,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let reasoning_effort_override = Some(Some(ReasoningEffort::High));
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -634,12 +645,13 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         reasoning_effort_override,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 70));
     if cfg!(windows) {
@@ -675,7 +687,7 @@ async fn status_snapshot_shows_missing_limits_message() {
 
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -683,12 +695,13 @@ async fn status_snapshot_shows_missing_limits_message() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        /*rate_limits*/ None,
+        &[],
         None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -744,7 +757,7 @@ async fn status_snapshot_includes_credits_and_limits() {
 
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -752,12 +765,13 @@ async fn status_snapshot_includes_credits_and_limits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -801,7 +815,7 @@ async fn status_snapshot_shows_empty_limits_message() {
 
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -809,12 +823,13 @@ async fn status_snapshot_shows_empty_limits_message() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -867,7 +882,7 @@ async fn status_snapshot_shows_stale_limits_message() {
 
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -875,12 +890,13 @@ async fn status_snapshot_shows_stale_limits_message() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -937,7 +953,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
 
     let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -945,12 +961,13 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        Some(&rate_display),
+        std::slice::from_ref(&rate_display),
         None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
@@ -995,7 +1012,7 @@ async fn status_context_window_uses_last_usage() {
         last_token_usage: last_usage,
         model_context_window: config.model_context_window,
     };
-    let composite = new_status_output(
+    let composite = new_status_output_with_rate_limits(
         &config,
         account_display.as_ref(),
         Some(&token_info),
@@ -1003,12 +1020,13 @@ async fn status_context_window_uses_last_usage() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
-        /*rate_limits*/ None,
+        &[],
         None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+        NO_AGENTS_SUMMARY.to_string(),
     );
     let rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     let context_line = rendered_lines
