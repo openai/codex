@@ -137,16 +137,11 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Refresh account rate limits, optionally rendering `/status` once the read finishes.
-    RefreshRateLimits {
-        show_status: bool,
-    },
+    /// Refresh account rate limits in the background.
+    RefreshRateLimits,
 
     /// Result of refreshing rate limits.
-    RateLimitsLoaded {
-        result: Result<Vec<RateLimitSnapshot>, String>,
-        show_status: bool,
-    },
+    RateLimitsLoaded(Result<Vec<RateLimitSnapshot>, String>),
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {

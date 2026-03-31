@@ -5329,10 +5329,10 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
-                    self.app_event_tx
-                        .send(AppEvent::RefreshRateLimits { show_status: true });
+                    self.add_status_output(/*refreshing_rate_limits*/ true);
+                    self.app_event_tx.send(AppEvent::RefreshRateLimits);
                 } else {
-                    self.add_status_output();
+                    self.add_status_output(/*refreshing_rate_limits*/ false);
                 }
             }
             SlashCommand::DebugConfig => {
@@ -7349,7 +7349,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_status_output(&mut self) {
+    pub(crate) fn add_status_output(&mut self, refreshing_rate_limits: bool) {
         let default_usage = TokenUsage::default();
         let token_info = self.token_info.as_ref();
         let total_usage = token_info
@@ -7376,6 +7376,7 @@ impl ChatWidget {
             self.model_display_name(),
             collaboration_mode,
             reasoning_effort_override,
+            refreshing_rate_limits,
         ));
     }
 

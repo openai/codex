@@ -73,6 +73,7 @@ struct StatusHistoryCell {
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
+    refreshing_rate_limits: bool,
 }
 
 #[cfg(test)]
@@ -107,6 +108,7 @@ pub(crate) fn new_status_output(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        /*refreshing_rate_limits*/ false,
     )
 }
 
@@ -125,6 +127,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     model_name: &str,
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    refreshing_rate_limits: bool,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
@@ -141,6 +144,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        refreshing_rate_limits,
     );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
@@ -162,6 +166,7 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
+        refreshing_rate_limits: bool,
     ) -> Self {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
@@ -266,6 +271,7 @@ impl StatusHistoryCell {
             forked_from,
             token_usage,
             rate_limits,
+            refreshing_rate_limits,
         }
     }
 
@@ -311,24 +317,50 @@ impl StatusHistoryCell {
         match &self.rate_limits {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
-                    return vec![
-                        formatter.line("Limits", vec![Span::from("data not available yet").dim()]),
-                    ];
+                    return vec![formatter.line(
+                        "Limits",
+                        vec![if self.refreshing_rate_limits {
+                            Span::from("refreshing cached limits...").dim()
+                        } else {
+                            Span::from("data not available yet").dim()
+                        }],
+                    )];
                 }
 
-                self.rate_limit_row_lines(rows_data, available_inner_width, formatter)
+                let mut lines =
+                    self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
+                if self.refreshing_rate_limits {
+                    lines.push(formatter.line(
+                        "Notice",
+                        vec![Span::from("refreshing limits in background...").dim()],
+                    ));
+                }
+                lines
             }
             StatusRateLimitData::Stale(rows_data) => {
                 let mut lines =
                     self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
                 lines.push(formatter.line(
                     "Warning",
-                    vec![Span::from("limits may be stale - start new turn to refresh.").dim()],
+                    vec![Span::from(if self.refreshing_rate_limits {
+                        "limits may be stale - refreshing in background..."
+                    } else {
+                        "limits may be stale - start new turn to refresh."
+                    })
+                    .dim()],
                 ));
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
+                vec![formatter.line(
+                    "Limits",
+                    vec![Span::from(if self.refreshing_rate_limits {
+                        "refreshing limits..."
+                    } else {
+                        "data not available yet"
+                    })
+                    .dim()],
+                )]
             }
         }
     }

@@ -1880,17 +1880,14 @@ impl App {
         });
     }
 
-    fn refresh_rate_limits(&mut self, app_server: &AppServerSession, show_status: bool) {
+    fn refresh_rate_limits(&mut self, app_server: &AppServerSession) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let result = fetch_account_rate_limits(request_handle)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::RateLimitsLoaded {
-                result,
-                show_status,
-            });
+            app_event_tx.send(AppEvent::RateLimitsLoaded(result));
         });
     }
 
@@ -4381,27 +4378,19 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RefreshRateLimits { show_status } => {
-                self.refresh_rate_limits(app_server, show_status);
+            AppEvent::RefreshRateLimits => {
+                self.refresh_rate_limits(app_server);
             }
-            AppEvent::RateLimitsLoaded {
-                result,
-                show_status,
-            } => {
-                match result {
-                    Ok(snapshots) => {
-                        for snapshot in snapshots {
-                            self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+            AppEvent::RateLimitsLoaded(result) => match result {
+                Ok(snapshots) => {
+                    for snapshot in snapshots {
+                        self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
                 }
-                if show_status {
-                    self.chat_widget.add_status_output();
+                Err(err) => {
+                    tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
                 }
-            }
+            },
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
