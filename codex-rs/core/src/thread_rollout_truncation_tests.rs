@@ -225,6 +225,23 @@ fn truncates_rollout_to_last_n_fork_turns_applies_thread_rollback_markers() {
 }
 
 #[test]
+fn fork_turn_positions_ignore_zero_turn_rollback_markers() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "triggered task",
+            /*trigger_turn*/ true,
+        )),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 0,
+        })),
+        RolloutItem::ResponseItem(user_msg("u2")),
+    ];
+
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 1, 3]);
+}
+
+#[test]
 fn truncates_rollout_to_last_n_fork_turns_discards_trigger_boundaries_in_rolled_back_suffix() {
     let rollout = vec![
         RolloutItem::ResponseItem(user_msg("u1")),

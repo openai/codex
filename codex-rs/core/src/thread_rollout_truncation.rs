@@ -65,6 +65,9 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                 let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                if num_turns == 0 {
+                    continue;
+                }
                 let Some(rollback_start_idx) = user_positions
                     .len()
                     .checked_sub(num_turns)
