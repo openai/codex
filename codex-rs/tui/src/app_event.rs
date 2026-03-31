@@ -29,6 +29,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::UserMessage;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
@@ -82,6 +83,12 @@ pub(crate) enum AppEvent {
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+
+    /// Fork the current thread into a transient BTW child and submit a side-question there.
+    StartBtw {
+        parent_thread_id: ThreadId,
+        user_message: UserMessage,
+    },
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {

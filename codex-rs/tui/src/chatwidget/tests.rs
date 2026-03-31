@@ -198,6 +198,8 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
+mod btw;
+
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
@@ -681,33 +683,7 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
 
 #[tokio::test]
 async fn forked_thread_history_line_includes_name_and_id_snapshot() {
-    let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let mut chat = chat;
-    let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
-
-    let forked_from_id =
-        ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
-    let session_index_entry = format!(
-        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"named-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
-    );
-    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
-        .expect("write session index");
-
-    chat.emit_forked_thread_event(forked_from_id);
-
-    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        loop {
-            match rx.recv().await {
-                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
-                Some(_) => continue,
-                None => panic!("app event channel closed before forked thread history was emitted"),
-            }
-        }
-    })
-    .await
-    .expect("timed out waiting for forked thread history");
-    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+    let combined = btw::forked_thread_history_line_includes_name_and_id_snapshot().await;
 
     assert!(
         combined.contains("Thread forked from"),
@@ -718,27 +694,7 @@ async fn forked_thread_history_line_includes_name_and_id_snapshot() {
 
 #[tokio::test]
 async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
-    let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let mut chat = chat;
-    let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
-
-    let forked_from_id =
-        ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
-    chat.emit_forked_thread_event(forked_from_id);
-
-    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        loop {
-            match rx.recv().await {
-                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
-                Some(_) => continue,
-                None => panic!("app event channel closed before forked thread history was emitted"),
-            }
-        }
-    })
-    .await
-    .expect("timed out waiting for forked thread history");
-    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+    let combined = btw::forked_thread_history_line_without_name_shows_id_once_snapshot().await;
 
     assert_snapshot!("forked_thread_history_line_without_name", combined);
 }
@@ -2154,7 +2110,10 @@ async fn make_chatwidget_manual(
         suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,
+        thread_rename_block_message: None,
         forked_from: None,
+        next_fork_banner_parent_label: None,
+        interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
@@ -5912,6 +5871,11 @@ queued draft"
 }
 
 #[tokio::test]
+async fn suppressed_interrupted_turn_notice_skips_history_warning() {
+    btw::suppressed_interrupted_turn_notice_skips_history_warning().await;
+}
+
+#[tokio::test]
 async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -7487,6 +7451,30 @@ async fn slash_fork_requests_current_fork() {
     chat.dispatch_command(SlashCommand::Fork);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+}
+
+#[tokio::test]
+async fn slash_rename_is_rejected_for_btw_threads() {
+    btw::slash_rename_is_rejected_for_btw_threads().await;
+}
+
+#[tokio::test]
+async fn slash_rename_with_args_is_rejected_for_btw_threads() {
+    btw::slash_rename_with_args_is_rejected_for_btw_threads().await;
+}
+
+#[tokio::test]
+async fn submit_user_message_as_plain_user_turn_does_not_run_shell_commands() {
+    btw::submit_user_message_as_plain_user_turn_does_not_run_shell_commands().await;
+}
+
+#[tokio::test]
+async fn slash_btw_requests_forked_side_question_while_task_running() {
+    let rendered = btw::slash_btw_requests_forked_side_question_while_task_running().await;
+    assert_snapshot!(
+        "slash_btw_requests_forked_side_question_while_task_running",
+        rendered
+    );
 }
 
 #[tokio::test]
@@ -13225,6 +13213,22 @@ async fn status_line_fast_mode_footer_snapshot() {
     assert_snapshot!(
         "status_line_fast_mode_footer",
         normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
+async fn btw_footer_override_snapshot() {
+    let rendered = btw::btw_footer_override_snapshot().await;
+    assert_snapshot!("btw_footer_override", rendered);
+}
+
+#[tokio::test]
+async fn clearing_thread_footer_override_preserves_general_footer_hint_snapshot() {
+    let rendered =
+        btw::clearing_thread_footer_override_preserves_general_footer_hint_snapshot().await;
+    assert_snapshot!(
+        "clearing_thread_footer_override_preserves_general_footer_hint",
+        rendered
     );
 }
 

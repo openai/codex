@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered
+---
+"                                                                                "
+"• Working (0s • esc to interrupt)                                               "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"   BTW starting...                                                              "

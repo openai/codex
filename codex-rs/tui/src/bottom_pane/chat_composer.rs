@@ -307,6 +307,7 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    thread_footer_hint_override: Option<Vec<(String, String)>>,
     remote_image_urls: Vec<String>,
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
@@ -431,6 +432,7 @@ impl ChatComposer {
             disable_paste_burst: false,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
+            thread_footer_hint_override: None,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
             footer_flash: None,
@@ -851,6 +853,14 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    /// Override the footer hint with thread-scoped UI, such as ephemeral BTW navigation state.
+    ///
+    /// This lives below general footer overrides so temporary flows like external editor launch
+    /// or realtime status can still take precedence.
+    pub(crate) fn set_thread_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.thread_footer_hint_override = items;
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -3519,12 +3529,16 @@ impl ChatComposer {
                 } else {
                     self.collaboration_mode_indicator
                 };
+                let active_footer_hint_override = self
+                    .footer_hint_override
+                    .as_ref()
+                    .or(self.thread_footer_hint_override.as_ref());
                 let mut left_width = if self.footer_flash_visible() {
                     self.footer_flash
                         .as_ref()
                         .map(|flash| flash.line.width() as u16)
                         .unwrap_or(0)
-                } else if let Some(items) = self.footer_hint_override.as_ref() {
+                } else if let Some(items) = active_footer_hint_override {
                     footer_hint_items_width(items)
                 } else if status_line_active {
                     truncated_status_line
@@ -3573,7 +3587,7 @@ impl ChatComposer {
                 let can_show_left_and_context =
                     can_show_left_with_context(hint_rect, left_width, right_width);
                 let has_override =
-                    self.footer_flash_visible() || self.footer_hint_override.is_some();
+                    self.footer_flash_visible() || active_footer_hint_override.is_some();
                 let single_line_layout = if has_override || status_line_active {
                     None
                 } else {
@@ -3649,7 +3663,7 @@ impl ChatComposer {
                     if let Some(flash) = self.footer_flash.as_ref() {
                         flash.line.render(inset_footer_hint_area(hint_rect), buf);
                     }
-                } else if let Some(items) = self.footer_hint_override.as_ref() {
+                } else if let Some(items) = active_footer_hint_override {
                     render_footer_hint_items(hint_rect, buf, items);
                 } else if status_line_active {
                     if let Some(line) = truncated_status_line {
