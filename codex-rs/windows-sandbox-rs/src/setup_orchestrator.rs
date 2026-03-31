@@ -92,6 +92,7 @@ pub struct SandboxSetupRequest<'a> {
 pub struct SetupRootOverrides {
     pub read_roots: Option<Vec<PathBuf>>,
     pub write_roots: Option<Vec<PathBuf>>,
+    pub deny_write_paths: Option<Vec<PathBuf>>,
 }
 
 pub fn run_setup_refresh(
@@ -113,6 +114,13 @@ pub fn run_setup_refresh(
         },
         SetupRootOverrides::default(),
     )
+}
+
+pub fn run_setup_refresh_with_overrides(
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
+) -> Result<()> {
+    run_setup_refresh_inner(request, overrides)
 }
 
 pub fn run_setup_refresh_with_extra_read_roots(
@@ -138,6 +146,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         SetupRootOverrides {
             read_roots: Some(read_roots),
             write_roots: Some(Vec::new()),
+            deny_write_paths: None,
         },
     )
 }
@@ -153,7 +162,7 @@ fn run_setup_refresh_inner(
     ) {
         return Ok(());
     }
-    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -165,6 +174,7 @@ fn run_setup_refresh_inner(
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        deny_write_paths: overrides.deny_write_paths.unwrap_or_default(),
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
@@ -434,6 +444,7 @@ struct ElevationPayload {
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     #[serde(default)]
+    deny_write_paths: Vec<PathBuf>,
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
@@ -723,7 +734,7 @@ pub fn run_elevated_setup(
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -735,6 +746,7 @@ pub fn run_elevated_setup(
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        deny_write_paths: overrides.deny_write_paths.unwrap_or_default(),
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
@@ -751,10 +763,10 @@ pub fn run_elevated_setup(
 
 fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
-    overrides: SetupRootOverrides,
+    overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = if let Some(roots) = overrides.write_roots {
-        canonical_existing(&roots)
+    let write_roots = if let Some(roots) = overrides.write_roots.as_deref() {
+        canonical_existing(roots)
     } else {
         gather_write_roots(
             request.policy,
@@ -764,11 +776,10 @@ fn build_payload_roots(
         )
     };
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
-    let mut read_roots = if let Some(roots) = overrides.read_roots {
-        canonical_existing(&roots)
-    } else {
-        gather_read_roots(request.command_cwd, request.policy, request.codex_home)
-    };
+    let mut read_roots = gather_read_roots(request.command_cwd, request.policy, request.codex_home);
+    if let Some(roots) = overrides.read_roots.as_deref() {
+        read_roots.extend(canonical_existing(roots));
+    }
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -802,6 +813,7 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use super::build_payload_roots;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
@@ -1095,6 +1107,103 @@ mod tests {
             dunce::canonicalize(&writable_root).expect("canonical writable root");
 
         assert!(roots.contains(&expected_writable));
+    }
+
+    #[test]
+    fn build_payload_roots_preserves_restricted_read_policy_when_no_override_is_needed() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let policy_cwd = tmp.path().join("policy-cwd");
+        let command_cwd = tmp.path().join("workspace");
+        let readable_root = tmp.path().join("docs");
+        fs::create_dir_all(&policy_cwd).expect("create policy cwd");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&readable_root).expect("create readable root");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![
+                    AbsolutePathBuf::from_absolute_path(&readable_root)
+                        .expect("absolute readable root"),
+                ],
+            },
+            network_access: false,
+        };
+
+        let (read_roots, write_roots) = build_payload_roots(
+            &super::SandboxSetupRequest {
+                policy: &policy,
+                policy_cwd: &policy_cwd,
+                command_cwd: &command_cwd,
+                env_map: &HashMap::new(),
+                codex_home: &codex_home,
+                proxy_enforced: false,
+            },
+            &super::SetupRootOverrides::default(),
+        );
+        let expected_helper =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+        let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
+        let expected_readable =
+            dunce::canonicalize(&readable_root).expect("canonical readable root");
+
+        assert_eq!(write_roots, Vec::<PathBuf>::new());
+        assert!(read_roots.contains(&expected_helper));
+        assert!(read_roots.contains(&expected_cwd));
+        assert!(read_roots.contains(&expected_readable));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| !read_roots.contains(&path))
+        );
+    }
+
+    #[test]
+    fn build_payload_roots_preserves_helper_roots_when_read_override_is_provided() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let policy_cwd = tmp.path().join("policy-cwd");
+        let command_cwd = tmp.path().join("workspace");
+        let readable_root = tmp.path().join("docs");
+        fs::create_dir_all(&policy_cwd).expect("create policy cwd");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&readable_root).expect("create readable root");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        };
+
+        let (read_roots, write_roots) = build_payload_roots(
+            &super::SandboxSetupRequest {
+                policy: &policy,
+                policy_cwd: &policy_cwd,
+                command_cwd: &command_cwd,
+                env_map: &HashMap::new(),
+                codex_home: &codex_home,
+                proxy_enforced: false,
+            },
+            &super::SetupRootOverrides {
+                read_roots: Some(vec![readable_root.clone()]),
+                write_roots: None,
+                deny_write_paths: None,
+            },
+        );
+        let expected_helper =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+        let expected_readable =
+            dunce::canonicalize(&readable_root).expect("canonical readable root");
+
+        assert_eq!(write_roots, Vec::<PathBuf>::new());
+        assert!(read_roots.contains(&expected_helper));
+        assert!(read_roots.contains(&expected_readable));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| read_roots.contains(&path))
+        );
     }
 
     #[test]
