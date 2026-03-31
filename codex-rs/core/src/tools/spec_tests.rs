@@ -497,9 +497,14 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("spawn_agent should use object params");
     };
     assert!(properties.contains_key("task_name"));
+    assert!(properties.contains_key("items"));
     assert!(properties.contains_key("fork_turns"));
+    assert!(!properties.contains_key("message"));
     assert!(!properties.contains_key("fork_context"));
-    assert_eq!(required.as_ref(), Some(&vec!["task_name".to_string()]));
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["task_name".to_string(), "items".to_string()])
+    );
     let output_schema = output_schema
         .as_ref()
         .expect("spawn_agent should define output schema");
