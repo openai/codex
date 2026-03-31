@@ -5,7 +5,6 @@ export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedN
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AdditionalFileSystemPermissions } from "./AdditionalFileSystemPermissions";
-export type { AdditionalMacOsPermissions } from "./AdditionalMacOsPermissions";
 export type { AdditionalNetworkPermissions } from "./AdditionalNetworkPermissions";
 export type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";
 export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotification";
@@ -54,7 +53,6 @@ export type { CommandExecutionApprovalDecision } from "./CommandExecutionApprova
 export type { CommandExecutionOutputDeltaNotification } from "./CommandExecutionOutputDeltaNotification";
 export type { CommandExecutionRequestApprovalParams } from "./CommandExecutionRequestApprovalParams";
 export type { CommandExecutionRequestApprovalResponse } from "./CommandExecutionRequestApprovalResponse";
-export type { CommandExecutionRequestApprovalSkillMetadata } from "./CommandExecutionRequestApprovalSkillMetadata";
 export type { CommandExecutionSource } from "./CommandExecutionSource";
 export type { CommandExecutionStatus } from "./CommandExecutionStatus";
 export type { Config } from "./Config";
@@ -199,9 +197,11 @@ export type { ModelUpgradeInfo } from "./ModelUpgradeInfo";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkApprovalContext } from "./NetworkApprovalContext";
 export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
+export type { NetworkDomainPermission } from "./NetworkDomainPermission";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { NetworkRequirements } from "./NetworkRequirements";
+export type { NetworkUnixSocketPermission } from "./NetworkUnixSocketPermission";
 export type { NonSteerableTurnKind } from "./NonSteerableTurnKind";
 export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";

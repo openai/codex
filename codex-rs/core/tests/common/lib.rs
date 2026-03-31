@@ -14,6 +14,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub mod apps_test_server;
@@ -104,6 +105,36 @@ pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
     test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
 }
 
+pub trait PathExt {
+    fn abs(&self) -> AbsolutePathBuf;
+}
+
+impl PathExt for Path {
+    fn abs(&self) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(self.to_path_buf()).expect("path should already be absolute")
+    }
+}
+
+pub trait PathBufExt {
+    fn abs(&self) -> AbsolutePathBuf;
+}
+
+impl PathBufExt for PathBuf {
+    fn abs(&self) -> AbsolutePathBuf {
+        self.as_path().abs()
+    }
+}
+
+pub trait TempDirExt {
+    fn abs(&self) -> AbsolutePathBuf;
+}
+
+impl TempDirExt for TempDir {
+    fn abs(&self) -> AbsolutePathBuf {
+        self.path().abs()
+    }
+}
+
 pub fn test_tmp_path() -> AbsolutePathBuf {
     test_absolute_path_with_windows("/tmp", Some(r"C:\Users\codex\AppData\Local\Temp"))
 }
@@ -177,15 +208,15 @@ fn default_test_overrides() -> ConfigOverrides {
 
 #[cfg(target_os = "linux")]
 pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
-    if let Ok(path) = std::env::current_exe() {
-        return Ok(path);
-    }
-
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
         .and_then(Option::as_ref)
         .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
     {
+        return Ok(path);
+    }
+
+    if let Ok(path) = std::env::current_exe() {
         return Ok(path);
     }
 

@@ -546,7 +546,12 @@ mod tests {
         request.extensions_mut().insert(state.clone());
 
         let (result, events) = capture_events(|| async {
-            handle_socks5_tcp(request, TcpConnector::default(), None).await
+            handle_socks5_tcp(
+                request,
+                TcpConnector::default(),
+                /*policy_decider*/ None,
+            )
+            .await
         })
         .await;
         assert!(result.is_err(), "proxy-disabled request should be denied");
@@ -584,8 +589,10 @@ mod tests {
             extensions: Extensions::new(),
         };
 
-        let (result, events) =
-            capture_events(|| async { inspect_socks5_udp(request, state, None).await }).await;
+        let (result, events) = capture_events(|| async {
+            inspect_socks5_udp(request, state, /*policy_decider*/ None).await
+        })
+        .await;
         assert!(result.is_err(), "limited-mode UDP request should be denied");
 
         let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)

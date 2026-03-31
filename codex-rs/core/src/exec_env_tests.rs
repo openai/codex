@@ -121,7 +121,7 @@ fn populate_env_inserts_thread_id() {
 fn populate_env_omits_thread_id_when_missing() {
     let vars = make_vars(&[("PATH", "/usr/bin")]);
     let policy = ShellEnvironmentPolicy::default();
-    let result = populate_env(vars, &policy, None);
+    let result = populate_env(vars, &policy, /*thread_id*/ None);
 
     let expected: HashMap<String, String> = hashmap! {
         "PATH".to_string() => "/usr/bin".to_string(),

@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn parses_citations_across_seed_and_delta_boundaries() {
-        let mut parser = AssistantTextStreamParser::new(false);
+        let mut parser = AssistantTextStreamParser::new(/*plan_mode*/ false);
 
         let seeded = parser.push_str("hello <oai-mem-citation>doc");
         let parsed = parser.push_str("1</oai-mem-citation> world");
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn parses_plan_segments_after_citation_stripping() {
-        let mut parser = AssistantTextStreamParser::new(true);
+        let mut parser = AssistantTextStreamParser::new(/*plan_mode*/ true);
 
         let seeded = parser.push_str("Intro\n<proposed");
         let parsed = parser.push_str("_plan>\n- step <oai-mem-citation>doc</oai-mem-citation>\n");

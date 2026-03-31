@@ -216,8 +216,11 @@ async fn process_compacted_history_replaces_developer_messages() {
             phase: None,
         },
     ];
-    let (refreshed, mut expected) =
-        process_compacted_history_with_test_session(compacted_history, None).await;
+    let (refreshed, mut expected) = process_compacted_history_with_test_session(
+        compacted_history,
+        /*previous_turn_settings*/ None,
+    )
+    .await;
     expected.push(ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -241,8 +244,11 @@ async fn process_compacted_history_reinjects_full_initial_context() {
         end_turn: None,
         phase: None,
     }];
-    let (refreshed, mut expected) =
-        process_compacted_history_with_test_session(compacted_history, None).await;
+    let (refreshed, mut expected) = process_compacted_history_with_test_session(
+        compacted_history,
+        /*previous_turn_settings*/ None,
+    )
+    .await;
     expected.push(ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -317,8 +323,11 @@ keep me updated
             phase: None,
         },
     ];
-    let (refreshed, mut expected) =
-        process_compacted_history_with_test_session(compacted_history, None).await;
+    let (refreshed, mut expected) = process_compacted_history_with_test_session(
+        compacted_history,
+        /*previous_turn_settings*/ None,
+    )
+    .await;
     expected.push(ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -363,8 +372,11 @@ async fn process_compacted_history_inserts_context_before_last_real_user_message
         },
     ];
 
-    let (refreshed, initial_context) =
-        process_compacted_history_with_test_session(compacted_history, None).await;
+    let (refreshed, initial_context) = process_compacted_history_with_test_session(
+        compacted_history,
+        /*previous_turn_settings*/ None,
+    )
+    .await;
     let mut expected = vec![
         ResponseItem::Message {
             id: None,

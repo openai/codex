@@ -178,7 +178,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
         },
     ))?;
 
-    metrics.counter("codex.turns", 1, &[("source", "test")])?;
+    metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
     metrics.shutdown()?;
 
     server.join().expect("server join");

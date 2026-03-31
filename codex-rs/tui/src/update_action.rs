@@ -68,32 +68,47 @@ mod tests {
     #[test]
     fn detects_update_action_without_env_mutation() {
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), false, false),
+            detect_update_action(
+                /*is_macos*/ false,
+                std::path::Path::new("/any/path"),
+                /*managed_by_npm*/ false,
+                /*managed_by_bun*/ false
+            ),
             None
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), true, false),
+            detect_update_action(
+                /*is_macos*/ false,
+                std::path::Path::new("/any/path"),
+                /*managed_by_npm*/ true,
+                /*managed_by_bun*/ false
+            ),
             Some(UpdateAction::NpmGlobalLatest)
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), false, true),
+            detect_update_action(
+                /*is_macos*/ false,
+                std::path::Path::new("/any/path"),
+                /*managed_by_npm*/ false,
+                /*managed_by_bun*/ true
+            ),
             Some(UpdateAction::BunGlobalLatest)
         );
         assert_eq!(
             detect_update_action(
-                true,
+                /*is_macos*/ true,
                 std::path::Path::new("/opt/homebrew/bin/codex"),
-                false,
-                false
+                /*managed_by_npm*/ false,
+                /*managed_by_bun*/ false
             ),
             Some(UpdateAction::BrewUpgrade)
         );
         assert_eq!(
             detect_update_action(
-                true,
+                /*is_macos*/ true,
                 std::path::Path::new("/usr/local/bin/codex"),
-                false,
-                false
+                /*managed_by_npm*/ false,
+                /*managed_by_bun*/ false
             ),
             Some(UpdateAction::BrewUpgrade)
         );

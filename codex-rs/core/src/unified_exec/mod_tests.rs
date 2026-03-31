@@ -3,27 +3,26 @@ use super::*;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::make_session_and_context;
-use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
+use crate::exec::ExecCapturePolicy;
+use crate::exec::ExecExpiration;
+use crate::sandboxing::ExecRequest;
 use crate::tools::context::ExecCommandToolOutput;
-use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::process::OutputHandles;
+use codex_sandboxing::SandboxType;
+use codex_utils_output_truncation::approx_token_count;
+use core_test_support::get_remote_test_env;
 use core_test_support::skip_if_sandbox;
+use core_test_support::test_codex::test_env as remote_test_env;
+use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::Duration;
+use tokio::time::Instant;
 
 async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
-    let (session, mut turn) = make_session_and_context().await;
-    turn.approval_policy
-        .set(AskForApproval::Never)
-        .expect("test setup should allow updating approval policy");
-    turn.sandbox_policy
-        .set(SandboxPolicy::DangerFullAccess)
-        .expect("test setup should allow updating sandbox policy");
-    turn.file_system_sandbox_policy =
-        codex_protocol::permissions::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
-    turn.network_sandbox_policy =
-        codex_protocol::permissions::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
+    let (session, turn) = make_session_and_context().await;
     (Arc::new(session), Arc::new(turn))
 }
 
@@ -32,36 +31,151 @@ async fn exec_command(
     turn: &Arc<TurnContext>,
     cmd: &str,
     yield_time_ms: u64,
+    workdir: Option<PathBuf>,
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+    exec_command_with_tty(
+        session,
+        turn,
+        cmd,
+        yield_time_ms,
+        workdir,
+        /*tty*/ true,
+    )
+    .await
+}
+
+fn shell_env() -> HashMap<String, String> {
+    std::env::vars().collect()
+}
+
+fn test_exec_request(
+    turn: &TurnContext,
+    command: Vec<String>,
+    cwd: PathBuf,
+    env: HashMap<String, String>,
+) -> ExecRequest {
+    let windows_sandbox_private_desktop = false;
+    let sandbox_policy = turn.sandbox_policy.get().clone();
+    let file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
+    let network_sandbox_policy = turn.network_sandbox_policy;
+    let network = None;
+    let arg0 = None;
+    ExecRequest::new(
+        command,
+        cwd,
+        env,
+        network,
+        ExecExpiration::DefaultTimeout,
+        ExecCapturePolicy::ShellTool,
+        SandboxType::None,
+        turn.windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        arg0,
+    )
+}
+
+async fn exec_command_with_tty(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    cmd: &str,
+    yield_time_ms: u64,
+    workdir: Option<PathBuf>,
+    tty: bool,
+) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    let cwd = workdir.unwrap_or_else(|| turn.cwd.clone().to_path_buf());
+    let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
+    let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
+
+    let process = Arc::new(
+        manager
+            .open_session_with_exec_env(
+                process_id,
+                &request,
+                tty,
+                Box::new(NoopSpawnLifecycle),
+                turn.environment.as_ref(),
+            )
+            .await?,
+    );
     let context =
         UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
-    let process_id = session
-        .services
-        .unified_exec_manager
-        .allocate_process_id()
-        .await;
+    let started_at = Instant::now();
+    let process_started_alive = !process.has_exited() && process.exit_code().is_none();
+    if process_started_alive {
+        let entry = ProcessEntry {
+            process: Arc::clone(&process),
+            call_id: context.call_id.clone(),
+            process_id,
+            command: command.clone(),
+            tty,
+            network_approval_id: None,
+            session: Arc::downgrade(session),
+            last_used: started_at,
+        };
+        manager
+            .process_store
+            .lock()
+            .await
+            .processes
+            .insert(process_id, entry);
+    }
 
-    session
-        .services
-        .unified_exec_manager
-        .exec_command(
-            ExecCommandRequest {
-                command: vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()],
-                process_id,
-                yield_time_ms,
-                max_output_tokens: None,
-                workdir: None,
-                network: None,
-                tty: true,
-                sandbox_permissions: SandboxPermissions::UseDefault,
-                additional_permissions: None,
-                additional_permissions_preapproved: false,
-                justification: None,
-                prefix_rule: None,
-            },
-            &context,
-        )
-        .await
+    let OutputHandles {
+        output_buffer,
+        output_notify,
+        output_closed,
+        output_closed_notify,
+        cancellation_token,
+    } = process.output_handles();
+    let deadline = started_at + Duration::from_millis(yield_time_ms);
+    let collected = UnifiedExecProcessManager::collect_output_until_deadline(
+        &output_buffer,
+        &output_notify,
+        &output_closed,
+        &output_closed_notify,
+        &cancellation_token,
+        Some(session.subscribe_out_of_band_elicitation_pause_state()),
+        deadline,
+    )
+    .await;
+    let wall_time = Instant::now().saturating_duration_since(started_at);
+    let text = String::from_utf8_lossy(&collected).to_string();
+    let has_exited = process.has_exited();
+    let exit_code = process.exit_code();
+    let response_process_id = if process_started_alive && !has_exited {
+        Some(process_id)
+    } else {
+        manager.release_process_id(process_id).await;
+        None
+    };
+
+    Ok(ExecCommandToolOutput {
+        event_call_id: context.call_id,
+        chunk_id: generate_chunk_id(),
+        wall_time,
+        raw_output: collected,
+        max_output_tokens: None,
+        process_id: response_process_id,
+        exit_code,
+        original_token_count: Some(approx_token_count(&text)),
+        session_command: Some(command),
+    })
+}
+
+#[derive(Debug)]
+struct TestSpawnLifecycle {
+    inherited_fds: Vec<i32>,
+}
+
+impl SpawnLifecycle for TestSpawnLifecycle {
+    fn inherited_fds(&self) -> Vec<i32> {
+        self.inherited_fds.clone()
+    }
 }
 
 async fn write_stdin(
@@ -121,14 +235,17 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
 
     let (session, turn) = test_session_and_turn().await;
 
-    let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
+    let open_shell = exec_command(
+        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
+    )
+    .await?;
     let process_id = open_shell.process_id.expect("expected process_id");
 
     write_stdin(
         &session,
         process_id,
         "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
-        2_500,
+        /*yield_time_ms*/ 2_500,
     )
     .await?;
 
@@ -136,7 +253,7 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
         &session,
         process_id,
         "echo $CODEX_INTERACTIVE_SHELL_VAR\n",
-        2_500,
+        /*yield_time_ms*/ 2_500,
     )
     .await?;
     assert!(
@@ -153,18 +270,28 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
 
     let (session, turn) = test_session_and_turn().await;
 
-    let shell_a = exec_command(&session, &turn, "bash -i", 2_500).await?;
+    let shell_a = exec_command(
+        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
+    )
+    .await?;
     let session_a = shell_a.process_id.expect("expected process id");
 
     write_stdin(
         &session,
         session_a,
         "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
-        2_500,
+        /*yield_time_ms*/ 2_500,
     )
     .await?;
 
-    let out_2 = exec_command(&session, &turn, "echo $CODEX_INTERACTIVE_SHELL_VAR", 2_500).await?;
+    let out_2 = exec_command(
+        &session,
+        &turn,
+        "echo $CODEX_INTERACTIVE_SHELL_VAR",
+        /*yield_time_ms*/ 2_500,
+        /*workdir*/ None,
+    )
+    .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(
         out_2.process_id.is_none(),
@@ -179,7 +306,7 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
         &session,
         shell_a.process_id.expect("expected process id"),
         "echo $CODEX_INTERACTIVE_SHELL_VAR\n",
-        2_500,
+        /*yield_time_ms*/ 2_500,
     )
     .await?;
     assert!(
@@ -198,14 +325,17 @@ async fn unified_exec_timeouts() -> anyhow::Result<()> {
 
     let (session, turn) = test_session_and_turn().await;
 
-    let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
+    let open_shell = exec_command(
+        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
+    )
+    .await?;
     let process_id = open_shell.process_id.expect("expected process id");
 
     write_stdin(
         &session,
         process_id,
         format!("export CODEX_INTERACTIVE_SHELL_VAR={TEST_VAR_VALUE}\n").as_str(),
-        2_500,
+        /*yield_time_ms*/ 2_500,
     )
     .await?;
 
@@ -213,7 +343,7 @@ async fn unified_exec_timeouts() -> anyhow::Result<()> {
         &session,
         process_id,
         "sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n",
-        10,
+        /*yield_time_ms*/ 10,
     )
     .await?;
     assert!(
@@ -223,7 +353,7 @@ async fn unified_exec_timeouts() -> anyhow::Result<()> {
 
     tokio::time::sleep(Duration::from_secs(7)).await;
 
-    let out_3 = write_stdin(&session, process_id, "", 100).await?;
+    let out_3 = write_stdin(&session, process_id, "", /*yield_time_ms*/ 100).await?;
 
     assert!(
         out_3.truncated_output().contains(TEST_VAR_VALUE),
@@ -238,16 +368,23 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
 
     let (session, turn) = test_session_and_turn().await;
-    session.set_out_of_band_elicitation_pause_state(true);
+    session.set_out_of_band_elicitation_pause_state(/*paused*/ true);
 
     let paused_session = Arc::clone(&session);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
-        paused_session.set_out_of_band_elicitation_pause_state(false);
+        paused_session.set_out_of_band_elicitation_pause_state(/*paused*/ false);
     });
 
     let started = tokio::time::Instant::now();
-    let response = exec_command(&session, &turn, "sleep 1 && echo unified-exec-done", 250).await?;
+    let response = exec_command(
+        &session,
+        &turn,
+        "sleep 1 && echo unified-exec-done",
+        /*yield_time_ms*/ 250,
+        /*workdir*/ None,
+    )
+    .await?;
 
     assert!(
         started.elapsed() >= Duration::from_secs(2),
@@ -270,7 +407,14 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
 async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {
     let (session, turn) = test_session_and_turn().await;
 
-    let result = exec_command(&session, &turn, "echo codex", 120_000).await?;
+    let result = exec_command(
+        &session,
+        &turn,
+        "echo codex",
+        /*yield_time_ms*/ 120_000,
+        /*workdir*/ None,
+    )
+    .await?;
 
     assert!(result.process_id.is_some());
     assert!(result.truncated_output().contains("codex"));
@@ -282,7 +426,14 @@ async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {
 #[ignore] // Ignored while we have a better way to test this.
 async fn completed_commands_do_not_persist_sessions() -> anyhow::Result<()> {
     let (session, turn) = test_session_and_turn().await;
-    let result = exec_command(&session, &turn, "echo codex", 2_500).await?;
+    let result = exec_command(
+        &session,
+        &turn,
+        "echo codex",
+        /*yield_time_ms*/ 2_500,
+        /*workdir*/ None,
+    )
+    .await?;
 
     assert!(
         result.process_id.is_some(),
@@ -310,14 +461,17 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
 
     let (session, turn) = test_session_and_turn().await;
 
-    let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
+    let open_shell = exec_command(
+        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
+    )
+    .await?;
     let process_id = open_shell.process_id.expect("expected process id");
 
-    write_stdin(&session, process_id, "exit\n", 2_500).await?;
+    write_stdin(&session, process_id, "exit\n", /*yield_time_ms*/ 2_500).await?;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let err = write_stdin(&session, process_id, "", 100)
+    let err = write_stdin(&session, process_id, "", /*yield_time_ms*/ 100)
         .await
         .expect_err("expected unknown process error");
 
@@ -339,5 +493,132 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
             .is_empty()
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let request = test_exec_request(
+        &turn,
+        vec!["bash".to_string(), "-lc".to_string(), "exit 17".to_string()],
+        PathBuf::from("/tmp"),
+        shell_env(),
+    );
+
+    let environment = codex_exec_server::Environment::default();
+    let process = UnifiedExecProcessManager::default()
+        .open_session_with_exec_env(
+            /*process_id*/ 1234,
+            &request,
+            /*tty*/ false,
+            Box::new(NoopSpawnLifecycle),
+            &environment,
+        )
+        .await?;
+
+    if !process.has_exited() {
+        let exit_signal = process.cancellation_token();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), exit_signal.cancelled())
+                .await
+                .is_ok(),
+            "process did not report exit within timeout"
+        );
+    }
+
+    assert!(process.has_exited());
+    assert_eq!(process.exit_code(), Some(17));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let remote_test_env = remote_test_env().await?;
+    let (_, turn) = make_session_and_context().await;
+    let request = test_exec_request(
+        &turn,
+        vec!["bash".to_string(), "-i".to_string()],
+        PathBuf::from("/tmp"),
+        shell_env(),
+    );
+
+    let manager = UnifiedExecProcessManager::default();
+    let process = manager
+        .open_session_with_exec_env(
+            /*process_id*/ 1234,
+            &request,
+            /*tty*/ true,
+            Box::new(NoopSpawnLifecycle),
+            remote_test_env.environment(),
+        )
+        .await?;
+
+    process.write(b"printf 'remote-unified-exec\\n'\n").await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let crate::unified_exec::process::OutputHandles {
+        output_buffer,
+        output_notify,
+        output_closed,
+        output_closed_notify,
+        cancellation_token,
+    } = process.output_handles();
+    let collected = UnifiedExecProcessManager::collect_output_until_deadline(
+        &output_buffer,
+        &output_notify,
+        &output_closed,
+        &output_closed_notify,
+        &cancellation_token,
+        /*pause_state*/ None,
+        Instant::now() + Duration::from_millis(2_500),
+    )
+    .await;
+
+    assert!(String::from_utf8_lossy(&collected).contains("remote-unified-exec"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let remote_test_env = remote_test_env().await?;
+    let (_, mut turn) = make_session_and_context().await;
+    turn.environment = Arc::new(remote_test_env.environment().clone());
+
+    let request = test_exec_request(
+        &turn,
+        vec!["bash".to_string(), "-lc".to_string(), "echo ok".to_string()],
+        PathBuf::from("/tmp"),
+        shell_env(),
+    );
+
+    let manager = UnifiedExecProcessManager::default();
+    let err = manager
+        .open_session_with_exec_env(
+            /*process_id*/ 1234,
+            &request,
+            /*tty*/ true,
+            Box::new(TestSpawnLifecycle {
+                inherited_fds: vec![42],
+            }),
+            turn.environment.as_ref(),
+        )
+        .await
+        .expect_err("expected inherited fd rejection");
+
+    assert_eq!(
+        err.to_string(),
+        "Failed to create unified exec process: remote exec-server does not support inherited file descriptors"
+    );
     Ok(())
 }

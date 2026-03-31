@@ -1,0 +1,23 @@
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -472,7 +472,19 @@
+         )
+         ld_is_direct_driver = False
+ 
+-    if not ld or toolchain.linker_preference == "rust":
++    # The bootstrap process wrapper is built without the normal rules_rust
++    # process wrapper. On Windows nightly toolchains that expose rust-lld, the
++    # C++ toolchain path currently resolves to clang++ while still emitting
++    # MSVC-style arguments, so prefer rust-lld for this one bootstrap binary
++    # instead of switching all Rust actions over.
++    use_bootstrap_rust_linker = (
++        toolchain.target_os.startswith("windows") and
++        toolchain.linker != None and
++        hasattr(ctx.executable, "_bootstrap_process_wrapper") and
++        not ctx.executable._process_wrapper
++    )
++
++    if not ld or toolchain.linker_preference == "rust" or use_bootstrap_rust_linker:
+         ld = toolchain.linker.path
+         ld_is_direct_driver = toolchain.linker_type == "direct"
+ 

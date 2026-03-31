@@ -68,8 +68,8 @@ fn detects_term_program() {
             TerminalName::Iterm2,
             Some("iTerm.app"),
             Some("3.5.0"),
-            None,
-            None,
+            /*term*/ None,
+            /*multiplexer*/ None,
         ),
         "term_program_with_version_info"
     );
@@ -85,7 +85,13 @@ fn detects_term_program() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Iterm2, Some("iTerm.app"), None, None, None),
+        terminal_info(
+            TerminalName::Iterm2,
+            Some("iTerm.app"),
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "term_program_without_version_info"
     );
     assert_eq!(
@@ -100,7 +106,13 @@ fn detects_term_program() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Iterm2, Some("iTerm.app"), None, None, None),
+        terminal_info(
+            TerminalName::Iterm2,
+            Some("iTerm.app"),
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "term_program_overrides_wezterm_info"
     );
     assert_eq!(
@@ -116,7 +128,13 @@ fn detects_iterm2() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Iterm2, None, None, None, None),
+        terminal_info(
+            TerminalName::Iterm2,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "iterm_session_id_info"
     );
     assert_eq!(
@@ -135,9 +153,9 @@ fn detects_apple_terminal() {
         terminal_info(
             TerminalName::AppleTerminal,
             Some("Apple_Terminal"),
-            None,
-            None,
-            None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None,
         ),
         "apple_term_program_info"
     );
@@ -151,7 +169,13 @@ fn detects_apple_terminal() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::AppleTerminal, None, None, None, None),
+        terminal_info(
+            TerminalName::AppleTerminal,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "apple_term_session_id_info"
     );
     assert_eq!(
@@ -167,7 +191,13 @@ fn detects_ghostty() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Ghostty, Some("Ghostty"), None, None, None),
+        terminal_info(
+            TerminalName::Ghostty,
+            Some("Ghostty"),
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "ghostty_term_program_info"
     );
     assert_eq!(
@@ -189,8 +219,8 @@ fn detects_vscode() {
             TerminalName::VsCode,
             Some("vscode"),
             Some("1.86.0"),
-            None,
-            None
+            /*term*/ None,
+            /*multiplexer*/ None
         ),
         "vscode_term_program_info"
     );
@@ -213,8 +243,8 @@ fn detects_warp_terminal() {
             TerminalName::WarpTerminal,
             Some("WarpTerminal"),
             Some("v0.2025.12.10.08.12.stable_03"),
-            None,
-            None,
+            /*term*/ None,
+            /*multiplexer*/ None,
         ),
         "warp_term_program_info"
     );
@@ -237,7 +267,7 @@ fn detects_tmux_multiplexer() {
         terminal_info(
             TerminalName::Unknown,
             Some("xterm-256color"),
-            None,
+            /*version*/ None,
             Some("screen-256color"),
             Some(Multiplexer::Tmux { version: None }),
         ),
@@ -272,15 +302,15 @@ fn detects_tmux_client_termtype() {
     let env = FakeEnvironment::new()
         .with_var("TMUX", "/tmp/tmux-1000/default,123,0")
         .with_var("TERM_PROGRAM", "tmux")
-        .with_tmux_client_info(Some("WezTerm"), None);
+        .with_tmux_client_info(Some("WezTerm"), /*termname*/ None);
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
         terminal_info(
             TerminalName::WezTerm,
             Some("WezTerm"),
-            None,
-            None,
+            /*version*/ None,
+            /*term*/ None,
             Some(Multiplexer::Tmux { version: None }),
         ),
         "tmux_client_termtype_info"
@@ -297,14 +327,14 @@ fn detects_tmux_client_termname() {
     let env = FakeEnvironment::new()
         .with_var("TMUX", "/tmp/tmux-1000/default,123,0")
         .with_var("TERM_PROGRAM", "tmux")
-        .with_tmux_client_info(None, Some("xterm-256color"));
+        .with_tmux_client_info(/*termtype*/ None, Some("xterm-256color"));
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
         terminal_info(
             TerminalName::Unknown,
-            None,
-            None,
+            /*term_program*/ None,
+            /*version*/ None,
             Some("xterm-256color"),
             Some(Multiplexer::Tmux { version: None })
         ),
@@ -351,7 +381,13 @@ fn detects_wezterm() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::WezTerm, None, Some("2024.2"), None, None),
+        terminal_info(
+            TerminalName::WezTerm,
+            /*term_program*/ None,
+            Some("2024.2"),
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "wezterm_version_info"
     );
     assert_eq!(
@@ -370,8 +406,8 @@ fn detects_wezterm() {
             TerminalName::WezTerm,
             Some("WezTerm"),
             Some("2024.2"),
-            None,
-            None
+            /*term*/ None,
+            /*multiplexer*/ None
         ),
         "wezterm_term_program_info"
     );
@@ -385,7 +421,13 @@ fn detects_wezterm() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::WezTerm, None, None, None, None),
+        terminal_info(
+            TerminalName::WezTerm,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "wezterm_empty_info"
     );
     assert_eq!(
@@ -401,7 +443,13 @@ fn detects_kitty() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Kitty, None, None, None, None),
+        terminal_info(
+            TerminalName::Kitty,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "kitty_window_id_info"
     );
     assert_eq!(
@@ -420,8 +468,8 @@ fn detects_kitty() {
             TerminalName::Kitty,
             Some("kitty"),
             Some("0.30.1"),
-            None,
-            None
+            /*term*/ None,
+            /*multiplexer*/ None
         ),
         "kitty_term_program_info"
     );
@@ -437,7 +485,13 @@ fn detects_kitty() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Kitty, None, None, None, None),
+        terminal_info(
+            TerminalName::Kitty,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "kitty_term_over_alacritty_info"
     );
     assert_eq!(
@@ -453,7 +507,13 @@ fn detects_alacritty() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Alacritty, None, None, None, None),
+        terminal_info(
+            TerminalName::Alacritty,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "alacritty_socket_info"
     );
     assert_eq!(
@@ -472,8 +532,8 @@ fn detects_alacritty() {
             TerminalName::Alacritty,
             Some("Alacritty"),
             Some("0.13.2"),
-            None,
-            None,
+            /*term*/ None,
+            /*multiplexer*/ None,
         ),
         "alacritty_term_program_info"
     );
@@ -487,7 +547,13 @@ fn detects_alacritty() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Alacritty, None, None, None, None),
+        terminal_info(
+            TerminalName::Alacritty,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "alacritty_term_info"
     );
     assert_eq!(
@@ -503,7 +569,13 @@ fn detects_konsole() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Konsole, None, Some("230800"), None, None),
+        terminal_info(
+            TerminalName::Konsole,
+            /*term_program*/ None,
+            Some("230800"),
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "konsole_version_info"
     );
     assert_eq!(
@@ -522,8 +594,8 @@ fn detects_konsole() {
             TerminalName::Konsole,
             Some("Konsole"),
             Some("230800"),
-            None,
-            None
+            /*term*/ None,
+            /*multiplexer*/ None
         ),
         "konsole_term_program_info"
     );
@@ -537,7 +609,13 @@ fn detects_konsole() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Konsole, None, None, None, None),
+        terminal_info(
+            TerminalName::Konsole,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "konsole_empty_info"
     );
     assert_eq!(
@@ -553,7 +631,13 @@ fn detects_gnome_terminal() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::GnomeTerminal, None, None, None, None),
+        terminal_info(
+            TerminalName::GnomeTerminal,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "gnome_terminal_screen_info"
     );
     assert_eq!(
@@ -572,8 +656,8 @@ fn detects_gnome_terminal() {
             TerminalName::GnomeTerminal,
             Some("gnome-terminal"),
             Some("3.50"),
-            None,
-            None,
+            /*term*/ None,
+            /*multiplexer*/ None,
         ),
         "gnome_terminal_term_program_info"
     );
@@ -590,7 +674,13 @@ fn detects_vte() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Vte, None, Some("7000"), None, None),
+        terminal_info(
+            TerminalName::Vte,
+            /*term_program*/ None,
+            Some("7000"),
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "vte_version_info"
     );
     assert_eq!(
@@ -605,7 +695,13 @@ fn detects_vte() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Vte, Some("VTE"), Some("7000"), None, None),
+        terminal_info(
+            TerminalName::Vte,
+            Some("VTE"),
+            Some("7000"),
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "vte_term_program_info"
     );
     assert_eq!(
@@ -618,7 +714,13 @@ fn detects_vte() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Vte, None, None, None, None),
+        terminal_info(
+            TerminalName::Vte,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "vte_empty_info"
     );
     assert_eq!(terminal.user_agent_token(), "VTE", "vte_empty_user_agent");
@@ -630,7 +732,13 @@ fn detects_windows_terminal() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::WindowsTerminal, None, None, None, None),
+        terminal_info(
+            TerminalName::WindowsTerminal,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "wt_session_info"
     );
     assert_eq!(
@@ -649,8 +757,8 @@ fn detects_windows_terminal() {
             TerminalName::WindowsTerminal,
             Some("WindowsTerminal"),
             Some("1.21"),
-            None,
-            None,
+            /*term*/ None,
+            /*multiplexer*/ None,
         ),
         "windows_terminal_term_program_info"
     );
@@ -669,10 +777,10 @@ fn detects_term_fallbacks() {
         terminal,
         terminal_info(
             TerminalName::Unknown,
-            None,
-            None,
+            /*term_program*/ None,
+            /*version*/ None,
             Some("xterm-256color"),
-            None,
+            /*multiplexer*/ None,
         ),
         "term_fallback_info"
     );
@@ -686,7 +794,13 @@ fn detects_term_fallbacks() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Dumb, None, None, Some("dumb"), None),
+        terminal_info(
+            TerminalName::Dumb,
+            /*term_program*/ None,
+            /*version*/ None,
+            Some("dumb"),
+            /*multiplexer*/ None
+        ),
         "dumb_term_info"
     );
     assert_eq!(terminal.user_agent_token(), "dumb", "dumb_term_user_agent");
@@ -695,7 +809,13 @@ fn detects_term_fallbacks() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(TerminalName::Unknown, None, None, None, None),
+        terminal_info(
+            TerminalName::Unknown,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            /*multiplexer*/ None
+        ),
         "unknown_info"
     );
     assert_eq!(terminal.user_agent_token(), "unknown", "unknown_user_agent");

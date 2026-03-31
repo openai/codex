@@ -27,8 +27,8 @@ fn test_sed_print_specific_lines() -> Result<()> {
                 program: "sed".to_string(),
                 flags: vec![MatchedFlag::new("-n")],
                 args: vec![
-                    MatchedArg::new(1, ArgType::SedCommand, "122,202p")?,
-                    MatchedArg::new(2, ArgType::ReadableFile, "hello.txt")?,
+                    MatchedArg::new(/*index*/ 1, ArgType::SedCommand, "122,202p")?,
+                    MatchedArg::new(/*index*/ 2, ArgType::ReadableFile, "hello.txt")?,
                 ],
                 system_path: vec!["/usr/bin/sed".to_string()],
                 ..Default::default()
@@ -52,7 +52,11 @@ fn test_sed_print_specific_lines_with_e_flag() -> Result<()> {
                     MatchedOpt::new("-e", "122,202p", ArgType::SedCommand)
                         .expect("should validate")
                 ],
-                args: vec![MatchedArg::new(3, ArgType::ReadableFile, "hello.txt")?],
+                args: vec![MatchedArg::new(
+                    /*index*/ 3,
+                    ArgType::ReadableFile,
+                    "hello.txt"
+                )?],
                 system_path: vec!["/usr/bin/sed".to_string()],
             }
         }),

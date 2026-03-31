@@ -17,6 +17,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentStatusEntry;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
@@ -161,7 +162,7 @@ pub(crate) fn thread_spawn_source(
 pub(crate) fn parse_collab_input(
     message: Option<String>,
     items: Option<Vec<UserInput>>,
-) -> Result<Vec<UserInput>, FunctionCallError> {
+) -> Result<Op, FunctionCallError> {
     match (message, items) {
         (Some(_), Some(_)) => Err(FunctionCallError::RespondToModel(
             "Provide either message or items, but not both".to_string(),
@@ -178,7 +179,8 @@ pub(crate) fn parse_collab_input(
             Ok(vec![UserInput::Text {
                 text: message,
                 text_elements: Vec::new(),
-            }])
+            }]
+            .into())
         }
         (None, Some(items)) => {
             if items.is_empty() {
@@ -186,27 +188,9 @@ pub(crate) fn parse_collab_input(
                     "Items can't be empty".to_string(),
                 ));
             }
-            Ok(items)
+            Ok(items.into())
         }
     }
-}
-
-pub(crate) fn input_preview(items: &[UserInput]) -> String {
-    let parts: Vec<String> = items
-        .iter()
-        .map(|item| match item {
-            UserInput::Text { text, .. } => text.clone(),
-            UserInput::Image { .. } => "[image]".to_string(),
-            UserInput::LocalImage { path } => format!("[local_image:{}]", path.display()),
-            UserInput::Skill { name, path } => {
-                format!("[skill:${name}]({})", path.display())
-            }
-            UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
-            _ => "[input]".to_string(),
-        })
-        .collect();
-
-    parts.join("\n")
 }
 
 /// Builds the base config snapshot for a newly spawned sub-agent.
@@ -281,7 +265,7 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
 }
 
 pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    if child_depth >= config.agent_max_depth {
+    if child_depth >= config.agent_max_depth && !config.features.enabled(Feature::MultiAgentV2) {
         let _ = config.features.disable(Feature::SpawnCsv);
         let _ = config.features.disable(Feature::Collab);
     }

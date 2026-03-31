@@ -12,6 +12,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -74,7 +75,7 @@ fn truncates_before_requested_user_message() {
         .collect();
     let truncated = truncate_before_nth_user_message(
         InitialHistory::Forked(initial),
-        1,
+        /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -99,7 +100,7 @@ fn truncates_before_requested_user_message() {
         .collect();
     let truncated2 = truncate_before_nth_user_message(
         InitialHistory::Forked(initial2.clone()),
-        2,
+        /*n*/ 2,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -209,7 +210,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
 
     let truncated = truncate_before_nth_user_message(
         InitialHistory::Forked(rollout_items),
-        1,
+        /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -236,13 +237,16 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
-    config.cwd = config.codex_home.clone();
+    config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.clone(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
     let thread_1 = manager
         .start_thread(config.clone())
@@ -275,7 +279,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
-    config.cwd = config.codex_home.clone();
+    config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
     config.model_catalog = None;
     config
@@ -291,6 +295,9 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         auth_manager,
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -408,7 +415,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
-    config.cwd = config.codex_home.clone();
+    config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
     let auth_manager =
@@ -418,6 +425,9 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let source = manager
@@ -505,7 +515,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
-    config.cwd = config.codex_home.clone();
+    config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
     let auth_manager =
@@ -515,6 +525,9 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let source = manager
@@ -591,7 +604,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
-    config.cwd = config.codex_home.clone();
+    config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
     let auth_manager =
@@ -601,6 +614,9 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let source = manager

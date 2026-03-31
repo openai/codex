@@ -74,7 +74,8 @@ fn truncates_rollout_from_start_before_nth_user_only() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, 1);
+    let truncated =
+        truncate_rollout_before_nth_user_message_from_start(&rollout, /*n_from_start*/ 1);
     let expected = vec![
         RolloutItem::ResponseItem(items[0].clone()),
         RolloutItem::ResponseItem(items[1].clone()),
@@ -85,7 +86,8 @@ fn truncates_rollout_from_start_before_nth_user_only() {
         serde_json::to_value(&expected).unwrap()
     );
 
-    let truncated2 = truncate_rollout_before_nth_user_message_from_start(&rollout, 2);
+    let truncated2 =
+        truncate_rollout_before_nth_user_message_from_start(&rollout, /*n_from_start*/ 2);
     assert_eq!(
         serde_json::to_value(&truncated2).unwrap(),
         serde_json::to_value(&rollout).unwrap()
@@ -126,7 +128,10 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
 
     // Effective user history after applying rollback(1) is: u1, u3, u4.
     // So n_from_start=2 should cut before u4 (not u3).
-    let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 2);
+    let truncated = truncate_rollout_before_nth_user_message_from_start(
+        &rollout_items,
+        /*n_from_start*/ 2,
+    );
     let expected = rollout_items[..7].to_vec();
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
@@ -149,7 +154,10 @@ async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
+    let truncated = truncate_rollout_before_nth_user_message_from_start(
+        &rollout_items,
+        /*n_from_start*/ 1,
+    );
     let expected: Vec<RolloutItem> = vec![
         RolloutItem::ResponseItem(items[0].clone()),
         RolloutItem::ResponseItem(items[1].clone()),

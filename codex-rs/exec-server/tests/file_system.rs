@@ -36,7 +36,7 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
             _server: Some(server),
         })
     } else {
-        let environment = Environment::create(None).await?;
+        let environment = Environment::create(/*exec_server_url*/ None).await?;
         Ok(FileSystemContext {
             file_system: environment.get_filesystem(),
             _server: None,

@@ -12,8 +12,8 @@ use codex_core::auth::RefreshTokenError;
 use codex_core::auth::load_auth_dot_json;
 use codex_core::auth::save_auth;
 use codex_core::error::RefreshTokenFailedReason;
-use codex_core::token_data::IdTokenInfo;
-use codex_core::token_data::TokenData;
+use codex_login::token_data::IdTokenInfo;
+use codex_login::token_data::TokenData;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
@@ -960,7 +960,7 @@ impl RefreshTokenTestContext {
 
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
-            false,
+            /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
         );
 

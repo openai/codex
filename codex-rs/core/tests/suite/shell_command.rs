@@ -112,7 +112,13 @@ async fn shell_command_works() -> anyhow::Result<()> {
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call";
-    mount_shell_responses(&harness, call_id, "echo 'hello, world'", None).await;
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "echo 'hello, world'",
+        /*login*/ None,
+    )
+    .await;
     harness.submit("run the echo command").await?;
 
     let output = harness.function_call_stdout(call_id).await;
@@ -183,7 +189,13 @@ async fn pipe_output_with_login() -> anyhow::Result<()> {
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call-second-extra-no-login";
-    mount_shell_responses(&harness, call_id, "echo 'hello, world' | cat", None).await;
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "echo 'hello, world' | cat",
+        /*login*/ None,
+    )
+    .await;
     harness.submit("run the command without login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
@@ -224,7 +236,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
         &harness,
         call_id,
         command,
-        None,
+        /*login*/ None,
         Duration::from_millis(200),
     )
     .await;

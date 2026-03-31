@@ -268,12 +268,13 @@ system_path=[{fake_cp:?}]
             program: "cp".into(),
             args: vec![
                 MatchedArg::new(
-                    0,
+                    /*index*/ 0,
                     ArgType::ReadableFile,
                     root_path.parent().unwrap().to_str().unwrap(),
                 )
                 .map_err(|e| anyhow!("{e:?}"))?,
-                MatchedArg::new(1, ArgType::WriteableFile, &dest).map_err(|e| anyhow!("{e:?}"))?,
+                MatchedArg::new(/*index*/ 1, ArgType::WriteableFile, &dest)
+                    .map_err(|e| anyhow!("{e:?}"))?,
             ],
             ..Default::default()
         };

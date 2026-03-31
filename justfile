@@ -14,6 +14,11 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
+# Start codex-exec-server and run codex-tui.
+[no-cd]
+tui-with-exec-server *args:
+    ./scripts/run_tui_with_exec_server.sh "$@"
+
 # Run the CLI version of the file-search crate.
 file-search *args:
     cargo run --bin codex-file-search -- "$@"
@@ -62,10 +67,17 @@ bazel-lock-check:
     ./scripts/check-module-bazel-lock.sh
 
 bazel-test:
-    bazel test //... --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
+
+bazel-clippy:
+    bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
+
+[no-cd]
+bazel-argument-comment-lint:
+    bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh)
 
 bazel-remote-test:
-    bazel test //... --config=remote --platforms=//:rbe --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
 
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
@@ -89,11 +101,15 @@ write-hooks-schema:
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
 argument-comment-lint *args:
-    ./tools/argument-comment-lint/run-prebuilt-linter.sh "$@"
+    if [ "$#" -eq 0 ]; then \
+      bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh); \
+    else \
+      ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
+    fi
 
 [no-cd]
 argument-comment-lint-from-source *args:
-    ./tools/argument-comment-lint/run.sh "$@"
+    ./tools/argument-comment-lint/run.py "$@"
 
 # Tail logs from the state SQLite database
 log *args:

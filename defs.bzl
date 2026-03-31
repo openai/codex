@@ -13,6 +13,18 @@ PLATFORMS = [
     "windows_arm64",
 ]
 
+# The Bazel-built windows-gnullvm binaries that pull in V8 need a larger PE
+# stack reserve than the default linker setting. Thread the flag through the
+# executable and test entry points so the final linked artifacts behave the same
+# in normal builds and under `bazel test`.
+WINDOWS_GNULLVM_RUSTC_STACK_FLAGS = select({
+    "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
+        "-C",
+        "link-arg=-Wl,--stack,8388608",
+    ],
+    "//conditions:default": [],
+})
+
 def multiplatform_binaries(name, platforms = PLATFORMS):
     for platform in platforms:
         platform_data(
@@ -45,6 +57,9 @@ def _workspace_root_test_impl(ctx):
     )
 
     runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
+    for data_dep in ctx.attr.data:
+        runfiles = runfiles.merge(ctx.runfiles(files = data_dep[DefaultInfo].files.to_list()))
+        runfiles = runfiles.merge(data_dep[DefaultInfo].default_runfiles)
 
     return [
         DefaultInfo(
@@ -61,6 +76,9 @@ workspace_root_test = rule(
     implementation = _workspace_root_test_impl,
     test = True,
     attrs = {
+        "data": attr.label_list(
+            allow_files = True,
+        ),
         "env": attr.string_dict(),
         "test_bin": attr.label(
             cfg = "target",
@@ -145,9 +163,28 @@ def codex_rust_crate(
         "INSTA_SNAPSHOT_PATH": "src",
     }
 
+    native.filegroup(
+        name = "package-files",
+        srcs = native.glob(
+            ["**"],
+            exclude = [
+                "**/BUILD.bazel",
+                "BUILD.bazel",
+                "target/**",
+            ],
+            allow_empty = True,
+        ),
+        visibility = ["//visibility:public"],
+    )
+
     rustc_env = {
         "BAZEL_PACKAGE": native.package_name(),
     } | rustc_env
+
+    manifest_relpath = native.package_name()
+    if manifest_relpath.startswith("codex-rs/"):
+        manifest_relpath = manifest_relpath[len("codex-rs/"):]
+    manifest_path = manifest_relpath + "/Cargo.toml"
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
 
@@ -188,11 +225,14 @@ def codex_rust_crate(
             name = unit_test_binary,
             crate = name,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+            # Unit tests also compile to standalone Windows executables, so
+            # keep their stack reserve aligned with binaries and integration
+            # tests under gnullvm.
             # Bazel has emitted both `codex-rs/<crate>/...` and
             # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
             # prefix so the workspace-root launcher sees Cargo-like metadata
             # such as `tui/src/...`.
-            rustc_flags = rustc_flags_extra + [
+            rustc_flags = rustc_flags_extra + WINDOWS_GNULLVM_RUSTC_STACK_FLAGS + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],
@@ -224,7 +264,7 @@ def codex_rust_crate(
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
             edition = crate_edition,
-            rustc_flags = rustc_flags_extra,
+            rustc_flags = rustc_flags_extra + WINDOWS_GNULLVM_RUSTC_STACK_FLAGS,
             srcs = native.glob(["src/**/*.rs"]),
             visibility = ["//visibility:public"],
         )
@@ -252,7 +292,7 @@ def codex_rust_crate(
             # Bazel has emitted both `codex-rs/<crate>/...` and
             # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
             # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
-            rustc_flags = rustc_flags_extra + [
+            rustc_flags = rustc_flags_extra + WINDOWS_GNULLVM_RUSTC_STACK_FLAGS + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],

@@ -11,6 +11,14 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 
+use crate::codex::make_session_and_context;
+use crate::tools::context::ExecCommandToolOutput;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
+use crate::tools::registry::ToolHandler;
+use crate::turn_diff_tracker::TurnDiffTracker;
+use tokio::sync::Mutex;
+
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello"}"#;
@@ -23,7 +31,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -44,7 +52,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -70,7 +78,7 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -90,7 +98,7 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -107,7 +115,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        false,
+        /*allow_login_shell*/ false,
     )
     .expect_err("explicit login should be rejected");
 
@@ -136,8 +144,13 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         })?,
     });
 
-    let command = get_command(&args, Arc::new(default_user_shell()), &shell_mode, true)
-        .map_err(anyhow::Error::msg)?;
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &shell_mode,
+        /*allow_login_shell*/ true,
+    )
+    .map_err(anyhow::Error::msg)?;
 
     assert_eq!(
         command,
@@ -181,4 +194,134 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
         })
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn exec_command_pre_tool_use_payload_uses_raw_command() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
+    };
+    let (session, turn) = make_session_and_context().await;
+    let handler = UnifiedExecHandler;
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-43".to_string(),
+            tool_name: "exec_command".to_string(),
+            tool_namespace: None,
+            payload,
+        }),
+        Some(crate::tools::registry::PreToolUsePayload {
+            command: "printf exec command".to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
+    };
+    let (session, turn) = make_session_and_context().await;
+    let handler = UnifiedExecHandler;
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-44".to_string(),
+            tool_name: "write_stdin".to_string(),
+            tool_namespace: None,
+            payload,
+        }),
+        None
+    );
+}
+
+#[test]
+fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_commands() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "echo three", "tty": false }).to_string(),
+    };
+    let output = ExecCommandToolOutput {
+        event_call_id: "event-43".to_string(),
+        chunk_id: "chunk-1".to_string(),
+        wall_time: std::time::Duration::from_millis(498),
+        raw_output: b"three".to_vec(),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        session_command: Some(vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo three".to_string(),
+        ]),
+    };
+
+    assert_eq!(
+        UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
+        Some(crate::tools::registry::PostToolUsePayload {
+            command: "echo three".to_string(),
+            tool_response: serde_json::json!("three"),
+        })
+    );
+}
+
+#[test]
+fn exec_command_post_tool_use_payload_skips_interactive_exec() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "echo three", "tty": true }).to_string(),
+    };
+    let output = ExecCommandToolOutput {
+        event_call_id: "event-44".to_string(),
+        chunk_id: "chunk-1".to_string(),
+        wall_time: std::time::Duration::from_millis(498),
+        raw_output: b"three".to_vec(),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        session_command: Some(vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo three".to_string(),
+        ]),
+    };
+
+    assert_eq!(
+        UnifiedExecHandler.post_tool_use_payload("call-44", &payload, &output),
+        None
+    );
+}
+
+#[test]
+fn exec_command_post_tool_use_payload_skips_running_sessions() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "echo three", "tty": false }).to_string(),
+    };
+    let output = ExecCommandToolOutput {
+        event_call_id: "event-45".to_string(),
+        chunk_id: "chunk-1".to_string(),
+        wall_time: std::time::Duration::from_millis(498),
+        raw_output: b"three".to_vec(),
+        max_output_tokens: None,
+        process_id: Some(45),
+        exit_code: None,
+        original_token_count: None,
+        session_command: Some(vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo three".to_string(),
+        ]),
+    };
+
+    assert_eq!(
+        UnifiedExecHandler.post_tool_use_payload("call-45", &payload, &output),
+        None
+    );
 }

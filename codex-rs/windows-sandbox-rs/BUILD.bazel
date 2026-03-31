@@ -7,5 +7,4 @@ codex_rust_crate(
         "Cargo.toml",
         "codex-windows-sandbox-setup.manifest",
     ],
-    crate_edition = "2021",
 )

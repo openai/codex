@@ -32,7 +32,7 @@ fn default_linux_sandbox_uses_platform_sandbox_tag() {
         &SandboxPolicy::new_read_only_policy(),
         WindowsSandboxLevel::Disabled,
     );
-    let expected = get_platform_sandbox(false)
+    let expected = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
         .map(SandboxType::as_metric_tag)
         .unwrap_or("none");
     assert_eq!(actual, expected);

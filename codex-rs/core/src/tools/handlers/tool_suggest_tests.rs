@@ -5,9 +5,11 @@ use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
-use crate::tools::discoverable::DiscoverablePluginInfo;
-use crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client;
 use codex_app_server_protocol::AppInfo;
+use codex_tools::DiscoverablePluginInfo;
+use codex_tools::DiscoverableTool;
+use codex_tools::DiscoverableToolAction;
+use codex_tools::DiscoverableToolType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -160,54 +162,6 @@ fn build_tool_suggestion_meta_uses_expected_shape() {
 }
 
 #[test]
-fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
-    let discoverable_tools = vec![
-        DiscoverableTool::Connector(Box::new(AppInfo {
-            id: "connector_google_calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events and schedules.".to_string()),
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some("https://example.test/google-calendar".to_string()),
-            is_accessible: false,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        })),
-        DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
-            id: "slack@openai-curated".to_string(),
-            name: "Slack".to_string(),
-            description: Some("Search Slack messages".to_string()),
-            has_skills: true,
-            mcp_server_names: vec!["slack".to_string()],
-            app_connector_ids: vec!["connector_slack".to_string()],
-        })),
-    ];
-
-    assert_eq!(
-        filter_tool_suggest_discoverable_tools_for_client(discoverable_tools, Some("codex-tui"),),
-        vec![DiscoverableTool::Connector(Box::new(AppInfo {
-            id: "connector_google_calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events and schedules.".to_string()),
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some("https://example.test/google-calendar".to_string()),
-            is_accessible: false,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        }))]
-    );
-}
-
-#[test]
 fn verified_connector_suggestion_completed_requires_accessible_connector() {
     let accessible_connectors = vec![AppInfo {
         id: "calendar".to_string(),
@@ -231,6 +185,34 @@ fn verified_connector_suggestion_completed_requires_accessible_connector() {
     ));
     assert!(!verified_connector_suggestion_completed(
         "gmail",
+        &accessible_connectors,
+    ));
+}
+
+#[test]
+fn all_suggested_connectors_picked_up_requires_every_expected_connector() {
+    let accessible_connectors = vec![AppInfo {
+        id: "calendar".to_string(),
+        name: "Google Calendar".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: true,
+        is_enabled: false,
+        plugin_display_names: Vec::new(),
+    }];
+
+    assert!(all_suggested_connectors_picked_up(
+        &["calendar".to_string()],
+        &accessible_connectors,
+    ));
+    assert!(!all_suggested_connectors_picked_up(
+        &["calendar".to_string(), "gmail".to_string()],
         &accessible_connectors,
     ));
 }

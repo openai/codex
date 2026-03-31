@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
-assertion_line: 1062
 expression: "render_before_after_scroll_snapshot(ColumnWidthMode::Fixed, 96)"
 ---
 before scroll:

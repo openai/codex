@@ -1,6 +1,5 @@
 ---
 source: tui/src/onboarding/trust_directory.rs
-assertion_line: 218
 expression: terminal.backend()
 ---
 > You are in /workspace/project

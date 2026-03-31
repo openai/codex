@@ -41,7 +41,14 @@ pub struct IdTokenInfo {
 impl IdTokenInfo {
     pub fn get_chatgpt_plan_type(&self) -> Option<String> {
         self.chatgpt_plan_type.as_ref().map(|t| match t {
-            PlanType::Known(plan) => format!("{plan:?}"),
+            PlanType::Known(plan) => plan.display_name().to_string(),
+            PlanType::Unknown(s) => s.clone(),
+        })
+    }
+
+    pub fn get_chatgpt_plan_type_raw(&self) -> Option<String> {
+        self.chatgpt_plan_type.as_ref().map(|t| match t {
+            PlanType::Known(plan) => plan.raw_value().to_string(),
             PlanType::Unknown(s) => s.clone(),
         })
     }
@@ -49,9 +56,7 @@ impl IdTokenInfo {
     pub fn is_workspace_account(&self) -> bool {
         matches!(
             self.chatgpt_plan_type,
-            Some(PlanType::Known(
-                KnownPlan::Team | KnownPlan::Business | KnownPlan::Enterprise | KnownPlan::Edu
-            ))
+            Some(PlanType::Known(plan)) if plan.is_workspace_account()
         )
     }
 }
@@ -71,15 +76,19 @@ impl PlanType {
             "plus" => Self::Known(KnownPlan::Plus),
             "pro" => Self::Known(KnownPlan::Pro),
             "team" => Self::Known(KnownPlan::Team),
+            "self_serve_business_usage_based" => {
+                Self::Known(KnownPlan::SelfServeBusinessUsageBased)
+            }
             "business" => Self::Known(KnownPlan::Business),
-            "enterprise" => Self::Known(KnownPlan::Enterprise),
+            "enterprise_cbp_usage_based" => Self::Known(KnownPlan::EnterpriseCbpUsageBased),
+            "enterprise" | "hc" => Self::Known(KnownPlan::Enterprise),
             "education" | "edu" => Self::Known(KnownPlan::Edu),
             _ => Self::Unknown(raw.to_string()),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KnownPlan {
     Free,
@@ -87,9 +96,58 @@ pub enum KnownPlan {
     Plus,
     Pro,
     Team,
+    #[serde(rename = "self_serve_business_usage_based")]
+    SelfServeBusinessUsageBased,
     Business,
+    #[serde(rename = "enterprise_cbp_usage_based")]
+    EnterpriseCbpUsageBased,
+    #[serde(alias = "hc")]
     Enterprise,
     Edu,
+}
+
+impl KnownPlan {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Go => "Go",
+            Self::Plus => "Plus",
+            Self::Pro => "Pro",
+            Self::Team => "Team",
+            Self::SelfServeBusinessUsageBased => "Self Serve Business Usage Based",
+            Self::Business => "Business",
+            Self::EnterpriseCbpUsageBased => "Enterprise CBP Usage Based",
+            Self::Enterprise => "Enterprise",
+            Self::Edu => "Edu",
+        }
+    }
+
+    pub fn raw_value(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Go => "go",
+            Self::Plus => "plus",
+            Self::Pro => "pro",
+            Self::Team => "team",
+            Self::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
+            Self::Business => "business",
+            Self::EnterpriseCbpUsageBased => "enterprise_cbp_usage_based",
+            Self::Enterprise => "enterprise",
+            Self::Edu => "edu",
+        }
+    }
+
+    pub fn is_workspace_account(self) -> bool {
+        matches!(
+            self,
+            Self::Team
+                | Self::SelfServeBusinessUsageBased
+                | Self::Business
+                | Self::EnterpriseCbpUsageBased
+                | Self::Enterprise
+                | Self::Edu
+        )
+    }
 }
 
 #[derive(Deserialize)]

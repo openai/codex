@@ -58,7 +58,7 @@ async fn emit_js_repl_exec_end_sends_event() {
         turn.as_ref(),
         "call-1",
         "hello",
-        None,
+        /*error*/ None,
         Duration::from_millis(12),
     )
     .await;
@@ -77,7 +77,7 @@ async fn emit_js_repl_exec_end_sends_event() {
     assert_eq!(event.call_id, "call-1");
     assert_eq!(event.turn_id, turn.sub_id);
     assert_eq!(event.command, vec!["js_repl".to_string()]);
-    assert_eq!(event.cwd, turn.cwd);
+    assert_eq!(event.cwd, turn.cwd.to_path_buf());
     assert_eq!(event.source, ExecCommandSource::Agent);
     assert_eq!(event.interaction_input, None);
     assert_eq!(event.stdout, "hello");

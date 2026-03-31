@@ -7,8 +7,11 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_otel::metrics::names::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
+use codex_otel::metrics::names::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
 use reqwest::Client;
 use serde::Deserialize;
+use tempfile::TempDir;
 use tracing::info;
 use tracing::warn;
 use zip::ZipArchive;
@@ -27,6 +30,8 @@ const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
 const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+// Keep this comfortably above a normal sync attempt so we do not race another Codex process.
+const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 const STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE: &str = ".tmp/app-server-remote-plugin-sync-v1";
 const STARTUP_REMOTE_PLUGIN_SYNC_PREREQUISITE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -63,14 +68,23 @@ fn sync_openai_plugins_repo_with_transport_overrides(
     api_base_url: &str,
 ) -> Result<String, String> {
     match sync_openai_plugins_repo_via_git(codex_home, git_binary) {
-        Ok(remote_sha) => Ok(remote_sha),
+        Ok(remote_sha) => {
+            emit_curated_plugins_startup_sync_metric("git", "success");
+            emit_curated_plugins_startup_sync_final_metric("git", "success");
+            Ok(remote_sha)
+        }
         Err(err) => {
+            emit_curated_plugins_startup_sync_metric("git", "failure");
             warn!(
                 error = %err,
                 git_binary,
                 "git sync failed for curated plugin sync; falling back to GitHub HTTP"
             );
-            sync_openai_plugins_repo_via_http(codex_home, api_base_url)
+            let result = sync_openai_plugins_repo_via_http(codex_home, api_base_url);
+            let status = if result.is_ok() { "success" } else { "failure" };
+            emit_curated_plugins_startup_sync_metric("http", status);
+            emit_curated_plugins_startup_sync_final_metric("http", status);
+            result
         }
     }
 }
@@ -85,7 +99,7 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
         return Ok(remote_sha);
     }
 
-    let cloned_repo_path = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
+    let staged_repo_dir = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
     let clone_output = run_git_command_with_timeout(
         Command::new(git_binary)
             .env("GIT_OPTIONAL_LOCKS", "0")
@@ -93,21 +107,21 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
             .arg("--depth")
             .arg("1")
             .arg("https://github.com/openai/plugins.git")
-            .arg(&cloned_repo_path),
+            .arg(staged_repo_dir.path()),
         "git clone curated plugins repo",
         CURATED_PLUGINS_GIT_TIMEOUT,
     )?;
     ensure_git_success(&clone_output, "git clone curated plugins repo")?;
 
-    let cloned_sha = git_head_sha(&cloned_repo_path, git_binary)?;
+    let cloned_sha = git_head_sha(staged_repo_dir.path(), git_binary)?;
     if cloned_sha != remote_sha {
         return Err(format!(
             "curated plugins clone HEAD mismatch: expected {remote_sha}, got {cloned_sha}"
         ));
     }
 
-    ensure_marketplace_manifest_exists(&cloned_repo_path)?;
-    activate_curated_repo(&repo_path, &cloned_repo_path)?;
+    ensure_marketplace_manifest_exists(staged_repo_dir.path())?;
+    activate_curated_repo(&repo_path, staged_repo_dir)?;
     write_curated_plugins_sha(&sha_path, &remote_sha)?;
     Ok(remote_sha)
 }
@@ -129,11 +143,11 @@ fn sync_openai_plugins_repo_via_http(
         return Ok(remote_sha);
     }
 
-    let cloned_repo_path = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
+    let staged_repo_dir = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
     let zipball_bytes = runtime.block_on(fetch_curated_repo_zipball(api_base_url, &remote_sha))?;
-    extract_zipball_to_dir(&zipball_bytes, &cloned_repo_path)?;
-    ensure_marketplace_manifest_exists(&cloned_repo_path)?;
-    activate_curated_repo(&repo_path, &cloned_repo_path)?;
+    extract_zipball_to_dir(&zipball_bytes, staged_repo_dir.path())?;
+    ensure_marketplace_manifest_exists(staged_repo_dir.path())?;
+    activate_curated_repo(&repo_path, staged_repo_dir)?;
     write_curated_plugins_sha(&sha_path, &remote_sha)?;
     Ok(remote_sha)
 }
@@ -227,7 +241,7 @@ async fn write_startup_remote_plugin_sync_marker(codex_home: &Path) -> std::io::
     tokio::fs::write(marker_path, b"ok\n").await
 }
 
-fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<PathBuf, String> {
+fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<TempDir, String> {
     let Some(parent) = repo_path.parent() else {
         return Err(format!(
             "failed to determine curated plugins parent directory for {}",
@@ -240,6 +254,7 @@ fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<PathBuf,
             parent.display()
         )
     })?;
+    remove_stale_curated_repo_temp_dirs(parent, CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE);
 
     let clone_dir = tempfile::Builder::new()
         .prefix("plugins-clone-")
@@ -250,7 +265,120 @@ fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<PathBuf,
                 parent.display()
             )
         })?;
-    Ok(clone_dir.keep())
+    Ok(clone_dir)
+}
+
+fn remove_stale_curated_repo_temp_dirs(parent: &Path, max_age: Duration) {
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!(
+                error = %err,
+                parent = %parent.display(),
+                "failed to list curated plugins temp directory parent for stale cleanup"
+            );
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    path = %entry.path().display(),
+                    "failed to inspect curated plugins temp directory entry"
+                );
+                continue;
+            }
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let path = entry.path();
+        let is_plugins_clone_dir = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("plugins-clone-"));
+        if !is_plugins_clone_dir {
+            continue;
+        }
+
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    path = %path.display(),
+                    "failed to read curated plugins temp directory metadata"
+                );
+                continue;
+            }
+        };
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    path = %path.display(),
+                    "failed to read curated plugins temp directory modification time"
+                );
+                continue;
+            }
+        };
+        let age = match modified.elapsed() {
+            Ok(age) => age,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    path = %path.display(),
+                    "failed to compute curated plugins temp directory age"
+                );
+                continue;
+            }
+        };
+        if age < max_age {
+            continue;
+        }
+
+        if let Err(err) = std::fs::remove_dir_all(&path) {
+            warn!(
+                error = %err,
+                path = %path.display(),
+                "failed to remove stale curated plugins temp directory"
+            );
+        }
+    }
+}
+
+fn emit_curated_plugins_startup_sync_metric(transport: &'static str, status: &'static str) {
+    emit_curated_plugins_startup_sync_counter(
+        CURATED_PLUGINS_STARTUP_SYNC_METRIC,
+        transport,
+        status,
+    );
+}
+
+fn emit_curated_plugins_startup_sync_final_metric(transport: &'static str, status: &'static str) {
+    emit_curated_plugins_startup_sync_counter(
+        CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC,
+        transport,
+        status,
+    );
+}
+
+fn emit_curated_plugins_startup_sync_counter(
+    metric_name: &str,
+    transport: &'static str,
+    status: &'static str,
+) {
+    let Some(metrics) = codex_otel::metrics::global() else {
+        return;
+    };
+    let tags = [("transport", transport), ("status", status)];
+    let _ = metrics.counter(metric_name, /*inc*/ 1, &tags);
 }
 
 fn ensure_marketplace_manifest_exists(repo_path: &Path) -> Result<(), String> {
@@ -263,7 +391,8 @@ fn ensure_marketplace_manifest_exists(repo_path: &Path) -> Result<(), String> {
     ))
 }
 
-fn activate_curated_repo(repo_path: &Path, staged_repo_path: &Path) -> Result<(), String> {
+fn activate_curated_repo(repo_path: &Path, staged_repo_dir: TempDir) -> Result<(), String> {
+    let staged_repo_path = staged_repo_dir.path();
     if repo_path.exists() {
         let parent = repo_path.parent().ok_or_else(|| {
             format!(

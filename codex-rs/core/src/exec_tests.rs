@@ -24,7 +24,7 @@ fn make_exec_output(
 
 #[test]
 fn sandbox_detection_requires_keywords() {
-    let output = make_exec_output(1, "", "", "");
+    let output = make_exec_output(/*exit_code*/ 1, "", "", "");
     assert!(!is_likely_sandbox_denied(
         SandboxType::LinuxSeccomp,
         &output
@@ -33,13 +33,13 @@ fn sandbox_detection_requires_keywords() {
 
 #[test]
 fn sandbox_detection_identifies_keyword_in_stderr() {
-    let output = make_exec_output(1, "", "Operation not permitted", "");
+    let output = make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
     assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
 }
 
 #[test]
 fn sandbox_detection_respects_quick_reject_exit_codes() {
-    let output = make_exec_output(127, "", "command not found", "");
+    let output = make_exec_output(/*exit_code*/ 127, "", "command not found", "");
     assert!(!is_likely_sandbox_denied(
         SandboxType::LinuxSeccomp,
         &output
@@ -48,14 +48,14 @@ fn sandbox_detection_respects_quick_reject_exit_codes() {
 
 #[test]
 fn sandbox_detection_ignores_non_sandbox_mode() {
-    let output = make_exec_output(1, "", "Operation not permitted", "");
+    let output = make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
     assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
 }
 
 #[test]
 fn sandbox_detection_ignores_network_policy_text_in_non_sandbox_mode() {
     let output = make_exec_output(
-        0,
+        /*exit_code*/ 0,
         "",
         "",
         r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"decider","protocol":"http","host":"google.com","port":80}"#,
@@ -66,7 +66,7 @@ fn sandbox_detection_ignores_network_policy_text_in_non_sandbox_mode() {
 #[test]
 fn sandbox_detection_uses_aggregated_output() {
     let output = make_exec_output(
-        101,
+        /*exit_code*/ 101,
         "",
         "",
         "cargo failed: Read-only file system when writing target",
@@ -80,7 +80,7 @@ fn sandbox_detection_uses_aggregated_output() {
 #[test]
 fn sandbox_detection_ignores_network_policy_text_with_zero_exit_code() {
     let output = make_exec_output(
-        0,
+        /*exit_code*/ 0,
         "",
         "",
         r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","source":"decider","protocol":"http","host":"google.com","port":80}"#,
@@ -100,9 +100,14 @@ async fn read_output_limits_retained_bytes_for_shell_capture() {
         writer.write_all(&bytes).await.expect("write");
     });
 
-    let out = read_output(reader, None, false, Some(EXEC_OUTPUT_MAX_BYTES))
-        .await
-        .expect("read");
+    let out = read_output(
+        reader,
+        /*stream*/ None,
+        /*is_stderr*/ false,
+        Some(EXEC_OUTPUT_MAX_BYTES),
+    )
+    .await
+    .expect("read");
     assert_eq!(out.text.len(), EXEC_OUTPUT_MAX_BYTES);
 }
 
@@ -196,7 +201,11 @@ async fn read_output_retains_all_bytes_for_full_buffer_capture() {
         writer.write_all(&bytes).await.expect("write");
     });
 
-    let out = read_output(reader, None, false, None).await.expect("read");
+    let out = read_output(
+        reader, /*stream*/ None, /*is_stderr*/ false, /*max_bytes*/ None,
+    )
+    .await
+    .expect("read");
     assert_eq!(out.text.len(), expected_len);
 }
 
@@ -211,7 +220,7 @@ fn aggregate_output_keeps_all_bytes_when_uncapped() {
         truncated_after_lines: None,
     };
 
-    let aggregated = aggregate_output(&stdout, &stderr, None);
+    let aggregated = aggregate_output(&stdout, &stderr, /*max_bytes*/ None);
 
     assert_eq!(aggregated.text.len(), EXEC_OUTPUT_MAX_BYTES * 2);
     assert_eq!(
@@ -362,8 +371,8 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
         NetworkSandboxPolicy::Enabled,
         cwd.as_path(),
         &None,
-        false,
-        None,
+        /*use_legacy_landlock*/ false,
+        /*stdout_stream*/ None,
     )
     .await?;
 
@@ -595,6 +604,19 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
         },
     ]);
 
+    #[cfg(windows)]
+    let expected_deny_write_paths = vec![
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd.join(".codex"))
+            .expect("absolute .codex"),
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+            .expect("absolute docs"),
+    ];
+    #[cfg(not(windows))]
+    let expected_deny_write_paths = vec![
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+            .expect("absolute docs"),
+    ];
+
     assert_eq!(
         resolve_windows_restricted_token_filesystem_overlay(
             SandboxType::WindowsRestrictedToken,
@@ -605,10 +627,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
             WindowsSandboxLevel::RestrictedToken,
         ),
         Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
-            additional_deny_write_paths: vec![
-                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-                    .expect("absolute docs"),
-            ],
+            additional_deny_write_paths: expected_deny_write_paths,
         }))
     );
 }
@@ -665,14 +684,15 @@ fn windows_elevated_rejects_split_write_read_carveouts() {
 
 #[test]
 fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() {
-    let expected = codex_sandboxing::get_platform_sandbox(false).unwrap_or(SandboxType::None);
+    let expected = codex_sandboxing::get_platform_sandbox(/*windows_sandbox_enabled*/ false)
+        .unwrap_or(SandboxType::None);
 
     assert_eq!(
         select_process_exec_tool_sandbox_type(
             &FileSystemSandboxPolicy::unrestricted(),
             NetworkSandboxPolicy::Restricted,
             codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-            false,
+            /*enforce_managed_network*/ false,
         ),
         expected
     );
@@ -726,8 +746,8 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
         None,
         NetworkSandboxPolicy::Restricted,
-        None,
-        None,
+        /*stdout_stream*/ None,
+        /*after_spawn*/ None,
     )
     .await?;
     assert!(output.timed_out);
@@ -788,8 +808,8 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         NetworkSandboxPolicy::Enabled,
         cwd.as_path(),
         &None,
-        false,
-        None,
+        /*use_legacy_landlock*/ false,
+        /*stdout_stream*/ None,
     )
     .await;
     let output = match result {

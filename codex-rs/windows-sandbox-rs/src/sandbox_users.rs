@@ -1,27 +1,27 @@
 #![cfg(target_os = "windows")]
 
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use rand::rngs::SmallRng;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use serde::Serialize;
-use std::ffi::c_void;
 use std::ffi::OsStr;
+use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
-use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
+use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAdd;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAddMembers;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserAdd;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserSetInfo;
-use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
-use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_DONT_EXPIRE_PASSWD;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_SCRIPT;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
@@ -34,14 +34,14 @@ use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
 
+use codex_windows_sandbox::SETUP_VERSION;
+use codex_windows_sandbox::SetupErrorCode;
+use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::dpapi_protect;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
-use codex_windows_sandbox::SetupErrorCode;
-use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
@@ -63,6 +63,8 @@ pub fn provision_sandbox_users(
     codex_home: &Path,
     offline_username: &str,
     online_username: &str,
+    proxy_ports: &[u16],
+    allow_local_binding: bool,
     log: &mut File,
 ) -> Result<()> {
     ensure_sandbox_users_group(log)?;
@@ -80,6 +82,8 @@ pub fn provision_sandbox_users(
         &offline_password,
         online_username,
         &online_password,
+        proxy_ports,
+        allow_local_binding,
     )?;
     Ok(())
 }
@@ -388,6 +392,8 @@ struct SetupMarker {
     offline_username: String,
     online_username: String,
     created_at: String,
+    proxy_ports: Vec<u16>,
+    allow_local_binding: bool,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
 }
@@ -398,6 +404,8 @@ fn write_secrets(
     offline_pwd: &str,
     online_user: &str,
     online_pwd: &str,
+    proxy_ports: &[u16],
+    allow_local_binding: bool,
 ) -> Result<()> {
     let sandbox_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
@@ -447,6 +455,8 @@ fn write_secrets(
         offline_username: offline_user.to_string(),
         online_username: online_user.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
+        proxy_ports: proxy_ports.to_vec(),
+        allow_local_binding,
         read_roots: Vec::new(),
         write_roots: Vec::new(),
     };

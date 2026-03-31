@@ -68,7 +68,11 @@ fn to_abs_path(cwd: &Path, path: &Path) -> Option<AbsolutePathBuf> {
     AbsolutePathBuf::resolve_path_against_base(path, cwd).ok()
 }
 
-fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<PermissionProfile> {
+fn write_permissions_for_paths(
+    file_paths: &[AbsolutePathBuf],
+    file_system_sandbox_policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> Option<PermissionProfile> {
     let write_paths = file_paths
         .iter()
         .map(|path| {
@@ -76,6 +80,7 @@ fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<Permiss
                 .unwrap_or_else(|| path.clone())
                 .into_path_buf()
         })
+        .filter(|path| !file_system_sandbox_policy.can_write_path_with_cwd(path.as_path(), cwd))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(AbsolutePathBuf::from_absolute_path)
@@ -107,16 +112,16 @@ async fn effective_patch_permissions(
         session.granted_session_permissions().await.as_ref(),
         session.granted_turn_permissions().await.as_ref(),
     );
-    let effective_additional_permissions = apply_granted_turn_permissions(
-        session,
-        crate::sandboxing::SandboxPermissions::UseDefault,
-        write_permissions_for_paths(&file_paths),
-    )
-    .await;
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
         &turn.file_system_sandbox_policy,
         granted_permissions.as_ref(),
     );
+    let effective_additional_permissions = apply_granted_turn_permissions(
+        session,
+        crate::sandboxing::SandboxPermissions::UseDefault,
+        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, turn.cwd.as_path()),
+    )
+    .await;
 
     (
         file_paths,
@@ -205,7 +210,6 @@ impl ToolHandler for ApplyPatchHandler {
                             permissions_preapproved: effective_additional_permissions
                                 .permissions_preapproved,
                             timeout_ms: None,
-                            codex_exe: turn.codex_linux_sandbox_exe.clone(),
                         };
 
                         let mut orchestrator = ToolOrchestrator::new();
@@ -308,7 +312,6 @@ pub(crate) async fn intercept_apply_patch(
                         permissions_preapproved: effective_additional_permissions
                             .permissions_preapproved,
                         timeout_ms,
-                        codex_exe: turn.codex_linux_sandbox_exe.clone(),
                     };
 
                     let mut orchestrator = ToolOrchestrator::new();

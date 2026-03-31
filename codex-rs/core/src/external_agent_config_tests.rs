@@ -390,7 +390,7 @@ fn import_skills_returns_only_new_skill_directory_count() {
     fs::create_dir_all(agents_skills.join("skill-a")).expect("create existing target");
 
     let copied_count = service_for_paths(claude_home, codex_home)
-        .import_skills(None)
+        .import_skills(/*cwd*/ None)
         .expect("import skills");
 
     assert_eq!(copied_count, 1);

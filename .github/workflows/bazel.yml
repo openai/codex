@@ -1,4 +1,4 @@
-name: Bazel (experimental)
+name: Bazel
 
 # Note this workflow was originally derived from:
 # https://github.com/cerisier/toolchains_llvm_bootstrapped/blob/main/.github/workflows/ci.yaml
@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -39,193 +40,116 @@ jobs:
           # - os: ubuntu-24.04-arm
           #   target: aarch64-unknown-linux-gnu
 
-          # TODO: Enable Windows once we fix the toolchain issues there.
-          #- os: windows-latest
-          #  target: x86_64-pc-windows-gnullvm
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job
     name: Local Bazel build on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Set up Node.js for js_repl tests
-        uses: actions/setup-node@v6
+      - name: Set up Bazel CI
+        id: setup_bazel
+        uses: ./.github/actions/setup-bazel-ci
         with:
-          node-version-file: codex-rs/node-version.txt
-
-      # Some integration tests rely on DotSlash being installed.
-      # See https://github.com/openai/codex/pull/7617.
-      - name: Install DotSlash
-        uses: facebook/install-dotslash@v2
-
-      - name: Make DotSlash available in PATH (Unix)
-        if: runner.os != 'Windows'
-        run: cp "$(which dotslash)" /usr/local/bin
-
-      - name: Make DotSlash available in PATH (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
-
-      # Install Bazel via Bazelisk
-      - name: Set up Bazel
-        uses: bazelbuild/setup-bazelisk@v3
+          target: ${{ matrix.target }}
+          install-test-prereqs: "true"
 
       - name: Check MODULE.bazel.lock is up to date
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
 
-      # TODO(mbolin): Bring this back once we have caching working. Currently,
-      # we never seem to get a cache hit but we still end up paying the cost of
-      # uploading at the end of the build, which takes over a minute!
-      #
-      # Cache build and external artifacts so that the next ci build is incremental.
-      # Because github action caches cannot be updated after a build, we need to
-      # store the contents of each build in a unique cache key, then fall back to loading
-      # it on the next ci run. We use hashFiles(...) in the key and restore-keys- with
-      # the prefix to load the most recent cache for the branch on a cache miss. You
-      # should customize the contents of hashFiles to capture any bazel input sources,
-      # although this doesn't need to be perfect. If none of the input sources change
-      # then a cache hit will load an existing cache and bazel won't have to do any work.
-      # In the case of a cache miss, you want the fallback cache to contain most of the
-      # previously built artifacts to minimize build time. The more precise you are with
-      # hashFiles sources the less work bazel will have to do.
-      # - name: Mount bazel caches
-      #   uses: actions/cache@v5
-      #   with:
-      #     path: |
-      #       ~/.cache/bazel-repo-cache
-      #       ~/.cache/bazel-repo-contents-cache
-      #     key: bazel-cache-${{ matrix.os }}-${{ hashFiles('**/BUILD.bazel', '**/*.bzl', 'MODULE.bazel') }}
-      #     restore-keys: |
-      #       bazel-cache-${{ matrix.os }}
-
-      - name: Configure Bazel startup args (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Use a very short path to reduce argv/path length issues.
-          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          set -o pipefail
-
-          bazel_console_log="$(mktemp)"
-
-          print_failed_bazel_test_logs() {
-            local console_log="$1"
-            local testlogs_dir
-
-            testlogs_dir="$(bazel $BAZEL_STARTUP_ARGS info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
-
-            local failed_targets=()
-            while IFS= read -r target; do
-              failed_targets+=("$target")
-            done < <(
-              grep -E '^FAIL: //' "$console_log" \
-                | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
-                | sort -u
-            )
-
-            if [[ ${#failed_targets[@]} -eq 0 ]]; then
-              echo "No failed Bazel test targets were found in console output."
-              return
-            fi
-
-            for target in "${failed_targets[@]}"; do
-              local rel_path="${target#//}"
-              rel_path="${rel_path/:/\/}"
-              local test_log="${testlogs_dir}/${rel_path}/test.log"
-
-              echo "::group::Bazel test log tail for ${target}"
-              if [[ -f "$test_log" ]]; then
-                tail -n 200 "$test_log"
-              else
-                echo "Missing test log: $test_log"
-              fi
-              echo "::endgroup::"
-            done
-          }
-
-          bazel_args=(
-            test
-            --test_verbose_timeout_warnings
-            --build_metadata=REPO_URL=https://github.com/openai/codex.git
-            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
-            --build_metadata=ROLE=CI
-            --build_metadata=VISIBILITY=PUBLIC
-          )
-
           bazel_targets=(
             //...
-            # Keep V8 out of the ordinary Bazel CI path. Only the dedicated
-            # canary and release workflows should build `third_party/v8`.
+            # Keep standalone V8 library targets out of the ordinary Bazel CI
+            # path. V8 consumers under `//codex-rs/...` still participate
+            # transitively through `//...`.
             -//third_party/v8:all
           )
 
-          if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
-            # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
-            # before the `actions/setup-node` runtime on PATH.
-            node_bin="$(which node)"
-            bazel_args+=("--test_env=CODEX_JS_REPL_NODE_PATH=${node_bin}")
-          fi
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-test-logs \
+            --use-node-test-env \
+            -- \
+            test \
+            --test_tag_filters=-argument-comment-lint \
+            --test_verbose_timeout_warnings \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            -- \
+            "${bazel_targets[@]}"
 
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-            echo "BuildBuddy API key is available; using remote Bazel configuration."
-            # Work around Bazel 9 remote repo contents cache / overlay materialization failures
-            # seen in CI (for example "is not a symlink" or permission errors while
-            # materializing external repos such as rules_perl). We still use BuildBuddy for
-            # remote execution/cache; this only disables the startup-level repo contents cache.
-            set +e
-            bazel $BAZEL_STARTUP_ARGS \
-              --noexperimental_remote_repo_contents_cache \
-              --bazelrc=.github/workflows/ci.bazelrc \
-              "${bazel_args[@]}" \
-              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
-              -- \
-              "${bazel_targets[@]}" \
-              2>&1 | tee "$bazel_console_log"
-            bazel_status=${PIPESTATUS[0]}
-            set -e
-          else
-            echo "BuildBuddy API key is not available; using local Bazel configuration."
-            # Keep fork/community PRs on Bazel but disable remote services that are
-            # configured in .bazelrc and require auth.
-            #
-            # Flag docs:
-            # - Command-line reference: https://bazel.build/reference/command-line-reference
-            # - Remote caching overview: https://bazel.build/remote/caching
-            # - Remote execution overview: https://bazel.build/remote/rbe
-            # - Build Event Protocol overview: https://bazel.build/remote/bep
-            #
-            # --noexperimental_remote_repo_contents_cache:
-            #   disable remote repo contents cache enabled in .bazelrc startup options.
-            #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
-            # --remote_cache= and --remote_executor=:
-            #   clear remote cache/execution endpoints configured in .bazelrc.
-            #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
-            #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
-            set +e
-            bazel $BAZEL_STARTUP_ARGS \
-              --noexperimental_remote_repo_contents_cache \
-              "${bazel_args[@]}" \
-              --remote_cache= \
-              --remote_executor= \
-              -- \
-              "${bazel_targets[@]}" \
-              2>&1 | tee "$bazel_console_log"
-            bazel_status=${PIPESTATUS[0]}
-            set -e
-          fi
+      # Save bazel repository cache explicitly; make non-fatal so cache uploading
+      # never fails the overall job. Only save when key wasn't hit.
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cache/bazel-repo-cache
+          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
 
-          if [[ ${bazel_status:-0} -ne 0 ]]; then
-            print_failed_bazel_test_logs "$bazel_console_log"
-            exit "$bazel_status"
-          fi
+  clippy:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Keep Linux lint coverage on x64 and add the arm64 macOS path that
+          # the Bazel test job already exercises. Add Windows gnullvm as well
+          # so PRs get Bazel-native lint signal on the same Windows toolchain
+          # that the Bazel test job uses.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
+    runs-on: ${{ matrix.os }}
+    name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Bazel CI
+        id: setup_bazel
+        uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: ${{ matrix.target }}
+
+      - name: bazel build --config=clippy //codex-rs/...
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          # Keep the initial Bazel clippy scope on codex-rs and out of the
+          # V8 proof-of-concept target for now.
+          ./.github/scripts/run-bazel-ci.sh \
+            -- \
+            build \
+            --config=clippy \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=clippy \
+            -- \
+            //codex-rs/... \
+            -//codex-rs/v8-poc:all
+
+      # Save bazel repository cache explicitly; make non-fatal so cache uploading
+      # never fails the overall job. Only save when key wasn't hit.
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cache/bazel-repo-cache
+          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}

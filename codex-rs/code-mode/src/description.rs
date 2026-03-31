@@ -7,15 +7,17 @@ use crate::PUBLIC_TOOL_NAME;
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 const CODE_MODE_ONLY_PREFACE: &str =
     "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly";
-const EXEC_DESCRIPTION_TEMPLATE: &str = r#"## exec
-- Runs raw JavaScript in an isolated context (no Node, no file system, or network access, no console).
-- Send raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
+const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
+- Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
+- All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
+- Nested tool methods take either a string or an object as their input argument.
+- Nested tools return either an object or a string, based on the description.
+- Runs raw JavaScript -- no Node, no file system, no network access, no console.
+- Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
 - You may optionally start the tool input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
 - `yield_time_ms` asks `exec` to yield early after that many milliseconds if the script is still running.
 - `max_output_tokens` sets the token budget for direct `exec` results. By default the result is truncated to 10000 tokens.
-- All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
-- Tool methods take either string or object as parameter.
-- They return either a structured value or a string based on the description above.
+- When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
 
 - Global helpers:
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
@@ -548,8 +550,10 @@ mod tests {
 
     #[test]
     fn code_mode_only_description_includes_nested_tools() {
-        let description =
-            build_exec_tool_description(&[("foo".to_string(), "bar".to_string())], true);
+        let description = build_exec_tool_description(
+            &[("foo".to_string(), "bar".to_string())],
+            /*code_mode_only*/ true,
+        );
         assert!(description.contains("### `foo` (`foo`)"));
     }
 }

@@ -1,37 +1,42 @@
 use crate::memories::memory_root;
 use crate::memories::phase_one;
 use crate::memories::storage::rollout_summary_file_stem_from_parts;
-use askama::Template;
 use codex_protocol::openai_models::ModelInfo;
 use codex_state::Phase2InputSelection;
 use codex_state::Stage1Output;
 use codex_state::Stage1OutputRef;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_template::Template;
 use std::path::Path;
+use std::sync::LazyLock;
 use tokio::fs;
 use tracing::warn;
 
-#[derive(Template)]
-#[template(path = "memories/consolidation.md", escape = "none")]
-struct ConsolidationPromptTemplate<'a> {
-    memory_root: &'a str,
-    phase2_input_selection: &'a str,
-}
+static CONSOLIDATION_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    parse_embedded_template(
+        include_str!("../../templates/memories/consolidation.md"),
+        "memories/consolidation.md",
+    )
+});
+static STAGE_ONE_INPUT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    parse_embedded_template(
+        include_str!("../../templates/memories/stage_one_input.md"),
+        "memories/stage_one_input.md",
+    )
+});
+static MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    parse_embedded_template(
+        include_str!("../../templates/memories/read_path.md"),
+        "memories/read_path.md",
+    )
+});
 
-#[derive(Template)]
-#[template(path = "memories/stage_one_input.md", escape = "none")]
-struct StageOneInputTemplate<'a> {
-    rollout_path: &'a str,
-    rollout_cwd: &'a str,
-    rollout_contents: &'a str,
-}
-
-#[derive(Template)]
-#[template(path = "memories/read_path.md", escape = "none")]
-struct MemoryToolDeveloperInstructionsTemplate<'a> {
-    base_path: &'a str,
-    memory_summary: &'a str,
+fn parse_embedded_template(source: &'static str, template_name: &str) -> Template {
+    match Template::parse(source) {
+        Ok(template) => template,
+        Err(err) => panic!("embedded template {template_name} is invalid: {err}"),
+    }
 }
 
 /// Builds the consolidation subagent prompt for a specific memory root.
@@ -41,11 +46,12 @@ pub(super) fn build_consolidation_prompt(
 ) -> String {
     let memory_root = memory_root.display().to_string();
     let phase2_input_selection = render_phase2_input_selection(selection);
-    let template = ConsolidationPromptTemplate {
-        memory_root: &memory_root,
-        phase2_input_selection: &phase2_input_selection,
-    };
-    template.render().unwrap_or_else(|err| {
+    CONSOLIDATION_PROMPT_TEMPLATE
+        .render([
+            ("memory_root", memory_root.as_str()),
+            ("phase2_input_selection", phase2_input_selection.as_str()),
+        ])
+        .unwrap_or_else(|err| {
         warn!("failed to render memories consolidation prompt template: {err}");
         format!(
             "## Memory Phase 2 (Consolidation)\nConsolidate Codex memories in: {memory_root}\n\n{phase2_input_selection}"
@@ -144,12 +150,11 @@ pub(super) fn build_stage_one_input_message(
 
     let rollout_path = rollout_path.display().to_string();
     let rollout_cwd = rollout_cwd.display().to_string();
-    Ok(StageOneInputTemplate {
-        rollout_path: &rollout_path,
-        rollout_cwd: &rollout_cwd,
-        rollout_contents: &truncated_rollout_contents,
-    }
-    .render()?)
+    Ok(STAGE_ONE_INPUT_TEMPLATE.render([
+        ("rollout_path", rollout_path.as_str()),
+        ("rollout_cwd", rollout_cwd.as_str()),
+        ("rollout_contents", truncated_rollout_contents.as_str()),
+    ])?)
 }
 
 /// Build prompt used for read path. This prompt must be added to the developer instructions. In
@@ -171,11 +176,12 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
         return None;
     }
     let base_path = base_path.display().to_string();
-    let template = MemoryToolDeveloperInstructionsTemplate {
-        base_path: &base_path,
-        memory_summary: &memory_summary,
-    };
-    template.render().ok()
+    MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE
+        .render([
+            ("base_path", base_path.as_str()),
+            ("memory_summary", memory_summary.as_str()),
+        ])
+        .ok()
 }
 
 #[cfg(test)]

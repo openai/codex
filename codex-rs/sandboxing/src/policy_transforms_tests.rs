@@ -1,21 +1,10 @@
-#[cfg(target_os = "macos")]
-use super::EffectiveSandboxPermissions;
 use super::effective_file_system_sandbox_policy;
-#[cfg(target_os = "macos")]
 use super::intersect_permission_profiles;
 use super::merge_file_system_policy_with_additional_permissions;
 use super::normalize_additional_permissions;
 use super::sandbox_policy_with_additional_permissions;
 use super::should_require_platform_sandbox;
 use codex_protocol::models::FileSystemPermissions;
-#[cfg(target_os = "macos")]
-use codex_protocol::models::MacOsAutomationPermission;
-#[cfg(target_os = "macos")]
-use codex_protocol::models::MacOsContactsPermission;
-#[cfg(target_os = "macos")]
-use codex_protocol::models::MacOsPreferencesPermission;
-#[cfg(target_os = "macos")]
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -49,7 +38,11 @@ fn full_access_restricted_policy_skips_platform_sandbox_when_network_is_enabled(
     }]);
 
     assert_eq!(
-        should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Enabled, false),
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Enabled,
+            /*has_managed_network_requirements*/ false
+        ),
         false
     );
 }
@@ -75,7 +68,11 @@ fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
     ]);
 
     assert_eq!(
-        should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Enabled, false),
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Enabled,
+            /*has_managed_network_requirements*/ false
+        ),
         true
     );
 }
@@ -90,7 +87,11 @@ fn full_access_restricted_policy_still_uses_platform_sandbox_for_restricted_netw
     }]);
 
     assert_eq!(
-        should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Restricted, false),
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Restricted,
+            /*has_managed_network_requirements*/ false
+        ),
         true
     );
 }
@@ -110,7 +111,6 @@ fn normalize_additional_permissions_preserves_network() {
             read: Some(vec![path.clone()]),
             write: Some(vec![path.clone()]),
         }),
-        ..Default::default()
     })
     .expect("permissions");
 
@@ -172,104 +172,73 @@ fn normalize_additional_permissions_drops_empty_nested_profiles() {
             read: None,
             write: None,
         }),
-        macos: None,
     })
     .expect("permissions");
 
     assert_eq!(permissions, PermissionProfile::default());
 }
 
-#[cfg(target_os = "macos")]
 #[test]
-fn normalize_additional_permissions_preserves_default_macos_preferences_permission() {
-    let permissions = normalize_additional_permissions(PermissionProfile {
-        macos: Some(MacOsSeatbeltProfileExtensions::default()),
-        ..Default::default()
-    })
-    .expect("permissions");
-
-    assert_eq!(
-        permissions,
-        PermissionProfile {
-            macos: Some(MacOsSeatbeltProfileExtensions::default()),
-            ..Default::default()
-        }
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn intersect_permission_profiles_preserves_default_macos_grants() {
+fn intersect_permission_profiles_preserves_explicit_empty_requested_reads() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let path = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
     let requested = PermissionProfile {
         file_system: Some(FileSystemPermissions {
-            read: Some(Vec::from(["/tmp/requested"
-                .try_into()
-                .expect("absolute path")])),
-            write: None,
-        }),
-        macos: Some(MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]),
-            macos_launch_services: false,
-            macos_accessibility: true,
-            macos_calendar: true,
-            macos_reminders: false,
-            macos_contacts: MacOsContactsPermission::None,
+            read: Some(vec![]),
+            write: Some(vec![path]),
         }),
         ..Default::default()
     };
-    let granted = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(Vec::new()),
-            write: None,
-        }),
-        macos: Some(MacOsSeatbeltProfileExtensions::default()),
-        ..Default::default()
-    };
+    let granted = requested.clone();
 
     assert_eq!(
-        intersect_permission_profiles(requested, granted),
-        PermissionProfile {
-            macos: Some(MacOsSeatbeltProfileExtensions::default()),
-            ..Default::default()
-        }
+        intersect_permission_profiles(requested.clone(), granted),
+        requested
     );
 }
 
-#[cfg(target_os = "macos")]
 #[test]
-fn normalize_additional_permissions_preserves_macos_permissions() {
-    let permissions = normalize_additional_permissions(PermissionProfile {
-        macos: Some(MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]),
-            macos_launch_services: true,
-            macos_accessibility: true,
-            macos_calendar: true,
-            macos_reminders: false,
-            macos_contacts: MacOsContactsPermission::None,
+fn intersect_permission_profiles_drops_ungranted_nonempty_path_requests() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let path = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![path]),
+            write: None,
         }),
         ..Default::default()
-    })
-    .expect("permissions");
+    };
 
     assert_eq!(
-        permissions.macos,
-        Some(MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]),
-            macos_launch_services: true,
-            macos_accessibility: true,
-            macos_calendar: true,
-            macos_reminders: false,
-            macos_contacts: MacOsContactsPermission::None,
-        })
+        intersect_permission_profiles(requested, PermissionProfile::default()),
+        PermissionProfile::default()
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_drops_explicit_empty_reads_without_grant() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let path = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![path]),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, PermissionProfile::default()),
+        PermissionProfile::default()
     );
 }
 
@@ -296,7 +265,6 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
                 read: Some(vec![path.clone()]),
                 write: Some(Vec::new()),
             }),
-            ..Default::default()
         },
     );
 
@@ -309,70 +277,6 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
             },
             network_access: true,
         }
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn effective_permissions_merge_macos_extensions_with_additional_permissions() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let path = AbsolutePathBuf::from_absolute_path(
-        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
-    )
-    .expect("absolute temp dir");
-    let effective_permissions = EffectiveSandboxPermissions::new(
-        &SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![path.clone()],
-            },
-            network_access: false,
-        },
-        Some(&MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadOnly,
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Calendar".to_string(),
-            ]),
-            macos_launch_services: false,
-            macos_accessibility: false,
-            macos_calendar: false,
-            macos_reminders: false,
-            macos_contacts: MacOsContactsPermission::None,
-        }),
-        Some(&PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![path]),
-                write: Some(Vec::new()),
-            }),
-            macos: Some(MacOsSeatbeltProfileExtensions {
-                macos_preferences: MacOsPreferencesPermission::ReadWrite,
-                macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                    "com.apple.Notes".to_string(),
-                ]),
-                macos_launch_services: true,
-                macos_accessibility: true,
-                macos_calendar: true,
-                macos_reminders: false,
-                macos_contacts: MacOsContactsPermission::None,
-            }),
-            ..Default::default()
-        }),
-    );
-
-    assert_eq!(
-        effective_permissions.macos_seatbelt_profile_extensions,
-        Some(MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Calendar".to_string(),
-                "com.apple.Notes".to_string(),
-            ]),
-            macos_launch_services: true,
-            macos_accessibility: true,
-            macos_calendar: true,
-            macos_reminders: false,
-            macos_contacts: MacOsContactsPermission::None,
-        })
     );
 }
 
@@ -395,7 +299,6 @@ fn external_sandbox_additional_permissions_can_enable_network() {
                 read: Some(vec![path]),
                 write: Some(Vec::new()),
             }),
-            ..Default::default()
         },
     );
 
@@ -472,7 +375,8 @@ fn effective_file_system_sandbox_policy_returns_base_policy_without_additional_p
         },
     ]);
 
-    let effective_policy = effective_file_system_sandbox_policy(&base_policy, None);
+    let effective_policy =
+        effective_file_system_sandbox_policy(&base_policy, /*additional_permissions*/ None);
 
     assert_eq!(effective_policy, base_policy);
 }

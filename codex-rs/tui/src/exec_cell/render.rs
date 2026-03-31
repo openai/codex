@@ -758,7 +758,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
 
         // Use a narrow width so each logical line wraps into many on-screen lines.
         let lines = cell.command_display_lines(width);
@@ -796,8 +796,13 @@ mod tests {
             Line::from("    tail"),
         ];
 
-        let truncated =
-            ExecCell::truncate_lines_middle(&lines, 2, 12, Some(4), Some(Line::from("    ".dim())));
+        let truncated = ExecCell::truncate_lines_middle(
+            &lines,
+            /*max_rows*/ 2,
+            /*width*/ 12,
+            Some(4),
+            Some(Line::from("    ".dim())),
+        );
         let rendered: Vec<String> = truncated
             .iter()
             .map(|line| {
@@ -820,7 +825,10 @@ mod tests {
         lines.extend(std::iter::repeat_n(Line::from("    "), 26));
         lines.push(Line::from("    end"));
 
-        let truncated = ExecCell::truncate_lines_middle(&lines, 28, 80, None, None);
+        let truncated = ExecCell::truncate_lines_middle(
+            &lines, /*max_rows*/ 28, /*width*/ 80, /*omitted_hint*/ None,
+            /*ellipsis_prefix*/ None,
+        );
 
         assert_eq!(truncated, lines);
     }
@@ -840,9 +848,9 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
         let rendered: Vec<String> = cell
-            .command_display_lines(36)
+            .command_display_lines(/*width*/ 36)
             .iter()
             .map(|line| {
                 line.spans
@@ -877,9 +885,9 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
         let rendered: Vec<String> = cell
-            .display_lines(36)
+            .display_lines(/*width*/ 36)
             .iter()
             .map(|line| {
                 line.spans
@@ -918,9 +926,9 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
         let rendered: Vec<String> = cell
-            .command_display_lines(36)
+            .command_display_lines(/*width*/ 36)
             .iter()
             .map(|line| {
                 line.spans
@@ -955,7 +963,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
         let width: u16 = 36;
         let logical_height = cell.transcript_lines(width).len() as u16;
         let wrapped_height = cell.desired_transcript_height(width);

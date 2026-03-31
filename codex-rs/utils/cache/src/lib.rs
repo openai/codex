@@ -151,18 +151,18 @@ mod tests {
         let cache = BlockingLruCache::new(NonZeroUsize::new(2).expect("capacity"));
 
         assert!(cache.get(&"first").is_none());
-        cache.insert("first", 1);
+        cache.insert("first", /*value*/ 1);
         assert_eq!(cache.get(&"first"), Some(1));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn evicts_least_recently_used() {
         let cache = BlockingLruCache::new(NonZeroUsize::new(2).expect("capacity"));
-        cache.insert("a", 1);
-        cache.insert("b", 2);
+        cache.insert("a", /*value*/ 1);
+        cache.insert("b", /*value*/ 2);
         assert_eq!(cache.get(&"a"), Some(1));
 
-        cache.insert("c", 3);
+        cache.insert("c", /*value*/ 3);
 
         assert!(cache.get(&"b").is_none());
         assert_eq!(cache.get(&"a"), Some(1));
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn disabled_without_runtime() {
         let cache = BlockingLruCache::new(NonZeroUsize::new(2).expect("capacity"));
-        cache.insert("first", 1);
+        cache.insert("first", /*value*/ 1);
         assert!(cache.get(&"first").is_none());
 
         assert_eq!(cache.get_or_insert_with("first", || 2), 2);

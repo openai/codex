@@ -967,8 +967,8 @@ mod tests {
     fn websocket_url_from_http_base_defaults_to_ws_path() {
         let url = websocket_url_from_api_url(
             "http://127.0.0.1:8011",
-            None,
-            None,
+            /*query_params*/ None,
+            /*model*/ None,
             RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
         )
@@ -983,7 +983,7 @@ mod tests {
     fn websocket_url_from_ws_base_defaults_to_ws_path() {
         let url = websocket_url_from_api_url(
             "wss://example.com",
-            None,
+            /*query_params*/ None,
             Some("realtime-test-model"),
             RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
@@ -999,7 +999,7 @@ mod tests {
     fn websocket_url_from_v1_base_appends_realtime_path() {
         let url = websocket_url_from_api_url(
             "https://api.openai.com/v1",
-            None,
+            /*query_params*/ None,
             Some("snapshot"),
             RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
@@ -1015,7 +1015,7 @@ mod tests {
     fn websocket_url_from_nested_v1_base_appends_realtime_path() {
         let url = websocket_url_from_api_url(
             "https://example.com/openai/v1",
-            None,
+            /*query_params*/ None,
             Some("snapshot"),
             RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
@@ -1050,8 +1050,8 @@ mod tests {
     fn websocket_url_v1_ignores_transcription_mode() {
         let url = websocket_url_from_api_url(
             "https://example.com",
-            None,
-            None,
+            /*query_params*/ None,
+            /*model*/ None,
             RealtimeEventParser::V1,
             RealtimeSessionMode::Transcription,
         )
@@ -1085,8 +1085,8 @@ mod tests {
     fn websocket_url_omits_intent_for_realtime_v2_transcription_mode() {
         let url = websocket_url_from_api_url(
             "https://example.com",
-            None,
-            None,
+            /*query_params*/ None,
+            /*model*/ None,
             RealtimeEventParser::RealtimeV2,
             RealtimeSessionMode::Transcription,
         )

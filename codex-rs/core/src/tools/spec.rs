@@ -1,21 +1,12 @@
-use crate::client_common::tools::FreeformTool;
-use crate::client_common::tools::FreeformToolFormat;
-use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
-use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
-use crate::tools::discoverable::DiscoverablePluginInfo;
-use crate::tools::discoverable::DiscoverableTool;
-use crate::tools::discoverable::DiscoverableToolAction;
-use crate::tools::discoverable::DiscoverableToolType;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
@@ -36,7 +27,6 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -46,221 +36,63 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::CommandToolOptions;
+use codex_tools::DiscoverableTool;
+use codex_tools::DiscoverableToolType;
+use codex_tools::ShellToolOptions;
+use codex_tools::SpawnAgentToolOptions;
+use codex_tools::ToolSearchAppInfo;
+use codex_tools::ToolSuggestEntry;
+use codex_tools::ViewImageToolOptions;
+use codex_tools::WaitAgentTimeoutOptions;
+use codex_tools::augment_tool_spec_for_code_mode;
+use codex_tools::create_assign_task_tool;
+use codex_tools::create_close_agent_tool_v1;
+use codex_tools::create_close_agent_tool_v2;
+use codex_tools::create_code_mode_tool;
+use codex_tools::create_exec_command_tool;
+use codex_tools::create_js_repl_reset_tool;
+use codex_tools::create_js_repl_tool;
+use codex_tools::create_list_agents_tool;
+use codex_tools::create_list_dir_tool;
+use codex_tools::create_list_mcp_resource_templates_tool;
+use codex_tools::create_list_mcp_resources_tool;
+use codex_tools::create_read_mcp_resource_tool;
+use codex_tools::create_report_agent_job_result_tool;
+use codex_tools::create_request_permissions_tool;
+use codex_tools::create_request_user_input_tool;
+use codex_tools::create_resume_agent_tool;
+use codex_tools::create_send_input_tool_v1;
+use codex_tools::create_send_message_tool;
+use codex_tools::create_shell_command_tool;
+use codex_tools::create_shell_tool;
+use codex_tools::create_spawn_agent_tool_v1;
+use codex_tools::create_spawn_agent_tool_v2;
+use codex_tools::create_spawn_agents_on_csv_tool;
+use codex_tools::create_test_sync_tool;
+use codex_tools::create_tool_search_tool;
+use codex_tools::create_tool_suggest_tool;
+use codex_tools::create_view_image_tool;
+use codex_tools::create_wait_agent_tool_v1;
+use codex_tools::create_wait_agent_tool_v2;
+use codex_tools::create_wait_tool;
+use codex_tools::create_write_stdin_tool;
+use codex_tools::dynamic_tool_to_responses_api_tool;
+use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_tools::tool_spec_to_code_mode_tool_definition;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value as JsonValue;
-use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
-    include_str!("../../templates/search_tool/tool_description.md");
-const TOOL_SUGGEST_DESCRIPTION_TEMPLATE: &str =
-    include_str!("../../templates/search_tool/tool_suggest_description.md");
+pub type JsonSchema = codex_tools::JsonSchema;
+
+#[cfg(test)]
+pub(crate) use codex_tools::mcp_call_tool_result_output_schema;
+
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
-
-fn unified_exec_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "chunk_id": {
-                "type": "string",
-                "description": "Chunk identifier included when the response reports one."
-            },
-            "wall_time_seconds": {
-                "type": "number",
-                "description": "Elapsed wall time spent waiting for output in seconds."
-            },
-            "exit_code": {
-                "type": "number",
-                "description": "Process exit code when the command finished during this call."
-            },
-            "session_id": {
-                "type": "number",
-                "description": "Session identifier to pass to write_stdin when the process is still running."
-            },
-            "original_token_count": {
-                "type": "number",
-                "description": "Approximate token count before output truncation."
-            },
-            "output": {
-                "type": "string",
-                "description": "Command output text, possibly truncated."
-            }
-        },
-        "required": ["wall_time_seconds", "output"],
-        "additionalProperties": false
-    })
-}
-
-fn agent_status_output_schema() -> JsonValue {
-    json!({
-        "oneOf": [
-            {
-                "type": "string",
-                "enum": ["pending_init", "running", "shutdown", "not_found"]
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "completed": {
-                        "type": ["string", "null"]
-                    }
-                },
-                "required": ["completed"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "errored": {
-                        "type": "string"
-                    }
-                },
-                "required": ["errored"],
-                "additionalProperties": false
-            }
-        ]
-    })
-}
-
-fn spawn_agent_output_schema(multi_agent_v2: bool) -> JsonValue {
-    let task_name_description = if multi_agent_v2 {
-        "Canonical task name for the spawned agent."
-    } else {
-        "Canonical task name for the spawned agent when one was assigned."
-    };
-    json!({
-        "type": "object",
-        "properties": {
-            "agent_id": {
-                "type": ["string", "null"],
-                "description": "Thread identifier for the spawned agent when no task name was assigned."
-            },
-            "task_name": {
-                "type": ["string", "null"],
-                "description": task_name_description
-            },
-            "nickname": {
-                "type": ["string", "null"],
-                "description": "User-facing nickname for the spawned agent when available."
-            }
-        },
-        "required": ["agent_id", "task_name", "nickname"],
-        "additionalProperties": false
-    })
-}
-
-fn send_input_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "submission_id": {
-                "type": "string",
-                "description": "Identifier for the queued input submission."
-            }
-        },
-        "required": ["submission_id"],
-        "additionalProperties": false
-    })
-}
-
-fn list_agents_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "agents": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "agent_name": {
-                            "type": "string",
-                            "description": "Canonical task name for the agent when available, otherwise the agent id."
-                        },
-                        "agent_status": {
-                            "description": "Last known status of the agent.",
-                            "allOf": [agent_status_output_schema()]
-                        },
-                        "last_task_message": {
-                            "type": ["string", "null"],
-                            "description": "Most recent user or inter-agent instruction received by the agent, when available."
-                        }
-                    },
-                    "required": ["agent_name", "agent_status", "last_task_message"],
-                    "additionalProperties": false
-                },
-                "description": "Live agents visible in the current root thread tree."
-            }
-        },
-        "required": ["agents"],
-        "additionalProperties": false
-    })
-}
-
-fn resume_agent_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": agent_status_output_schema()
-        },
-        "required": ["status"],
-        "additionalProperties": false
-    })
-}
-
-fn wait_output_schema_v1() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "object",
-                "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
-                "additionalProperties": agent_status_output_schema()
-            },
-            "timed_out": {
-                "type": "boolean",
-                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
-            }
-        },
-        "required": ["status", "timed_out"],
-        "additionalProperties": false
-    })
-}
-
-fn wait_output_schema_v2() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "message": {
-                "type": "string",
-                "description": "Brief wait summary without the agent's final content."
-            },
-            "timed_out": {
-                "type": "boolean",
-                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
-            }
-        },
-        "required": ["message", "timed_out"],
-        "additionalProperties": false
-    })
-}
-
-fn close_agent_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "previous_status": {
-                "description": "The agent status observed before shutdown was requested.",
-                "allOf": [agent_status_output_schema()]
-            }
-        },
-        "required": ["previous_status"],
-        "additionalProperties": false
-    })
-}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
@@ -334,7 +166,6 @@ pub(crate) struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
-    pub artifact_tools: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -390,13 +221,10 @@ impl ToolsConfig {
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
             model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
-        let include_tool_suggest = include_search_tool
-            && features.enabled(Feature::ToolSuggest)
+        let include_tool_suggest = features.enabled(Feature::ToolSuggest)
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
-        let include_artifact_tools =
-            features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
@@ -472,7 +300,6 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
-            artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -2484,259 +2311,21 @@ pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
 }
 
-/// Returns JSON values that are compatible with Function Calling in the
-/// Responses API:
-/// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
-pub fn create_tools_json_for_responses_api(
-    tools: &[ToolSpec],
-) -> crate::error::Result<Vec<serde_json::Value>> {
-    let mut tools_json = Vec::new();
-
-    for tool in tools {
-        let json = serde_json::to_value(tool)?;
-        tools_json.push(json);
-    }
-
-    Ok(tools_json)
-}
-
 fn push_tool_spec(
     builder: &mut ToolRegistryBuilder,
     spec: ToolSpec,
     supports_parallel_tool_calls: bool,
     code_mode_enabled: bool,
 ) {
-    let spec = augment_tool_spec_for_code_mode(spec, code_mode_enabled);
+    let spec = if code_mode_enabled {
+        augment_tool_spec_for_code_mode(spec)
+    } else {
+        spec
+    };
     if supports_parallel_tool_calls {
         builder.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ true);
     } else {
         builder.push_spec(spec);
-    }
-}
-
-pub(crate) fn mcp_tool_to_openai_tool(
-    fully_qualified_name: String,
-    tool: rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, output_schema) = mcp_tool_to_openai_tool_parts(tool)?;
-
-    Ok(ResponsesApiTool {
-        name: fully_qualified_name,
-        description,
-        strict: false,
-        defer_loading: None,
-        parameters: input_schema,
-        output_schema,
-    })
-}
-
-pub(crate) fn mcp_tool_to_deferred_openai_tool(
-    name: String,
-    tool: rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, _) = mcp_tool_to_openai_tool_parts(tool)?;
-
-    Ok(ResponsesApiTool {
-        name,
-        description,
-        strict: false,
-        defer_loading: Some(true),
-        parameters: input_schema,
-        output_schema: None,
-    })
-}
-
-fn dynamic_tool_to_openai_tool(
-    tool: &DynamicToolSpec,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
-
-    Ok(ResponsesApiTool {
-        name: tool.name.clone(),
-        description: tool.description.clone(),
-        strict: false,
-        defer_loading: None,
-        parameters: input_schema,
-        output_schema: None,
-    })
-}
-
-/// Parse the tool input_schema or return an error for invalid schema
-pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
-    let mut input_schema = input_schema.clone();
-    sanitize_json_schema(&mut input_schema);
-    serde_json::from_value::<JsonSchema>(input_schema)
-}
-
-fn mcp_tool_to_openai_tool_parts(
-    tool: rmcp::model::Tool,
-) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {
-    let rmcp::model::Tool {
-        description,
-        input_schema,
-        output_schema,
-        ..
-    } = tool;
-
-    let mut serialized_input_schema = serde_json::Value::Object(input_schema.as_ref().clone());
-
-    // OpenAI models mandate the "properties" field in the schema. Some MCP
-    // servers omit it (or set it to null), so we insert an empty object to
-    // match the behavior of the Agents SDK.
-    if let serde_json::Value::Object(obj) = &mut serialized_input_schema
-        && obj.get("properties").is_none_or(serde_json::Value::is_null)
-    {
-        obj.insert(
-            "properties".to_string(),
-            serde_json::Value::Object(serde_json::Map::new()),
-        );
-    }
-
-    // Serialize to a raw JSON value so we can sanitize schemas coming from MCP
-    // servers. Some servers omit the top-level or nested `type` in JSON
-    // Schemas (e.g. using enum/anyOf), or use unsupported variants like
-    // `integer`. Our internal JsonSchema is a small subset and requires
-    // `type`, so we coerce/sanitize here for compatibility.
-    sanitize_json_schema(&mut serialized_input_schema);
-    let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
-    let structured_content_schema = output_schema
-        .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
-        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
-    let output_schema = Some(mcp_call_tool_result_output_schema(
-        structured_content_schema,
-    ));
-    let description = description.map(Into::into).unwrap_or_default();
-
-    Ok((description, input_schema, output_schema))
-}
-
-fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "content": {
-                "type": "array",
-                "items": {}
-            },
-            "structuredContent": structured_content_schema,
-            "isError": {
-                "type": "boolean"
-            },
-            "_meta": {}
-        },
-        "required": ["content"],
-        "additionalProperties": false
-    })
-}
-
-/// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
-/// JsonSchema enum. This function:
-/// - Ensures every schema object has a "type". If missing, infers it from
-///   common keywords (properties => object, items => array, enum/const/format => string)
-///   and otherwise defaults to "string".
-/// - Fills required child fields (e.g. array items, object properties) with
-///   permissive defaults when absent.
-fn sanitize_json_schema(value: &mut JsonValue) {
-    match value {
-        JsonValue::Bool(_) => {
-            // JSON Schema boolean form: true/false. Coerce to an accept-all string.
-            *value = json!({ "type": "string" });
-        }
-        JsonValue::Array(arr) => {
-            for v in arr.iter_mut() {
-                sanitize_json_schema(v);
-            }
-        }
-        JsonValue::Object(map) => {
-            // First, recursively sanitize known nested schema holders
-            if let Some(props) = map.get_mut("properties")
-                && let Some(props_map) = props.as_object_mut()
-            {
-                for (_k, v) in props_map.iter_mut() {
-                    sanitize_json_schema(v);
-                }
-            }
-            if let Some(items) = map.get_mut("items") {
-                sanitize_json_schema(items);
-            }
-            // Some schemas use oneOf/anyOf/allOf - sanitize their entries
-            for combiner in ["oneOf", "anyOf", "allOf", "prefixItems"] {
-                if let Some(v) = map.get_mut(combiner) {
-                    sanitize_json_schema(v);
-                }
-            }
-
-            // Normalize/ensure type
-            let mut ty = map.get("type").and_then(|v| v.as_str()).map(str::to_string);
-
-            // If type is an array (union), pick first supported; else leave to inference
-            if ty.is_none()
-                && let Some(JsonValue::Array(types)) = map.get("type")
-            {
-                for t in types {
-                    if let Some(tt) = t.as_str()
-                        && matches!(
-                            tt,
-                            "object" | "array" | "string" | "number" | "integer" | "boolean"
-                        )
-                    {
-                        ty = Some(tt.to_string());
-                        break;
-                    }
-                }
-            }
-
-            // Infer type if still missing
-            if ty.is_none() {
-                if map.contains_key("properties")
-                    || map.contains_key("required")
-                    || map.contains_key("additionalProperties")
-                {
-                    ty = Some("object".to_string());
-                } else if map.contains_key("items") || map.contains_key("prefixItems") {
-                    ty = Some("array".to_string());
-                } else if map.contains_key("enum")
-                    || map.contains_key("const")
-                    || map.contains_key("format")
-                {
-                    ty = Some("string".to_string());
-                } else if map.contains_key("minimum")
-                    || map.contains_key("maximum")
-                    || map.contains_key("exclusiveMinimum")
-                    || map.contains_key("exclusiveMaximum")
-                    || map.contains_key("multipleOf")
-                {
-                    ty = Some("number".to_string());
-                }
-            }
-            // If we still couldn't infer, default to string
-            let ty = ty.unwrap_or_else(|| "string".to_string());
-            map.insert("type".to_string(), JsonValue::String(ty.to_string()));
-
-            // Ensure object schemas have properties map
-            if ty == "object" {
-                if !map.contains_key("properties") {
-                    map.insert(
-                        "properties".to_string(),
-                        JsonValue::Object(serde_json::Map::new()),
-                    );
-                }
-                // If additionalProperties is an object schema, sanitize it too.
-                // Leave booleans as-is, since JSON Schema allows boolean here.
-                if let Some(ap) = map.get_mut("additionalProperties") {
-                    let is_bool = matches!(ap, JsonValue::Bool(_));
-                    if !is_bool {
-                        sanitize_json_schema(ap);
-                    }
-                }
-            }
-
-            // Ensure array schemas have items
-            if ty == "array" && !map.contains_key("items") {
-                map.insert("items".to_string(), json!({ "type": "string" }));
-            }
-        }
-        _ => {}
     }
 }
 
@@ -2748,7 +2337,13 @@ pub(crate) fn build_specs(
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_tools(config, mcp_tools, app_tools, None, dynamic_tools)
+    build_specs_with_discoverable_tools(
+        config,
+        mcp_tools,
+        app_tools,
+        /*discoverable_tools*/ None,
+        dynamic_tools,
+    )
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(
@@ -2759,18 +2354,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
-    use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -2786,6 +2378,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
     use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -2812,7 +2405,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
-    let artifacts_handler = Arc::new(ArtifactsHandler);
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
     if config.code_mode_enabled {
@@ -2827,16 +2419,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .build();
         let mut enabled_tools = nested_specs
             .into_iter()
-            .filter_map(|spec| {
-                let (name, description) = match augment_tool_spec_for_code_mode(
-                    spec.spec, /*code_mode_enabled*/ true,
-                ) {
-                    ToolSpec::Function(tool) => (tool.name, tool.description),
-                    ToolSpec::Freeform(tool) => (tool.name, tool.description),
-                    _ => return None,
-                };
-                codex_code_mode::is_code_mode_nested_tool(&name).then_some((name, description))
-            })
+            .filter_map(|spec| tool_spec_to_code_mode_tool_definition(&spec.spec))
+            .map(|tool| (tool.name, tool.description))
             .collect::<Vec<_>>();
         enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));
         enabled_tools.dedup_by(|left, right| left.0 == right.0);
@@ -2860,7 +2444,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::Default => {
             push_tool_spec(
                 &mut builder,
-                create_shell_tool(exec_permission_approvals_enabled),
+                create_shell_tool(ShellToolOptions {
+                    exec_permission_approvals_enabled,
+                }),
                 /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
@@ -2876,10 +2462,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::UnifiedExec => {
             push_tool_spec(
                 &mut builder,
-                create_exec_command_tool(
-                    config.allow_login_shell,
+                create_exec_command_tool(CommandToolOptions {
+                    allow_login_shell: config.allow_login_shell,
                     exec_permission_approvals_enabled,
-                ),
+                }),
                 /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
@@ -2898,10 +2484,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::ShellCommand => {
             push_tool_spec(
                 &mut builder,
-                create_shell_command_tool(
-                    config.allow_login_shell,
+                create_shell_command_tool(CommandToolOptions {
+                    allow_login_shell: config.allow_login_shell,
                     exec_permission_approvals_enabled,
-                ),
+                }),
                 /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
@@ -2968,9 +2554,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.request_user_input {
         push_tool_spec(
             &mut builder,
-            create_request_user_input_tool(CollaborationModesConfig {
-                default_mode_request_user_input: config.default_mode_request_user_input,
-            }),
+            create_request_user_input_tool(request_user_input_tool_description(
+                config.default_mode_request_user_input,
+            )),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -2980,7 +2566,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.request_permissions_tool_enabled {
         push_tool_spec(
             &mut builder,
-            create_request_permissions_tool(),
+            create_request_permissions_tool(request_permissions_tool_description()),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -2993,7 +2579,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         let search_tool_handler = Arc::new(ToolSearchHandler::new(app_tools.clone()));
         push_tool_spec(
             &mut builder,
-            create_tool_search_tool(&app_tools),
+            create_tool_search_tool(
+                &tool_search_app_infos(&app_tools),
+                TOOL_SEARCH_DEFAULT_LIMIT,
+            ),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
@@ -3013,7 +2602,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             .filter(|tools| !tools.is_empty())
     {
         builder.push_spec_with_parallel_support(
-            create_tool_suggest_tool(discoverable_tools),
+            create_tool_suggest_tool(&tool_suggest_entries(discoverable_tools)),
             /*supports_parallel_tool_calls*/ true,
         );
         builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
@@ -3039,34 +2628,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
         }
         builder.register_handler("apply_patch", apply_patch_handler);
-    }
-
-    if config
-        .experimental_supported_tools
-        .contains(&"grep_files".to_string())
-    {
-        let grep_files_handler = Arc::new(GrepFilesHandler);
-        push_tool_spec(
-            &mut builder,
-            create_grep_files_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("grep_files", grep_files_handler);
-    }
-
-    if config
-        .experimental_supported_tools
-        .contains(&"read_file".to_string())
-    {
-        let read_file_handler = Arc::new(ReadFileHandler);
-        push_tool_spec(
-            &mut builder,
-            create_read_file_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("read_file", read_file_handler);
     }
 
     if config
@@ -3151,73 +2712,55 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     push_tool_spec(
         &mut builder,
-        create_view_image_tool(config.can_request_original_image_detail),
+        create_view_image_tool(ViewImageToolOptions {
+            can_request_original_image_detail: config.can_request_original_image_detail,
+        }),
         /*supports_parallel_tool_calls*/ true,
         config.code_mode_enabled,
     );
     builder.register_handler("view_image", view_image_handler);
 
-    if config.artifact_tools {
-        push_tool_spec(
-            &mut builder,
-            create_artifacts_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("artifacts", artifacts_handler);
-    }
-
     if config.collab_tools {
-        push_tool_spec(
-            &mut builder,
-            create_spawn_agent_tool(config),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            if config.multi_agent_v2 {
-                create_send_message_tool()
-            } else {
-                create_send_input_tool()
-            },
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
         if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+                    available_models: &config.available_models,
+                    agent_type_description: crate::agent::role::spawn_tool_spec::build(
+                        &config.agent_roles,
+                    ),
+                }),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_send_message_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             push_tool_spec(
                 &mut builder,
                 create_assign_task_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-        }
-        if !config.multi_agent_v2 {
             push_tool_spec(
                 &mut builder,
-                create_resume_agent_tool(),
+                create_wait_agent_tool_v2(WaitAgentTimeoutOptions {
+                    default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+                    min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+                    max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+                }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
-        }
-        push_tool_spec(
-            &mut builder,
-            if config.multi_agent_v2 {
-                create_wait_agent_tool_v2()
-            } else {
-                create_wait_agent_tool_v1()
-            },
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            create_close_agent_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_close_agent_tool_v2(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             push_tool_spec(
                 &mut builder,
                 create_list_agents_tool(),
@@ -3228,13 +2771,54 @@ pub(crate) fn build_specs_with_discoverable_tools(
             builder.register_handler("send_message", Arc::new(SendMessageHandlerV2));
             builder.register_handler("assign_task", Arc::new(AssignTaskHandlerV2));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
+            builder.register_handler("close_agent", Arc::new(CloseAgentHandlerV2));
             builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
         } else {
+            push_tool_spec(
+                &mut builder,
+                create_spawn_agent_tool_v1(SpawnAgentToolOptions {
+                    available_models: &config.available_models,
+                    agent_type_description: crate::agent::role::spawn_tool_spec::build(
+                        &config.agent_roles,
+                    ),
+                }),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_send_input_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_resume_agent_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
+            push_tool_spec(
+                &mut builder,
+                create_wait_agent_tool_v1(WaitAgentTimeoutOptions {
+                    default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+                    min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+                    max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+                }),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_close_agent_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
             builder.register_handler("send_input", Arc::new(SendInputHandler));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+            builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
         }
-        builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 
     if config.agent_jobs_tools {
@@ -3262,7 +2846,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool) in entries.into_iter() {
-            match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
+            match mcp_tool_to_responses_api_tool(name.clone(), &tool) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,
@@ -3281,7 +2865,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     if !dynamic_tools.is_empty() {
         for tool in dynamic_tools {
-            match dynamic_tool_to_openai_tool(tool) {
+            match dynamic_tool_to_responses_api_tool(tool) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,
@@ -3302,6 +2886,54 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     builder
+}
+
+fn tool_search_app_infos(app_tools: &HashMap<String, ToolInfo>) -> Vec<ToolSearchAppInfo> {
+    app_tools
+        .values()
+        .filter(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
+        .filter_map(|tool| {
+            let name = tool
+                .connector_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())?
+                .to_string();
+            let description = tool
+                .connector_description
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_description| !connector_description.is_empty())
+                .map(str::to_string);
+            Some(ToolSearchAppInfo { name, description })
+        })
+        .collect()
+}
+
+fn tool_suggest_entries(discoverable_tools: &[DiscoverableTool]) -> Vec<ToolSuggestEntry> {
+    discoverable_tools
+        .iter()
+        .map(|tool| match tool {
+            DiscoverableTool::Connector(connector) => ToolSuggestEntry {
+                id: connector.id.clone(),
+                name: connector.name.clone(),
+                description: connector.description.clone(),
+                tool_type: DiscoverableToolType::Connector,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            },
+            DiscoverableTool::Plugin(plugin) => ToolSuggestEntry {
+                id: plugin.id.clone(),
+                name: plugin.name.clone(),
+                description: plugin.description.clone(),
+                tool_type: DiscoverableToolType::Plugin,
+                has_skills: plugin.has_skills,
+                mcp_server_names: plugin.mcp_server_names.clone(),
+                app_connector_ids: plugin.app_connector_ids.clone(),
+            },
+        })
+        .collect()
 }
 
 #[cfg(test)]

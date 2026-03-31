@@ -3,9 +3,11 @@
 
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
+use codex_exec_server::EnvironmentManager;
 use codex_utils_cli::CliConfigOverrides;
 
 use rmcp::model::ClientNotification;
@@ -55,6 +57,7 @@ pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
 ) -> IoResult<()> {
+    let environment_manager = Arc::new(EnvironmentManager::from_env());
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
     let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
@@ -127,7 +130,8 @@ pub async fn run_main(
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             arg0_paths,
-            std::sync::Arc::new(config),
+            Arc::new(config),
+            environment_manager,
         );
         async move {
             while let Some(msg) = incoming_rx.recv().await {

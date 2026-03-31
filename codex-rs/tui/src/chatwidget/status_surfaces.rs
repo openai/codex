@@ -5,17 +5,23 @@
 
 use super::*;
 
+/// Items shown in the terminal title when the user has not configured a
+/// custom selection. Intentionally minimal: spinner + project name.
 pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["spinner", "project"];
+
+/// Braille-pattern dot-spinner frames for the terminal title animation.
 pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Time between spinner frame advances in the terminal title.
 pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 /// Compact runtime states that can be rendered into the terminal title.
 ///
 /// This is intentionally smaller than the full status-header vocabulary. The
 /// title needs short, stable labels, so callers map richer lifecycle events
 /// onto one of these buckets before rendering.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
@@ -47,12 +53,12 @@ impl StatusSurfaceSelections {
     }
 }
 
-#[derive(Clone, Debug)]
 /// Cached project-root display name keyed by the cwd used for the last lookup.
 ///
 /// Terminal-title refreshes can happen very frequently, so the title path avoids
 /// repeatedly walking up the filesystem to rediscover the same project root name
 /// while the working directory is unchanged.
+#[derive(Clone, Debug)]
 pub(super) struct CachedProjectRootName {
     pub(super) cwd: PathBuf,
     pub(super) root_name: Option<String>,
@@ -270,20 +276,7 @@ impl ChatWidget {
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
     fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
-        let mut invalid = Vec::new();
-        let mut invalid_seen = HashSet::new();
-        let mut items = Vec::new();
-        for id in self.configured_status_line_items() {
-            match id.parse::<StatusLineItem>() {
-                Ok(item) => items.push(item),
-                Err(_) => {
-                    if invalid_seen.insert(id.clone()) {
-                        invalid.push(format!(r#""{id}""#));
-                    }
-                }
-            }
-        }
-        (items, invalid)
+        parse_items_with_invalids(self.configured_status_line_items())
     }
 
     pub(super) fn configured_status_line_items(&self) -> Vec<String> {
@@ -299,20 +292,7 @@ impl ChatWidget {
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
     fn terminal_title_items_with_invalids(&self) -> (Vec<TerminalTitleItem>, Vec<String>) {
-        let mut invalid = Vec::new();
-        let mut invalid_seen = HashSet::new();
-        let mut items = Vec::new();
-        for id in self.configured_terminal_title_items() {
-            match id.parse::<TerminalTitleItem>() {
-                Ok(item) => items.push(item),
-                Err(_) => {
-                    if invalid_seen.insert(id.clone()) {
-                        invalid.push(format!(r#""{id}""#));
-                    }
-                }
-            }
-        }
-        (items, invalid)
+        parse_items_with_invalids(self.configured_terminal_title_items())
     }
 
     /// Returns the configured terminal-title ids, or the default ordering when unset.
@@ -326,7 +306,9 @@ impl ChatWidget {
     }
 
     fn status_line_cwd(&self) -> &Path {
-        self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
+        self.current_cwd
+            .as_deref()
+            .unwrap_or(self.config.cwd.as_path())
     }
 
     /// Resolves the project root associated with `cwd`.
@@ -657,4 +639,24 @@ impl ChatWidget {
         truncated.push_str("...");
         truncated
     }
+}
+
+fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)
+where
+    T: std::str::FromStr,
+{
+    let mut invalid = Vec::new();
+    let mut invalid_seen = HashSet::new();
+    let mut items = Vec::new();
+    for id in ids {
+        match id.parse::<T>() {
+            Ok(item) => items.push(item),
+            Err(_) => {
+                if invalid_seen.insert(id.clone()) {
+                    invalid.push(format!(r#""{id}""#));
+                }
+            }
+        }
+    }
+    (items, invalid)
 }

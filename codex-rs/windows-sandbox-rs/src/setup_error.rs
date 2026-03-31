@@ -189,15 +189,16 @@ pub fn sanitize_setup_metric_tag_value(value: &str) -> String {
 
 fn redact_home_paths(value: &str) -> String {
     let mut usernames: Vec<String> = Vec::new();
-    if let Ok(username) = std::env::var("USERNAME") {
-        if !username.trim().is_empty() {
-            usernames.push(username);
-        }
+    if let Ok(username) = std::env::var("USERNAME")
+        && !username.trim().is_empty()
+    {
+        usernames.push(username);
     }
-    if let Ok(user) = std::env::var("USER") {
-        if !user.trim().is_empty() && !usernames.iter().any(|v| v.eq_ignore_ascii_case(&user)) {
-            usernames.push(user);
-        }
+    if let Ok(user) = std::env::var("USER")
+        && !user.trim().is_empty()
+        && !usernames.iter().any(|v| v.eq_ignore_ascii_case(&user))
+    {
+        usernames.push(user);
     }
 
     redact_username_segments(value, &usernames)

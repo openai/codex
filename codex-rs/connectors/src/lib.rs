@@ -419,7 +419,7 @@ mod tests {
             "https://chatgpt.example".to_string(),
             Some(format!("account-{id}")),
             Some(format!("user-{id}")),
-            true,
+            /*is_workspace_account*/ true,
         )
     }
 
@@ -444,21 +444,31 @@ mod tests {
         let call_counter = Arc::clone(&calls);
         let key = cache_key("shared");
 
-        let first = list_all_connectors_with_options(key.clone(), false, false, move |_path| {
-            let call_counter = Arc::clone(&call_counter);
-            async move {
-                call_counter.fetch_add(1, Ordering::SeqCst);
-                Ok(DirectoryListResponse {
-                    apps: vec![app("alpha", "Alpha")],
-                    next_token: None,
-                })
-            }
-        })
+        let first = list_all_connectors_with_options(
+            key.clone(),
+            /*is_workspace_account*/ false,
+            /*force_refetch*/ false,
+            move |_path| {
+                let call_counter = Arc::clone(&call_counter);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("alpha", "Alpha")],
+                        next_token: None,
+                    })
+                }
+            },
+        )
         .await?;
 
-        let second = list_all_connectors_with_options(key, false, false, move |_path| async move {
-            anyhow::bail!("cache should have been used");
-        })
+        let second = list_all_connectors_with_options(
+            key,
+            /*is_workspace_account*/ false,
+            /*force_refetch*/ false,
+            move |_path| async move {
+                anyhow::bail!("cache should have been used");
+            },
+        )
         .await?;
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -472,40 +482,45 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
 
-        let connectors = list_all_connectors_with_options(key, true, true, move |path| {
-            let call_counter = Arc::clone(&call_counter);
-            async move {
-                call_counter.fetch_add(1, Ordering::SeqCst);
-                if path.starts_with("/connectors/directory/list_workspace") {
-                    Ok(DirectoryListResponse {
-                        apps: vec![
-                            DirectoryApp {
-                                description: Some("Merged description".to_string()),
-                                branding: Some(AppBranding {
-                                    category: Some("calendar".to_string()),
-                                    developer: None,
-                                    website: None,
-                                    privacy_policy: None,
-                                    terms_of_service: None,
-                                    is_discoverable_app: true,
-                                }),
-                                ..app("alpha", "")
-                            },
-                            DirectoryApp {
-                                visibility: Some("HIDDEN".to_string()),
-                                ..app("hidden", "Hidden")
-                            },
-                        ],
-                        next_token: None,
-                    })
-                } else {
-                    Ok(DirectoryListResponse {
-                        apps: vec![app("alpha", " Alpha "), app("beta", "Beta")],
-                        next_token: None,
-                    })
+        let connectors = list_all_connectors_with_options(
+            key,
+            /*is_workspace_account*/ true,
+            /*force_refetch*/ true,
+            move |path| {
+                let call_counter = Arc::clone(&call_counter);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    if path.starts_with("/connectors/directory/list_workspace") {
+                        Ok(DirectoryListResponse {
+                            apps: vec![
+                                DirectoryApp {
+                                    description: Some("Merged description".to_string()),
+                                    branding: Some(AppBranding {
+                                        category: Some("calendar".to_string()),
+                                        developer: None,
+                                        website: None,
+                                        privacy_policy: None,
+                                        terms_of_service: None,
+                                        is_discoverable_app: true,
+                                    }),
+                                    ..app("alpha", "")
+                                },
+                                DirectoryApp {
+                                    visibility: Some("HIDDEN".to_string()),
+                                    ..app("hidden", "Hidden")
+                                },
+                            ],
+                            next_token: None,
+                        })
+                    } else {
+                        Ok(DirectoryListResponse {
+                            apps: vec![app("alpha", " Alpha "), app("beta", "Beta")],
+                            next_token: None,
+                        })
+                    }
                 }
-            }
-        })
+            },
+        )
         .await?;
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);

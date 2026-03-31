@@ -366,7 +366,7 @@ mod tests {
             AppEventSender::new(tx_raw),
         );
 
-        assert_snapshot!(render_lines(&view, 72));
+        assert_snapshot!(render_lines(&view, /*width*/ 72));
     }
 
     fn render_lines(view: &StatusLineSetupView, width: u16) -> String {

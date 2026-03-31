@@ -1,36 +1,52 @@
+use std::collections::HashMap;
+use std::path::Path;
+
+pub struct ElevatedSandboxCaptureRequest<'a> {
+    pub policy_json_or_preset: &'a str,
+    pub sandbox_policy_cwd: &'a Path,
+    pub codex_home: &'a Path,
+    pub command: Vec<String>,
+    pub cwd: &'a Path,
+    pub env_map: HashMap<String, String>,
+    pub timeout_ms: Option<u64>,
+    pub use_private_desktop: bool,
+    pub proxy_enforced: bool,
+}
+
 mod windows_impl {
+    use super::ElevatedSandboxCaptureRequest;
     use crate::acl::allow_null_device;
-    use crate::allow::compute_allow_paths;
     use crate::allow::AllowDenyPaths;
+    use crate::allow::compute_allow_paths;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
-    use crate::helper_materialization::resolve_helper_for_launch;
     use crate::helper_materialization::HelperExecutable;
+    use crate::helper_materialization::resolve_helper_for_launch;
     use crate::identity::require_logon_sandbox_creds;
-    use crate::ipc_framed::decode_bytes;
-    use crate::ipc_framed::read_frame;
-    use crate::ipc_framed::write_frame;
     use crate::ipc_framed::FramedMessage;
     use crate::ipc_framed::Message;
     use crate::ipc_framed::OutputStream;
     use crate::ipc_framed::SpawnRequest;
+    use crate::ipc_framed::decode_bytes;
+    use crate::ipc_framed::read_frame;
+    use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
     use crate::logging::log_note;
     use crate::logging::log_start;
     use crate::logging::log_success;
-    use crate::policy::parse_policy;
     use crate::policy::SandboxPolicy;
+    use crate::policy::parse_policy;
     use crate::token::convert_string_sid_to_sid;
     use crate::winutil::quote_windows_arg;
     use crate::winutil::resolve_sid;
     use crate::winutil::string_from_sid_bytes;
     use crate::winutil::to_wide;
     use anyhow::Result;
-    use rand::rngs::SmallRng;
     use rand::Rng;
     use rand::SeedableRng;
+    use rand::rngs::SmallRng;
     use std::collections::HashMap;
     use std::ffi::c_void;
     use std::fs::File;
@@ -68,16 +84,16 @@ mod windows_impl {
                 return Some(cur);
             }
             if marker.is_file() {
-                if let Ok(txt) = std::fs::read_to_string(&marker) {
-                    if let Some(rest) = txt.trim().strip_prefix("gitdir:") {
-                        let gitdir = rest.trim();
-                        let resolved = if Path::new(gitdir).is_absolute() {
-                            PathBuf::from(gitdir)
-                        } else {
-                            cur.join(gitdir)
-                        };
-                        return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
-                    }
+                if let Ok(txt) = std::fs::read_to_string(&marker)
+                    && let Some(rest) = txt.trim().strip_prefix("gitdir:")
+                {
+                    let gitdir = rest.trim();
+                    let resolved = if Path::new(gitdir).is_absolute() {
+                        PathBuf::from(gitdir)
+                    } else {
+                        cur.join(gitdir)
+                    };
+                    return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
                 }
                 return Some(cur);
             }
@@ -127,7 +143,11 @@ mod windows_impl {
     /// Generates a unique named-pipe path used to communicate with the runner process.
     fn pipe_name(suffix: &str) -> String {
         let mut rng = SmallRng::from_entropy();
-        format!(r"\\.\pipe\codex-runner-{:x}-{}", rng.gen::<u128>(), suffix)
+        format!(
+            r"\\.\pipe\codex-runner-{:x}-{}",
+            rng.r#gen::<u128>(),
+            suffix
+        )
     }
 
     /// Creates a named pipe whose DACL only allows the sandbox user to connect.
@@ -203,15 +223,19 @@ mod windows_impl {
     /// Launches the command runner under the sandbox user and captures its output.
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
-        policy_json_or_preset: &str,
-        sandbox_policy_cwd: &Path,
-        codex_home: &Path,
-        command: Vec<String>,
-        cwd: &Path,
-        mut env_map: HashMap<String, String>,
-        timeout_ms: Option<u64>,
-        use_private_desktop: bool,
+        request: ElevatedSandboxCaptureRequest<'_>,
     ) -> Result<CaptureResult> {
+        let ElevatedSandboxCaptureRequest {
+            policy_json_or_preset,
+            sandbox_policy_cwd,
+            codex_home,
+            command,
+            cwd,
+            mut env_map,
+            timeout_ms,
+            use_private_desktop,
+            proxy_enforced,
+        } = request;
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
@@ -224,8 +248,14 @@ mod windows_impl {
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let sandbox_creds =
-            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
+        let sandbox_creds = require_logon_sandbox_creds(
+            &policy,
+            sandbox_policy_cwd,
+            cwd,
+            &env_map,
+            codex_home,
+            proxy_enforced,
+        )?;
         let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
             io::Error::new(io::ErrorKind::PermissionDenied, err.to_string())
         })?;
@@ -460,12 +490,12 @@ mod windows_impl {
 
         #[test]
         fn applies_network_block_when_access_is_disabled() {
-            assert!(!workspace_policy(false).has_full_network_access());
+            assert!(!workspace_policy(/*network_access*/ false).has_full_network_access());
         }
 
         #[test]
         fn skips_network_block_when_access_is_allowed() {
-            assert!(workspace_policy(true).has_full_network_access());
+            assert!(workspace_policy(/*network_access*/ true).has_full_network_access());
         }
 
         #[test]
@@ -480,11 +510,9 @@ pub use windows_impl::run_windows_sandbox_capture;
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use anyhow::bail;
+    use super::ElevatedSandboxCaptureRequest;
     use anyhow::Result;
-    use codex_protocol::protocol::SandboxPolicy;
-    use std::collections::HashMap;
-    use std::path::Path;
+    use anyhow::bail;
 
     #[derive(Debug, Default)]
     pub struct CaptureResult {
@@ -497,14 +525,7 @@ mod stub {
     /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
-        _policy_json_or_preset: &str,
-        _sandbox_policy_cwd: &Path,
-        _codex_home: &Path,
-        _command: Vec<String>,
-        _cwd: &Path,
-        _env_map: HashMap<String, String>,
-        _timeout_ms: Option<u64>,
-        _use_private_desktop: bool,
+        _request: ElevatedSandboxCaptureRequest<'_>,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

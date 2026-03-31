@@ -137,7 +137,7 @@ mod tests {
                 &all_connectors,
                 &[],
                 &[AppConnectorId("alpha".to_string())],
-                false,
+                /*codex_apps_ready*/ false,
             ),
             Vec::new()
         );

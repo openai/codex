@@ -47,7 +47,7 @@ fn test_head_one_file_no_flags() -> Result<()> {
             exec: ValidExec::new(
                 "head",
                 vec![MatchedArg::new(
-                    0,
+                    /*index*/ 0,
                     ArgType::ReadableFile,
                     "src/extension.ts"
                 )?],
@@ -73,7 +73,7 @@ fn test_head_one_flag_one_file() -> Result<()> {
                         .expect("should validate")
                 ],
                 args: vec![MatchedArg::new(
-                    2,
+                    /*index*/ 2,
                     ArgType::ReadableFile,
                     "src/extension.ts"
                 )?],

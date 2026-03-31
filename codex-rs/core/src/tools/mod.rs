@@ -1,7 +1,5 @@
 pub mod code_mode;
-pub(crate) mod code_mode_description;
 pub mod context;
-pub(crate) mod discoverable;
 pub mod events;
 pub(crate) mod handlers;
 pub mod js_repl;
