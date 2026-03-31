@@ -1,3 +1,7 @@
+use super::manager::ExternalAuth;
+use super::manager::ExternalAuthRefreshContext;
+use super::manager::ExternalAuthTokens;
+use async_trait::async_trait;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use std::fmt;
 use std::io;
@@ -10,11 +14,11 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
-pub(crate) struct ExternalBearerAuth {
+pub(crate) struct BearerTokenRefresher {
     state: Arc<ExternalBearerAuthState>,
 }
 
-impl ExternalBearerAuth {
+impl BearerTokenRefresher {
     pub(crate) fn new(config: ModelProviderAuthInfo) -> Self {
         Self {
             state: Arc::new(ExternalBearerAuthState::new(config)),
@@ -48,9 +52,27 @@ impl ExternalBearerAuth {
     }
 }
 
-impl fmt::Debug for ExternalBearerAuth {
+#[async_trait]
+impl ExternalAuth for BearerTokenRefresher {
+    fn auth_mode(&self) -> crate::AuthMode {
+        crate::AuthMode::ApiKey
+    }
+
+    async fn resolve(&self) -> io::Result<Option<ExternalAuthTokens>> {
+        let access_token = self.resolve_access_token().await?;
+        Ok(Some(ExternalAuthTokens::access_token_only(access_token)))
+    }
+
+    async fn refresh(&self, _context: ExternalAuthRefreshContext) -> io::Result<ExternalAuthTokens> {
+        self.refresh_after_unauthorized().await?;
+        let access_token = self.resolve_access_token().await?;
+        Ok(ExternalAuthTokens::access_token_only(access_token))
+    }
+}
+
+impl fmt::Debug for BearerTokenRefresher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ExternalBearerAuth").finish_non_exhaustive()
+        f.debug_struct("BearerTokenRefresher").finish_non_exhaustive()
     }
 }
 

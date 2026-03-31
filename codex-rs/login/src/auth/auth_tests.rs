@@ -6,6 +6,7 @@ use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
 use codex_protocol::account::PlanType as AccountPlanType;
 
+use async_trait::async_trait;
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -283,6 +284,8 @@ async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
 
     assert_eq!(first.as_deref(), Some("provider-token"));
     assert_eq!(second.as_deref(), Some("provider-token"));
+    assert_eq!(manager.auth_mode(), Some(crate::AuthMode::ApiKey));
+    assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ApiKey));
 }
 
 #[tokio::test]
@@ -319,6 +322,88 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
         .and_then(|auth| auth.api_key().map(str::to_string));
     assert_eq!(initial_token.as_deref(), Some("provider-token"));
     assert_eq!(refreshed_token.as_deref(), Some("refreshed-provider-token"));
+}
+
+#[tokio::test]
+async fn external_chatgpt_auth_manager_refresh_persists_ephemeral_auth() {
+    let codex_home = tempdir().unwrap();
+    let original_access_token = fake_jwt(
+        /*chatgpt_plan_type*/ Some("pro"),
+        /*chatgpt_account_id*/ Some("org_original"),
+    )
+    .expect("original access token");
+    let auth = CodexAuth::from_auth_dot_json(
+        codex_home.path(),
+        AuthDotJson::from_external_access_token(
+            &original_access_token,
+            "org_original",
+            Some("pro"),
+        )
+        .expect("external auth dot json"),
+        AuthCredentialsStoreMode::Ephemeral,
+    )
+    .expect("external auth should parse");
+    let manager =
+        AuthManager::from_auth_for_testing_with_home(auth, codex_home.path().to_path_buf());
+    manager.set_external_auth(Arc::new(StaticExternalAuth::chatgpt(
+        ExternalAuthTokens::chatgpt(
+            fake_jwt(
+                /*chatgpt_plan_type*/ Some("business"),
+                /*chatgpt_account_id*/ Some("org_refreshed"),
+            )
+            .expect("refreshed access token"),
+            "org_refreshed",
+            Some("business".to_string()),
+        ),
+    )));
+
+    manager
+        .refresh_token_from_authority()
+        .await
+        .expect("external auth refresh should succeed");
+
+    assert_eq!(manager.auth_mode(), Some(crate::AuthMode::Chatgpt));
+    assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ChatgptAuthTokens));
+
+    let auth_dot_json = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::Ephemeral)
+        .expect("ephemeral auth should load")
+        .expect("ephemeral auth should exist");
+    let tokens = auth_dot_json.tokens.expect("tokens should exist");
+    assert_eq!(tokens.account_id.as_deref(), Some("org_refreshed"));
+    assert_eq!(tokens.id_token.chatgpt_account_id.as_deref(), Some("org_refreshed"));
+    assert_eq!(
+        tokens.id_token.chatgpt_plan_type,
+        Some(InternalPlanType::Known(InternalKnownPlan::Business))
+    );
+}
+
+#[derive(Debug)]
+struct StaticExternalAuth {
+    auth_mode: crate::AuthMode,
+    refresh_result: ExternalAuthTokens,
+}
+
+impl StaticExternalAuth {
+    fn chatgpt(refresh_result: ExternalAuthTokens) -> Self {
+        Self {
+            auth_mode: crate::AuthMode::Chatgpt,
+            refresh_result,
+        }
+    }
+}
+
+#[async_trait]
+impl ExternalAuth for StaticExternalAuth {
+    fn auth_mode(&self) -> crate::AuthMode {
+        self.auth_mode
+    }
+
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        Ok(self.refresh_result.clone())
+    }
 }
 
 struct ProviderAuthScript {
@@ -433,7 +518,7 @@ exit 1
         serde_json::from_value(json!({
             "command": self.command,
             "args": self.args,
-            "timeout_ms": 1000,
+            "timeout_ms": 5000,
             "refresh_interval_ms": 60000,
             "cwd": self.tempdir.path(),
         }))
@@ -447,43 +532,21 @@ struct AuthFileParams {
     chatgpt_account_id: Option<String>,
 }
 
-fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
-    let auth_file = get_auth_file(codex_home);
-    // Create a minimal valid JWT for the id_token field.
-    #[derive(Serialize)]
-    struct Header {
-        alg: &'static str,
-        typ: &'static str,
-    }
-    let header = Header {
-        alg: "none",
-        typ: "JWT",
+fn fake_jwt(
+    chatgpt_plan_type: Option<&str>,
+    chatgpt_account_id: Option<&str>,
+) -> std::io::Result<String> {
+    let params = AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: chatgpt_plan_type.map(str::to_string),
+        chatgpt_account_id: chatgpt_account_id.map(str::to_string),
     };
-    let mut auth_payload = serde_json::json!({
-        "chatgpt_user_id": "user-12345",
-        "user_id": "user-12345",
-    });
+    fake_jwt_for_auth_file_params(&params)
+}
 
-    if let Some(chatgpt_plan_type) = params.chatgpt_plan_type {
-        auth_payload["chatgpt_plan_type"] = serde_json::Value::String(chatgpt_plan_type);
-    }
-
-    if let Some(chatgpt_account_id) = params.chatgpt_account_id {
-        let org_value = serde_json::Value::String(chatgpt_account_id);
-        auth_payload["chatgpt_account_id"] = org_value;
-    }
-
-    let payload = serde_json::json!({
-        "email": "user@example.com",
-        "email_verified": true,
-        "https://api.openai.com/auth": auth_payload,
-    });
-    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
-    let header_b64 = b64(&serde_json::to_vec(&header)?);
-    let payload_b64 = b64(&serde_json::to_vec(&payload)?);
-    let signature_b64 = b64(b"sig");
-    let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
-
+fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
+    let fake_jwt = fake_jwt_for_auth_file_params(&params)?;
+    let auth_file = get_auth_file(codex_home);
     let auth_json_data = json!({
         "OPENAI_API_KEY": params.openai_api_key,
         "tokens": {
@@ -496,6 +559,44 @@ fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result
     let auth_json = serde_json::to_string_pretty(&auth_json_data)?;
     std::fs::write(auth_file, auth_json)?;
     Ok(fake_jwt)
+}
+
+fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<String> {
+    #[derive(Serialize)]
+    struct Header {
+        alg: &'static str,
+        typ: &'static str,
+    }
+
+    let header = Header {
+        alg: "none",
+        typ: "JWT",
+    };
+    let mut auth_payload = serde_json::json!({
+        "chatgpt_user_id": "user-12345",
+        "user_id": "user-12345",
+    });
+
+    if let Some(chatgpt_plan_type) = params.chatgpt_plan_type.as_ref() {
+        auth_payload["chatgpt_plan_type"] =
+            serde_json::Value::String(chatgpt_plan_type.clone());
+    }
+
+    if let Some(chatgpt_account_id) = params.chatgpt_account_id.as_ref() {
+        auth_payload["chatgpt_account_id"] =
+            serde_json::Value::String(chatgpt_account_id.clone());
+    }
+
+    let payload = serde_json::json!({
+        "email": "user@example.com",
+        "email_verified": true,
+        "https://api.openai.com/auth": auth_payload,
+    });
+    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let header_b64 = b64(&serde_json::to_vec(&header)?);
+    let payload_b64 = b64(&serde_json::to_vec(&payload)?);
+    let signature_b64 = b64(b"sig");
+    Ok(format!("{header_b64}.{payload_b64}.{signature_b64}"))
 }
 
 async fn build_config(
