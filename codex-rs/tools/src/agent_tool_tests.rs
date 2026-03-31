@@ -101,7 +101,7 @@ fn send_message_tool_requires_items_and_uses_submission_output() {
 }
 
 #[test]
-fn wait_agent_tool_v2_uses_task_targets_and_summary_output() {
+fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -114,17 +114,17 @@ fn wait_agent_tool_v2_uses_task_targets_and_summary_output() {
     else {
         panic!("wait_agent should be a function tool");
     };
-    let JsonSchema::Object { properties, .. } = parameters else {
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
         panic!("wait_agent should use object params");
     };
-    let Some(JsonSchema::Array {
-        description: Some(description),
-        ..
-    }) = properties.get("targets")
-    else {
-        panic!("wait_agent should define targets array");
-    };
-    assert!(description.contains("canonical task names"));
+    assert!(!properties.contains_key("targets"));
+    assert!(properties.contains_key("timeout_ms"));
+    assert_eq!(required, None);
     assert_eq!(
         output_schema.expect("wait output schema")["properties"]["message"]["description"],
         json!("Brief wait summary without the agent's final content.")

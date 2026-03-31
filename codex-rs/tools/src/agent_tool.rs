@@ -695,31 +695,19 @@ fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema
 }
 
 fn wait_agent_tool_parameters_v2(options: WaitAgentTimeoutOptions) -> JsonSchema {
-    let properties = BTreeMap::from([
-        (
-            "targets".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
-                description: Some(
-                    "Agent ids or canonical task names to wait on. Pass multiple targets to wait for whichever finishes first."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(format!(
-                    "Optional timeout in milliseconds. Defaults to {}, min {}, max {}. Prefer longer waits (minutes) to avoid busy polling.",
-                    options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
-                )),
-            },
-        ),
-    ]);
+    let properties = BTreeMap::from([(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(format!(
+                "Optional timeout in milliseconds. Defaults to {}, min {}, max {}. Prefer longer waits (minutes) to avoid busy polling.",
+                options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
+            )),
+        },
+    )]);
 
     JsonSchema::Object {
         properties,
-        required: Some(vec!["targets".to_string()]),
+        required: None,
         additional_properties: Some(false.into()),
     }
 }
