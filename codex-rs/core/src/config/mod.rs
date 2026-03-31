@@ -796,6 +796,13 @@ fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> 
     Ok(catalog)
 }
 
+pub fn feedback_enabled_from_config_toml(cfg: &ConfigToml) -> bool {
+    cfg.feedback
+        .as_ref()
+        .and_then(|feedback| feedback.enabled)
+        .unwrap_or(true)
+}
+
 fn load_model_catalog(
     model_catalog_json: Option<AbsolutePathBuf>,
 ) -> std::io::Result<Option<ModelsResponse>> {
@@ -1983,6 +1990,7 @@ impl Config {
     ) -> std::io::Result<Self> {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        let feedback_enabled = feedback_enabled_from_config_toml(&cfg);
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -2685,11 +2693,7 @@ impl Config {
                 .as_ref()
                 .and_then(|a| a.enabled)
                 .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
-            feedback_enabled: cfg
-                .feedback
-                .as_ref()
-                .and_then(|feedback| feedback.enabled)
-                .unwrap_or(true),
+            feedback_enabled,
             tool_suggest,
             tui_notifications: cfg
                 .tui

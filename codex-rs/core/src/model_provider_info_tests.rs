@@ -156,3 +156,132 @@ args = ["--format=text"]
         })
     );
 }
+
+#[test]
+fn openai_provider_without_base_url_emits_sentry_auth_failures() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn openai_provider_with_non_openai_base_url_skips_sentry_auth_failures() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://example.com/v1".to_string()));
+
+    assert!(!provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn openai_provider_with_openai_subdomain_base_url_emits_sentry_auth_failures() {
+    let provider = ModelProviderInfo::create_openai_provider(Some(
+        "https://api-staging.openai.com/v1".to_string(),
+    ));
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn openai_provider_with_chatgpt_subdomain_base_url_emits_sentry_auth_failures() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://ab.chatgpt.com/v1".to_string()));
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn custom_openai_provider_with_env_key_emits_sentry_auth_failures() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "OpenAI Staging"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+"#,
+    )
+    .expect("custom openai provider should deserialize");
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn custom_openai_provider_with_command_auth_emits_sentry_auth_failures() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "OpenAI Staging"
+base_url = "https://api.openai.com/v1"
+wire_api = "responses"
+
+[auth]
+command = "print-token"
+"#,
+    )
+    .expect("custom openai provider should deserialize");
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn custom_openai_provider_with_static_bearer_token_emits_sentry_auth_failures() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "OpenAI Staging"
+base_url = "https://api.openai.com/v1"
+wire_api = "responses"
+experimental_bearer_token = "token"
+"#,
+    )
+    .expect("custom openai provider should deserialize");
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn custom_openai_provider_with_http_authorization_header_emits_sentry_auth_failures() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "OpenAI Staging"
+base_url = "https://api.openai.com/v1"
+wire_api = "responses"
+
+[http_headers]
+Authorization = "Bearer token"
+"#,
+    )
+    .expect("custom openai provider should deserialize");
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn custom_openai_provider_with_env_authorization_header_emits_sentry_auth_failures() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "OpenAI Staging"
+base_url = "https://api.openai.com/v1"
+wire_api = "responses"
+
+[env_http_headers]
+authorization = "OPENAI_AUTH_HEADER"
+"#,
+    )
+    .expect("custom openai provider should deserialize");
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn renamed_openai_provider_still_emits_sentry_auth_failures() {
+    let mut provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    provider.name = "Staging".to_string();
+
+    assert!(provider.should_emit_sentry_auth_failures());
+}
+
+#[test]
+fn oss_provider_skips_sentry_auth_failures() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::Responses);
+
+    assert!(!provider.should_emit_sentry_auth_failures());
+}

@@ -66,7 +66,6 @@ use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
-use codex_feedback::upload_auth_failure_event_tags;
 use codex_git_utils::get_git_repo_root;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
@@ -91,7 +90,6 @@ use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use supports_color::Stream;
 use tokio::sync::mpsc;
 use tracing::Instrument;
@@ -258,14 +256,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         }
     };
 
-    let feedback = CodexFeedback::new();
-    let _auth_failure_reporter_guard =
-        codex_core::auth::set_auth_failure_reporter(Arc::new(|tags| {
-            if let Err(err) = upload_auth_failure_event_tags(tags) {
-                tracing::warn!(error = %err, "failed to upload auth failure event");
-            }
-        }));
-
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
         &codex_home,
@@ -420,15 +410,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let feedback_layer = feedback.logger_layer();
-    let feedback_metadata_layer = feedback.metadata_layer();
-    let feedback_auth_event_layer = feedback.auth_event_layer();
-
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
-        .with(feedback_layer)
-        .with(feedback_metadata_layer)
-        .with(feedback_auth_event_layer)
         .with(otel_tracing_layer)
         .with(otel_logger_layer)
         .try_init();
@@ -453,7 +436,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cli_overrides: run_cli_overrides,
         loader_overrides: run_loader_overrides,
         cloud_requirements: run_cloud_requirements,
-        feedback,
+        feedback: CodexFeedback::new(),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,

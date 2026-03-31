@@ -38,6 +38,7 @@ pub use auth::load_auth_dot_json;
 pub use auth::login_with_api_key;
 pub use auth::logout;
 pub use auth::read_openai_api_key_from_env;
+pub use auth::report_auth_failure;
 pub use auth::save_auth;
 pub use auth::set_auth_failure_reporter;
 pub use codex_app_server_protocol::AuthMode;

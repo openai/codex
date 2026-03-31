@@ -19,7 +19,6 @@ use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
-use crate::util::emit_sentry_auth_failure_event_with_auth_env;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -132,9 +131,6 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth_recovery_followup_status: None,
         };
         emit_feedback_request_tags_with_auth_env(&feedback_tags, &self.auth_env);
-        if status == Some(http::StatusCode::UNAUTHORIZED.as_u16()) {
-            emit_sentry_auth_failure_event_with_auth_env(&feedback_tags, &self.auth_env);
-        }
     }
 }
 

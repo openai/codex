@@ -1,5 +1,6 @@
 use super::*;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
+use serial_test::serial;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -62,6 +63,26 @@ where
         self.tags.lock().unwrap().extend(visitor.tags);
         *self.event_count.lock().unwrap() += 1;
     }
+}
+
+type AuthFailureReportCollector = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
+
+fn install_auth_failure_report_collector() -> (
+    AuthFailureReportCollector,
+    crate::auth::AuthFailureReporterGuard,
+) {
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let guard = crate::auth::set_auth_failure_reporter({
+        let reported = Arc::clone(&reported);
+        Arc::new(move |fields| {
+            reported
+                .lock()
+                .expect("report collector poisoned")
+                .push(fields);
+            true
+        })
+    });
+    (reported, guard)
 }
 
 #[test]
@@ -313,16 +334,9 @@ fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() 
 }
 
 #[test]
-fn emit_sentry_auth_failure_event_records_non_feedback_fields() {
-    let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let event_count = Arc::new(Mutex::new(0));
-    let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer {
-            target: SENTRY_AUTH_FAILURES_TARGET,
-            tags: tags.clone(),
-            event_count: event_count.clone(),
-        })
-        .set_default();
+#[serial(auth_failure_reporter)]
+fn emit_sentry_auth_failure_event_keeps_post_refresh_retry_reports_when_override_present() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
 
     let auth_env = AuthEnvTelemetry {
         openai_api_key_env_present: true,
@@ -341,7 +355,7 @@ fn emit_sentry_auth_failure_event_records_non_feedback_fields() {
             auth_mode: Some("chatgpt"),
             auth_retry_after_unauthorized: Some(false),
             auth_recovery_mode: Some("managed"),
-            auth_recovery_phase: Some("reload"),
+            auth_recovery_phase: Some("refresh_token"),
             auth_connection_reused: Some(false),
             auth_request_id: Some("req-123"),
             auth_cf_ray: Some("ray-123"),
@@ -353,26 +367,145 @@ fn emit_sentry_auth_failure_event_records_non_feedback_fields() {
         &auth_env,
     );
 
-    let tags = tags.lock().unwrap().clone();
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
     assert_eq!(
-        tags.get("report_kind").map(String::as_str),
-        Some("auth_failure_auto")
-    );
-    assert_eq!(tags.get("endpoint").map(String::as_str), Some("/responses"));
-    assert_eq!(
-        tags.get("auth_header_attached").map(String::as_str),
-        Some("true")
+        reported[0].get("endpoint").map(String::as_str),
+        Some("/responses")
     );
     assert_eq!(
-        tags.get("auth_header_name").map(String::as_str),
-        Some("authorization")
+        reported[0].get("auth_recovery_phase").map(String::as_str),
+        Some("refresh_token")
     );
     assert_eq!(
-        tags.get("auth_request_id").map(String::as_str),
+        reported[0].get("auth_request_id").map(String::as_str),
         Some("req-123")
     );
-    assert_eq!(tags.get("auth_cf_ray").map(String::as_str), Some("ray-123"));
-    assert_eq!(*event_count.lock().unwrap(), 1);
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn emit_sentry_auth_failure_event_keeps_non_refresh_reports_when_override_present() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let auth_env = AuthEnvTelemetry {
+        openai_api_key_env_present: true,
+        codex_api_key_env_present: false,
+        codex_api_key_env_enabled: true,
+        provider_env_key_name: Some("configured".to_string()),
+        provider_env_key_present: Some(true),
+        refresh_token_url_override_present: true,
+    };
+
+    emit_sentry_auth_failure_event_with_auth_env(
+        &FeedbackRequestTags {
+            endpoint: "/responses/compact",
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            auth_mode: Some("openai_api_key"),
+            auth_retry_after_unauthorized: Some(false),
+            auth_recovery_mode: None,
+            auth_recovery_phase: None,
+            auth_connection_reused: None,
+            auth_request_id: Some("req-non-refresh"),
+            auth_cf_ray: Some("ray-non-refresh"),
+            auth_error: Some("missing_authorization_header"),
+            auth_error_code: Some("invalid_api_key"),
+            auth_recovery_followup_success: None,
+            auth_recovery_followup_status: None,
+        },
+        &auth_env,
+    );
+
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
+    assert_eq!(
+        reported[0].get("endpoint").map(String::as_str),
+        Some("/responses/compact")
+    );
+    assert_eq!(
+        reported[0].get("auth_request_id").map(String::as_str),
+        Some("req-non-refresh")
+    );
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn emit_sentry_auth_failure_event_omits_missing_followup_metadata() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    emit_sentry_auth_failure_event_with_auth_env(
+        &FeedbackRequestTags {
+            endpoint: "/responses/compact",
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            auth_mode: Some("chatgpt"),
+            auth_retry_after_unauthorized: Some(false),
+            auth_recovery_mode: None,
+            auth_recovery_phase: None,
+            auth_connection_reused: None,
+            auth_request_id: Some("req-no-followup"),
+            auth_cf_ray: Some("ray-no-followup"),
+            auth_error: Some("plain body"),
+            auth_error_code: Some("token_expired"),
+            auth_recovery_followup_success: None,
+            auth_recovery_followup_status: None,
+        },
+        &AuthEnvTelemetry {
+            openai_api_key_env_present: false,
+            codex_api_key_env_present: false,
+            codex_api_key_env_enabled: true,
+            provider_env_key_name: None,
+            provider_env_key_present: None,
+            refresh_token_url_override_present: false,
+        },
+    );
+
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].get("auth_recovery_followup_success"), None);
+    assert_eq!(reported[0].get("auth_recovery_followup_status"), None);
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn emit_sentry_auth_failure_event_uses_direct_reporter_when_available() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    emit_sentry_auth_failure_event_with_auth_env(
+        &FeedbackRequestTags {
+            endpoint: "/responses",
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            auth_mode: Some("chatgpt"),
+            auth_retry_after_unauthorized: Some(true),
+            auth_recovery_mode: Some("managed"),
+            auth_recovery_phase: Some("refresh_token"),
+            auth_connection_reused: Some(false),
+            auth_request_id: Some("req-direct"),
+            auth_cf_ray: Some("ray-direct"),
+            auth_error: Some("plain body"),
+            auth_error_code: Some("token_expired"),
+            auth_recovery_followup_success: Some(false),
+            auth_recovery_followup_status: Some(401),
+        },
+        &AuthEnvTelemetry {
+            openai_api_key_env_present: false,
+            codex_api_key_env_present: false,
+            codex_api_key_env_enabled: true,
+            provider_env_key_name: Some("OPENAI_API_KEY".to_string()),
+            provider_env_key_present: Some(false),
+            refresh_token_url_override_present: false,
+        },
+    );
+
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
+    assert_eq!(
+        reported[0].get("auth_request_id").map(String::as_str),
+        Some("req-direct")
+    );
+    assert_eq!(reported[0].get("auth_error").map(String::as_str), None);
 }
 
 #[test]

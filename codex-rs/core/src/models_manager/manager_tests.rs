@@ -14,6 +14,7 @@ use http::HeaderMap;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use serial_test::serial;
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -231,6 +232,26 @@ where
         event.record(&mut visitor);
         self.tags.lock().unwrap().extend(visitor.tags);
     }
+}
+
+type AuthFailureReportCollector = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
+
+fn install_auth_failure_report_collector() -> (
+    AuthFailureReportCollector,
+    crate::auth::AuthFailureReporterGuard,
+) {
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let guard = crate::auth::set_auth_failure_reporter({
+        let reported = Arc::clone(&reported);
+        Arc::new(move |fields| {
+            reported
+                .lock()
+                .expect("report collector poisoned")
+                .push(fields);
+            true
+        })
+    });
+    (reported, guard)
 }
 
 #[tokio::test]
@@ -840,14 +861,9 @@ fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
 }
 
 #[test]
-fn models_request_telemetry_emits_sentry_auth_failure_event_on_401() {
-    let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer {
-            target: crate::util::SENTRY_AUTH_FAILURES_TARGET,
-            tags: tags.clone(),
-        })
-        .set_default();
+#[serial(auth_failure_reporter)]
+fn models_request_telemetry_does_not_emit_sentry_auth_failure_event_on_401() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
 
     let telemetry = ModelsRequestTelemetry {
         auth_mode: Some(TelemetryAuthMode::Chatgpt.to_string()),
@@ -877,7 +893,7 @@ fn models_request_telemetry_emits_sentry_auth_failure_event_on_401() {
             .unwrap(),
     );
     telemetry.on_request(
-        1,
+        /*attempt*/ 1,
         Some(StatusCode::UNAUTHORIZED),
         Some(&TransportError::Http {
             status: StatusCode::UNAUTHORIZED,
@@ -888,28 +904,7 @@ fn models_request_telemetry_emits_sentry_auth_failure_event_on_401() {
         Duration::from_millis(17),
     );
 
-    let tags = tags.lock().unwrap().clone();
-    assert_eq!(
-        tags.get("report_kind").map(String::as_str),
-        Some("auth_failure_auto")
-    );
-    assert_eq!(tags.get("endpoint").map(String::as_str), Some("/models"));
-    assert_eq!(
-        tags.get("auth_header_attached").map(String::as_str),
-        Some("true")
-    );
-    assert_eq!(
-        tags.get("auth_header_name").map(String::as_str),
-        Some("authorization")
-    );
-    assert_eq!(
-        tags.get("auth_request_id").map(String::as_str),
-        Some("req-models-401")
-    );
-    assert_eq!(
-        tags.get("auth_cf_ray").map(String::as_str),
-        Some("ray-models-401")
-    );
+    assert!(reported.lock().unwrap().is_empty());
 }
 
 #[test]

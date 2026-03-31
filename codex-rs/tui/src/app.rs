@@ -978,6 +978,7 @@ pub(crate) struct App {
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    auth_failure_reporter_guard: Option<codex_core::auth::AuthFailureReporterGuard>,
     feedback_audience: FeedbackAudience,
     remote_app_server_url: Option<String>,
     remote_app_server_auth_token: Option<String>,
@@ -1052,6 +1053,25 @@ fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
 }
 
 impl App {
+    fn set_config(&mut self, config: Config) {
+        self.config = config;
+        self.chat_widget.sync_runtime_config(&self.config);
+        self.reconcile_auth_failure_reporting();
+    }
+
+    fn reconcile_auth_failure_reporting(&mut self) {
+        if self.config.feedback_enabled {
+            if self.auth_failure_reporter_guard.is_none() {
+                self.auth_failure_reporter_guard =
+                    Some(codex_core::auth::set_auth_failure_reporter(Arc::new(
+                        codex_feedback::enqueue_auth_failure_event_tags,
+                    )));
+            }
+        } else {
+            self.auth_failure_reporter_guard = None;
+        }
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -1096,8 +1116,7 @@ impl App {
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
-        self.config = config;
-        self.chat_widget.sync_plugin_mentions_config(&self.config);
+        self.set_config(config);
         Ok(())
     }
 
@@ -1349,7 +1368,7 @@ impl App {
             return;
         }
 
-        self.config = next_config;
+        self.set_config(next_config);
         for (feature, effective_enabled) in feature_updates_to_apply {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
@@ -3222,7 +3241,7 @@ impl App {
                 tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {err}");
             }
         }
-        self.config = config.clone();
+        self.set_config(config.clone());
         match app_server.start_thread(&config).await {
             Ok(started) => {
                 if let Err(err) = self
@@ -3710,6 +3729,7 @@ impl App {
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
+            auth_failure_reporter_guard: None,
             feedback_audience,
             remote_app_server_url,
             remote_app_server_auth_token,
@@ -3727,6 +3747,7 @@ impl App {
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
         };
+        app.reconcile_auth_failure_reporting();
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
@@ -4034,7 +4055,7 @@ impl App {
                         {
                             Ok(resumed) => {
                                 self.shutdown_current_thread(app_server).await;
-                                self.config = resume_config;
+                                self.set_config(resume_config);
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search
                                     .update_search_dir(self.config.cwd.to_path_buf());
@@ -4960,7 +4981,7 @@ impl App {
                 ) {
                     return Ok(AppRunControl::Continue);
                 }
-                self.config = config;
+                self.set_config(config);
                 self.runtime_approval_policy_override =
                     Some(self.config.permissions.approval_policy.value());
                 self.chat_widget
@@ -4984,7 +5005,7 @@ impl App {
                 ) {
                     return Ok(AppRunControl::Continue);
                 }
-                self.config = config;
+                self.set_config(config);
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
@@ -8926,6 +8947,7 @@ guardian_approval = true
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
+            auth_failure_reporter_guard: None,
             feedback_audience: FeedbackAudience::External,
             remote_app_server_url: None,
             remote_app_server_auth_token: None,
@@ -8980,6 +9002,7 @@ guardian_approval = true
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
+                auth_failure_reporter_guard: None,
                 feedback_audience: FeedbackAudience::External,
                 remote_app_server_url: None,
                 remote_app_server_auth_token: None,
@@ -9916,6 +9939,62 @@ guardian_approval = true
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_reconciles_auth_failure_reporting() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.feedback_enabled = false;
+        app.reconcile_auth_failure_reporting();
+
+        assert!(app.auth_failure_reporter_guard.is_none());
+
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits([ConfigEdit::SetPath {
+                segments: vec!["feedback".to_string(), "enabled".to_string()],
+                value: true.into(),
+            }])
+            .apply()
+            .await
+            .expect("persist feedback opt-in");
+
+        app.refresh_in_memory_config_from_disk().await?;
+        assert!(app.config.feedback_enabled);
+        assert!(app.auth_failure_reporter_guard.is_some());
+        assert!(app.chat_widget.config_ref().feedback_enabled);
+
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits([ConfigEdit::SetPath {
+                segments: vec!["feedback".to_string(), "enabled".to_string()],
+                value: false.into(),
+            }])
+            .apply()
+            .await
+            .expect("persist feedback opt-out");
+
+        app.refresh_in_memory_config_from_disk().await?;
+        assert!(!app.config.feedback_enabled);
+        assert!(app.auth_failure_reporter_guard.is_none());
+        assert!(!app.chat_widget.config_ref().feedback_enabled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_config_syncs_chat_widget_feedback_enabled() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut next_config = app.config.clone();
+        next_config.feedback_enabled = !app.chat_widget.config_ref().feedback_enabled;
+
+        app.set_config(next_config.clone());
+
+        assert_eq!(app.config.feedback_enabled, next_config.feedback_enabled);
+        assert_eq!(
+            app.chat_widget.config_ref().feedback_enabled,
+            next_config.feedback_enabled
+        );
         Ok(())
     }
 

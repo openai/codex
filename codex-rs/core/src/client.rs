@@ -105,6 +105,7 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::provider_auth::auth_manager_for_provider;
+use crate::response_debug_context::ResponseDebugContext;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::extract_response_debug_context_from_api_error;
 use crate::response_debug_context::telemetry_api_error_message;
@@ -364,10 +365,12 @@ impl ModelClient {
             AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 &client_setup.api_auth,
+                /*has_followup_unauthorized_retry*/ false,
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
             self.state.auth_env_telemetry.clone(),
+            self.state.provider.should_emit_sentry_auth_failures(),
         );
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
@@ -433,10 +436,12 @@ impl ModelClient {
             AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 &client_setup.api_auth,
+                /*has_followup_unauthorized_retry*/ false,
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(MEMORIES_SUMMARIZE_ENDPOINT),
             self.state.auth_env_telemetry.clone(),
+            self.state.provider.should_emit_sentry_auth_failures(),
         );
         let client =
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
@@ -482,12 +487,14 @@ impl ModelClient {
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
+        emit_sentry_auth_failures: bool,
     ) -> Arc<dyn RequestTelemetry> {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
             auth_env_telemetry,
+            emit_sentry_auth_failures,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
         request_telemetry
@@ -568,6 +575,7 @@ impl ModelClient {
             auth_context,
             request_route_telemetry,
             self.state.auth_env_telemetry.clone(),
+            self.state.provider.should_emit_sentry_auth_failures(),
         );
         let websocket_connect_timeout = self.state.provider.websocket_connect_timeout();
         let start = Instant::now();
@@ -631,6 +639,33 @@ impl ModelClient {
                     .flatten(),
             },
             &self.state.auth_env_telemetry,
+        );
+        emit_sentry_auth_failure_if_unauthorized(
+            &FeedbackRequestTags {
+                endpoint: request_route_telemetry.endpoint,
+                auth_header_attached: auth_context.auth_header_attached,
+                auth_header_name: auth_context.auth_header_name,
+                auth_mode: auth_context.auth_mode,
+                auth_retry_after_unauthorized: Some(auth_context.retry_after_unauthorized),
+                auth_recovery_mode: auth_context.recovery_mode,
+                auth_recovery_phase: auth_context.recovery_phase,
+                auth_connection_reused: Some(false),
+                auth_request_id: response_debug.request_id.as_deref(),
+                auth_cf_ray: response_debug.cf_ray.as_deref(),
+                auth_error: response_debug.auth_error.as_deref(),
+                auth_error_code: response_debug.auth_error_code.as_deref(),
+                auth_recovery_followup_success: auth_context
+                    .retry_after_unauthorized
+                    .then_some(result.is_ok()),
+                auth_recovery_followup_status: auth_context
+                    .retry_after_unauthorized
+                    .then_some(status)
+                    .flatten(),
+            },
+            &self.state.auth_env_telemetry,
+            self.state.provider.should_emit_sentry_auth_failures(),
+            status,
+            auth_context.has_followup_unauthorized_retry,
         );
         result
     }
@@ -879,6 +914,7 @@ impl ModelClientSession {
         let auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             &client_setup.api_auth,
+            /*has_followup_unauthorized_retry*/ false,
             PendingUnauthorizedRetry::default(),
         );
         let connection = self
@@ -1029,11 +1065,15 @@ impl ModelClientSession {
             .map(super::auth::AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
+            let has_followup_unauthorized_retry = auth_recovery
+                .as_ref()
+                .is_some_and(UnauthorizedRecovery::has_next);
             let client_setup = self.client.current_client_setup().await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 &client_setup.api_auth,
+                has_followup_unauthorized_retry,
                 pending_retry,
             );
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
@@ -1041,6 +1081,10 @@ impl ModelClientSession {
                 request_auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
                 self.client.state.auth_env_telemetry.clone(),
+                self.client
+                    .state
+                    .provider
+                    .should_emit_sentry_auth_failures(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let options = self.build_responses_options(turn_metadata_header, compression);
@@ -1069,14 +1113,42 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    pending_retry = PendingUnauthorizedRetry::from_recovery(
-                        handle_unauthorized(
-                            unauthorized_transport,
-                            &mut auth_recovery,
-                            session_telemetry,
-                        )
-                        .await?,
-                    );
+                    let attempted_recovery = auth_recovery.as_ref().and_then(|recovery| {
+                        recovery
+                            .has_next()
+                            .then(|| (recovery.mode_name(), recovery.step_name()))
+                    });
+                    let debug = extract_response_debug_context(&unauthorized_transport);
+                    match handle_unauthorized(
+                        unauthorized_transport,
+                        &mut auth_recovery,
+                        session_telemetry,
+                    )
+                    .await
+                    {
+                        Ok(recovery) => {
+                            pending_retry = PendingUnauthorizedRetry::from_recovery(recovery);
+                        }
+                        Err(err) => {
+                            if request_auth_context.has_followup_unauthorized_retry {
+                                emit_terminal_auth_failure_after_failed_recovery(
+                                    AuthRequestTelemetryContext {
+                                        recovery_mode: attempted_recovery.map(|(mode, _)| mode),
+                                        recovery_phase: attempted_recovery.map(|(_, phase)| phase),
+                                        ..request_auth_context
+                                    },
+                                    RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
+                                    &self.client.state.auth_env_telemetry,
+                                    &debug,
+                                    self.client
+                                        .state
+                                        .provider
+                                        .should_emit_sentry_auth_failures(),
+                                );
+                            }
+                            return Err(err);
+                        }
+                    }
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -1118,10 +1190,14 @@ impl ModelClientSession {
             .map(super::auth::AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
+            let has_followup_unauthorized_retry = auth_recovery
+                .as_ref()
+                .is_some_and(UnauthorizedRecovery::has_next);
             let client_setup = self.client.current_client_setup().await?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 &client_setup.api_auth,
+                has_followup_unauthorized_retry,
                 pending_retry,
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
@@ -1169,14 +1245,42 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    pending_retry = PendingUnauthorizedRetry::from_recovery(
-                        handle_unauthorized(
-                            unauthorized_transport,
-                            &mut auth_recovery,
-                            session_telemetry,
-                        )
-                        .await?,
-                    );
+                    let attempted_recovery = auth_recovery.as_ref().and_then(|recovery| {
+                        recovery
+                            .has_next()
+                            .then(|| (recovery.mode_name(), recovery.step_name()))
+                    });
+                    let debug = extract_response_debug_context(&unauthorized_transport);
+                    match handle_unauthorized(
+                        unauthorized_transport,
+                        &mut auth_recovery,
+                        session_telemetry,
+                    )
+                    .await
+                    {
+                        Ok(recovery) => {
+                            pending_retry = PendingUnauthorizedRetry::from_recovery(recovery);
+                        }
+                        Err(err) => {
+                            if request_auth_context.has_followup_unauthorized_retry {
+                                emit_terminal_auth_failure_after_failed_recovery(
+                                    AuthRequestTelemetryContext {
+                                        recovery_mode: attempted_recovery.map(|(mode, _)| mode),
+                                        recovery_phase: attempted_recovery.map(|(_, phase)| phase),
+                                        ..request_auth_context
+                                    },
+                                    RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
+                                    &self.client.state.auth_env_telemetry,
+                                    &debug,
+                                    self.client
+                                        .state
+                                        .provider
+                                        .should_emit_sentry_auth_failures(),
+                                );
+                            }
+                            return Err(err);
+                        }
+                    }
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -1206,12 +1310,14 @@ impl ModelClientSession {
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
+        emit_sentry_auth_failures: bool,
     ) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
             auth_env_telemetry,
+            emit_sentry_auth_failures,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
         let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
@@ -1224,12 +1330,14 @@ impl ModelClientSession {
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
+        emit_sentry_auth_failures: bool,
     ) -> Arc<dyn WebsocketTelemetry> {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
             auth_env_telemetry,
+            emit_sentry_auth_failures,
         ));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
         websocket_telemetry
@@ -1523,6 +1631,7 @@ struct AuthRequestTelemetryContext {
     auth_mode: Option<&'static str>,
     auth_header_attached: bool,
     auth_header_name: Option<&'static str>,
+    has_followup_unauthorized_retry: bool,
     retry_after_unauthorized: bool,
     recovery_mode: Option<&'static str>,
     recovery_phase: Option<&'static str>,
@@ -1532,6 +1641,7 @@ impl AuthRequestTelemetryContext {
     fn new(
         auth_mode: Option<AuthMode>,
         api_auth: &CoreAuthProvider,
+        has_followup_unauthorized_retry: bool,
         retry: PendingUnauthorizedRetry,
     ) -> Self {
         Self {
@@ -1541,6 +1651,7 @@ impl AuthRequestTelemetryContext {
             }),
             auth_header_attached: api_auth.auth_header_attached(),
             auth_header_name: api_auth.auth_header_name(),
+            has_followup_unauthorized_retry,
             retry_after_unauthorized: retry.retry_after_unauthorized,
             recovery_mode: retry.recovery_mode,
             recovery_phase: retry.recovery_phase,
@@ -1686,6 +1797,7 @@ struct ApiTelemetry {
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
     auth_env_telemetry: AuthEnvTelemetry,
+    emit_sentry_auth_failures: bool,
 }
 
 impl ApiTelemetry {
@@ -1694,14 +1806,66 @@ impl ApiTelemetry {
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
+        emit_sentry_auth_failures: bool,
     ) -> Self {
         Self {
             session_telemetry,
             auth_context,
             request_route_telemetry,
             auth_env_telemetry,
+            emit_sentry_auth_failures,
         }
     }
+}
+
+fn emit_sentry_auth_failure_if_unauthorized(
+    feedback_tags: &FeedbackRequestTags<'_>,
+    auth_env_telemetry: &AuthEnvTelemetry,
+    emit_sentry_auth_failures: bool,
+    status: Option<u16>,
+    has_followup_unauthorized_retry: bool,
+) {
+    if status == Some(http::StatusCode::UNAUTHORIZED.as_u16())
+        && !has_followup_unauthorized_retry
+        && emit_sentry_auth_failures
+    {
+        emit_sentry_auth_failure_event_with_auth_env(feedback_tags, auth_env_telemetry);
+    }
+}
+
+fn emit_terminal_auth_failure_after_failed_recovery(
+    auth_context: AuthRequestTelemetryContext,
+    request_route_telemetry: RequestRouteTelemetry,
+    auth_env_telemetry: &AuthEnvTelemetry,
+    debug: &ResponseDebugContext,
+    emit_sentry_auth_failures: bool,
+) {
+    if auth_context.recovery_phase == Some("refresh_token") {
+        return;
+    }
+    let feedback_tags = FeedbackRequestTags {
+        endpoint: request_route_telemetry.endpoint,
+        auth_header_attached: auth_context.auth_header_attached,
+        auth_header_name: auth_context.auth_header_name,
+        auth_mode: auth_context.auth_mode,
+        auth_retry_after_unauthorized: Some(false),
+        auth_recovery_mode: auth_context.recovery_mode,
+        auth_recovery_phase: auth_context.recovery_phase,
+        auth_connection_reused: None,
+        auth_request_id: debug.request_id.as_deref(),
+        auth_cf_ray: debug.cf_ray.as_deref(),
+        auth_error: debug.auth_error.as_deref(),
+        auth_error_code: debug.auth_error_code.as_deref(),
+        auth_recovery_followup_success: None,
+        auth_recovery_followup_status: None,
+    };
+    emit_sentry_auth_failure_if_unauthorized(
+        &feedback_tags,
+        auth_env_telemetry,
+        emit_sentry_auth_failures,
+        Some(StatusCode::UNAUTHORIZED.as_u16()),
+        /*has_followup_unauthorized_retry*/ false,
+    );
 }
 
 impl RequestTelemetry for ApiTelemetry {
@@ -1757,9 +1921,13 @@ impl RequestTelemetry for ApiTelemetry {
                 .flatten(),
         };
         emit_feedback_request_tags_with_auth_env(&feedback_tags, &self.auth_env_telemetry);
-        if status == Some(http::StatusCode::UNAUTHORIZED.as_u16()) {
-            emit_sentry_auth_failure_event_with_auth_env(&feedback_tags, &self.auth_env_telemetry);
-        }
+        emit_sentry_auth_failure_if_unauthorized(
+            &feedback_tags,
+            &self.auth_env_telemetry,
+            self.emit_sentry_auth_failures,
+            status,
+            self.auth_context.has_followup_unauthorized_retry,
+        );
     }
 }
 
@@ -1812,9 +1980,13 @@ impl WebsocketTelemetry for ApiTelemetry {
                 .flatten(),
         };
         emit_feedback_request_tags_with_auth_env(&feedback_tags, &self.auth_env_telemetry);
-        if status == Some(http::StatusCode::UNAUTHORIZED.as_u16()) {
-            emit_sentry_auth_failure_event_with_auth_env(&feedback_tags, &self.auth_env_telemetry);
-        }
+        emit_sentry_auth_failure_if_unauthorized(
+            &feedback_tags,
+            &self.auth_env_telemetry,
+            self.emit_sentry_auth_failures,
+            status,
+            self.auth_context.has_followup_unauthorized_retry && !connection_reused,
+        );
     }
 
     fn on_ws_event(

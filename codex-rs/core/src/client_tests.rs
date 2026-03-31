@@ -1,14 +1,27 @@
+use super::ApiTelemetry;
 use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
+use super::RequestRouteTelemetry;
 use super::UnauthorizedRecoveryExecution;
+use super::emit_terminal_auth_failure_after_failed_recovery;
+use crate::auth_env_telemetry::AuthEnvTelemetry;
+use crate::response_debug_context::ResponseDebugContext;
+use codex_api::ApiError;
+use codex_api::RequestTelemetry;
+use codex_api::WebsocketTelemetry;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use serial_test::serial;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = crate::model_provider_info::create_oss_provider_with_base_url(
@@ -72,6 +85,37 @@ fn test_session_telemetry() -> SessionTelemetry {
     )
 }
 
+fn empty_auth_env_telemetry() -> AuthEnvTelemetry {
+    AuthEnvTelemetry {
+        openai_api_key_env_present: false,
+        codex_api_key_env_present: false,
+        codex_api_key_env_enabled: false,
+        provider_env_key_name: None,
+        provider_env_key_present: None,
+        refresh_token_url_override_present: false,
+    }
+}
+
+type AuthFailureReportCollector = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
+
+fn install_auth_failure_report_collector() -> (
+    AuthFailureReportCollector,
+    crate::auth::AuthFailureReporterGuard,
+) {
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let guard = crate::auth::set_auth_failure_reporter({
+        let reported = Arc::clone(&reported);
+        Arc::new(move |fields| {
+            reported
+                .lock()
+                .expect("report collector poisoned")
+                .push(fields);
+            true
+        })
+    });
+    (reported, guard)
+}
+
 #[test]
 fn build_subagent_headers_sets_other_subagent_label() {
     let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
@@ -107,6 +151,7 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     let auth_context = AuthRequestTelemetryContext::new(
         Some(crate::auth::AuthMode::Chatgpt),
         &crate::api_bridge::CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
+        /*has_followup_unauthorized_retry*/ true,
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
             mode: "managed",
             phase: "refresh_token",
@@ -119,4 +164,292 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn api_telemetry_skips_auth_failure_while_followup_retry_remains() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let telemetry = ApiTelemetry::new(
+        test_session_telemetry(),
+        AuthRequestTelemetryContext {
+            auth_mode: Some("Chatgpt"),
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            has_followup_unauthorized_retry: true,
+            retry_after_unauthorized: false,
+            recovery_mode: Some("managed"),
+            recovery_phase: Some("refresh_token"),
+        },
+        RequestRouteTelemetry::for_endpoint("/responses"),
+        empty_auth_env_telemetry(),
+        /*emit_sentry_auth_failures*/ true,
+    );
+
+    telemetry.on_request(
+        /*attempt*/ 1,
+        Some(StatusCode::UNAUTHORIZED),
+        /*error*/ None,
+        Default::default(),
+    );
+
+    assert!(reported.lock().unwrap().is_empty());
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn api_telemetry_emits_auth_failure_once_no_followup_retry_remains() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let telemetry = ApiTelemetry::new(
+        test_session_telemetry(),
+        AuthRequestTelemetryContext {
+            auth_mode: Some("Chatgpt"),
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            has_followup_unauthorized_retry: false,
+            retry_after_unauthorized: true,
+            recovery_mode: Some("managed"),
+            recovery_phase: Some("refresh_token"),
+        },
+        RequestRouteTelemetry::for_endpoint("/responses"),
+        empty_auth_env_telemetry(),
+        /*emit_sentry_auth_failures*/ true,
+    );
+
+    telemetry.on_request(
+        /*attempt*/ 2,
+        Some(StatusCode::UNAUTHORIZED),
+        /*error*/ None,
+        Default::default(),
+    );
+
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
+    assert_eq!(
+        reported[0].get("endpoint").map(String::as_str),
+        Some("/responses")
+    );
+    assert_eq!(
+        reported[0]
+            .get("auth_retry_after_unauthorized")
+            .map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn api_telemetry_skips_sentry_auth_failure_for_non_openai_provider() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let telemetry = ApiTelemetry::new(
+        test_session_telemetry(),
+        AuthRequestTelemetryContext {
+            auth_mode: Some("Chatgpt"),
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            has_followup_unauthorized_retry: true,
+            retry_after_unauthorized: true,
+            recovery_mode: Some("managed"),
+            recovery_phase: Some("refresh_token"),
+        },
+        RequestRouteTelemetry::for_endpoint("/responses"),
+        empty_auth_env_telemetry(),
+        /*emit_sentry_auth_failures*/ false,
+    );
+
+    telemetry.on_request(
+        /*attempt*/ 1,
+        Some(StatusCode::UNAUTHORIZED),
+        /*error*/ None,
+        Default::default(),
+    );
+
+    assert!(reported.lock().unwrap().is_empty());
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn websocket_handshake_failure_emits_auth_failure_when_no_followup_retry_remains() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let telemetry = ApiTelemetry::new(
+        test_session_telemetry(),
+        AuthRequestTelemetryContext {
+            auth_mode: Some("Chatgpt"),
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            has_followup_unauthorized_retry: false,
+            retry_after_unauthorized: true,
+            recovery_mode: Some("managed"),
+            recovery_phase: Some("refresh_token"),
+        },
+        RequestRouteTelemetry::for_endpoint("/responses"),
+        empty_auth_env_telemetry(),
+        /*emit_sentry_auth_failures*/ true,
+    );
+
+    telemetry.on_ws_request(
+        Default::default(),
+        Some(&ApiError::Transport(codex_api::TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: None,
+            headers: None,
+            body: None,
+        })),
+        /*connection_reused*/ false,
+    );
+
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
+    assert_eq!(
+        reported[0].get("endpoint").map(String::as_str),
+        Some("/responses")
+    );
+    assert_eq!(
+        reported[0]
+            .get("auth_retry_after_unauthorized")
+            .map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn websocket_reused_connection_failure_emits_auth_failure_even_with_followup_retry_available() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let telemetry = ApiTelemetry::new(
+        test_session_telemetry(),
+        AuthRequestTelemetryContext {
+            auth_mode: Some("Chatgpt"),
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            has_followup_unauthorized_retry: true,
+            retry_after_unauthorized: false,
+            recovery_mode: Some("managed"),
+            recovery_phase: Some("refresh_token"),
+        },
+        RequestRouteTelemetry::for_endpoint("/responses"),
+        empty_auth_env_telemetry(),
+        /*emit_sentry_auth_failures*/ true,
+    );
+
+    telemetry.on_ws_request(
+        Default::default(),
+        Some(&ApiError::Transport(codex_api::TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: None,
+            headers: None,
+            body: None,
+        })),
+        /*connection_reused*/ true,
+    );
+
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
+    assert_eq!(
+        reported[0].get("endpoint").map(String::as_str),
+        Some("/responses")
+    );
+    assert_eq!(
+        reported[0]
+            .get("auth_connection_reused")
+            .map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn failed_recovery_before_retry_emits_terminal_auth_failure() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let auth_context = AuthRequestTelemetryContext {
+        auth_mode: Some("Chatgpt"),
+        auth_header_attached: true,
+        auth_header_name: Some("authorization"),
+        has_followup_unauthorized_retry: true,
+        retry_after_unauthorized: false,
+        recovery_mode: Some("managed"),
+        recovery_phase: Some("reload"),
+    };
+    let debug = ResponseDebugContext {
+        request_id: Some("req_failed_recovery".to_string()),
+        cf_ray: Some("ray_failed_recovery".to_string()),
+        auth_error: None,
+        auth_error_code: Some("token_expired".to_string()),
+    };
+
+    emit_terminal_auth_failure_after_failed_recovery(
+        auth_context,
+        RequestRouteTelemetry::for_endpoint("/responses"),
+        &empty_auth_env_telemetry(),
+        &debug,
+        /*emit_sentry_auth_failures*/ true,
+    );
+
+    let reported = reported.lock().expect("report collector poisoned");
+    assert_eq!(reported.len(), 1);
+    assert_eq!(
+        reported[0].get("endpoint").map(String::as_str),
+        Some("/responses")
+    );
+    assert_eq!(
+        reported[0].get("auth_recovery_mode").map(String::as_str),
+        Some("managed")
+    );
+    assert_eq!(
+        reported[0].get("auth_recovery_phase").map(String::as_str),
+        Some("reload")
+    );
+    assert_eq!(
+        reported[0]
+            .get("auth_retry_after_unauthorized")
+            .map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        reported[0].get("auth_request_id").map(String::as_str),
+        Some("req_failed_recovery")
+    );
+}
+
+#[test]
+#[serial(auth_failure_reporter)]
+fn refresh_token_failed_recovery_before_retry_does_not_emit_terminal_auth_failure() {
+    let (reported, _reporter_guard) = install_auth_failure_report_collector();
+
+    let auth_context = AuthRequestTelemetryContext {
+        auth_mode: Some("Chatgpt"),
+        auth_header_attached: true,
+        auth_header_name: Some("authorization"),
+        has_followup_unauthorized_retry: true,
+        retry_after_unauthorized: false,
+        recovery_mode: Some("managed"),
+        recovery_phase: Some("refresh_token"),
+    };
+    let debug = ResponseDebugContext {
+        request_id: Some("req_refresh_failed".to_string()),
+        cf_ray: Some("ray_refresh_failed".to_string()),
+        auth_error: None,
+        auth_error_code: Some("token_expired".to_string()),
+    };
+
+    emit_terminal_auth_failure_after_failed_recovery(
+        auth_context,
+        RequestRouteTelemetry::for_endpoint("/responses"),
+        &empty_auth_env_telemetry(),
+        &debug,
+        /*emit_sentry_auth_failures*/ true,
+    );
+
+    assert!(
+        reported
+            .lock()
+            .expect("report collector poisoned")
+            .is_empty()
+    );
 }
