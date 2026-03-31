@@ -501,6 +501,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
+                "task_name": "worker",
                 "fork_context": true
             })),
         ))
@@ -539,6 +540,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
+                "task_name": "worker",
                 "fork_turns": "banana"
             })),
         ))
@@ -577,6 +579,7 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
+                "task_name": "worker",
                 "fork_turns": "0"
             })),
         ))
