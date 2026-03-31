@@ -9,7 +9,9 @@ async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgp
     chat.dispatch_command(SlashCommand::Status);
 
     let rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => lines_to_single_string(&cell.display_lines(80)),
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 80))
+        }
         other => panic!("expected status output before refresh request, got {other:?}"),
     };
     assert!(
