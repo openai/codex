@@ -5341,7 +5341,9 @@ impl ChatWidget {
                     self.app_event_tx
                         .send(AppEvent::RefreshRateLimits { request_id });
                 } else {
-                    self.add_status_output(/*refreshing_rate_limits*/ false, None);
+                    self.add_status_output(
+                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
+                    );
                 }
             }
             SlashCommand::DebugConfig => {
