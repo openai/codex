@@ -1,18 +1,21 @@
-mod analytics_client;
+mod client;
+mod events;
+mod facts;
+mod reducer;
 
-pub use analytics_client::AnalyticsEventsClient;
-pub use analytics_client::AnalyticsFact;
-pub use analytics_client::AnalyticsReducer;
-pub use analytics_client::AppInvocation;
-pub use analytics_client::AppMentionedInput;
-pub use analytics_client::AppServerRpcTransport;
-pub use analytics_client::AppUsedInput;
-pub use analytics_client::CustomAnalyticsFact;
-pub use analytics_client::InvocationType;
-pub use analytics_client::PluginState;
-pub use analytics_client::PluginStateChangedInput;
-pub use analytics_client::PluginUsedInput;
-pub use analytics_client::SkillInvocation;
-pub use analytics_client::SkillInvokedInput;
-pub use analytics_client::TrackEventsContext;
-pub use analytics_client::build_track_events_context;
+pub use client::AnalyticsEventsClient;
+pub use events::AppServerRpcTransport;
+pub use facts::AppInvocation;
+pub use facts::AppMentionedInput;
+pub use facts::AppUsedInput;
+pub use facts::InvocationType;
+pub use facts::PluginState;
+pub use facts::PluginStateChangedInput;
+pub use facts::PluginUsedInput;
+pub use facts::SkillInvocation;
+pub use facts::SkillInvokedInput;
+pub use facts::TrackEventsContext;
+pub use facts::build_track_events_context;
+
+#[cfg(test)]
+mod analytics_client_tests;

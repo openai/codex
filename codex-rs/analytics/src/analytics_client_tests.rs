@@ -1,30 +1,33 @@
-use super::AnalyticsEventsQueue;
-use super::AnalyticsFact;
-use super::AnalyticsReducer;
-use super::AppInvocation;
-use super::AppMentionedInput;
-use super::AppUsedInput;
-use super::CodexAppMentionedEventRequest;
-use super::CodexAppUsedEventRequest;
-use super::CodexPluginEventRequest;
-use super::CodexPluginUsedEventRequest;
-use super::CodexRuntimeMetadata;
-use super::CustomAnalyticsFact;
-use super::InvocationType;
-use super::PluginState;
-use super::PluginStateChangedInput;
-use super::PluginUsedInput;
-use super::SkillInvocation;
-use super::SkillInvokedInput;
-use super::ThreadInitializationMode;
-use super::ThreadInitializedEvent;
-use super::ThreadInitializedEventParams;
-use super::TrackEventRequest;
-use super::TrackEventsContext;
-use super::codex_app_metadata;
-use super::codex_plugin_metadata;
-use super::codex_plugin_used_metadata;
-use super::normalize_path_for_skill_id;
+use crate::client::AnalyticsEventsQueue;
+use crate::events::AppServerRpcTransport;
+use crate::events::CodexAppMentionedEventRequest;
+use crate::events::CodexAppServerClientMetadata;
+use crate::events::CodexAppUsedEventRequest;
+use crate::events::CodexPluginEventRequest;
+use crate::events::CodexPluginUsedEventRequest;
+use crate::events::CodexRuntimeMetadata;
+use crate::events::ThreadInitializationMode;
+use crate::events::ThreadInitializedEvent;
+use crate::events::ThreadInitializedEventParams;
+use crate::events::TrackEventRequest;
+use crate::events::codex_app_metadata;
+use crate::events::codex_plugin_metadata;
+use crate::events::codex_plugin_used_metadata;
+use crate::facts::AnalyticsFact;
+use crate::facts::AppInvocation;
+use crate::facts::AppMentionedInput;
+use crate::facts::AppUsedInput;
+use crate::facts::CustomAnalyticsFact;
+use crate::facts::InvocationType;
+use crate::facts::PluginState;
+use crate::facts::PluginStateChangedInput;
+use crate::facts::PluginUsedInput;
+use crate::facts::SkillInvocation;
+use crate::facts::SkillInvokedInput;
+use crate::facts::TrackEventsContext;
+use crate::reducer::AnalyticsReducer;
+use crate::reducer::normalize_path_for_skill_id;
+use crate::reducer::skill_id_for_local_skill;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -283,11 +286,11 @@ fn thread_initialized_event_serializes_expected_shape() {
         event_type: "codex_thread_initialized",
         event_params: ThreadInitializedEventParams {
             thread_id: "thread-0".to_string(),
-            app_server_client: super::CodexAppServerClientMetadata {
+            app_server_client: CodexAppServerClientMetadata {
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
                 client_name: Some("codex-tui".to_string()),
                 client_version: Some("1.0.0".to_string()),
-                rpc_transport: super::AppServerRpcTransport::Stdio,
+                rpc_transport: AppServerRpcTransport::Stdio,
                 experimental_api_enabled: Some(true),
             },
             runtime: CodexRuntimeMetadata {
@@ -375,13 +378,13 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                     }),
                 },
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
-                runtime: super::CodexRuntimeMetadata {
+                runtime: CodexRuntimeMetadata {
                     codex_rs_version: "0.99.0".to_string(),
                     runtime_os: "linux".to_string(),
                     runtime_os_version: "24.04".to_string(),
                     runtime_arch: "x86_64".to_string(),
                 },
-                rpc_transport: super::AppServerRpcTransport::Websocket,
+                rpc_transport: AppServerRpcTransport::Websocket,
             },
             &mut events,
         )
@@ -538,7 +541,7 @@ async fn reducer_ingests_skill_invoked_fact() {
         turn_id: "turn-1".to_string(),
     };
     let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
-    let expected_skill_id = super::skill_id_for_local_skill(
+    let expected_skill_id = skill_id_for_local_skill(
         /*repo_url*/ None,
         /*repo_root*/ None,
         skill_path.as_path(),
