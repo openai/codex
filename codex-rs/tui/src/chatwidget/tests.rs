@@ -32,7 +32,9 @@ pub(super) use codex_app_server_protocol::CommandExecutionStatus as AppServerCom
 pub(super) use codex_app_server_protocol::ErrorNotification;
 pub(super) use codex_app_server_protocol::FileUpdateChange;
 pub(super) use codex_app_server_protocol::GuardianApprovalReview;
+pub(super) use codex_app_server_protocol::GuardianApprovalReviewAction as AppServerGuardianApprovalReviewAction;
 pub(super) use codex_app_server_protocol::GuardianApprovalReviewStatus;
+pub(super) use codex_app_server_protocol::GuardianCommandSource as AppServerGuardianCommandSource;
 pub(super) use codex_app_server_protocol::GuardianRiskLevel as AppServerGuardianRiskLevel;
 pub(super) use codex_app_server_protocol::HookCompletedNotification as AppServerHookCompletedNotification;
 pub(super) use codex_app_server_protocol::HookEventName as AppServerHookEventName;
@@ -136,8 +138,10 @@ pub(super) use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandSta
 pub(super) use codex_protocol::protocol::ExecPolicyAmendment;
 pub(super) use codex_protocol::protocol::ExitedReviewModeEvent;
 pub(super) use codex_protocol::protocol::FileChange;
+pub(super) use codex_protocol::protocol::GuardianAssessmentAction;
 pub(super) use codex_protocol::protocol::GuardianAssessmentEvent;
 pub(super) use codex_protocol::protocol::GuardianAssessmentStatus;
+pub(super) use codex_protocol::protocol::GuardianCommandSource;
 pub(super) use codex_protocol::protocol::GuardianRiskLevel;
 pub(super) use codex_protocol::protocol::ImageGenerationEndEvent;
 pub(super) use codex_protocol::protocol::ItemCompletedEvent;

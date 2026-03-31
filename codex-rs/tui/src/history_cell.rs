@@ -927,10 +927,7 @@ impl ApprovalDecisionActor {
     }
 }
 
-pub fn new_guardian_denied_patch_request(
-    files: Vec<String>,
-    change_count: usize,
-) -> Box<dyn HistoryCell> {
+pub fn new_guardian_denied_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
     let mut summary = vec![
         "Request ".into(),
         "denied".bold(),
@@ -940,7 +937,7 @@ pub fn new_guardian_denied_patch_request(
         summary.push("a patch touching ".into());
         summary.push(Span::from(files[0].clone()).dim());
     } else {
-        summary.push(format!("a patch touching {change_count} changes across ").into());
+        summary.push("a patch touching ".into());
         summary.push(Span::from(files.len().to_string()).dim());
         summary.push(" files".into());
     }

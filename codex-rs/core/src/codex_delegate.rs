@@ -516,7 +516,6 @@ async fn handle_patch_approval(
     } = event;
     let approval_id = call_id.clone();
     let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
-        let change_count = changes.len();
         let maybe_files = changes
             .keys()
             .map(|path| parent_ctx.cwd.join(path).ok())
@@ -557,7 +556,6 @@ async fn handle_patch_approval(
                     id: approval_id.clone(),
                     cwd: parent_ctx.cwd.to_path_buf(),
                     files,
-                    change_count,
                     patch,
                 },
                 reason.clone(),

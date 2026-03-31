@@ -98,6 +98,85 @@ pub enum GuardianAssessmentStatus {
     Aborted,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianCommandSource {
+    Shell,
+    UnifiedExec,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct GuardianCommandAssessmentAction {
+    pub source: GuardianCommandSource,
+    pub command: String,
+    pub cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct GuardianExecveAssessmentAction {
+    pub source: GuardianCommandSource,
+    pub program: String,
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct GuardianApplyPatchAssessmentAction {
+    pub cwd: PathBuf,
+    pub files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct GuardianNetworkAccessAssessmentAction {
+    pub target: String,
+    pub host: String,
+    pub protocol: NetworkApprovalProtocol,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct GuardianMcpToolCallAssessmentAction {
+    pub server: String,
+    pub tool_name: String,
+    pub connector_id: Option<String>,
+    pub connector_name: Option<String>,
+    pub tool_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", rename_all = "snake_case")]
+pub enum GuardianAssessmentAction {
+    Command {
+        source: GuardianCommandSource,
+        command: String,
+        cwd: PathBuf,
+    },
+    Execve {
+        source: GuardianCommandSource,
+        program: String,
+        argv: Vec<String>,
+        cwd: PathBuf,
+    },
+    ApplyPatch {
+        cwd: PathBuf,
+        files: Vec<PathBuf>,
+    },
+    NetworkAccess {
+        target: String,
+        host: String,
+        protocol: NetworkApprovalProtocol,
+        port: u16,
+    },
+    McpToolCall {
+        server: String,
+        tool_name: String,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+        tool_title: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct NetworkPolicyAmendment {
     pub host: String,
@@ -125,12 +204,8 @@ pub struct GuardianAssessmentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rationale: Option<String>,
-    /// Canonical action payload that was reviewed. Included when available so
-    /// clients can render pending or resolved review state alongside the
-    /// reviewed request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub action: Option<JsonValue>,
+    /// Canonical action payload that was reviewed.
+    pub action: GuardianAssessmentAction,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -302,4 +377,63 @@ pub struct ApplyPatchApprovalRequestEvent {
     /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn guardian_assessment_action_deserializes_command_shape() {
+        let action: GuardianAssessmentAction = serde_json::from_value(serde_json::json!({
+            "type": "command",
+            "source": "shell",
+            "command": "rm -rf /tmp/guardian",
+            "cwd": "/tmp",
+        }))
+        .expect("guardian action");
+
+        assert_eq!(
+            action,
+            GuardianAssessmentAction::Command {
+                source: GuardianCommandSource::Shell,
+                command: "rm -rf /tmp/guardian".to_string(),
+                cwd: PathBuf::from("/tmp"),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guardian_assessment_action_round_trips_execve_shape() {
+        let value = serde_json::json!({
+            "type": "execve",
+            "source": "shell",
+            "program": "/bin/rm",
+            "argv": ["/usr/bin/rm", "-f", "/tmp/file.sqlite"],
+            "cwd": "/tmp",
+        });
+        let action: GuardianAssessmentAction =
+            serde_json::from_value(value.clone()).expect("guardian action");
+
+        assert_eq!(
+            serde_json::to_value(&action).expect("serialize guardian action"),
+            value
+        );
+
+        assert_eq!(
+            action,
+            GuardianAssessmentAction::Execve {
+                source: GuardianCommandSource::Shell,
+                program: "/bin/rm".to_string(),
+                argv: vec![
+                    "/usr/bin/rm".to_string(),
+                    "-f".to_string(),
+                    "/tmp/file.sqlite".to_string(),
+                ],
+                cwd: PathBuf::from("/tmp"),
+            }
+        );
+    }
 }

@@ -27,6 +27,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -187,7 +188,7 @@ pub(super) async fn try_run_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
-        tool_name: "shell",
+        tool_name: GuardianCommandSource::Shell,
         approval_policy: ctx.turn.approval_policy.value(),
         sandbox_policy: command_executor.sandbox_policy.clone(),
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
@@ -259,7 +260,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
-        tool_name: "exec_command",
+        tool_name: GuardianCommandSource::UnifiedExec,
         approval_policy: ctx.turn.approval_policy.value(),
         sandbox_policy: exec_request.sandbox_policy.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
@@ -294,7 +295,7 @@ struct CoreShellActionProvider {
     session: Arc<crate::codex::Session>,
     turn: Arc<crate::codex::TurnContext>,
     call_id: String,
-    tool_name: &'static str,
+    tool_name: GuardianCommandSource,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -380,7 +381,7 @@ impl CoreShellActionProvider {
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
-        let tool_name = self.tool_name;
+        let source = self.tool_name;
         Ok(stopwatch
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
@@ -389,7 +390,7 @@ impl CoreShellActionProvider {
                         &turn,
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
-                            tool_name: tool_name.to_string(),
+                            source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
                             cwd: workdir,

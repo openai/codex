@@ -76,6 +76,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::GuardianApprovalReviewAction;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerStartupState;
@@ -168,6 +169,7 @@ use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 #[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
@@ -3264,85 +3266,53 @@ impl ChatWidget {
     /// render the final approved/denied history cell when guardian returns a
     /// decision.
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
-        // Guardian emits a compact JSON action payload; map the stable fields we
-        // care about into a short footer/history summary without depending on
-        // the full raw JSON shape in the rest of the widget.
-        let guardian_action_summary = |action: &serde_json::Value| {
-            let tool = action.get("tool").and_then(serde_json::Value::as_str)?;
-            match tool {
-                "shell" | "exec_command" => match action.get("command") {
-                    Some(serde_json::Value::String(command)) => Some(command.clone()),
-                    Some(serde_json::Value::Array(command)) => {
-                        let args = command
-                            .iter()
-                            .map(serde_json::Value::as_str)
-                            .collect::<Option<Vec<_>>>()?;
-                        shlex::try_join(args.iter().copied())
-                            .ok()
-                            .or_else(|| Some(args.join(" ")))
-                    }
-                    _ => None,
-                },
-                "apply_patch" => {
-                    let files = action
-                        .get("files")
-                        .and_then(serde_json::Value::as_array)
-                        .map(|files| {
-                            files
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let change_count = action
-                        .get("change_count")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(files.len() as u64);
-                    Some(if files.len() == 1 {
-                        format!("apply_patch touching {}", files[0])
-                    } else {
-                        format!(
-                            "apply_patch touching {change_count} changes across {} files",
-                            files.len()
-                        )
-                    })
-                }
-                "network_access" => action
-                    .get("target")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|target| format!("network access to {target}")),
-                "mcp_tool_call" => {
-                    let tool_name = action
-                        .get("tool_name")
-                        .and_then(serde_json::Value::as_str)?;
-                    let label = action
-                        .get("connector_name")
-                        .and_then(serde_json::Value::as_str)
-                        .or_else(|| action.get("server").and_then(serde_json::Value::as_str))
-                        .unwrap_or("unknown server");
-                    Some(format!("MCP {tool_name} on {label}"))
-                }
-                _ => None,
+        let guardian_action_summary = |action: &GuardianAssessmentAction| match action {
+            GuardianAssessmentAction::Command { command, .. } => Some(command.clone()),
+            GuardianAssessmentAction::Execve { program, argv, .. } => {
+                let command = if argv.is_empty() {
+                    vec![program.clone()]
+                } else {
+                    argv.clone()
+                };
+                shlex::try_join(command.iter().map(String::as_str))
+                    .ok()
+                    .or_else(|| Some(command.join(" ")))
+            }
+            GuardianAssessmentAction::ApplyPatch { files, .. } => Some(if files.len() == 1 {
+                format!("apply_patch touching {}", files[0].display())
+            } else {
+                format!("apply_patch touching {} files", files.len())
+            }),
+            GuardianAssessmentAction::NetworkAccess { target, .. } => {
+                Some(format!("network access to {target}"))
+            }
+            GuardianAssessmentAction::McpToolCall {
+                server,
+                tool_name,
+                connector_name,
+                ..
+            } => {
+                let label = connector_name.as_deref().unwrap_or(server.as_str());
+                Some(format!("MCP {tool_name} on {label}"))
             }
         };
-        let guardian_command = |action: &serde_json::Value| match action.get("command") {
-            Some(serde_json::Value::Array(command)) => Some(
-                command
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>(),
-            )
-            .filter(|command| !command.is_empty()),
-            Some(serde_json::Value::String(command)) => shlex::split(command)
+        let guardian_command = |action: &GuardianAssessmentAction| match action {
+            GuardianAssessmentAction::Command { command, .. } => shlex::split(command)
                 .filter(|command| !command.is_empty())
                 .or_else(|| Some(vec![command.clone()])),
-            _ => None,
+            GuardianAssessmentAction::Execve { program, argv, .. } => Some(if argv.is_empty() {
+                vec![program.clone()]
+            } else {
+                argv.clone()
+            })
+            .filter(|command| !command.is_empty()),
+            GuardianAssessmentAction::ApplyPatch { .. }
+            | GuardianAssessmentAction::NetworkAccess { .. }
+            | GuardianAssessmentAction::McpToolCall { .. } => None,
         };
 
         if ev.status == GuardianAssessmentStatus::InProgress
-            && let Some(action) = ev.action.as_ref()
-            && let Some(detail) = guardian_action_summary(action)
+            && let Some(detail) = guardian_action_summary(&ev.action)
         {
             // In-progress assessments own the live footer state while the
             // review is pending. Parallel reviews are aggregated into one
@@ -3384,20 +3354,16 @@ impl ChatWidget {
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
-            let Some(action) = ev.action else {
-                return;
-            };
-
-            let cell = if let Some(command) = guardian_command(&action) {
+            let cell = if let Some(command) = guardian_command(&ev.action) {
                 history_cell::new_approval_decision_cell(
                     command,
                     codex_protocol::protocol::ReviewDecision::Approved,
                     history_cell::ApprovalDecisionActor::Guardian,
                 )
-            } else if let Some(summary) = guardian_action_summary(&action) {
+            } else if let Some(summary) = guardian_action_summary(&ev.action) {
                 history_cell::new_guardian_approved_action_request(summary)
             } else {
-                let summary = serde_json::to_string(&action)
+                let summary = serde_json::to_string(&ev.action)
                     .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
                 history_cell::new_guardian_approved_action_request(summary)
             };
@@ -3410,66 +3376,33 @@ impl ChatWidget {
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
-        let Some(action) = ev.action else {
-            return;
-        };
-
-        let tool = action.get("tool").and_then(serde_json::Value::as_str);
-        let cell = if let Some(command) = guardian_command(&action) {
+        let cell = if let Some(command) = guardian_command(&ev.action) {
             history_cell::new_approval_decision_cell(
                 command,
                 codex_protocol::protocol::ReviewDecision::Denied,
                 history_cell::ApprovalDecisionActor::Guardian,
             )
         } else {
-            match tool {
-                Some("apply_patch") => {
-                    let files = action
-                        .get("files")
-                        .and_then(serde_json::Value::as_array)
-                        .map(|files| {
-                            files
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let change_count = action
-                        .get("change_count")
-                        .and_then(serde_json::Value::as_u64)
-                        .and_then(|count| usize::try_from(count).ok())
-                        .unwrap_or(files.len());
-                    history_cell::new_guardian_denied_patch_request(files, change_count)
+            match &ev.action {
+                GuardianAssessmentAction::ApplyPatch { files, .. } => {
+                    let files = files
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>();
+                    history_cell::new_guardian_denied_patch_request(files)
                 }
-                Some("mcp_tool_call") => {
-                    let server = action
-                        .get("server")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown server");
-                    let tool_name = action
-                        .get("tool_name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown tool");
-                    history_cell::new_guardian_denied_action_request(format!(
-                        "codex to call MCP tool {server}.{tool_name}"
-                    ))
-                }
-                Some("network_access") => {
-                    let target = action
-                        .get("target")
-                        .and_then(serde_json::Value::as_str)
-                        .or_else(|| action.get("host").and_then(serde_json::Value::as_str))
-                        .unwrap_or("network target");
+                GuardianAssessmentAction::McpToolCall {
+                    server, tool_name, ..
+                } => history_cell::new_guardian_denied_action_request(format!(
+                    "codex to call MCP tool {server}.{tool_name}"
+                )),
+                GuardianAssessmentAction::NetworkAccess { target, .. } => {
                     history_cell::new_guardian_denied_action_request(format!(
                         "codex to access {target}"
                     ))
                 }
-                _ => {
-                    let summary = serde_json::to_string(&action)
-                        .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
-                    history_cell::new_guardian_denied_action_request(summary)
-                }
+                GuardianAssessmentAction::Command { .. } => unreachable!(),
+                GuardianAssessmentAction::Execve { .. } => unreachable!(),
             }
         };
 
@@ -6793,7 +6726,7 @@ impl ChatWidget {
         id: String,
         turn_id: String,
         review: codex_app_server_protocol::GuardianApprovalReview,
-        action: Option<serde_json::Value>,
+        action: GuardianApprovalReviewAction,
     ) {
         self.on_guardian_assessment(GuardianAssessmentEvent {
             id,
@@ -6825,7 +6758,7 @@ impl ChatWidget {
                 }
             }),
             rationale: review.rationale,
-            action,
+            action: action.into(),
         });
     }
 

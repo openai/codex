@@ -223,6 +223,7 @@ fn guardian_auto_approval_review_notification(
         risk_level: assessment.risk_level.map(Into::into),
         rationale: assessment.rationale.clone(),
     };
+    let action = assessment.action.clone().into();
     match assessment.status {
         codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
             ServerNotification::ItemGuardianApprovalReviewStarted(
@@ -231,7 +232,7 @@ fn guardian_auto_approval_review_notification(
                     turn_id,
                     target_item_id: assessment.id.clone(),
                     review,
-                    action: assessment.action.clone(),
+                    action,
                 },
             )
         }
@@ -244,7 +245,7 @@ fn guardian_auto_approval_review_notification(
                     turn_id,
                     target_item_id: assessment.id.clone(),
                     review,
-                    action: assessment.action.clone(),
+                    action,
                 },
             )
         }
@@ -2904,10 +2905,11 @@ mod tests {
     #[test]
     fn guardian_assessment_started_uses_event_turn_id_fallback() {
         let conversation_id = ThreadId::new();
-        let action = json!({
-            "tool": "shell",
-            "command": "rm -rf /tmp/example.sqlite",
-        });
+        let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
+            source: codex_protocol::protocol::GuardianCommandSource::Shell,
+            command: "rm -rf /tmp/example.sqlite".to_string(),
+            cwd: "/tmp".into(),
+        };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
@@ -2918,7 +2920,7 @@ mod tests {
                 risk_score: None,
                 risk_level: None,
                 rationale: None,
-                action: Some(action.clone()),
+                action: action.clone(),
             },
         );
 
@@ -2934,7 +2936,7 @@ mod tests {
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);
-                assert_eq!(payload.action, Some(action));
+                assert_eq!(payload.action, action.into());
             }
             other => panic!("unexpected notification: {other:?}"),
         }
@@ -2943,10 +2945,11 @@ mod tests {
     #[test]
     fn guardian_assessment_completed_emits_review_payload() {
         let conversation_id = ThreadId::new();
-        let action = json!({
-            "tool": "shell",
-            "command": "rm -rf /tmp/example.sqlite",
-        });
+        let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
+            source: codex_protocol::protocol::GuardianCommandSource::Shell,
+            command: "rm -rf /tmp/example.sqlite".to_string(),
+            cwd: "/tmp".into(),
+        };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
@@ -2957,7 +2960,7 @@ mod tests {
                 risk_score: Some(91),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 rationale: Some("too risky".to_string()),
-                action: Some(action.clone()),
+                action: action.clone(),
             },
         );
 
@@ -2973,7 +2976,7 @@ mod tests {
                     Some(codex_app_server_protocol::GuardianRiskLevel::High)
                 );
                 assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
-                assert_eq!(payload.action, Some(action));
+                assert_eq!(payload.action, action.into());
             }
             other => panic!("unexpected notification: {other:?}"),
         }
@@ -2982,10 +2985,12 @@ mod tests {
     #[test]
     fn guardian_assessment_aborted_emits_completed_review_payload() {
         let conversation_id = ThreadId::new();
-        let action = json!({
-            "tool": "network_access",
-            "target": "api.openai.com:443",
-        });
+        let action = codex_protocol::protocol::GuardianAssessmentAction::NetworkAccess {
+            target: "api.openai.com:443".to_string(),
+            host: "api.openai.com".to_string(),
+            protocol: codex_protocol::protocol::NetworkApprovalProtocol::Https,
+            port: 443,
+        };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
@@ -2996,7 +3001,7 @@ mod tests {
                 risk_score: None,
                 risk_level: None,
                 rationale: None,
-                action: Some(action.clone()),
+                action: action.clone(),
             },
         );
 
@@ -3009,7 +3014,7 @@ mod tests {
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);
-                assert_eq!(payload.action, Some(action));
+                assert_eq!(payload.action, action.into());
             }
             other => panic!("unexpected notification: {other:?}"),
         }
