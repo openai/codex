@@ -13,7 +13,7 @@ use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
-use crate::events::subagent_session_started_event_request;
+use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
@@ -449,8 +449,8 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 }
 
 #[test]
-fn subagent_session_started_review_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+fn subagent_thread_started_review_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-review".to_string(),
             product_client_id: "codex-tui".to_string(),
@@ -478,11 +478,11 @@ fn subagent_session_started_review_serializes_expected_shape() {
 }
 
 #[test]
-fn subagent_session_started_thread_spawn_serializes_parent_thread_id() {
+fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
     let parent_thread_id =
         codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
             .expect("valid thread id");
-    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-spawn".to_string(),
             product_client_id: "codex-tui".to_string(),
@@ -509,8 +509,8 @@ fn subagent_session_started_thread_spawn_serializes_parent_thread_id() {
 }
 
 #[test]
-fn subagent_session_started_memory_consolidation_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-memory".to_string(),
             product_client_id: "codex-tui".to_string(),
@@ -531,8 +531,8 @@ fn subagent_session_started_memory_consolidation_serializes_expected_shape() {
 }
 
 #[test]
-fn subagent_session_started_other_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(subagent_session_started_event_request(
+fn subagent_thread_started_other_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-guardian".to_string(),
             product_client_id: "codex-tui".to_string(),
@@ -548,7 +548,7 @@ fn subagent_session_started_other_serializes_expected_shape() {
 }
 
 #[tokio::test]
-async fn subagent_session_started_publishes_without_initialize() {
+async fn subagent_thread_started_publishes_without_initialize() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
 

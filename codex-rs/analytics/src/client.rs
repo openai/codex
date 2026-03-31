@@ -145,7 +145,7 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_subagent_session_started(&self, input: SubAgentThreadStartedInput) {
+    pub fn track_subagent_thread_started(&self, input: SubAgentThreadStartedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::SubAgentThreadStarted(input),
         ));

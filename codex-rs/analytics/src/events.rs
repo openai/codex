@@ -231,7 +231,7 @@ pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
     }
 }
 
-pub(crate) fn subagent_session_started_event_request(
+pub(crate) fn subagent_thread_started_event_request(
     input: SubAgentThreadStartedInput,
 ) -> ThreadInitializedEvent {
     let event_params = ThreadInitializedEventParams {

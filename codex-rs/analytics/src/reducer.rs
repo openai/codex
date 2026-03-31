@@ -15,7 +15,7 @@ use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
 use crate::events::plugin_state_event_type;
-use crate::events::subagent_session_started_event_request;
+use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppMentionedInput;
@@ -79,7 +79,7 @@ impl AnalyticsReducer {
             AnalyticsFact::Notification(_notification) => {}
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
-                    self.ingest_subagent_session_started(input, out);
+                    self.ingest_subagent_thread_started(input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -125,13 +125,13 @@ impl AnalyticsReducer {
         );
     }
 
-    fn ingest_subagent_session_started(
+    fn ingest_subagent_thread_started(
         &mut self,
         input: SubAgentThreadStartedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
         out.push(TrackEventRequest::ThreadInitialized(
-            subagent_session_started_event_request(input),
+            subagent_thread_started_event_request(input),
         ));
     }
 

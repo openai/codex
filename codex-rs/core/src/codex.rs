@@ -4380,7 +4380,7 @@ pub(crate) fn emit_subagent_session_started(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    analytics_events_client.track_subagent_session_started(SubAgentThreadStartedInput {
+    analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
         thread_id: thread_id.to_string(),
         product_client_id,
         model: thread_config.model,
