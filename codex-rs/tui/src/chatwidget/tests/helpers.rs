@@ -9,7 +9,9 @@ pub(super) async fn test_config() -> Config {
         .tempdir()
         .expect("tempdir")
         .keep();
-    let mut config = Config::load_default_with_cli_overrides(Vec::new()).expect("config");
+    let mut config =
+        Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), Vec::new())
+            .expect("config");
     config.codex_home = codex_home.clone();
     config.sqlite_home = codex_home.clone();
     config.log_dir = codex_home.join("log");
