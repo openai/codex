@@ -143,13 +143,21 @@ pub struct ExternalAuthRefreshContext {
 }
 
 #[async_trait]
+/// Pluggable auth provider used by `AuthManager` for externally managed auth flows.
+///
+/// Implementations may either resolve auth eagerly via `resolve()` or provide refreshed
+/// credentials on demand via `refresh()`.
 pub trait ExternalAuth: Send + Sync {
+    /// Indicates which top-level auth mode this external provider supplies.
     fn auth_mode(&self) -> crate::AuthMode;
 
+    /// Returns cached or immediately available auth, if this provider can resolve it synchronously
+    /// from the caller's perspective.
     async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
         Ok(None)
     }
 
+    /// Refreshes auth in response to a manager-driven refresh attempt.
     async fn refresh(
         &self,
         context: ExternalAuthRefreshContext,
@@ -1185,7 +1193,7 @@ impl AuthManager {
     }
 
     pub fn external_bearer_only(config: ModelProviderAuthInfo) -> Arc<Self> {
-        let manager = Arc::new(Self {
+        Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(CachedAuth {
                 auth: None,
@@ -1195,10 +1203,10 @@ impl AuthManager {
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
-            external_auth: RwLock::new(None),
-        });
-        manager.set_external_auth(Arc::new(BearerTokenRefresher::new(config)));
-        manager
+            external_auth: RwLock::new(Some(
+                Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
+            )),
+        })
     }
 
     /// Current cached auth (clone) without attempting a refresh.
