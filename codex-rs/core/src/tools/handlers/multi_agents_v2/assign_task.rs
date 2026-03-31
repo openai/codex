@@ -1,3 +1,4 @@
+use super::message_tool::AssignTaskArgs;
 use super::message_tool::MessageDeliveryMode;
 use super::message_tool::MessageToolResult;
 use super::message_tool::handle_message_tool;
@@ -18,6 +19,15 @@ impl ToolHandler for Handler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        handle_message_tool(invocation, MessageDeliveryMode::TriggerTurn).await
+        let arguments = function_arguments(invocation.payload.clone())?;
+        let args: AssignTaskArgs = parse_arguments(&arguments)?;
+        handle_message_tool(
+            invocation,
+            MessageDeliveryMode::TriggerTurn,
+            args.target,
+            args.items,
+            args.interrupt,
+        )
+        .await
     }
 }

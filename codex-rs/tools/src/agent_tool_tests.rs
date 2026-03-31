@@ -109,6 +109,7 @@ fn send_message_tool_requires_items_and_uses_submission_output() {
     };
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("items"));
+    assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("message"));
     assert_eq!(
         required,

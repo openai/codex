@@ -128,20 +128,11 @@ pub fn create_send_message_tool() -> ToolSpec {
             },
         ),
         ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Add a message to an existing agent without triggering a new turn. Use interrupt=true to stop the current task first. In MultiAgentV2, this tool currently supports text content only."
+        description: "Add a message to an existing agent without triggering a new turn. In MultiAgentV2, this tool currently supports text content only."
             .to_string(),
         strict: false,
         defer_loading: None,

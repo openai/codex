@@ -974,7 +974,7 @@ async fn multi_agent_v2_send_message_rejects_structured_items() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_send_message_interrupts_busy_child_without_triggering_turn() {
+async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1007,107 +1007,43 @@ async fn multi_agent_v2_send_message_interrupts_busy_child_without_triggering_tu
         .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
-    let thread = manager
-        .get_thread(agent_id)
-        .await
-        .expect("worker thread should exist");
 
-    let active_turn = thread.codex.session.new_default_turn().await;
-    thread
-        .codex
-        .session
-        .spawn_task(
-            Arc::clone(&active_turn),
-            vec![UserInput::Text {
-                text: "working".to_string(),
-                text_elements: Vec::new(),
-            }],
-            NeverEndingTask,
+    let invocation = invocation(
+        session,
+        turn,
+        "send_message",
+        function_payload(json!({
+            "target": agent_id.to_string(),
+            "items": [{"type": "text", "text": "continue"}],
+            "interrupt": true
+        })),
+    );
+
+    let Err(err) = SendMessageHandlerV2.handle(invocation).await else {
+        panic!("send_message interrupt parameter should be rejected");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "failed to parse function arguments: unknown field `interrupt`, expected `target` or `items`".to_string()
         )
-        .await;
-
-    SendMessageHandlerV2
-        .handle(invocation(
-            session.clone(),
-            turn.clone(),
-            "send_message",
-            function_payload(json!({
-                "target": agent_id.to_string(),
-                "items": [{"type": "text", "text": "continue"}],
-                "interrupt": true
-            })),
-        ))
-        .await
-        .expect("interrupting v2 send_message should succeed");
+    );
 
     let ops = manager.captured_ops();
     let ops_for_agent: Vec<&Op> = ops
         .iter()
         .filter_map(|(id, op)| (*id == agent_id).then_some(op))
         .collect();
-    assert!(ops_for_agent.iter().any(|op| matches!(op, Op::Interrupt)));
-    assert!(ops_for_agent.iter().any(|op| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication }
-                if communication.author == AgentPath::root()
-                    && communication.recipient.as_str() == "/root/worker"
-                    && communication.other_recipients.is_empty()
-                    && communication.content == "continue"
-                    && !communication.trigger_turn
-        )
-    }));
-
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if !thread.codex.session.has_pending_input().await {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                continue;
-            }
-            let history_items = thread
-                .codex
-                .session
-                .clone_history()
-                .await
-                .raw_items()
-                .to_vec();
-            let saw_envelope = history_contains_inter_agent_communication(
-                &history_items,
-                &InterAgentCommunication::new(
-                    AgentPath::root(),
-                    AgentPath::try_from("/root/worker").expect("agent path"),
-                    Vec::new(),
-                    "continue".to_string(),
-                    /*trigger_turn*/ false,
-                ),
-            );
-            let saw_user_message = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "user"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::InputText { text } if text == "continue"
-                            ))
-                )
-            });
-            if saw_envelope && !saw_user_message {
-                panic!("send_message should not materialize the envelope into history");
-            }
-            if !saw_user_message {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("interrupting v2 send_message should queue the redirected message without a turn");
-
-    let _ = thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("shutdown should submit");
+    assert!(!ops_for_agent.iter().any(|op| matches!(op, Op::Interrupt)));
+    assert!(!ops_for_agent.iter().any(|op| matches!(
+        op,
+        Op::InterAgentCommunication { communication }
+            if communication.author == AgentPath::root()
+                && communication.recipient.as_str() == "/root/worker"
+                && communication.other_recipients.is_empty()
+                && communication.content == "continue"
+                && !communication.trigger_turn
+    )));
 }
 
 #[tokio::test]
