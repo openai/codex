@@ -524,7 +524,7 @@ exit 1
         serde_json::from_value(json!({
             "command": self.command,
             "args": self.args,
-            "timeout_ms": 5000,
+            "timeout_ms": 1000,
             "refresh_interval_ms": 60000,
             "cwd": self.tempdir.path(),
         }))
