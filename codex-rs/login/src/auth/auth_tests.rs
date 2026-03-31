@@ -363,14 +363,20 @@ async fn external_chatgpt_auth_manager_refresh_persists_ephemeral_auth() {
         .expect("external auth refresh should succeed");
 
     assert_eq!(manager.auth_mode(), Some(crate::AuthMode::Chatgpt));
-    assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ChatgptAuthTokens));
+    assert_eq!(
+        manager.get_api_auth_mode(),
+        Some(ApiAuthMode::ChatgptAuthTokens)
+    );
 
     let auth_dot_json = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::Ephemeral)
         .expect("ephemeral auth should load")
         .expect("ephemeral auth should exist");
     let tokens = auth_dot_json.tokens.expect("tokens should exist");
     assert_eq!(tokens.account_id.as_deref(), Some("org_refreshed"));
-    assert_eq!(tokens.id_token.chatgpt_account_id.as_deref(), Some("org_refreshed"));
+    assert_eq!(
+        tokens.id_token.chatgpt_account_id.as_deref(),
+        Some("org_refreshed")
+    );
     assert_eq!(
         tokens.id_token.chatgpt_plan_type,
         Some(InternalPlanType::Known(InternalKnownPlan::Business))
@@ -578,13 +584,11 @@ fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<Str
     });
 
     if let Some(chatgpt_plan_type) = params.chatgpt_plan_type.as_ref() {
-        auth_payload["chatgpt_plan_type"] =
-            serde_json::Value::String(chatgpt_plan_type.clone());
+        auth_payload["chatgpt_plan_type"] = serde_json::Value::String(chatgpt_plan_type.clone());
     }
 
     if let Some(chatgpt_account_id) = params.chatgpt_account_id.as_ref() {
-        auth_payload["chatgpt_account_id"] =
-            serde_json::Value::String(chatgpt_account_id.clone());
+        auth_payload["chatgpt_account_id"] = serde_json::Value::String(chatgpt_account_id.clone());
     }
 
     let payload = serde_json::json!({

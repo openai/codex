@@ -63,7 +63,10 @@ impl ExternalAuth for BearerTokenRefresher {
         Ok(Some(ExternalAuthTokens::access_token_only(access_token)))
     }
 
-    async fn refresh(&self, _context: ExternalAuthRefreshContext) -> io::Result<ExternalAuthTokens> {
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> io::Result<ExternalAuthTokens> {
         self.refresh_after_unauthorized().await?;
         let access_token = self.resolve_access_token().await?;
         Ok(ExternalAuthTokens::access_token_only(access_token))
@@ -72,7 +75,8 @@ impl ExternalAuth for BearerTokenRefresher {
 
 impl fmt::Debug for BearerTokenRefresher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BearerTokenRefresher").finish_non_exhaustive()
+        f.debug_struct("BearerTokenRefresher")
+            .finish_non_exhaustive()
     }
 }
 

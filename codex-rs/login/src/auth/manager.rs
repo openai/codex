@@ -1099,22 +1099,6 @@ pub struct AuthManager {
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
 }
 
-impl Debug for AuthManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AuthManager")
-            .field("codex_home", &self.codex_home)
-            .field("inner", &self.inner)
-            .field("enable_codex_api_key_env", &self.enable_codex_api_key_env)
-            .field(
-                "auth_credentials_store_mode",
-                &self.auth_credentials_store_mode,
-            )
-            .field("forced_chatgpt_workspace_id", &self.forced_chatgpt_workspace_id)
-            .field("has_external_auth", &self.has_external_auth())
-            .finish_non_exhaustive()
-    }
-}
-
 impl AuthManager {
     /// Create a new manager loading the initial auth using the provided
     /// preferred auth method. Errors loading auth are swallowed; `auth()` will
@@ -1419,7 +1403,9 @@ impl AuthManager {
     }
 
     fn external_auth_mode(&self) -> Option<crate::AuthMode> {
-        self.external_auth().as_ref().map(|external_auth| external_auth.auth_mode())
+        self.external_auth()
+            .as_ref()
+            .map(|external_auth| external_auth.auth_mode())
     }
 
     fn has_external_api_key_auth(&self) -> bool {

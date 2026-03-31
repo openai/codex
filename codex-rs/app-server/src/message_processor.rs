@@ -70,11 +70,11 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_login::AuthMode as LoginAuthMode;
+use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
-use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthTokens;
-use codex_login::AuthMode as LoginAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
