@@ -23,7 +23,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
     let available_models_description = spawn_agent_models_description(options.available_models);
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
-    let properties = spawn_agent_common_properties(&options.agent_type_description);
+    let properties = spawn_agent_common_properties_v1(&options.agent_type_description);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -45,7 +45,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpec {
     let available_models_description = spawn_agent_models_description(options.available_models);
     let return_value_description = "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available.";
-    let mut properties = spawn_agent_common_properties(&options.agent_type_description);
+    let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
     properties.insert(
         "task_name".to_string(),
         JsonSchema::String {
@@ -544,7 +544,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
+fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
     BTreeMap::from([
         (
             "message".to_string(),
@@ -567,6 +567,54 @@ fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<Strin
             JsonSchema::Boolean {
                 description: Some(
                     "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "model".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional model override for the new agent. Replaces the inherited model."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "reasoning_effort".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+                        .to_string(),
+                ),
+            },
+        ),
+    ])
+}
+
+fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
+    BTreeMap::from([
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Initial plain-text task for the new agent. Use either message or items."
+                        .to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "agent_type".to_string(),
+            JsonSchema::String {
+                description: Some(agent_type_description.to_string()),
+            },
+        ),
+        (
+            "fork_turns".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional MultiAgentV2 fork mode. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
                         .to_string(),
                 ),
             },

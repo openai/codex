@@ -56,6 +56,8 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(description.contains("visible display (`visible-model`)"));
     assert!(!description.contains("hidden display (`hidden-model`)"));
     assert!(properties.contains_key("task_name"));
+    assert!(properties.contains_key("fork_turns"));
+    assert!(!properties.contains_key("fork_context"));
     assert_eq!(
         properties.get("agent_type"),
         Some(&JsonSchema::String {
@@ -67,6 +69,24 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         output_schema.expect("spawn_agent output schema")["required"],
         json!(["agent_id", "task_name", "nickname"])
     );
+}
+
+#[test]
+fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
+    let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
+        available_models: &[],
+        agent_type_description: "role help".to_string(),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("spawn_agent should use object params");
+    };
+
+    assert!(properties.contains_key("fork_context"));
+    assert!(!properties.contains_key("fork_turns"));
 }
 
 #[test]
