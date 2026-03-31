@@ -382,6 +382,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             }
             normalized
         }),
+        allow_managed_hooks_only: requirements.allow_managed_hooks_only,
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -552,6 +553,7 @@ mod tests {
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
+            allow_managed_hooks_only: Some(true),
             guardian_developer_instructions: None,
             feature_requirements: Some(codex_core::config_loader::FeatureRequirementsToml {
                 entries: std::collections::BTreeMap::from([
@@ -610,6 +612,7 @@ mod tests {
             mapped.allowed_web_search_modes,
             Some(vec![WebSearchMode::Cached, WebSearchMode::Disabled]),
         );
+        assert_eq!(mapped.allow_managed_hooks_only, Some(true));
         assert_eq!(
             mapped.feature_requirements,
             Some(std::collections::BTreeMap::from([
@@ -709,6 +712,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            allow_managed_hooks_only: None,
             guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: None,

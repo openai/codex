@@ -2008,6 +2008,7 @@ impl Config {
             approval_policy: mut constrained_approval_policy,
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
+            allow_managed_hooks_only: _,
             feature_requirements,
             mcp_servers,
             exec_policy: _,
