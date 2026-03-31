@@ -57,6 +57,7 @@ use crate::model_catalog::ModelCatalog;
 use crate::multi_agents;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::StatusAccountDisplay;
+use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
@@ -761,6 +762,7 @@ pub(crate) struct ChatWidget {
     status_account_display: Option<StatusAccountDisplay>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
+    refreshing_status_outputs: Vec<StatusHistoryHandle>,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
@@ -4705,6 +4707,7 @@ impl ChatWidget {
             status_account_display,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            refreshing_status_outputs: Vec::new(),
             plan_type: initial_plan_type,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -7362,7 +7365,7 @@ impl ChatWidget {
             .values()
             .cloned()
             .collect();
-        self.add_to_history(crate::status::new_status_output_with_rate_limits(
+        let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
             self.status_account_display.as_ref(),
             token_info,
@@ -7377,7 +7380,28 @@ impl ChatWidget {
             collaboration_mode,
             reasoning_effort_override,
             refreshing_rate_limits,
-        ));
+        );
+        if refreshing_rate_limits {
+            self.refreshing_status_outputs.push(handle);
+        }
+        self.add_to_history(cell);
+    }
+
+    pub(crate) fn finish_status_rate_limit_refresh(&mut self) {
+        if self.refreshing_status_outputs.is_empty() {
+            return;
+        }
+
+        let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
+            .rate_limit_snapshots_by_limit_id
+            .values()
+            .cloned()
+            .collect();
+        let now = Local::now();
+        for handle in self.refreshing_status_outputs.drain(..) {
+            handle.finish_rate_limit_refresh(rate_limit_snapshots.as_slice(), now);
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {

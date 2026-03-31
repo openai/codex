@@ -4386,9 +4386,11 @@ impl App {
                     for snapshot in snapshots {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
+                    self.chat_widget.finish_status_rate_limit_refresh();
                 }
                 Err(err) => {
                     tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+                    self.chat_widget.finish_status_rate_limit_refresh();
                 }
             },
             AppEvent::ConnectorsLoaded { result, is_final } => {

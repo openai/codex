@@ -2111,6 +2111,7 @@ async fn make_chatwidget_manual(
         status_account_display: None,
         token_info: None,
         rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+        refreshing_status_outputs: Vec::new(),
         plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
