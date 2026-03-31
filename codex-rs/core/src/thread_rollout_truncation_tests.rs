@@ -260,9 +260,40 @@ fn truncates_rollout_to_last_n_fork_turns_discards_trigger_boundaries_in_rolled_
 
     let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
 
+    let expected = rollout[1..].to_vec();
+
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
-        serde_json::to_value(&rollout).unwrap()
+        serde_json::to_value(&expected).unwrap()
+    );
+}
+
+#[test]
+fn truncates_rollout_to_last_n_fork_turns_discards_rolled_back_assistant_instruction_turns() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "triggered task 1",
+            /*trigger_turn*/ true,
+        )),
+        RolloutItem::ResponseItem(assistant_msg("a2")),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+        RolloutItem::ResponseItem(inter_agent_msg(
+            "triggered task 2",
+            /*trigger_turn*/ true,
+        )),
+        RolloutItem::ResponseItem(assistant_msg("a3")),
+    ];
+
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 1);
+    let expected = rollout[5..].to_vec();
+
+    assert_eq!(
+        serde_json::to_value(&truncated).unwrap(),
+        serde_json::to_value(&expected).unwrap()
     );
 }
 
