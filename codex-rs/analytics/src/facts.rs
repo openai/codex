@@ -82,33 +82,33 @@ pub(crate) enum CustomAnalyticsFact {
     PluginStateChanged(PluginStateChangedInput),
 }
 
-pub struct SkillInvokedInput {
+pub(crate) struct SkillInvokedInput {
     pub tracking: TrackEventsContext,
     pub invocations: Vec<SkillInvocation>,
 }
 
-pub struct AppMentionedInput {
+pub(crate) struct AppMentionedInput {
     pub tracking: TrackEventsContext,
     pub mentions: Vec<AppInvocation>,
 }
 
-pub struct AppUsedInput {
+pub(crate) struct AppUsedInput {
     pub tracking: TrackEventsContext,
     pub app: AppInvocation,
 }
 
-pub struct PluginUsedInput {
+pub(crate) struct PluginUsedInput {
     pub tracking: TrackEventsContext,
     pub plugin: PluginTelemetryMetadata,
 }
 
-pub struct PluginStateChangedInput {
+pub(crate) struct PluginStateChangedInput {
     pub plugin: PluginTelemetryMetadata,
     pub state: PluginState,
 }
 
 #[derive(Clone, Copy)]
-pub enum PluginState {
+pub(crate) enum PluginState {
     Installed,
     Uninstalled,
     Enabled,
