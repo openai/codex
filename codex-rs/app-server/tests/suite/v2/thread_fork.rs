@@ -562,7 +562,7 @@ fn create_config_toml_with_chatgpt_base_url(
     general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
     let general_analytics_toml = if general_analytics_enabled {
-        "\n[features]\ngeneral_analytics = true\n".to_string()
+        "\ngeneral_analytics = true".to_string()
     } else {
         String::new()
     };
@@ -575,9 +575,10 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
-{general_analytics_toml}
 
 model_provider = "mock_provider"
+
+[features]
 {general_analytics_toml}
 
 [model_providers.mock_provider]
