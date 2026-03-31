@@ -99,17 +99,6 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-      - name: Install nightly argument-comment-lint toolchain
-        if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        run: |
-          rustup toolchain install nightly-2025-09-18 \
-            --profile minimal \
-            --component llvm-tools-preview \
-            --component rustc-dev \
-            --component rust-src \
-            --no-self-update
-          rustup default nightly-2025-09-18
       - name: Run argument comment lint on codex-rs via Bazel
         if: ${{ runner.os != 'Windows' }}
         env:
@@ -125,10 +114,17 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
             -- \
             ${bazel_targets}
-      - name: Run argument comment lint on codex-rs via packaged wrapper
+      - name: Run argument comment lint on codex-rs via Bazel
         if: ${{ runner.os == 'Windows' }}
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
-        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py
+        run: |
+          ./.github/scripts/run-argument-comment-lint-bazel.sh \
+            --config=argument-comment-lint \
+            --platforms=//:local_windows \
+            --keep_going \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:

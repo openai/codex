@@ -64,6 +64,7 @@ mod tests {
             env_key: Some("sk-should-not-leak".to_string()),
             env_key_instructions: None,
             experimental_bearer_token: None,
+            auth: None,
             wire_api: crate::model_provider_info::WireApi::Responses,
             query_params: None,
             http_headers: None,

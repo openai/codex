@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(
             should_install_network_seccomp(
                 NetworkSandboxPolicy::Enabled,
-                /*allow_network_for_proxy*/ true
+                /*allow_network_for_proxy*/ true,
             ),
             true
         );
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(
             should_install_network_seccomp(
                 NetworkSandboxPolicy::Enabled,
-                /*allow_network_for_proxy*/ false
+                /*allow_network_for_proxy*/ false,
             ),
             false
         );
@@ -297,11 +297,11 @@ mod tests {
     fn restricted_network_policy_always_installs_seccomp() {
         assert!(should_install_network_seccomp(
             NetworkSandboxPolicy::Restricted,
-            /*allow_network_for_proxy*/ false
+            /*allow_network_for_proxy*/ false,
         ));
         assert!(should_install_network_seccomp(
             NetworkSandboxPolicy::Restricted,
-            /*allow_network_for_proxy*/ true
+            /*allow_network_for_proxy*/ true,
         ));
     }
 
@@ -311,7 +311,7 @@ mod tests {
             network_seccomp_mode(
                 NetworkSandboxPolicy::Enabled,
                 /*allow_network_for_proxy*/ true,
-                /*proxy_routed_network*/ true
+                /*proxy_routed_network*/ true,
             ),
             Some(NetworkSeccompMode::ProxyRouted)
         );
@@ -323,7 +323,7 @@ mod tests {
             network_seccomp_mode(
                 NetworkSandboxPolicy::Restricted,
                 /*allow_network_for_proxy*/ false,
-                /*proxy_routed_network*/ false
+                /*proxy_routed_network*/ false,
             ),
             Some(NetworkSeccompMode::Restricted)
         );
@@ -335,7 +335,7 @@ mod tests {
             network_seccomp_mode(
                 NetworkSandboxPolicy::Enabled,
                 /*allow_network_for_proxy*/ false,
-                /*proxy_routed_network*/ false
+                /*proxy_routed_network*/ false,
             ),
             None
         );

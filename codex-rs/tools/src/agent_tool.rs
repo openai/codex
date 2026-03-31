@@ -23,7 +23,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
     let available_models_description = spawn_agent_models_description(options.available_models);
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
-    let properties = spawn_agent_common_properties(&options.agent_type_description);
+    let properties = spawn_agent_common_properties_v1(&options.agent_type_description);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -45,7 +45,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpec {
     let available_models_description = spawn_agent_models_description(options.available_models);
     let return_value_description = "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available.";
-    let mut properties = spawn_agent_common_properties(&options.agent_type_description);
+    let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
     properties.insert(
         "task_name".to_string(),
         JsonSchema::String {
@@ -66,7 +66,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["task_name".to_string()]),
+            required: Some(vec!["task_name".to_string(), "items".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(spawn_agent_output_schema_v2()),
@@ -128,20 +128,11 @@ pub fn create_send_message_tool() -> ToolSpec {
             },
         ),
         ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Add a message to an existing agent without triggering a new turn. Use interrupt=true to stop the current task first. In MultiAgentV2, this tool currently supports text content only."
+        description: "Add a message to an existing agent without triggering a new turn. In MultiAgentV2, this tool currently supports text content only."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -544,7 +535,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
+fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
     BTreeMap::from([
         (
             "message".to_string(),
@@ -567,6 +558,45 @@ fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<Strin
             JsonSchema::Boolean {
                 description: Some(
                     "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "model".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional model override for the new agent. Replaces the inherited model."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "reasoning_effort".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+                        .to_string(),
+                ),
+            },
+        ),
+    ])
+}
+
+fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
+    BTreeMap::from([
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "agent_type".to_string(),
+            JsonSchema::String {
+                description: Some(agent_type_description.to_string()),
+            },
+        ),
+        (
+            "fork_turns".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional MultiAgentV2 fork mode. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
                         .to_string(),
                 ),
             },
@@ -695,31 +725,19 @@ fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema
 }
 
 fn wait_agent_tool_parameters_v2(options: WaitAgentTimeoutOptions) -> JsonSchema {
-    let properties = BTreeMap::from([
-        (
-            "targets".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
-                description: Some(
-                    "Agent ids or canonical task names to wait on. Pass multiple targets to wait for whichever finishes first."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::Number {
-                description: Some(format!(
-                    "Optional timeout in milliseconds. Defaults to {}, min {}, max {}. Prefer longer waits (minutes) to avoid busy polling.",
-                    options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
-                )),
-            },
-        ),
-    ]);
+    let properties = BTreeMap::from([(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(format!(
+                "Optional timeout in milliseconds. Defaults to {}, min {}, max {}. Prefer longer waits (minutes) to avoid busy polling.",
+                options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
+            )),
+        },
+    )]);
 
     JsonSchema::Object {
         properties,
-        required: Some(vec!["targets".to_string()]),
+        required: None,
         additional_properties: Some(false.into()),
     }
 }

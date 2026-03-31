@@ -244,6 +244,26 @@ web_search = false
 }
 
 #[test]
+fn rejects_provider_auth_with_env_key() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.corp]
+name = "Corp"
+env_key = "CORP_TOKEN"
+
+[model_providers.corp.auth]
+command = "print-token"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("model_providers.corp: provider auth cannot be combined with env_key")
+    );
+}
+
+#[test]
 fn config_toml_deserializes_model_availability_nux() {
     let toml = r#"
 [tui.model_availability_nux]
@@ -4315,6 +4335,7 @@ model_verbosity = "high"
         wire_api: crate::WireApi::Responses,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

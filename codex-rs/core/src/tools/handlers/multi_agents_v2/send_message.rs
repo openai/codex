@@ -1,5 +1,6 @@
 use super::message_tool::MessageDeliveryMode;
 use super::message_tool::MessageToolResult;
+use super::message_tool::SendMessageArgs;
 use super::message_tool::handle_message_tool;
 use super::*;
 
@@ -18,6 +19,15 @@ impl ToolHandler for Handler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        handle_message_tool(invocation, MessageDeliveryMode::QueueOnly).await
+        let arguments = function_arguments(invocation.payload.clone())?;
+        let args: SendMessageArgs = parse_arguments(&arguments)?;
+        handle_message_tool(
+            invocation,
+            MessageDeliveryMode::QueueOnly,
+            args.target,
+            args.items,
+            /*interrupt*/ false,
+        )
+        .await
     }
 }

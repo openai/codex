@@ -431,6 +431,16 @@ fn test_build_specs_collab_tools_enabled() {
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
     assert_lacks_tool_name(&tools, "list_agents");
+
+    let spawn_agent = find_tool(&tools, "spawn_agent");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &spawn_agent.spec else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("spawn_agent should use object params");
+    };
+    assert!(properties.contains_key("fork_context"));
+    assert!(!properties.contains_key("fork_turns"));
 }
 
 #[test]
@@ -487,7 +497,14 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("spawn_agent should use object params");
     };
     assert!(properties.contains_key("task_name"));
-    assert_eq!(required.as_ref(), Some(&vec!["task_name".to_string()]));
+    assert!(properties.contains_key("items"));
+    assert!(properties.contains_key("fork_turns"));
+    assert!(!properties.contains_key("message"));
+    assert!(!properties.contains_key("fork_context"));
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["task_name".to_string(), "items".to_string()])
+    );
     let output_schema = output_schema
         .as_ref()
         .expect("spawn_agent should define output schema");
@@ -509,6 +526,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("send_message should use object params");
     };
     assert!(properties.contains_key("target"));
+    assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("message"));
     assert_eq!(
         required.as_ref(),
@@ -551,8 +569,9 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     else {
         panic!("wait_agent should use object params");
     };
-    assert!(properties.contains_key("targets"));
-    assert_eq!(required.as_ref(), Some(&vec!["targets".to_string()]));
+    assert!(!properties.contains_key("targets"));
+    assert!(properties.contains_key("timeout_ms"));
+    assert_eq!(required, &None);
     let output_schema = output_schema
         .as_ref()
         .expect("wait_agent should define output schema");

@@ -65,6 +65,7 @@ pub mod utils;
 pub use utils::path_utils;
 pub mod personality_migration;
 pub mod plugins;
+mod provider_auth;
 pub(crate) mod mentions {
     pub(crate) use crate::plugins::build_connector_slug_counts;
     pub(crate) use crate::plugins::build_skill_name_counts;
@@ -104,6 +105,7 @@ mod text_encoding;
 mod unified_exec;
 pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
+pub use codex_protocol::config_types::ModelProviderAuthInfo;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -133,10 +135,7 @@ pub type CodexConversation = CodexThread;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub use codex_analytics::AnalyticsEventsClient;
-pub use codex_analytics::AnalyticsFact;
 pub use codex_analytics::AppServerRpcTransport;
-pub use codex_analytics::CustomAnalyticsFact;
-pub use codex_analytics::SubAgentThreadStartedInput;
 mod default_client_forwarding;
 
 /// Default Codex HTTP client headers and reqwest construction.

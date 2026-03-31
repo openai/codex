@@ -452,7 +452,12 @@ async fn prepare_realtime_start(
     params: ConversationStartParams,
 ) -> CodexResult<PreparedRealtimeConversationStart> {
     let provider = sess.provider().await;
-    let auth = sess.services.auth_manager.auth().await;
+    let auth_manager = sess
+        .services
+        .model_client
+        .auth_manager()
+        .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
+    let auth = auth_manager.auth().await;
     let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
     let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
     let config = sess.get_config().await;

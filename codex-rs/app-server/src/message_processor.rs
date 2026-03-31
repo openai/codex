@@ -145,11 +145,11 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
         let response: ChatgptAuthTokensRefreshResponse =
             serde_json::from_value(result).map_err(std::io::Error::other)?;
 
-        Ok(ExternalAuthTokens {
-            access_token: response.access_token,
-            chatgpt_account_id: response.chatgpt_account_id,
-            chatgpt_plan_type: response.chatgpt_plan_type,
-        })
+        Ok(ExternalAuthTokens::chatgpt(
+            response.access_token,
+            response.chatgpt_account_id,
+            response.chatgpt_plan_type,
+        ))
     }
 }
 
@@ -211,10 +211,13 @@ impl MessageProcessor {
             enable_codex_api_key_env,
             rpc_transport,
         } = args;
-        let auth_manager = AuthManager::shared(
+        let auth_manager = AuthManager::shared_with_external_chatgpt_auth_refresher(
             config.codex_home.clone(),
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode,
+            Arc::new(ExternalAuthRefreshBridge {
+                outgoing: outgoing.clone(),
+            }),
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
@@ -228,9 +231,6 @@ impl MessageProcessor {
             environment_manager,
         ));
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
-        auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
-            outgoing: outgoing.clone(),
-        }));
         let analytics_events_client = AnalyticsEventsClient::new(
             Arc::clone(&auth_manager),
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
@@ -290,7 +290,7 @@ impl MessageProcessor {
     }
 
     pub(crate) fn clear_runtime_references(&self) {
-        self.auth_manager.clear_external_auth_refresher();
+        self.auth_manager.clear_external_chatgpt_auth_refresher();
     }
 
     pub(crate) async fn process_request(

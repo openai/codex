@@ -38,8 +38,17 @@ impl MessageDeliveryMode {
 }
 
 #[derive(Debug, Deserialize)]
-/// Input shared by the MultiAgentV2 `send_message` and `assign_task` tools.
-pub(crate) struct MessageToolArgs {
+#[serde(deny_unknown_fields)]
+/// Input for the MultiAgentV2 `send_message` tool.
+pub(crate) struct SendMessageArgs {
+    pub(crate) target: String,
+    pub(crate) items: Vec<UserInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Input for the MultiAgentV2 `assign_task` tool.
+pub(crate) struct AssignTaskArgs {
     pub(crate) target: String,
     pub(crate) items: Vec<UserInput>,
     #[serde(default)]
@@ -95,6 +104,9 @@ fn text_content(
 pub(crate) async fn handle_message_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,
+    target: String,
+    items: Vec<UserInput>,
+    interrupt: bool,
 ) -> Result<MessageToolResult, FunctionCallError> {
     let ToolInvocation {
         session,
@@ -103,16 +115,15 @@ pub(crate) async fn handle_message_tool(
         call_id,
         ..
     } = invocation;
-    let arguments = function_arguments(payload)?;
-    let args: MessageToolArgs = parse_arguments(&arguments)?;
-    let receiver_thread_id = resolve_agent_target(&session, &turn, &args.target).await?;
-    let prompt = text_content(&args.items, mode)?;
+    let _ = payload;
+    let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
+    let prompt = text_content(&items, mode)?;
     let receiver_agent = session
         .services
         .agent_control
         .get_agent_metadata(receiver_thread_id)
         .unwrap_or_default();
-    if args.interrupt {
+    if interrupt {
         session
             .services
             .agent_control

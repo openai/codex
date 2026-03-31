@@ -1,0 +1,48 @@
+diff --git a/builder/main.rs b/builder/main.rs
+--- a/builder/main.rs
++++ b/builder/main.rs
+@@ -721,16 +721,29 @@
+ fn get_crate_cflags() -> Option<String> {
+     optional_env_optional_crate_target("TARGET_CFLAGS")
+         .or(optional_env_optional_crate_target("CFLAGS"))
++}
++
++fn is_bazel_windows_msvc_build_script() -> bool {
++    if !target().ends_with("windows-msvc") {
++        return false;
++    }
++
++    let cargo_manifest_dir = cargo_env("CARGO_MANIFEST_DIR");
++    let manifest_dir = Path::new(&cargo_manifest_dir);
++    manifest_dir
++        .components()
++        .any(|component| component.as_os_str() == "bazel-out")
+ }
+ 
+ fn use_prebuilt_nasm() -> bool {
++    let use_prebuilt_for_bazel_windows_msvc = is_bazel_windows_msvc_build_script();
+     target_os() == "windows"
+         && target_arch() == "x86_64"
+         && !is_no_asm()
+-        && !test_nasm_command() // NASM not found in environment
+         && Some(false) != allow_prebuilt_nasm() // not prevented by environment
+         && !is_disable_prebuilt_nasm() // not prevented by feature
+         // permitted by environment or by feature
++        && (use_prebuilt_for_bazel_windows_msvc || !test_nasm_command())
+         && (Some(true) == allow_prebuilt_nasm() || is_prebuilt_nasm())
+ }
+ 
+ fn allow_prebuilt_nasm() -> Option<bool> {
+diff --git a/builder/nasm_builder.rs b/builder/nasm_builder.rs
+--- a/builder/nasm_builder.rs
++++ b/builder/nasm_builder.rs
+@@ -57,7 +57,7 @@
+         if self.files.is_empty() {
+             return vec![];
+         }
+ 
+-        if test_nasm_command() {
++        if test_nasm_command() && !use_prebuilt_nasm() {
+             for src in &self.files {
+                 let obj_name = src
+                     .file_name()

@@ -1,0 +1,26 @@
+# What: let `rules_rust` repository_set entries specify an explicit exec-platform
+# constraint set.
+# Why: codex needs Windows nightly lint toolchains to run helper binaries on an
+# MSVC exec platform while still targeting `windows-gnullvm` crates.
+
+diff --git a/rust/extensions.bzl b/rust/extensions.bzl
+--- a/rust/extensions.bzl
++++ b/rust/extensions.bzl
+@@ -52,6 +52,7 @@ def _rust_impl(module_ctx):
+                 "allocator_library": repository_set.allocator_library,
+                 "dev_components": repository_set.dev_components,
+                 "edition": repository_set.edition,
++                "exec_compatible_with": [str(v) for v in repository_set.exec_compatible_with] if repository_set.exec_compatible_with else None,
+                 "exec_triple": repository_set.exec_triple,
+                 "extra_target_triples": {repository_set.target_triple: [str(v) for v in repository_set.target_compatible_with]},
+                 "name": repository_set.name,
+@@ -166,6 +167,9 @@ _COMMON_TAG_KWARGS = {
+ 
+ _RUST_REPOSITORY_SET_TAG_ATTRS = {
++    "exec_compatible_with": attr.label_list(
++        doc = "Execution platform constraints for this repository_set.",
++    ),
+     "exec_triple": attr.string(
+         doc = "Exec triple for this repository_set.",
+     ),
+     "name": attr.string(

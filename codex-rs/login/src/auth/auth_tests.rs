@@ -8,10 +8,12 @@ use codex_protocol::account::PlanType as AccountPlanType;
 
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -250,6 +252,193 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
 
     assert_eq!(manager.refresh_failure_for_auth(&auth), Some(error));
     assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
+}
+
+#[test]
+fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
+    let err = AuthDotJson::from_external_tokens(&ExternalAuthTokens::access_token_only(
+        "test-access-token",
+    ))
+    .expect_err("bearer-only external auth should not seed ChatGPT auth");
+
+    assert_eq!(
+        err.to_string(),
+        "external auth tokens are missing ChatGPT metadata"
+    );
+}
+
+#[tokio::test]
+async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
+    let script = ProviderAuthScript::new(&["provider-token", "next-token"]).unwrap();
+    let manager = AuthManager::external_bearer_only(script.auth_config());
+
+    let first = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    let second = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+
+    assert_eq!(first.as_deref(), Some("provider-token"));
+    assert_eq!(second.as_deref(), Some("provider-token"));
+}
+
+#[tokio::test]
+async fn external_bearer_only_auth_manager_returns_none_when_command_fails() {
+    let script = ProviderAuthScript::new_failing().unwrap();
+    let manager = AuthManager::external_bearer_only(script.auth_config());
+
+    assert_eq!(manager.auth().await, None);
+}
+
+#[tokio::test]
+async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
+    let script = ProviderAuthScript::new(&["provider-token", "refreshed-provider-token"]).unwrap();
+    let manager = AuthManager::external_bearer_only(script.auth_config());
+    let initial_token = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    let mut recovery = manager.unauthorized_recovery();
+
+    assert!(recovery.has_next());
+    assert_eq!(recovery.mode_name(), "external");
+    assert_eq!(recovery.step_name(), "external_refresh");
+
+    let result = recovery
+        .next()
+        .await
+        .expect("external refresh should succeed");
+
+    assert_eq!(result.auth_state_changed(), Some(true));
+    let refreshed_token = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    assert_eq!(initial_token.as_deref(), Some("provider-token"));
+    assert_eq!(refreshed_token.as_deref(), Some("refreshed-provider-token"));
+}
+
+struct ProviderAuthScript {
+    tempdir: TempDir,
+    command: String,
+    args: Vec<String>,
+}
+
+impl ProviderAuthScript {
+    fn new(tokens: &[&str]) -> std::io::Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+        let token_file = tempdir.path().join("tokens.txt");
+        let mut token_file_contents = String::new();
+        for token in tokens {
+            token_file_contents.push_str(token);
+            token_file_contents.push('\n');
+        }
+        std::fs::write(&token_file, token_file_contents)?;
+
+        #[cfg(unix)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("print-token.sh");
+            std::fs::write(
+                &script_path,
+                r#"#!/bin/sh
+first_line=$(sed -n '1p' tokens.txt)
+printf '%s\n' "$first_line"
+tail -n +2 tokens.txt > tokens.next
+mv tokens.next tokens.txt
+"#,
+            )?;
+            let mut permissions = std::fs::metadata(&script_path)?.permissions();
+            {
+                use std::os::unix::fs::PermissionsExt;
+                permissions.set_mode(0o755);
+            }
+            std::fs::set_permissions(&script_path, permissions)?;
+            ("./print-token.sh".to_string(), Vec::new())
+        };
+
+        #[cfg(windows)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("print-token.ps1");
+            std::fs::write(
+                &script_path,
+                r#"$lines = Get-Content -Path tokens.txt
+if ($lines.Count -eq 0) { exit 1 }
+Write-Output $lines[0]
+$lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
+"#,
+            )?;
+            (
+                "powershell".to_string(),
+                vec![
+                    "-NoProfile".to_string(),
+                    "-ExecutionPolicy".to_string(),
+                    "Bypass".to_string(),
+                    "-File".to_string(),
+                    ".\\print-token.ps1".to_string(),
+                ],
+            )
+        };
+
+        Ok(Self {
+            tempdir,
+            command,
+            args,
+        })
+    }
+
+    fn new_failing() -> std::io::Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+
+        #[cfg(unix)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("fail.sh");
+            std::fs::write(
+                &script_path,
+                r#"#!/bin/sh
+exit 1
+"#,
+            )?;
+            let mut permissions = std::fs::metadata(&script_path)?.permissions();
+            {
+                use std::os::unix::fs::PermissionsExt;
+                permissions.set_mode(0o755);
+            }
+            std::fs::set_permissions(&script_path, permissions)?;
+            ("./fail.sh".to_string(), Vec::new())
+        };
+
+        #[cfg(windows)]
+        let (command, args) = (
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-Command".to_string(),
+                "exit 1".to_string(),
+            ],
+        );
+
+        Ok(Self {
+            tempdir,
+            command,
+            args,
+        })
+    }
+
+    fn auth_config(&self) -> ModelProviderAuthInfo {
+        serde_json::from_value(json!({
+            "command": self.command,
+            "args": self.args,
+            "timeout_ms": 1000,
+            "refresh_interval_ms": 60000,
+            "cwd": self.tempdir.path(),
+        }))
+        .expect("provider auth config should deserialize")
+    }
 }
 
 struct AuthFileParams {
