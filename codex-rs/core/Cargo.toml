@@ -147,9 +147,7 @@ codex-shell-escalation = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-otel = { workspace = true, features = [
-    "disable-default-metrics-exporter",
-] }
+codex-otel = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }

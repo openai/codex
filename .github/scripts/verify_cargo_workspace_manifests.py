@@ -26,19 +26,9 @@ TOP_LEVEL_NAME_EXCEPTIONS = {
 UTILITY_NAME_EXCEPTIONS = {
     "path-utils": "codex-utils-path",
 }
-MANIFEST_FEATURE_EXCEPTIONS = {
-    "codex-rs/otel/Cargo.toml": {
-        "disable-default-metrics-exporter": (),
-    },
-}
+MANIFEST_FEATURE_EXCEPTIONS = {}
 OPTIONAL_DEPENDENCY_EXCEPTIONS = set()
-INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {
-    (
-        "codex-rs/core/Cargo.toml",
-        "dev-dependencies",
-        "codex-otel",
-    ): ("disable-default-metrics-exporter",),
-}
+INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {}
 
 
 def main() -> int:
@@ -74,6 +64,12 @@ def main() -> int:
         "features."
     )
     print(
+        "Workspace crate features are disallowed because our Bazel build setup "
+        "does not honor them today, which can let issues hidden behind feature "
+        "gates go unnoticed, and because they add extra crate build "
+        "permutations we want to avoid."
+    )
+    print(
         "Cargo only applies `codex-rs/Cargo.toml` `[workspace.lints.clippy]` "
         "entries to a crate when that crate declares:"
     )
@@ -91,8 +87,8 @@ def main() -> int:
         "`codex-rs/utils/<crate>/Cargo.toml`."
     )
     print(
-        "Existing workspace crate features are temporarily allowlisted in this "
-        "script and must shrink as they are removed."
+        "Workspace crate features are forbidden; add a targeted exception here "
+        "only if there is a deliberate temporary migration in flight."
     )
     print()
     for path in sorted(failures_by_path):
