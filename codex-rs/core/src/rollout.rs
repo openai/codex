@@ -12,7 +12,11 @@ pub use codex_rollout::find_conversation_path_by_id_str;
 pub use codex_rollout::find_thread_name_by_id;
 pub use codex_rollout::find_thread_path_by_id_str;
 pub use codex_rollout::find_thread_path_by_name_str;
+pub use codex_rollout::is_rollout_path;
+pub use codex_rollout::read_nonempty_rollout_text;
+pub use codex_rollout::read_rollout_text;
 pub use codex_rollout::rollout_date_parts;
+pub use codex_rollout::strip_rollout_file_suffix;
 
 impl codex_rollout::RolloutConfigView for Config {
     fn codex_home(&self) -> &std::path::Path {

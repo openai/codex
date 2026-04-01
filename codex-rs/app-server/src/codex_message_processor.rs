@@ -234,6 +234,7 @@ use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::load_plugin_apps;
 use codex_core::plugins::load_plugin_mcp_servers;
 use codex_core::read_head_for_summary;
+use codex_core::read_latest_turn_context;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
@@ -2993,7 +2994,6 @@ impl CodexMessageProcessor {
                 });
             };
 
-            let required_suffix = format!("{thread_id}.jsonl");
             let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
                 return Err(JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
@@ -3001,9 +3001,7 @@ impl CodexMessageProcessor {
                     data: None,
                 });
             };
-            if !file_name
-                .to_string_lossy()
-                .ends_with(required_suffix.as_str())
+            if !rollout_file_name_matches_thread_id(file_name.to_string_lossy().as_ref(), thread_id)
             {
                 return Err(JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
@@ -5363,7 +5361,6 @@ impl CodexMessageProcessor {
         };
 
         // Verify file name matches thread id.
-        let required_suffix = format!("{thread_id}.jsonl");
         let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -5374,10 +5371,7 @@ impl CodexMessageProcessor {
                 data: None,
             });
         };
-        if !file_name
-            .to_string_lossy()
-            .ends_with(required_suffix.as_str())
-        {
+        if !rollout_file_name_matches_thread_id(file_name.to_string_lossy().as_ref(), thread_id) {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
@@ -8229,6 +8223,10 @@ async fn read_history_cwd_from_state_db(
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
+    if let Ok(Some(turn_context)) = read_latest_turn_context(rollout_path).await {
+        return Some(turn_context.cwd);
+    }
+
     if let Some(state_db_ctx) = get_state_db(config).await
         && let Some(thread_id) = thread_id
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
@@ -8319,7 +8317,7 @@ async fn summary_from_thread_list_item(
 
 fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
     let file_name = path.file_name()?.to_str()?;
-    let stem = file_name.strip_suffix(".jsonl")?;
+    let stem = codex_core::strip_rollout_file_suffix(file_name)?;
     if stem.len() < 37 {
         return None;
     }
@@ -8328,6 +8326,13 @@ fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
         return None;
     }
     ThreadId::from_string(&stem[uuid_start..]).ok()
+}
+
+fn rollout_file_name_matches_thread_id(file_name: &str, thread_id: ThreadId) -> bool {
+    let Some(stem) = codex_core::strip_rollout_file_suffix(file_name) else {
+        return false;
+    };
+    stem.ends_with(&format!("-{thread_id}"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8457,6 +8462,12 @@ pub(crate) async fn read_summary_from_rollout(
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.as_ref().map(map_git_info);
     let updated_at = updated_at.or_else(|| timestamp.clone());
+    let resume_cwd = read_latest_turn_context(path)
+        .await
+        .ok()
+        .flatten()
+        .map(|turn_context| turn_context.cwd)
+        .unwrap_or_else(|| session_meta.cwd.clone());
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
@@ -8465,7 +8476,7 @@ pub(crate) async fn read_summary_from_rollout(
         path: path.to_path_buf(),
         preview: String::new(),
         model_provider,
-        cwd: session_meta.cwd,
+        cwd: resume_cwd,
         cli_version: session_meta.cli_version,
         source: session_meta.source,
         git_info,

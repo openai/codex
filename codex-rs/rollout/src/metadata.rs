@@ -1,6 +1,8 @@
 use crate::ARCHIVED_SESSIONS_SUBDIR;
 use crate::SESSIONS_SUBDIR;
 use crate::config::RolloutConfigView;
+use crate::file_io::is_rollout_file_name;
+use crate::file_io::strip_rollout_file_suffix;
 use crate::list;
 use crate::list::parse_timestamp_uuid_from_filename;
 use crate::recorder::RolloutRecorder;
@@ -30,7 +32,6 @@ use tracing::info;
 use tracing::warn;
 
 const ROLLOUT_PREFIX: &str = "rollout-";
-const ROLLOUT_SUFFIX: &str = ".jsonl";
 const BACKFILL_BATCH_SIZE: usize = 200;
 #[cfg(not(test))]
 const BACKFILL_LEASE_SECONDS: i64 = 900;
@@ -80,7 +81,7 @@ pub fn builder_from_items(
     }
 
     let file_name = rollout_path.file_name()?.to_str()?;
-    if !file_name.starts_with(ROLLOUT_PREFIX) || !file_name.ends_with(ROLLOUT_SUFFIX) {
+    if !is_rollout_file_name(file_name) {
         return None;
     }
     let (created_ts, uuid) = parse_timestamp_uuid_from_filename(file_name)?;
@@ -430,7 +431,7 @@ async fn collect_rollout_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             let Some(name) = file_name.to_str() else {
                 continue;
             };
-            if name.starts_with(ROLLOUT_PREFIX) && name.ends_with(ROLLOUT_SUFFIX) {
+            if name.starts_with(ROLLOUT_PREFIX) && strip_rollout_file_suffix(name).is_some() {
                 paths.push(path);
             }
         }

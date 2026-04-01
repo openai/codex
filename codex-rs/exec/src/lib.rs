@@ -65,6 +65,7 @@ use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
+use codex_core::read_latest_turn_context;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_otel::set_parent_from_context;
@@ -74,7 +75,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -1116,28 +1116,11 @@ fn all_thread_source_kinds() -> Vec<ThreadSourceKind> {
 
 async fn latest_thread_cwd(thread: &AppServerThread) -> PathBuf {
     if let Some(path) = thread.path.as_deref()
-        && let Some(cwd) = parse_latest_turn_context_cwd(path).await
+        && let Ok(Some(turn_context)) = read_latest_turn_context(path).await
     {
-        return cwd;
+        return turn_context.cwd;
     }
     thread.cwd.clone()
-}
-
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
-    let text = tokio::fs::read_to_string(path).await.ok()?;
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
-        }
-    }
-    None
 }
 
 fn cwds_match(current_cwd: &Path, session_cwd: &Path) -> bool {

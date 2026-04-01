@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::config::RolloutConfig;
+use crate::file_io::RolloutAppendWriter;
+use crate::file_io::read_rollout_text;
 use chrono::TimeZone;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -124,7 +126,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     recorder.persist().await?;
     assert!(rollout_path.exists(), "rollout file should be materialized");
 
-    let text = std::fs::read_to_string(&rollout_path)?;
+    let text = read_rollout_text(rollout_path.as_path())?;
     assert!(
         text.contains("\"type\":\"session_meta\""),
         "expected session metadata in rollout"
@@ -139,7 +141,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         buffered_idx < user_idx,
         "buffered items should preserve ordering"
     );
-    let text_after_second_persist = std::fs::read_to_string(&rollout_path)?;
+    let text_after_second_persist = read_rollout_text(rollout_path.as_path())?;
     assert_eq!(text_after_second_persist, text);
 
     recorder.shutdown().await?;
@@ -481,5 +483,70 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
         )
         .await
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_preserves_parsed_items_when_zstd_tail_is_truncated()
+-> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let thread_id = ThreadId::new();
+    let rollout_path = temp_dir
+        .path()
+        .join(format!("rollout-2026-01-01T00-00-00-{thread_id}.jsonl.zst"));
+
+    let session_meta = serde_json::json!({
+        "timestamp": "2026-01-01T00:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "id": thread_id,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "cli",
+            "model_provider": "test-provider",
+        },
+    });
+    let user_event = serde_json::json!({
+        "timestamp": "2026-01-01T00:00:01Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "user_message",
+            "message": "hello",
+            "kind": "plain",
+        },
+    });
+
+    let mut writer = RolloutAppendWriter::open(&rollout_path)?;
+    writer.append_text(&format!("{session_meta}\n"))?;
+    writer.append_text(&format!("{user_event}\n"))?;
+    drop(writer);
+
+    let file = File::options().write(true).open(&rollout_path)?;
+    let truncated_len = file.metadata()?.len().saturating_sub(1);
+    file.set_len(truncated_len)?;
+
+    let (items, parsed_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(parsed_thread_id, Some(thread_id));
+    assert_eq!(items.len(), 1);
+    let Some(RolloutItem::SessionMeta(session_meta_line)) = items.first() else {
+        panic!("expected recovered session meta");
+    };
+    assert_eq!(session_meta_line.meta.id, thread_id);
+    assert_eq!(session_meta_line.meta.timestamp, "2026-01-01T00:00:00Z");
+    assert_eq!(session_meta_line.meta.cwd, PathBuf::from("."));
+    assert_eq!(session_meta_line.meta.originator, "test_originator");
+    assert_eq!(session_meta_line.meta.cli_version, "test_version");
+    assert_eq!(session_meta_line.meta.source, SessionSource::Cli);
+    assert_eq!(
+        session_meta_line.meta.model_provider.as_deref(),
+        Some("test-provider")
+    );
+    assert!(session_meta_line.git.is_none());
+    assert_eq!(parse_errors, 0);
+
     Ok(())
 }

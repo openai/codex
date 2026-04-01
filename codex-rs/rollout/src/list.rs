@@ -17,6 +17,10 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use super::file_io::RolloutLineReader;
+use super::file_io::is_rollout_file_name;
+use super::file_io::read_rollout_text;
+use super::file_io::strip_rollout_file_suffix;
 use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
@@ -25,6 +29,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 
 /// Returned page of thread (thread) summaries.
@@ -378,7 +383,7 @@ pub async fn get_threads_in_root(
 
 /// Load thread file paths from disk using directory traversal.
 ///
-/// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
+/// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl(.zst)`
 /// Returned newest (based on sort key) first.
 async fn traverse_directories_for_paths(
     root: PathBuf,
@@ -823,7 +828,7 @@ async fn collect_flat_rollout_files(
         let Some(name_str) = file_name.to_str() else {
             continue;
         };
-        if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+        if !is_rollout_file_name(name_str) {
             continue;
         }
         let Some((ts, id)) = parse_timestamp_uuid_from_filename(name_str) else {
@@ -843,7 +848,7 @@ async fn collect_rollout_day_files(
     day_path: &Path,
 ) -> io::Result<Vec<(OffsetDateTime, Uuid, PathBuf)>> {
     let mut day_files = collect_files(day_path, |name_str, path| {
-        if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+        if !is_rollout_file_name(name_str) {
             return None;
         }
 
@@ -856,8 +861,8 @@ async fn collect_rollout_day_files(
 }
 
 pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
-    // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
-    let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl(.zst)
+    let core = strip_rollout_file_suffix(name)?.strip_prefix("rollout-")?;
 
     // Scan from the right for a '-' such that the suffix parses as a UUID.
     let (sep_idx, uuid) = core
@@ -913,7 +918,7 @@ async fn collect_flat_files_by_updated_at(
         let Some(name_str) = file_name.to_str() else {
             continue;
         };
-        if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+        if !is_rollout_file_name(name_str) {
             continue;
         }
         let Some((_ts, id)) = parse_timestamp_uuid_from_filename(name_str) else {
@@ -1001,127 +1006,136 @@ impl<'a> ProviderMatcher<'a> {
 }
 
 async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTailSummary> {
-    use tokio::io::AsyncBufReadExt;
+    read_rollout_head(path, move |reader| {
+        let mut summary = HeadTailSummary::default();
+        let mut lines_scanned = 0usize;
 
-    let file = tokio::fs::File::open(path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut summary = HeadTailSummary::default();
-    let mut lines_scanned = 0usize;
+        while lines_scanned < head_limit
+            || (summary.saw_session_meta
+                && !summary.saw_user_event
+                && lines_scanned < head_limit + USER_EVENT_SCAN_LIMIT)
+        {
+            let Some(line) = reader.next_line()? else {
+                break;
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            lines_scanned += 1;
 
-    while lines_scanned < head_limit
-        || (summary.saw_session_meta
-            && !summary.saw_user_event
-            && lines_scanned < head_limit + USER_EVENT_SCAN_LIMIT)
-    {
-        let line_opt = lines.next_line().await?;
-        let Some(line) = line_opt else { break };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        lines_scanned += 1;
+            let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+                continue;
+            };
 
-        let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
-        let Ok(rollout_line) = parsed else { continue };
-
-        match rollout_line.item {
-            RolloutItem::SessionMeta(session_meta_line) => {
-                if !summary.saw_session_meta {
-                    summary.source = Some(session_meta_line.meta.source.clone());
-                    summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();
-                    summary.agent_role = session_meta_line.meta.agent_role.clone();
-                    summary.model_provider = session_meta_line.meta.model_provider.clone();
-                    summary.thread_id = Some(session_meta_line.meta.id);
-                    summary.cwd = Some(session_meta_line.meta.cwd.clone());
-                    summary.git_branch = session_meta_line
-                        .git
-                        .as_ref()
-                        .and_then(|git| git.branch.clone());
-                    summary.git_sha = session_meta_line
-                        .git
-                        .as_ref()
-                        .and_then(|git| git.commit_hash.as_ref().map(|sha| sha.0.clone()));
-                    summary.git_origin_url = session_meta_line
-                        .git
-                        .as_ref()
-                        .and_then(|git| git.repository_url.clone());
-                    summary.cli_version = Some(session_meta_line.meta.cli_version);
-                    summary.created_at = Some(session_meta_line.meta.timestamp.clone());
-                    summary.saw_session_meta = true;
+            match rollout_line.item {
+                RolloutItem::SessionMeta(session_meta_line) => {
+                    if !summary.saw_session_meta {
+                        summary.source = Some(session_meta_line.meta.source.clone());
+                        summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();
+                        summary.agent_role = session_meta_line.meta.agent_role.clone();
+                        summary.model_provider = session_meta_line.meta.model_provider.clone();
+                        summary.thread_id = Some(session_meta_line.meta.id);
+                        summary.cwd = Some(session_meta_line.meta.cwd.clone());
+                        summary.git_branch = session_meta_line
+                            .git
+                            .as_ref()
+                            .and_then(|git| git.branch.clone());
+                        summary.git_sha = session_meta_line
+                            .git
+                            .as_ref()
+                            .and_then(|git| git.commit_hash.as_ref().map(|sha| sha.0.clone()));
+                        summary.git_origin_url = session_meta_line
+                            .git
+                            .as_ref()
+                            .and_then(|git| git.repository_url.clone());
+                        summary.cli_version = Some(session_meta_line.meta.cli_version);
+                        summary.created_at = Some(session_meta_line.meta.timestamp.clone());
+                        summary.saw_session_meta = true;
+                    }
                 }
-            }
-            RolloutItem::ResponseItem(_) => {
-                summary.created_at = summary
-                    .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
-            }
-            RolloutItem::TurnContext(_) => {
-                // Not included in `head`; skip.
-            }
-            RolloutItem::Compacted(_) => {
-                // Not included in `head`; skip.
-            }
-            RolloutItem::EventMsg(ev) => {
-                if let EventMsg::UserMessage(user) = ev {
-                    summary.saw_user_event = true;
-                    if summary.first_user_message.is_none() {
-                        let message = strip_user_message_prefix(user.message.as_str()).to_string();
-                        if !message.is_empty() {
-                            summary.first_user_message = Some(message);
+                RolloutItem::ResponseItem(_) => {
+                    summary.created_at = summary
+                        .created_at
+                        .clone()
+                        .or_else(|| Some(rollout_line.timestamp.clone()));
+                }
+                RolloutItem::TurnContext(_) => {}
+                RolloutItem::Compacted(_) => {}
+                RolloutItem::EventMsg(event) => {
+                    if let EventMsg::UserMessage(user) = event {
+                        summary.saw_user_event = true;
+                        if summary.first_user_message.is_none() {
+                            let message =
+                                strip_user_message_prefix(user.message.as_str()).to_string();
+                            if !message.is_empty() {
+                                summary.first_user_message = Some(message);
+                            }
                         }
                     }
                 }
             }
+
+            if summary.saw_session_meta && summary.saw_user_event {
+                break;
+            }
         }
 
-        if summary.saw_session_meta && summary.saw_user_event {
-            break;
-        }
-    }
-
-    Ok(summary)
+        Ok(summary)
+    })
+    .await
 }
 
 /// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.
 /// This should be enough to produce a summary including the session meta line.
 pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Value>> {
-    use tokio::io::AsyncBufReadExt;
+    read_rollout_head(path, |reader| {
+        let mut head = Vec::new();
 
-    let file = tokio::fs::File::open(path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut head = Vec::new();
-
-    while head.len() < HEAD_RECORD_LIMIT {
-        let Some(line) = lines.next_line().await? else {
-            break;
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) {
-            match rollout_line.item {
-                RolloutItem::SessionMeta(session_meta_line) => {
-                    if let Ok(value) = serde_json::to_value(session_meta_line) {
-                        head.push(value);
+        while head.len() < HEAD_RECORD_LIMIT {
+            let Some(line) = reader.next_line()? else {
+                break;
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) {
+                match rollout_line.item {
+                    RolloutItem::SessionMeta(session_meta_line) => {
+                        if let Ok(value) = serde_json::to_value(session_meta_line) {
+                            head.push(value);
+                        }
                     }
-                }
-                RolloutItem::ResponseItem(item) => {
-                    if let Ok(value) = serde_json::to_value(item) {
-                        head.push(value);
+                    RolloutItem::ResponseItem(item) => {
+                        if let Ok(value) = serde_json::to_value(item) {
+                            head.push(value);
+                        }
                     }
+                    RolloutItem::Compacted(_)
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::EventMsg(_) => {}
                 }
-                RolloutItem::Compacted(_)
-                | RolloutItem::TurnContext(_)
-                | RolloutItem::EventMsg(_) => {}
             }
         }
-    }
 
-    Ok(head)
+        Ok(head)
+    })
+    .await
+}
+
+async fn read_rollout_head<T, F>(path: &Path, read: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut RolloutLineReader) -> io::Result<T> + Send + 'static,
+{
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut reader = RolloutLineReader::open(path.as_path())?;
+        read(&mut reader)
+    })
+    .await
+    .map_err(|err| io::Error::other(format!("failed to read rollout head: {err}")))?
 }
 
 fn strip_user_message_prefix(text: &str) -> &str {
@@ -1147,6 +1161,29 @@ pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> 
             path.display()
         ))
     })
+}
+
+/// Read the latest TurnContext item from a rollout file, if present.
+pub async fn read_latest_turn_context(path: &Path) -> io::Result<Option<TurnContextItem>> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let text = read_rollout_text(path.as_path())?;
+        for line in text.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+                continue;
+            };
+            if let RolloutItem::TurnContext(item) = rollout_line.item {
+                return Ok(Some(item));
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|err| io::Error::other(format!("failed to read latest turn context: {err}")))?
 }
 
 async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {

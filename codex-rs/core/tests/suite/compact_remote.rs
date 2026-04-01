@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::compact::SUMMARY_PREFIX;
+use codex_core::read_rollout_text;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -1160,7 +1161,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     assert_eq!(responses_mock.requests().len(), 1);
     assert_eq!(compact_mock.requests().len(), 1);
 
-    let rollout_text = fs::read_to_string(&rollout_path)?;
+    let rollout_text = read_rollout_text(rollout_path.as_path())?;
     let mut saw_compacted_history = false;
     for line in rollout_text
         .lines()

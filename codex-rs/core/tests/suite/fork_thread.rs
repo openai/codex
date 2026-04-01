@@ -1,6 +1,7 @@
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
+use codex_core::read_rollout_text;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -66,7 +67,7 @@ async fn fork_thread_twice_drops_to_first_message() {
 
     // Helper: read rollout items (excluding SessionMeta) from a JSONL path.
     let read_items = |p: &std::path::Path| -> Vec<RolloutItem> {
-        let text = std::fs::read_to_string(p).expect("read rollout file");
+        let text = read_rollout_text(p).expect("read rollout file");
         let mut items: Vec<RolloutItem> = Vec::new();
         for line in text.lines() {
             if line.trim().is_empty() {

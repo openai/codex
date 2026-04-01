@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
+use codex_core::is_rollout_path;
+use codex_core::read_rollout_text;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
@@ -23,11 +25,11 @@ fn find_session_file_containing_marker(
         if !entry.file_type().is_file() {
             continue;
         }
-        if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
+        if !is_rollout_path(entry.path()) {
             continue;
         }
         let path = entry.path();
-        let Ok(content) = std::fs::read_to_string(path) else {
+        let Ok(content) = read_rollout_text(path) else {
             continue;
         };
         // Skip the first meta line and scan remaining JSONL entries.
@@ -60,7 +62,7 @@ fn find_session_file_containing_marker(
 
 /// Extract the conversation UUID from the first SessionMeta line in the rollout file.
 fn extract_conversation_id(path: &std::path::Path) -> String {
-    let content = std::fs::read_to_string(path).unwrap();
+    let content = read_rollout_text(path).unwrap();
     let mut lines = content.lines();
     let meta_line = lines.next().expect("missing meta line");
     let meta: Value = serde_json::from_str(meta_line).expect("invalid meta json");
@@ -72,7 +74,7 @@ fn extract_conversation_id(path: &std::path::Path) -> String {
 }
 
 fn last_user_image_count(path: &std::path::Path) -> usize {
-    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let content = read_rollout_text(path).unwrap_or_default();
     let mut last_count = 0;
     for line in content.lines() {
         if line.trim().is_empty() {
@@ -160,7 +162,7 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         resumed_path, path,
         "resume --last should append to existing file"
     );
-    let content = std::fs::read_to_string(&resumed_path)?;
+    let content = read_rollout_text(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
     Ok(())
@@ -214,7 +216,7 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
         resumed_path, path,
         "resume --last should append to existing file"
     );
-    let content = std::fs::read_to_string(&resumed_path)?;
+    let content = read_rollout_text(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
     Ok(())
@@ -417,7 +419,7 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
         resumed_path, path,
         "resume by id should append to existing file"
     );
-    let content = std::fs::read_to_string(&resumed_path)?;
+    let content = read_rollout_text(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
     Ok(())
@@ -493,7 +495,7 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         .expect("no resumed session file containing marker2");
     assert_eq!(resumed_path, path, "resume should append to same file");
 
-    let content = std::fs::read_to_string(&resumed_path)?;
+    let content = read_rollout_text(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
     Ok(())

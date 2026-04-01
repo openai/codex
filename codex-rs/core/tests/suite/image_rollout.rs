@@ -1,4 +1,5 @@
 use anyhow::Context;
+use codex_core::read_nonempty_rollout_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -22,7 +23,6 @@ use image::ImageBuffer;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use std::path::Path;
-use std::time::Duration;
 
 fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
     for line in text.lines() {
@@ -56,20 +56,6 @@ fn extract_image_url(item: &ResponseItem) -> Option<String> {
         }),
         _ => None,
     }
-}
-
-async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {
-    for _ in 0..50 {
-        if path.exists()
-            && let Ok(text) = std::fs::read_to_string(path)
-            && !text.trim().is_empty()
-        {
-            return Ok(text);
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    std::fs::read_to_string(path)
-        .with_context(|| format!("read rollout file at {}", path.display()))
 }
 
 fn write_test_png(path: &Path, color: [u8; 4]) -> anyhow::Result<()> {
@@ -138,7 +124,9 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
     wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
 
     let rollout_path = codex.rollout_path().expect("rollout path");
-    let rollout_text = read_rollout_text(&rollout_path).await?;
+    let rollout_text = read_nonempty_rollout_text(&rollout_path)
+        .await
+        .with_context(|| format!("read rollout file at {}", rollout_path.display()))?;
     let actual = find_user_message_with_image(&rollout_text)
         .expect("expected user message with input image in rollout");
 
@@ -222,7 +210,9 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
     wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
 
     let rollout_path = codex.rollout_path().expect("rollout path");
-    let rollout_text = read_rollout_text(&rollout_path).await?;
+    let rollout_text = read_nonempty_rollout_text(&rollout_path)
+        .await
+        .with_context(|| format!("read rollout file at {}", rollout_path.display()))?;
     let actual = find_user_message_with_image(&rollout_text)
         .expect("expected user message with input image in rollout");
 

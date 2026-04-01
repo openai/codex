@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::AgentRoleConfig;
+use codex_core::read_rollout_text;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -227,8 +228,7 @@ async fn setup_turn_one_with_custom_spawned_child(
             .ok_or_else(|| anyhow::anyhow!("expected parent rollout path"))?;
         let deadline = Instant::now() + Duration::from_secs(6);
         loop {
-            let has_notification = tokio::fs::read_to_string(&rollout_path)
-                .await
+            let has_notification = read_rollout_text(rollout_path.as_path())
                 .is_ok_and(|rollout| rollout.contains("<subagent_notification>"));
             if has_notification {
                 break;

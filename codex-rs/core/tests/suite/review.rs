@@ -1,6 +1,7 @@
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
+use codex_core::read_rollout_text;
 use codex_core::review_format::render_review_output_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -120,7 +121,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
     let path = codex.rollout_path().expect("rollout path");
-    let text = std::fs::read_to_string(&path).expect("read rollout file");
+    let text = read_rollout_text(path.as_path()).expect("read rollout file");
 
     let mut saw_header = false;
     let mut saw_finding_line = false;
@@ -641,7 +642,7 @@ async fn review_input_isolated_from_parent_history() {
 
     // Also verify that a user interruption note was recorded in the rollout.
     let path = codex.rollout_path().expect("rollout path");
-    let text = std::fs::read_to_string(&path).expect("read rollout file");
+    let text = read_rollout_text(path.as_path()).expect("read rollout file");
     let mut saw_interruption_message = false;
     for line in text.lines() {
         if line.trim().is_empty() {

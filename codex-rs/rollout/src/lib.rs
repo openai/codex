@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 use codex_protocol::protocol::SessionSource;
 
 pub mod config;
+pub(crate) mod file_io;
 pub mod list;
 pub mod metadata;
 pub mod policy;
@@ -32,10 +33,15 @@ pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock:
 pub use codex_protocol::protocol::SessionMeta;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
+pub use file_io::is_rollout_path;
+pub use file_io::read_nonempty_rollout_text;
+pub use file_io::read_rollout_text;
+pub use file_io::strip_rollout_file_suffix;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
+pub use list::read_latest_turn_context;
 pub use list::rollout_date_parts;
 pub use policy::EventPersistenceMode;
 pub use recorder::RolloutRecorder;

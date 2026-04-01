@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use codex_core::is_rollout_path;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use walkdir::WalkDir;
@@ -15,7 +16,7 @@ fn session_rollout_count(home_path: &std::path::Path) -> usize {
         .into_iter()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".jsonl"))
+        .filter(|entry| is_rollout_path(entry.path()))
         .count()
 }
 

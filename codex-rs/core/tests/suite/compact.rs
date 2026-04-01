@@ -5,6 +5,7 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_core::read_rollout_text;
 use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -368,7 +369,7 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // Verify rollout contains user-turn TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
-    let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+    let text = read_rollout_text(rollout_path.as_path()).unwrap_or_else(|e| {
         panic!(
             "failed to read rollout file {}: {e}",
             rollout_path.display()
@@ -2069,7 +2070,7 @@ async fn auto_compact_persists_rollout_entries() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
     let rollout_path = session_configured.rollout_path.expect("rollout path");
-    let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+    let text = read_rollout_text(rollout_path.as_path()).unwrap_or_else(|e| {
         panic!(
             "failed to read rollout file {}: {e}",
             rollout_path.display()

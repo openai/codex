@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
+use codex_core::read_nonempty_rollout_text;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
@@ -19,7 +20,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::Path;
-use std::time::Duration;
 use tempfile::TempDir;
 
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
@@ -35,19 +35,6 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMod
 
 fn collab_xml(text: &str) -> String {
     format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
-}
-
-async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {
-    for _ in 0..50 {
-        if path.exists()
-            && let Ok(text) = std::fs::read_to_string(path)
-            && !text.trim().is_empty()
-        {
-            return Ok(text);
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    Ok(std::fs::read_to_string(path)?)
 }
 
 fn rollout_developer_texts(text: &str) -> Vec<String> {
@@ -132,7 +119,7 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let rollout_text = read_rollout_text(&rollout_path).await?;
+    let rollout_text = read_nonempty_rollout_text(&rollout_path).await?;
     let developer_texts = rollout_developer_texts(&rollout_text);
     let approval_texts: Vec<&String> = developer_texts
         .iter()
@@ -174,7 +161,7 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let rollout_text = read_rollout_text(&rollout_path).await?;
+    let rollout_text = read_nonempty_rollout_text(&rollout_path).await?;
     let env_texts = rollout_environment_texts(&rollout_text);
     assert!(
         env_texts.is_empty(),
@@ -213,7 +200,7 @@ async fn override_turn_context_without_user_turn_does_not_record_collaboration_u
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let rollout_text = read_rollout_text(&rollout_path).await?;
+    let rollout_text = read_nonempty_rollout_text(&rollout_path).await?;
     let developer_texts = rollout_developer_texts(&rollout_text);
     let collab_text = collab_xml(collab_text);
     let collab_count = developer_texts

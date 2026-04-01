@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::read_rollout_text;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
@@ -558,7 +559,7 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     );
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let rollout_text = fs::read_to_string(&rollout_path)?;
+    let rollout_text = read_rollout_text(rollout_path.as_path())?;
     let hook_prompt_texts = rollout_hook_prompt_texts(&rollout_text)?;
     assert!(
         hook_prompt_texts.contains(&FIRST_CONTINUATION_PROMPT.to_string()),
@@ -746,7 +747,7 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
     );
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let rollout_text = fs::read_to_string(&rollout_path)?;
+    let rollout_text = read_rollout_text(rollout_path.as_path())?;
     assert_eq!(
         rollout_hook_prompt_texts(&rollout_text)?,
         vec![

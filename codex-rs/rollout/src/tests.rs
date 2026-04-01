@@ -19,6 +19,7 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::INTERACTIVE_SESSION_SOURCES;
+use crate::file_io::read_rollout_text;
 use crate::find_thread_path_by_id_str;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
@@ -26,6 +27,7 @@ use crate::list::ThreadSortKey;
 use crate::list::ThreadsPage;
 use crate::list::get_threads;
 use crate::list::read_head_for_summary;
+use crate::list::read_latest_turn_context;
 use crate::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
@@ -37,6 +39,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
@@ -87,6 +90,47 @@ async fn insert_state_db_thread(
         .upsert_thread(&metadata)
         .await
         .expect("state db upsert should succeed");
+}
+
+#[tokio::test]
+async fn read_latest_turn_context_reads_compressed_rollout() -> Result<()> {
+    let temp = TempDir::new()?;
+    let path = temp.path().join("rollout.jsonl.zst");
+    let mut encoder = zstd::stream::write::Encoder::new(File::create(&path)?, 0)?;
+    for (idx, cwd) in ["/tmp/first", "/tmp/second"].into_iter().enumerate() {
+        let line = RolloutLine {
+            timestamp: format!("t{idx}"),
+            item: RolloutItem::TurnContext(TurnContextItem {
+                turn_id: Some(format!("turn-{idx}")),
+                trace_id: None,
+                cwd: cwd.into(),
+                current_date: None,
+                timezone: None,
+                approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+                sandbox_policy: codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+                network: None,
+                model: format!("model-{idx}"),
+                personality: None,
+                collaboration_mode: None,
+                realtime_active: None,
+                effort: None,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
+            }),
+        };
+        writeln!(encoder, "{}", serde_json::to_string(&line)?)?;
+    }
+    let _ = encoder.finish()?;
+
+    let turn_context = read_latest_turn_context(path.as_path())
+        .await?
+        .expect("latest turn context");
+    assert_eq!(turn_context.cwd, Path::new("/tmp/second"));
+    assert_eq!(turn_context.model, "model-1");
+    Ok(())
 }
 
 // TODO(jif) fix
@@ -918,7 +962,7 @@ async fn test_get_thread_contents() {
     .unwrap();
     let path = &page.items[0].path;
 
-    let content = tokio::fs::read_to_string(path).await.unwrap();
+    let content = read_rollout_text(path).unwrap();
 
     // Page equality (single item)
     let expected_path = home

@@ -1,5 +1,7 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::auth::CODEX_API_KEY_ENV_VAR;
+use codex_core::is_rollout_path;
+use codex_core::read_rollout_text;
 use codex_git_utils::collect_git_info;
 use codex_protocol::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
@@ -375,10 +377,10 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Find the session file that contains `marker`.
     let marker_clone = marker.clone();
     let path = fs_wait::wait_for_matching_file(&sessions_dir, Duration::from_secs(10), move |p| {
-        if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+        if !is_rollout_path(p) {
             return false;
         }
-        let Ok(content) = std::fs::read_to_string(p) else {
+        let Ok(content) = read_rollout_text(p) else {
             return false;
         };
         content.contains(&marker_clone)
@@ -422,7 +424,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     }
 
     let content =
-        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read session file"));
+        read_rollout_text(path.as_path()).unwrap_or_else(|_| panic!("Failed to read session file"));
     let mut lines = content.lines();
     let meta_line = lines
         .next()
@@ -491,10 +493,10 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let marker2_clone = marker2.clone();
     let resumed_path =
         fs_wait::wait_for_matching_file(&sessions_dir, Duration::from_secs(10), move |p| {
-            if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            if !is_rollout_path(p) {
                 return false;
             }
-            std::fs::read_to_string(p)
+            read_rollout_text(p)
                 .map(|content| content.contains(&marker2_clone))
                 .unwrap_or(false)
         })
@@ -506,7 +508,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         "resume should create a new session file"
     );
 
-    let resumed_content = std::fs::read_to_string(&resumed_path)?;
+    let resumed_content = read_rollout_text(resumed_path.as_path())?;
     assert!(
         resumed_content.contains(&marker),
         "resumed file missing original marker"
