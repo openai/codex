@@ -347,7 +347,7 @@ async fn multi_agent_v2_spawn_requires_task_name() {
         Arc::new(turn),
         "spawn_agent",
         function_payload(json!({
-            "items": [{"type": "text", "text": "inspect this repo"}]
+            "message": "inspect this repo"
         })),
     );
     let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
@@ -360,7 +360,7 @@ async fn multi_agent_v2_spawn_requires_task_name() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_rejects_legacy_message_field() {
+async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -387,12 +387,12 @@ async fn multi_agent_v2_spawn_rejects_legacy_message_field() {
         })),
     );
     let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
-        panic!("legacy message field should be rejected");
+        panic!("legacy items field should be rejected");
     };
     let FunctionCallError::RespondToModel(message) = err else {
-        panic!("legacy message field should surface as a model-facing error");
+        panic!("legacy items field should surface as a model-facing error");
     };
-    assert!(message.contains("unknown field `message`"));
+    assert!(message.contains("unknown field `items`"));
 }
 
 #[tokio::test]
@@ -444,7 +444,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "test_process"
             })),
         ))
@@ -539,7 +539,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "worker",
                 "fork_context": true
             })),
@@ -578,7 +578,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "worker",
                 "fork_turns": "banana"
             })),
@@ -617,7 +617,7 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "worker",
                 "fork_turns": "0"
             })),
@@ -731,7 +731,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "worker"
             })),
         ))
@@ -909,7 +909,7 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "worker"
             })),
         ))
@@ -973,7 +973,7 @@ async fn multi_agent_v2_send_message_rejects_structured_items() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))
@@ -1031,7 +1031,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))
@@ -1104,7 +1104,7 @@ async fn multi_agent_v2_assign_task_interrupts_busy_child_without_losing_message
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))
@@ -1233,7 +1233,7 @@ async fn multi_agent_v2_assign_task_completion_notifies_parent_on_every_turn() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))
@@ -1438,7 +1438,7 @@ async fn multi_agent_v2_spawn_includes_agent_id_key_when_named() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "test_process"
             })),
         ))
@@ -1476,7 +1476,7 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
         Arc::new(turn),
         "spawn_agent",
         function_payload(json!({
-            "items": [{"type": "text", "text": "inspect this repo"}],
+            "message": "inspect this repo",
             "task_name": "BadName"
         })),
     );
@@ -2103,7 +2103,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))
@@ -2349,7 +2349,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "test_process"
             })),
         ))
@@ -2440,7 +2440,7 @@ async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))
@@ -2540,7 +2540,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
                 turn.clone(),
                 "spawn_agent",
                 function_payload(json!({
-                    "items": [{"type": "text", "text": format!("boot {task_name}")}],
+                    "message": format!("boot {task_name}"),
                     "task_name": task_name
                 })),
             ))
@@ -2627,7 +2627,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))
@@ -2713,7 +2713,7 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "inspect this repo"}],
+                "message": "inspect this repo",
                 "task_name": "worker"
             })),
         ))

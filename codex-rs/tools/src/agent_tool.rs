@@ -66,7 +66,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["task_name".to_string(), "items".to_string()]),
+            required: Some(vec!["task_name".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(spawn_agent_output_schema_v2()),
@@ -585,7 +585,12 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
 
 fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
     BTreeMap::from([
-        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some("Initial plain-text task for the new agent.".to_string()),
+            },
+        ),
         (
             "agent_type".to_string(),
             JsonSchema::String {
