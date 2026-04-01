@@ -635,6 +635,7 @@ impl Codex {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
+            app_server_product_client_id: None,
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
@@ -758,11 +759,13 @@ impl Codex {
 
     pub(crate) async fn set_app_server_client_info(
         &self,
+        app_server_product_client_id: Option<String>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> ConstraintResult<()> {
         self.session
             .update_settings(SessionSettingsUpdate {
+                app_server_product_client_id,
                 app_server_client_name,
                 app_server_client_version,
                 ..Default::default()
@@ -1114,6 +1117,7 @@ pub(crate) struct SessionConfiguration {
     original_config_do_not_use: Arc<Config>,
     /// Optional service name tag for session metrics.
     metrics_service_name: Option<String>,
+    app_server_product_client_id: Option<String>,
     app_server_client_name: Option<String>,
     app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
@@ -1206,6 +1210,9 @@ impl SessionConfiguration {
                     &next_configuration.cwd,
                 );
         }
+        if let Some(app_server_product_client_id) = updates.app_server_product_client_id.clone() {
+            next_configuration.app_server_product_client_id = Some(app_server_product_client_id);
+        }
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
         }
@@ -1228,12 +1235,13 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
+    pub(crate) app_server_product_client_id: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
 }
 
 pub(crate) struct AnalyticsClientMetadata {
-    pub(crate) product_client_id: String,
+    pub(crate) product_client_id: Option<String>,
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,
 }
@@ -1241,18 +1249,16 @@ pub(crate) struct AnalyticsClientMetadata {
 impl Session {
     pub(crate) async fn analytics_client_metadata(&self) -> AnalyticsClientMetadata {
         let state = self.state.lock().await;
-        let client_name = state.session_configuration.app_server_client_name.clone();
-        let client_version = state
-            .session_configuration
-            .app_server_client_version
-            .clone();
-        let product_client_id = client_name
-            .clone()
-            .unwrap_or_else(|| crate::default_client::originator().value);
         AnalyticsClientMetadata {
-            product_client_id,
-            client_name,
-            client_version,
+            product_client_id: state
+                .session_configuration
+                .app_server_product_client_id
+                .clone(),
+            client_name: state.session_configuration.app_server_client_name.clone(),
+            client_version: state
+                .session_configuration
+                .app_server_client_version
+                .clone(),
         }
     }
 
@@ -4393,13 +4399,22 @@ impl Session {
 
 pub(crate) fn emit_subagent_session_started(
     analytics_events_client: &crate::AnalyticsEventsClient,
-    product_client_id: String,
-    client_name: Option<String>,
-    client_version: Option<String>,
+    client_metadata: AnalyticsClientMetadata,
     thread_id: ThreadId,
     thread_config: ThreadConfigSnapshot,
     subagent_source: SubAgentSource,
 ) {
+    let AnalyticsClientMetadata {
+        product_client_id,
+        client_name,
+        client_version,
+    } = client_metadata;
+    let (Some(product_client_id), Some(client_name), Some(client_version)) =
+        (product_client_id, client_name, client_version)
+    else {
+        tracing::warn!("skipping subagent thread analytics: missing inherited client metadata");
+        return;
+    };
     let created_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -4782,6 +4797,7 @@ mod handlers {
                         service_tier,
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
+                        app_server_product_client_id: None,
                         app_server_client_name: None,
                         app_server_client_version: None,
                     },

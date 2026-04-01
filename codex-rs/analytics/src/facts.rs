@@ -55,8 +55,8 @@ pub struct AppInvocation {
 pub struct SubAgentThreadStartedInput {
     pub thread_id: String,
     pub product_client_id: String,
-    pub client_name: Option<String>,
-    pub client_version: Option<String>,
+    pub client_name: String,
+    pub client_version: String,
     pub model: String,
     pub ephemeral: bool,
     pub subagent_source: SubAgentSource,

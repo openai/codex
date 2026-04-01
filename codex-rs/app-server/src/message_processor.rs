@@ -172,6 +172,7 @@ pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
+    pub(crate) product_client_id: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) client_version: Option<String>,
 }
@@ -574,6 +575,7 @@ impl MessageProcessor {
                     title: _title,
                     version,
                 } = params.client_info;
+                session.product_client_id = Some(name.clone());
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
                 let originator = name.clone();
@@ -844,6 +846,7 @@ impl MessageProcessor {
                     .process_request(
                         connection_id,
                         other,
+                        session.product_client_id.clone(),
                         session.app_server_client_name.clone(),
                         session.client_version.clone(),
                         request_context,

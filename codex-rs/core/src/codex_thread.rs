@@ -102,11 +102,16 @@ impl CodexThread {
 
     pub async fn set_app_server_client_info(
         &self,
+        app_server_product_client_id: Option<String>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> ConstraintResult<()> {
         self.codex
-            .set_app_server_client_info(app_server_client_name, app_server_client_version)
+            .set_app_server_client_info(
+                app_server_product_client_id,
+                app_server_client_name,
+                app_server_client_version,
+            )
             .await
     }
 

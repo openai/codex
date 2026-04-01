@@ -222,6 +222,7 @@ impl AgentControl {
                 parent_thread_id, ..
             },
         )) = notification_source.as_ref()
+            && new_thread.thread.enabled(Feature::GeneralAnalytics)
         {
             let client_metadata = match state.get_thread(*parent_thread_id).await {
                 Ok(parent_thread) => {
@@ -231,11 +232,18 @@ impl AgentControl {
                         .analytics_client_metadata()
                         .await
                 }
-                Err(_) => crate::codex::AnalyticsClientMetadata {
-                    product_client_id: crate::default_client::originator().value,
-                    client_name: None,
-                    client_version: None,
-                },
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        parent_thread_id = %parent_thread_id,
+                        "skipping subagent thread analytics: failed to load parent thread metadata"
+                    );
+                    crate::codex::AnalyticsClientMetadata {
+                        product_client_id: None,
+                        client_name: None,
+                        client_version: None,
+                    }
+                }
             };
             let thread_config = new_thread.thread.codex.thread_config_snapshot().await;
             emit_subagent_session_started(
@@ -245,9 +253,7 @@ impl AgentControl {
                     .session
                     .services
                     .analytics_events_client,
-                client_metadata.product_client_id,
-                client_metadata.client_name,
-                client_metadata.client_version,
+                client_metadata,
                 new_thread.thread_id,
                 thread_config,
                 subagent_source.clone(),

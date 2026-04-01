@@ -97,17 +97,17 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_trace: None,
     })
     .await?;
-    let thread_config = codex.thread_config_snapshot().await;
-    let client_metadata = parent_session.analytics_client_metadata().await;
-    emit_subagent_session_started(
-        &parent_session.services.analytics_events_client,
-        client_metadata.product_client_id,
-        client_metadata.client_name,
-        client_metadata.client_version,
-        codex.session.conversation_id,
-        thread_config,
-        subagent_source,
-    );
+    if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
+        let thread_config = codex.thread_config_snapshot().await;
+        let client_metadata = parent_session.analytics_client_metadata().await;
+        emit_subagent_session_started(
+            &parent_session.services.analytics_events_client,
+            client_metadata,
+            codex.session.conversation_id,
+            thread_config,
+            subagent_source,
+        );
+    }
     let codex = Arc::new(codex);
 
     // Use a child token so parent cancel cascades but we can scope it to this task
