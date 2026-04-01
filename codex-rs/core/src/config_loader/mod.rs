@@ -796,6 +796,34 @@ async fn load_project_layers(
             continue;
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+        match tokio::fs::symlink_metadata(&config_file).await {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    let config_file_display = config_file.as_path().display();
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Project config file {config_file_display} must not be a symlink"),
+                    ));
+                }
+            }
+            Err(err) => {
+                if err.kind() == io::ErrorKind::NotFound {
+                    layers.push(project_layer_entry(
+                        trust_context,
+                        &dot_codex_abs,
+                        &layer_dir,
+                        TomlValue::Table(toml::map::Map::new()),
+                        /*config_toml_exists*/ false,
+                    ));
+                    continue;
+                }
+                let config_file_display = config_file.as_path().display();
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!("Failed to inspect project config file {config_file_display}: {err}"),
+                ));
+            }
+        }
         match tokio::fs::read_to_string(&config_file).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
