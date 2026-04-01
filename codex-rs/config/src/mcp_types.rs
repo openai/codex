@@ -22,9 +22,17 @@ pub enum AppToolApproval {
     Approve,
 }
 
+/// Human-readable reason a configured MCP server was disabled after requirements
+/// were applied.
+///
+/// `Display` is intentionally implemented for CLI/TUI status output; avoid
+/// relying on `Debug` because enum variant syntax is not part of the user-facing
+/// message contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerDisabledReason {
+    /// The server is disabled, but there is no more specific user-facing reason.
     Unknown,
+    /// The server was disabled by config requirements from the given source.
     Requirements { source: RequirementSource },
 }
 
