@@ -8,7 +8,10 @@ use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::protocol::PersistPermissionProfileAction;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,6 +61,8 @@ pub enum ConfigEdit {
         segments: Vec<String>,
         value: TomlItem,
     },
+    /// Merge permissions into a named profile.
+    MergePermissionProfile(PersistPermissionProfileAction),
     /// Remove the value stored at the exact dotted path.
     ClearPath { segments: Vec<String> },
 }
@@ -425,6 +430,7 @@ impl ConfigDocument {
                 Ok(self.set_skill_config(SkillConfigSelector::Name(name.clone()), *enabled))
             }
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
+            ConfigEdit::MergePermissionProfile(action) => Ok(self.merge_permission_profile(action)),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
             ConfigEdit::SetProjectTrustLevel { path, level } => {
                 // Delegate to the existing, tested logic in config.rs to
@@ -458,6 +464,173 @@ impl ConfigDocument {
 
     fn clear_owned(&mut self, segments: &[String]) -> bool {
         self.remove(segments)
+    }
+
+    fn merge_permission_profile(&mut self, action: &PersistPermissionProfileAction) -> bool {
+        let mut mutated = false;
+
+        for (path, access) in filesystem_path_access(action.permissions.file_system.as_ref()) {
+            if access == FileSystemAccessMode::Read
+                && self.has_writable_filesystem_ancestor(&action.profile_name, &path)
+            {
+                continue;
+            }
+
+            let segments = vec![
+                "permissions".to_string(),
+                action.profile_name.clone(),
+                "filesystem".to_string(),
+                path.clone(),
+            ];
+            let merged_access = match self.get_item(&segments).and_then(TomlItem::as_str) {
+                Some("write") => FileSystemAccessMode::Write,
+                Some("read") => access,
+                _ => access,
+            };
+            mutated |= self.insert(&segments, value(merged_access.to_string()));
+
+            if merged_access == FileSystemAccessMode::Write {
+                mutated |=
+                    self.remove_descendant_filesystem_reads(&action.profile_name, path.as_str());
+            }
+        }
+
+        if let Some(enabled) = action
+            .permissions
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled)
+        {
+            let segments = vec![
+                "permissions".to_string(),
+                action.profile_name.clone(),
+                "network".to_string(),
+                "enabled".to_string(),
+            ];
+            let merged_enabled = self
+                .get_item(&segments)
+                .and_then(TomlItem::as_bool)
+                .unwrap_or(false)
+                || enabled;
+            mutated |= self.insert(&segments, value(merged_enabled));
+        }
+
+        mutated
+    }
+
+    fn has_writable_filesystem_ancestor(&mut self, profile_name: &str, path: &str) -> bool {
+        let filesystem_segments = vec![
+            "permissions".to_string(),
+            profile_name.to_string(),
+            "filesystem".to_string(),
+        ];
+        let Some(filesystem) = self.descend(&filesystem_segments, TraversalMode::Existing) else {
+            return false;
+        };
+
+        let path = Path::new(path);
+        for (key, item) in filesystem.iter() {
+            if matches!(item.as_str(), Some("write")) {
+                let candidate = Path::new(key);
+                if path.starts_with(candidate) && path != candidate {
+                    return true;
+                }
+                continue;
+            }
+
+            let Some(scoped_entries) = item.as_table() else {
+                continue;
+            };
+            let base = Path::new(key);
+            if !base.is_absolute() {
+                continue;
+            }
+
+            for (subpath, access) in scoped_entries.iter() {
+                if !matches!(access.as_str(), Some("write")) {
+                    continue;
+                }
+
+                let candidate = if subpath == "." {
+                    base.to_path_buf()
+                } else {
+                    base.join(subpath)
+                };
+                if path.starts_with(&candidate) && path != candidate {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn remove_descendant_filesystem_reads(&mut self, profile_name: &str, path: &str) -> bool {
+        let filesystem_segments = vec![
+            "permissions".to_string(),
+            profile_name.to_string(),
+            "filesystem".to_string(),
+        ];
+        let Some(filesystem) = self.descend(&filesystem_segments, TraversalMode::Existing) else {
+            return false;
+        };
+
+        let path = Path::new(path);
+        let mut descendants_to_remove = Vec::new();
+        let mut scoped_parents_to_prune = Vec::new();
+        for (key, item) in filesystem.iter() {
+            if matches!(item.as_str(), Some("read")) {
+                let candidate = Path::new(key);
+                if candidate.starts_with(path) && candidate != path {
+                    descendants_to_remove.push(vec![key.to_string()]);
+                }
+                continue;
+            }
+
+            let Some(scoped_entries) = item.as_table() else {
+                continue;
+            };
+            let base = Path::new(key);
+            if !base.is_absolute() {
+                continue;
+            }
+
+            for (subpath, access) in scoped_entries.iter() {
+                if !matches!(access.as_str(), Some("read")) {
+                    continue;
+                }
+
+                let candidate = if subpath == "." {
+                    base.to_path_buf()
+                } else {
+                    base.join(subpath)
+                };
+                if candidate.starts_with(path) && candidate != path {
+                    descendants_to_remove.push(vec![key.to_string(), subpath.to_string()]);
+                    scoped_parents_to_prune.push(key.to_string());
+                }
+            }
+        }
+
+        let mut mutated = false;
+        for descendant in descendants_to_remove {
+            let mut segments = filesystem_segments.clone();
+            segments.extend(descendant);
+            mutated |= self.remove(&segments);
+        }
+        scoped_parents_to_prune.sort();
+        scoped_parents_to_prune.dedup();
+        for parent in scoped_parents_to_prune {
+            let mut segments = filesystem_segments.clone();
+            segments.push(parent);
+            if self
+                .get_item(&segments)
+                .and_then(TomlItem::as_table)
+                .is_some_and(TomlTable::is_empty)
+            {
+                mutated |= self.remove(&segments);
+            }
+        }
+        mutated
     }
 
     fn replace_mcp_servers(&mut self, servers: &BTreeMap<String, McpServerConfig>) -> bool {
@@ -673,6 +846,12 @@ impl ConfigDocument {
         parent.remove(last).is_some()
     }
 
+    fn get_item(&mut self, segments: &[String]) -> Option<&TomlItem> {
+        let (last, parents) = segments.split_last()?;
+        let parent = self.descend(parents, TraversalMode::Existing)?;
+        parent.get(last.as_str())
+    }
+
     fn descend(&mut self, segments: &[String], mode: TraversalMode) -> Option<&mut TomlTable> {
         let mut current = self.doc.as_table_mut();
 
@@ -736,6 +915,32 @@ fn normalize_skill_config_path(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .to_string()
+}
+
+fn filesystem_path_access(
+    file_system: Option<&FileSystemPermissions>,
+) -> BTreeMap<String, FileSystemAccessMode> {
+    let Some(file_system) = file_system else {
+        return BTreeMap::new();
+    };
+
+    let mut path_access = BTreeMap::new();
+
+    if let Some(read_roots) = file_system.read.as_ref() {
+        for path in read_roots {
+            path_access
+                .entry(path.display().to_string())
+                .or_insert(FileSystemAccessMode::Read);
+        }
+    }
+
+    if let Some(write_roots) = file_system.write.as_ref() {
+        for path in write_roots {
+            path_access.insert(path.display().to_string(), FileSystemAccessMode::Write);
+        }
+    }
+
+    path_access
 }
 
 fn skill_config_selector_from_table(table: &TomlTable) -> Option<SkillConfigSelector> {
@@ -1043,6 +1248,11 @@ impl ConfigEditsBuilder {
         I: IntoIterator<Item = ConfigEdit>,
     {
         self.edits.extend(edits);
+        self
+    }
+
+    pub fn merge_permission_profile(mut self, action: PersistPermissionProfileAction) -> Self {
+        self.edits.push(ConfigEdit::MergePermissionProfile(action));
         self
     }
 
