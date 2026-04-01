@@ -472,10 +472,15 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         first_file.display(),
         second_file.display()
     );
+    // Login shells can emit an extra approval for system startup helpers
+    // (for example `/usr/libexec/path_helper -s` on macOS) before the target
+    // `rm` subcommands. Give the command enough budget to exercise the full
+    // approval sequence on slower CI shards.
+    let tool_timeout_ms = 15_000;
     let tool_call_arguments = serde_json::to_string(&serde_json::json!({
         "command": shell_command,
         "workdir": serde_json::Value::Null,
-        "timeout_ms": 5000
+        "timeout_ms": tool_timeout_ms
     }))?;
     let response = responses::sse(vec![
         responses::ev_response_created("resp-1"),

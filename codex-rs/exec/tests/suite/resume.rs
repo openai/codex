@@ -1,10 +1,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 use std::string::ToString;
+use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -217,6 +224,118 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
     let content = std::fs::read_to_string(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
+    Ok(())
+}
+
+#[test]
+fn exec_resume_last_ignores_newer_internal_thread() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let fixture = exec_fixture()?;
+    let repo_root = exec_repo_root()?;
+
+    let marker = format!("resume-last-visible-{}", Uuid::new_v4());
+    let prompt = format!("echo {marker}");
+
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg(&prompt)
+        .assert()
+        .success();
+
+    let sessions_dir = test.home_path().join("sessions");
+    let path = find_session_file_containing_marker(&sessions_dir, &marker)
+        .expect("no session file found after first run");
+
+    // `updated_at` is second-granularity, so make the injected internal thread
+    // deterministically newer than the visible exec session.
+    std::thread::sleep(Duration::from_millis(1100));
+
+    let internal_thread_id = Uuid::new_v4();
+    let internal_rollout_path = test.home_path().join("sessions/2026/03/27").join(format!(
+        "rollout-2026-03-27T00-00-00-{internal_thread_id}.jsonl"
+    ));
+    std::fs::create_dir_all(
+        internal_rollout_path
+            .parent()
+            .expect("internal rollout parent directory"),
+    )?;
+
+    let internal_thread_id_str = internal_thread_id.to_string();
+    let internal_payload = serde_json::to_value(SessionMetaLine {
+        meta: SessionMeta {
+            id: ThreadId::from_string(&internal_thread_id_str)?,
+            forked_from_id: None,
+            timestamp: "2026-03-27T00:00:00.000Z".to_string(),
+            cwd: repo_root.clone(),
+            originator: "codex".to_string(),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::SubAgent(SubAgentSource::MemoryConsolidation),
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: None,
+            base_instructions: None,
+            dynamic_tools: None,
+            memory_mode: None,
+        },
+        git: None,
+    })?;
+    let internal_lines = [
+        json!({
+            "timestamp": "2026-03-27T00:00:00.000Z",
+            "type": "session_meta",
+            "payload": internal_payload,
+        })
+        .to_string(),
+        json!({
+            "timestamp": "2026-03-27T00:00:00.000Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "internal memory sweep"}],
+            },
+        })
+        .to_string(),
+        json!({
+            "timestamp": "2026-03-27T00:00:00.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "internal memory sweep",
+                "kind": "plain",
+            },
+        })
+        .to_string(),
+    ];
+    std::fs::write(&internal_rollout_path, internal_lines.join("\n") + "\n")?;
+
+    let marker2 = format!("resume-last-visible-2-{}", Uuid::new_v4());
+    let prompt2 = format!("echo {marker2}");
+
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg(&prompt2)
+        .arg("resume")
+        .arg("--last")
+        .assert()
+        .success();
+
+    let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
+        .expect("no resumed session file containing marker2");
+    assert_eq!(
+        resumed_path, path,
+        "resume --last should ignore newer internal threads"
+    );
+
     Ok(())
 }
 
