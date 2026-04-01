@@ -2077,7 +2077,7 @@ fn to_mcp_config_enables_connectors_for_chatgpt_auth() -> std::io::Result<()> {
         ConfigOverrides::default(),
         codex_home.path().to_path_buf(),
     )?;
-    config.features.enable(Feature::Apps);
+    let _ = config.features.enable(Feature::Apps);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
     let mcp_config = config.to_mcp_config(/*auth*/ None, &plugins_manager);

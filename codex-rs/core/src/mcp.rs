@@ -12,6 +12,7 @@ pub use codex_mcp::mcp::collect_missing_mcp_dependencies;
 pub use codex_mcp::mcp::configured_mcp_servers;
 pub use codex_mcp::mcp::effective_mcp_servers;
 pub use codex_mcp::mcp::group_tools_by_server;
+pub use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
 pub use codex_mcp::mcp::split_qualified_tool_name;
 pub use codex_mcp::mcp::tool_plugin_provenance as mcp_tool_plugin_provenance;
 pub use codex_mcp::mcp::with_codex_apps_mcp;

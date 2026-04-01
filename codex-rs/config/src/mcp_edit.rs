@@ -206,7 +206,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     }
     if !config.tools.is_empty() {
         let mut tools = TomlTable::new();
-        tools.set_implicit(true);
+        tools.set_implicit(false);
         let mut tool_entries: Vec<_> = config.tools.iter().collect();
         tool_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (name, tool_config) in tool_entries {
@@ -312,6 +312,8 @@ mod tests {
             serialized,
             r#"[mcp_servers.docs]
 command = "docs-server"
+
+[mcp_servers.docs.tools]
 
 [mcp_servers.docs.tools.read]
 approval_mode = "prompt"
