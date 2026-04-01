@@ -6,6 +6,7 @@ use crate::facts::AnalyticsFact;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexTurnSteerEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
@@ -13,6 +14,7 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnSteerInput;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
@@ -187,6 +189,15 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
         ));
+    }
+
+    pub fn track_turn_steer(&self, tracking: TrackEventsContext, turn_steer: CodexTurnSteerEvent) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnSteer(
+            TurnSteerInput {
+                tracking,
+                turn_steer,
+            },
+        )));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
