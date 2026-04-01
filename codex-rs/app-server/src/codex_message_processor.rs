@@ -74,6 +74,8 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MarketplaceInterface;
+use codex_app_server_protocol::McpResourceReadParams;
+use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
@@ -220,8 +222,7 @@ use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::mcp::auth::discover_supported_scopes;
 use codex_core::mcp::auth::resolve_oauth_scopes;
-use codex_core::mcp::collect_mcp_snapshot;
-use codex_core::mcp::group_tools_by_server;
+use codex_core::mcp::collect_mcp_server_status_snapshot;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
@@ -880,6 +881,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::McpResourceRead { request_id, params } => {
+                self.read_mcp_resource(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::WindowsSandboxSetupStart { request_id, params } => {
@@ -5051,9 +5056,7 @@ impl CodexMessageProcessor {
         params: ListMcpServerStatusParams,
         config: Config,
     ) {
-        let snapshot = collect_mcp_snapshot(&config).await;
-
-        let tools_by_server = group_tools_by_server(&snapshot.tools);
+        let snapshot = collect_mcp_server_status_snapshot(&config).await;
 
         let mut server_names: Vec<String> = config
             .mcp_servers
@@ -5101,7 +5104,7 @@ impl CodexMessageProcessor {
             .iter()
             .map(|name| McpServerStatus {
                 name: name.clone(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                tools: snapshot.tools_by_server.get(name).cloned().unwrap_or_default(),
                 resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
                 resource_templates: snapshot
                     .resource_templates
@@ -5126,6 +5129,58 @@ impl CodexMessageProcessor {
         let response = ListMcpServerStatusResponse { data, next_cursor };
 
         outgoing.send_response(request_id, response).await;
+    }
+
+    async fn read_mcp_resource(
+        &self,
+        request_id: ConnectionRequestId,
+        params: McpResourceReadParams,
+    ) {
+        let outgoing = Arc::clone(&self.outgoing);
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(thread) => thread,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            let result = thread.read_mcp_resource(&params.server, &params.uri).await;
+            match result {
+                Ok(result) => match serde_json::from_value::<McpResourceReadResponse>(result) {
+                    Ok(response) => {
+                        outgoing.send_response(request_id, response).await;
+                    }
+                    Err(error) => {
+                        outgoing
+                            .send_error(
+                                request_id,
+                                JSONRPCErrorError {
+                                    code: INTERNAL_ERROR_CODE,
+                                    message: format!(
+                                        "failed to deserialize MCP resource read response: {error}"
+                                    ),
+                                    data: None,
+                                },
+                            )
+                            .await;
+                    }
+                },
+                Err(error) => {
+                    outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("{error:#}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                }
+            }
+        });
     }
 
     async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
