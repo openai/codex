@@ -739,6 +739,7 @@ async fn trigger_zsh_fork_multi_cmd_approval(
                     text: message,
                     text_elements: Vec::new(),
                 }],
+                submission_type: None,
                 ..Default::default()
             };
             turn_params.approval_policy = Some(AskForApproval::OnRequest);
@@ -824,6 +825,7 @@ async fn resume_message_v2(
                 text: user_message,
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })?;
         println!("< turn/start response: {turn_response:?}");
@@ -968,6 +970,7 @@ async fn send_message_v2_with_policies(
                     // Test client sends plain text without UI element ranges.
                     text_elements: Vec::new(),
                 }],
+                submission_type: None,
                 ..Default::default()
             };
             turn_params.approval_policy = policies.approval_policy;
@@ -1008,6 +1011,7 @@ async fn send_follow_up_v2(
                 // Test client sends plain text without UI element ranges.
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         };
         let first_turn_response = client.turn_start(first_turn_params)?;
@@ -1021,6 +1025,7 @@ async fn send_follow_up_v2(
                 // Test client sends plain text without UI element ranges.
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         };
         let follow_up_response = client.turn_start(follow_up_params)?;
@@ -1265,6 +1270,7 @@ fn live_elicitation_timeout_pause(
         sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
         effort: Some(ReasoningEffort::High),
         cwd: Some(workspace),
+        submission_type: None,
         ..Default::default()
     })?;
     println!("< turn/start response: {turn_response:?}");

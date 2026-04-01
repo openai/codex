@@ -2338,6 +2338,7 @@ text(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 

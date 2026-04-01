@@ -77,6 +77,7 @@ use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
@@ -3972,6 +3973,10 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// Classify the primary input message submitted with `turn/start`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub submission_type: Option<SubmissionType>,
     /// Optional JSON Schema used to constrain the final assistant message for
     /// this turn.
     #[ts(optional = nullable)]
@@ -8084,9 +8089,10 @@ mod tests {
             service_tier: None,
             effort: None,
             summary: None,
+            personality: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: None,
-            personality: None,
         };
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");

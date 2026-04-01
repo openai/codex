@@ -342,6 +342,7 @@ async fn send_turn_and_wait(mcp: &mut McpProcess, thread_id: &str, text: &str) -
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

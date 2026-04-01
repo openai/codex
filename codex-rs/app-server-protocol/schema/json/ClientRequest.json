@@ -2473,6 +2473,13 @@
       },
       "type": "object"
     },
+    "SubmissionType": {
+      "enum": [
+        "prompt",
+        "prompt_queued"
+      ],
+      "type": "string"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -3240,6 +3247,17 @@
             }
           ],
           "description": "Override the service tier for this turn and subsequent turns."
+        },
+        "submissionType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SubmissionType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Classify the primary input message submitted with `turn/start`."
         },
         "summary": {
           "anyOf": [

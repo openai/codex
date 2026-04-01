@@ -28,6 +28,7 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
+use crate::facts::TurnSubmissionType;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
@@ -200,7 +201,7 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         turn_id: turn_id.to_string(),
         thread_id: "thread-2".to_string(),
         num_input_images: 1,
-        submission_type: None,
+        submission_type: Some(TurnSubmissionType::Default),
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -861,7 +862,7 @@ fn turn_event_serializes_expected_shape() {
             thread_id: "thread-2".to_string(),
             turn_id: "turn-2".to_string(),
             product_client_id: Some("codex-tui".to_string()),
-            submission_type: None,
+            submission_type: Some(TurnSubmissionType::Default),
             model: Some("gpt-5".to_string()),
             model_provider: "openai".to_string(),
             sandbox_policy: Some("read_only"),
@@ -907,7 +908,7 @@ fn turn_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": "codex-tui",
-                "submission_type": null,
+                "submission_type": "default",
                 "model": "gpt-5",
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",

@@ -434,6 +434,7 @@ async fn materialize_thread_rollout(mcp: &mut McpProcess, thread_id: &str) -> Re
                 text: "materialize rollout".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

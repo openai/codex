@@ -205,6 +205,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
+            submission_type: None,
             ..Default::default()
         })
         .await?;

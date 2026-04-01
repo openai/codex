@@ -86,6 +86,7 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -164,6 +165,7 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -252,6 +254,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
                 text: "Run the tool".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -420,6 +423,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
                 text: "Run the tool".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

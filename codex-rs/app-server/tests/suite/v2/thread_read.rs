@@ -441,6 +441,7 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
                 text: "fail this turn".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

@@ -129,6 +129,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -153,6 +154,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -232,6 +234,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -256,6 +259,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -366,6 +370,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            submission_type: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

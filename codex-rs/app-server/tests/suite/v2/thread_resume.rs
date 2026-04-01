@@ -616,6 +616,7 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -665,6 +666,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -690,6 +692,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
                 text: "respond with docs".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -772,6 +775,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -795,6 +799,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -888,6 +893,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -911,6 +917,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -994,6 +1001,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1016,6 +1024,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1107,6 +1116,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1130,6 +1140,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
                 text_elements: Vec::new(),
             }],
             approval_policy: Some(AskForApproval::UnlessTrusted),
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1246,6 +1257,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1270,6 +1282,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
             }],
             cwd: Some(workspace.clone()),
             approval_policy: Some(AskForApproval::UnlessTrusted),
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1414,6 +1427,7 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1594,6 +1608,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
                 text: "materialize".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1714,6 +1729,7 @@ async fn start_materialized_thread_and_restart(
                 text: seed_text.to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1788,6 +1804,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1828,6 +1845,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
+            submission_type: None,
             ..Default::default()
         })
         .await?;

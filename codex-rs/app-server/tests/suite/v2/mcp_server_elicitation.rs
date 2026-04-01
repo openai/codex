@@ -137,6 +137,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             model: Some("mock-model".to_string()),
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -169,6 +170,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             model: Some("mock-model".to_string()),
+            submission_type: None,
             ..Default::default()
         })
         .await?;
