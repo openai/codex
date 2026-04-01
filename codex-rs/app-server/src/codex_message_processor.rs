@@ -5039,8 +5039,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let auth = self.auth_manager.auth().await;
         let mcp_config = config.to_mcp_config(
-            /*auth*/ None,
+            auth.as_ref(),
             self.thread_manager.plugins_manager().as_ref(),
         );
 

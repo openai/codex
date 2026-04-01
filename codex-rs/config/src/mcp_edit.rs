@@ -11,6 +11,7 @@ use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
 use toml_edit::value;
 
+use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
 use crate::McpServerTransportConfig;
@@ -203,6 +204,25 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     {
         entry["oauth_resource"] = value(resource.clone());
     }
+    if !config.tools.is_empty() {
+        let mut tools = TomlTable::new();
+        tools.set_implicit(true);
+        let mut tool_entries: Vec<_> = config.tools.iter().collect();
+        tool_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (name, tool_config) in tool_entries {
+            let mut tool_entry = TomlTable::new();
+            tool_entry.set_implicit(false);
+            if let Some(approval_mode) = tool_config.approval_mode {
+                tool_entry["approval_mode"] = value(match approval_mode {
+                    AppToolApproval::Auto => "auto",
+                    AppToolApproval::Prompt => "prompt",
+                    AppToolApproval::Approve => "approve",
+                });
+            }
+            tools.insert(name, TomlItem::Table(tool_entry));
+        }
+        entry.insert("tools", TomlItem::Table(tools));
+    }
 
     TomlItem::Table(entry)
 }
@@ -227,4 +247,85 @@ where
         table.insert(key, value(value_str.clone()));
     }
     TomlItem::Table(table)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::McpServerToolConfig;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    #[tokio::test]
+    async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow::Result<()> {
+        let unique_suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let codex_home = std::env::temp_dir().join(format!(
+            "codex-config-mcp-edit-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: None,
+                tools: HashMap::from([
+                    (
+                        "search".to_string(),
+                        McpServerToolConfig {
+                            approval_mode: Some(AppToolApproval::Approve),
+                        },
+                    ),
+                    (
+                        "read".to_string(),
+                        McpServerToolConfig {
+                            approval_mode: Some(AppToolApproval::Prompt),
+                        },
+                    ),
+                ]),
+            },
+        )]);
+
+        ConfigEditsBuilder::new(&codex_home)
+            .replace_mcp_servers(&servers)
+            .apply()
+            .await?;
+
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert_eq!(
+            serialized,
+            r#"[mcp_servers.docs]
+command = "docs-server"
+
+[mcp_servers.docs.tools.read]
+approval_mode = "prompt"
+
+[mcp_servers.docs.tools.search]
+approval_mode = "approve"
+"#
+        );
+
+        let loaded = load_global_mcp_servers(&codex_home).await?;
+        assert_eq!(loaded, servers);
+
+        std::fs::remove_dir_all(&codex_home)?;
+
+        Ok(())
+    }
 }
