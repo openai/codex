@@ -94,6 +94,58 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties.get("model"),
+        Some(&JsonSchema::String {
+            description: Some(
+                "Optional model override for the new agent. Replaces the inherited model only when fork_context is false; forked children always inherit the parent model."
+                    .to_string(),
+            ),
+        })
+    );
+    assert_eq!(
+        properties.get("reasoning_effort"),
+        Some(&JsonSchema::String {
+            description: Some(
+                "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort only when fork_context is false; forked children always inherit the parent reasoning effort."
+                    .to_string(),
+            ),
+        })
+    );
+}
+
+#[test]
+fn spawn_agent_tool_v2_documents_that_forked_children_ignore_model_overrides() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: &[],
+        agent_type_description: "role help".to_string(),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("spawn_agent should use object params");
+    };
+
+    assert_eq!(
+        properties.get("model"),
+        Some(&JsonSchema::String {
+            description: Some(
+                "Optional model override for the new agent. Replaces the inherited model only when fork_turns is `none`; forked children always inherit the parent model."
+                    .to_string(),
+            ),
+        })
+    );
+    assert_eq!(
+        properties.get("reasoning_effort"),
+        Some(&JsonSchema::String {
+            description: Some(
+                "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort only when fork_turns is `none`; forked children always inherit the parent reasoning effort."
+                    .to_string(),
+            ),
+        })
+    );
 }
 
 #[test]

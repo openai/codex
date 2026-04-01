@@ -130,7 +130,7 @@ pub(crate) fn default_fork_context_for_role(config: &Config, role_name: Option<&
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     resolve_role_config(config, role_name)
         .and_then(|role| role.fork_context)
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 fn preservation_policy(config: &Config, role_layer_toml: &TomlValue) -> (bool, bool) {

@@ -73,6 +73,86 @@ async fn apply_role_returns_error_for_unknown_role() {
 }
 
 #[tokio::test]
+async fn default_fork_context_for_role_defaults_unspecified_custom_roles_to_true() {
+    let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: Some("Custom role".to_string()),
+            config_file: None,
+            nickname_candidates: None,
+            fork_context: None,
+        },
+    );
+
+    assert!(default_fork_context_for_role(&config, Some("custom")));
+}
+
+#[tokio::test]
+async fn default_fork_context_for_role_defaults_discovered_role_files_to_true() {
+    let codex_home = TempDir::new().expect("create temp dir");
+    let repo_root = TempDir::new().expect("create temp dir");
+    let nested_cwd = repo_root.path().join("packages").join("app");
+    fs::create_dir_all(repo_root.path().join(".git")).expect("create git dir");
+    fs::create_dir_all(&nested_cwd).expect("create nested cwd");
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )
+    .await
+    .expect("write config");
+
+    let agents_dir = repo_root.path().join(".codex").join("agents");
+    tokio::fs::create_dir_all(&agents_dir)
+        .await
+        .expect("create agents dir");
+    tokio::fs::write(
+        agents_dir.join("custom.toml"),
+        r#"
+name = "custom"
+description = "Custom role"
+developer_instructions = "Stay focused"
+"#,
+    )
+    .await
+    .expect("write role file");
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested_cwd),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("load config");
+
+    assert!(default_fork_context_for_role(&config, Some("custom")));
+}
+
+#[tokio::test]
+async fn default_fork_context_for_role_uses_explicit_custom_role_override() {
+    let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: Some("Custom role".to_string()),
+            config_file: None,
+            nickname_candidates: None,
+            fork_context: Some(false),
+        },
+    );
+
+    assert!(!default_fork_context_for_role(&config, Some("custom")));
+}
+
+#[tokio::test]
 #[ignore = "No role requiring it for now"]
 async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
