@@ -314,7 +314,6 @@ pub fn build_exec_request(
 
 pub(crate) async fn execute_exec_request(
     exec_request: ExecRequest,
-    sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
@@ -328,13 +327,12 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        sandbox_policy: _sandbox_policy_from_env,
+        sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_restricted_token_filesystem_overlay,
         arg0,
     } = exec_request;
-    let _ = _sandbox_policy_from_env;
 
     let params = ExecParams {
         command,
@@ -354,7 +352,7 @@ pub(crate) async fn execute_exec_request(
     let raw_output_result = exec(
         params,
         sandbox,
-        sandbox_policy,
+        &sandbox_policy,
         &file_system_sandbox_policy,
         windows_restricted_token_filesystem_overlay.as_ref(),
         network_sandbox_policy,
