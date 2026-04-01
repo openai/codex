@@ -547,10 +547,11 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("assign_task should use object params");
     };
     assert!(properties.contains_key("target"));
-    assert!(!properties.contains_key("message"));
+    assert!(properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert_eq!(
         required.as_ref(),
-        Some(&vec!["target".to_string(), "items".to_string()])
+        Some(&vec!["target".to_string(), "message".to_string()])
     );
 
     let wait_agent = find_tool(&tools, "wait_agent");

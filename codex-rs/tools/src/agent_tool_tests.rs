@@ -127,6 +127,38 @@ fn send_message_tool_requires_message_and_uses_submission_output() {
 }
 
 #[test]
+fn assign_task_tool_requires_message_and_uses_submission_output() {
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = create_assign_task_tool()
+    else {
+        panic!("assign_task should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("assign_task should use object params");
+    };
+    assert!(properties.contains_key("target"));
+    assert!(properties.contains_key("message"));
+    assert!(properties.contains_key("interrupt"));
+    assert!(!properties.contains_key("items"));
+    assert_eq!(
+        required,
+        Some(vec!["target".to_string(), "message".to_string()])
+    );
+    assert_eq!(
+        output_schema.expect("assign_task output schema")["required"],
+        json!(["submission_id"])
+    );
+}
+
+#[test]
 fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,

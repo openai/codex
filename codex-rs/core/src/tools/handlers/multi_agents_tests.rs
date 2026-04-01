@@ -1140,7 +1140,7 @@ async fn multi_agent_v2_assign_task_interrupts_busy_child_without_losing_message
             "assign_task",
             function_payload(json!({
                 "target": agent_id.to_string(),
-                "items": [{"type": "text", "text": "continue"}],
+                "message": "continue",
                 "interrupt": true
             })),
         ))
@@ -1269,7 +1269,7 @@ async fn multi_agent_v2_assign_task_completion_notifies_parent_on_every_turn() {
             "assign_task",
             function_payload(json!({
                 "target": agent_id.to_string(),
-                "items": [{"type": "text", "text": "continue"}],
+                "message": "continue",
             })),
         ))
         .await
@@ -1339,6 +1339,59 @@ async fn multi_agent_v2_assign_task_completion_notifies_parent_on_every_turn() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_assign_task_rejects_legacy_items_field() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot worker",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let invocation = invocation(
+        session,
+        turn,
+        "assign_task",
+        function_payload(json!({
+            "target": agent_id.to_string(),
+            "items": [{"type": "text", "text": "continue"}],
+        })),
+    );
+
+    let Err(err) = AssignTaskHandlerV2.handle(invocation).await else {
+        panic!("legacy items field should be rejected in v2");
+    };
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("legacy items field should surface as a model-facing error");
+    };
+    assert!(message.contains("unknown field `items`"));
+}
+
+#[tokio::test]
 async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -1360,7 +1413,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "items": [{"type": "text", "text": "boot worker"}],
+                "message": "boot worker",
                 "task_name": "worker"
             })),
         ))

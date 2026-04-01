@@ -4,7 +4,6 @@
 //! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
-use crate::agent::control::render_input_preview;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy)]
@@ -14,14 +13,6 @@ pub(crate) enum MessageDeliveryMode {
 }
 
 impl MessageDeliveryMode {
-    /// Returns the model-visible error message for non-text inputs.
-    fn unsupported_items_error(self) -> &'static str {
-        match self {
-            Self::QueueOnly => "send_message only supports text content in MultiAgentV2 for now",
-            Self::TriggerTurn => "assign_task only supports text content in MultiAgentV2 for now",
-        }
-    }
-
     /// Returns whether the produced communication should start a turn immediately.
     fn apply(self, communication: InterAgentCommunication) -> InterAgentCommunication {
         match self {
@@ -50,7 +41,7 @@ pub(crate) struct SendMessageArgs {
 /// Input for the MultiAgentV2 `assign_task` tool.
 pub(crate) struct AssignTaskArgs {
     pub(crate) target: String,
-    pub(crate) items: Vec<UserInput>,
+    pub(crate) message: String,
     #[serde(default)]
     pub(crate) interrupt: bool,
 }
@@ -88,28 +79,7 @@ fn message_content(message: String) -> Result<String, FunctionCallError> {
     Ok(message)
 }
 
-/// Validates that the tool input is non-empty text-only content and returns its preview string.
-fn text_content(
-    items: &[UserInput],
-    mode: MessageDeliveryMode,
-) -> Result<String, FunctionCallError> {
-    if items.is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "Items can't be empty".to_string(),
-        ));
-    }
-    if items
-        .iter()
-        .all(|item| matches!(item, UserInput::Text { .. }))
-    {
-        return Ok(render_input_preview(&(items.to_vec().into())));
-    }
-    Err(FunctionCallError::RespondToModel(
-        mode.unsupported_items_error().to_string(),
-    ))
-}
-
-/// Handles the shared MultiAgentV2 text-message flow for both `send_message` and `assign_task`.
+/// Handles the shared MultiAgentV2 plain-text message flow for both `send_message` and `assign_task`.
 pub(crate) async fn handle_message_string_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,
@@ -122,24 +92,6 @@ pub(crate) async fn handle_message_string_tool(
         mode,
         target,
         message_content(message)?,
-        interrupt,
-    )
-    .await
-}
-
-/// Handles the shared MultiAgentV2 text-message flow for both `send_message` and `assign_task`.
-pub(crate) async fn handle_message_tool(
-    invocation: ToolInvocation,
-    mode: MessageDeliveryMode,
-    target: String,
-    items: Vec<UserInput>,
-    interrupt: bool,
-) -> Result<MessageToolResult, FunctionCallError> {
-    handle_message_submission(
-        invocation,
-        mode,
-        target,
-        text_content(&items, mode)?,
         interrupt,
     )
     .await
