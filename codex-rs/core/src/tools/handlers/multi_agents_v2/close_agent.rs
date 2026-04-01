@@ -106,6 +106,7 @@ impl ToolHandler for Handler {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CloseAgentArgs {
     target: String,
 }
