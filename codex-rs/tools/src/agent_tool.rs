@@ -179,7 +179,7 @@ pub fn create_assign_task_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "assign_task".to_string(),
-        description: "Add a message to an existing agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. In MultiAgentV2, this tool currently supports text content only."
+        description: "Add a message to an existing non-root agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. In MultiAgentV2, this tool currently supports text content only."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -231,7 +231,7 @@ pub fn create_wait_agent_tool_v1(options: WaitAgentTimeoutOptions) -> ToolSpec {
 pub fn create_wait_agent_tool_v2(options: WaitAgentTimeoutOptions) -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
-        description: "Wait for agents to reach a final status. Returns a brief wait summary instead of the agent's final content. Returns a timeout summary when no agent reaches a final status before the deadline."
+        description: "Wait for a mailbox update from any live agent, including queued messages and final-status notifications. Returns a brief wait summary instead of agent content, or a timeout summary if no mailbox update arrives before the deadline."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -318,7 +318,7 @@ fn agent_status_output_schema() -> Value {
         "oneOf": [
             {
                 "type": "string",
-                "enum": ["pending_init", "running", "shutdown", "not_found"]
+                "enum": ["pending_init", "running", "interrupted", "shutdown", "not_found"]
             },
             {
                 "type": "object",

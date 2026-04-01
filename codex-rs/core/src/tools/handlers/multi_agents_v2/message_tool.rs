@@ -6,7 +6,7 @@
 use super::*;
 use codex_protocol::protocol::InterAgentCommunication;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MessageDeliveryMode {
     QueueOnly,
     TriggerTurn,
@@ -118,6 +118,16 @@ async fn handle_message_submission(
         .agent_control
         .get_agent_metadata(receiver_thread_id)
         .unwrap_or_default();
+    if mode == MessageDeliveryMode::TriggerTurn
+        && receiver_agent
+            .agent_path
+            .as_ref()
+            .is_some_and(AgentPath::is_root)
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "Tasks can't be assigned to the root agent".to_string(),
+        ));
+    }
     if interrupt {
         session
             .services
