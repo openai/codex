@@ -1,15 +1,18 @@
-use crate::ApplyOutcome;
-use crate::AttemptStatus;
-use crate::CloudBackend;
-use crate::CloudTaskError;
-use crate::DiffSummary;
-use crate::Result;
-use crate::TaskId;
-use crate::TaskStatus;
-use crate::TaskSummary;
-use crate::TurnAttempt;
-use crate::api::TaskText;
 use chrono::Utc;
+use codex_cloud_tasks_client::ApplyOutcome;
+use codex_cloud_tasks_client::ApplyStatus;
+use codex_cloud_tasks_client::AttemptStatus;
+use codex_cloud_tasks_client::CloudBackend;
+use codex_cloud_tasks_client::CloudTaskError;
+use codex_cloud_tasks_client::CreatedTask;
+use codex_cloud_tasks_client::DiffSummary;
+use codex_cloud_tasks_client::Result;
+use codex_cloud_tasks_client::TaskId;
+use codex_cloud_tasks_client::TaskListPage;
+use codex_cloud_tasks_client::TaskStatus;
+use codex_cloud_tasks_client::TaskSummary;
+use codex_cloud_tasks_client::TaskText;
+use codex_cloud_tasks_client::TurnAttempt;
 
 #[derive(Clone, Default)]
 pub struct MockClient;
@@ -21,7 +24,7 @@ impl CloudBackend for MockClient {
         _env: Option<&str>,
         _limit: Option<i64>,
         _cursor: Option<&str>,
-    ) -> Result<crate::TaskListPage> {
+    ) -> Result<TaskListPage> {
         // Slightly vary content by env to aid tests that rely on the mock
         let rows = match _env {
             Some("env-A") => vec![("T-2000", "A: First", TaskStatus::Ready)],
@@ -63,7 +66,7 @@ impl CloudBackend for MockClient {
                 attempt_total: Some(if id_str == "T-1000" { 2 } else { 1 }),
             });
         }
-        Ok(crate::TaskListPage {
+        Ok(TaskListPage {
             tasks: out,
             cursor: None,
         })
@@ -104,7 +107,7 @@ impl CloudBackend for MockClient {
     async fn apply_task(&self, id: TaskId, _diff_override: Option<String>) -> Result<ApplyOutcome> {
         Ok(ApplyOutcome {
             applied: true,
-            status: crate::ApplyStatus::Success,
+            status: ApplyStatus::Success,
             message: format!("Applied task {} locally (mock)", id.0),
             skipped_paths: Vec::new(),
             conflict_paths: Vec::new(),
@@ -118,7 +121,7 @@ impl CloudBackend for MockClient {
     ) -> Result<ApplyOutcome> {
         Ok(ApplyOutcome {
             applied: false,
-            status: crate::ApplyStatus::Success,
+            status: ApplyStatus::Success,
             message: format!("Preflight passed for task {} (mock)", id.0),
             skipped_paths: Vec::new(),
             conflict_paths: Vec::new(),
@@ -150,10 +153,10 @@ impl CloudBackend for MockClient {
         git_ref: &str,
         qa_mode: bool,
         best_of_n: usize,
-    ) -> Result<crate::CreatedTask> {
+    ) -> Result<CreatedTask> {
         let _ = (env_id, prompt, git_ref, qa_mode, best_of_n);
         let id = format!("task_local_{}", chrono::Utc::now().timestamp_millis());
-        Ok(crate::CreatedTask { id: TaskId(id) })
+        Ok(CreatedTask { id: TaskId(id) })
     }
 }
 

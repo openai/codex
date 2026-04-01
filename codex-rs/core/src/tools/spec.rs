@@ -1,8 +1,6 @@
 use crate::client_common::tools::ToolSpec;
-use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
-use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
@@ -21,21 +19,11 @@ use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::registry::tool_handler_key;
-use codex_features::Feature;
-use codex_features::Features;
-use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InputModality;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_tools::CommandToolOptions;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolType;
@@ -43,6 +31,7 @@ use codex_tools::ShellToolOptions;
 use codex_tools::SpawnAgentToolOptions;
 use codex_tools::ToolSearchAppInfo;
 use codex_tools::ToolSuggestEntry;
+use codex_tools::ToolUserShellType;
 use codex_tools::ViewImageToolOptions;
 use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::augment_tool_spec_for_code_mode;
@@ -80,282 +69,38 @@ use codex_tools::create_write_stdin_tool;
 use codex_tools::dynamic_tool_to_responses_api_tool;
 use codex_tools::mcp_tool_to_responses_api_tool;
 use codex_tools::tool_spec_to_code_mode_tool_definition;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 pub type JsonSchema = codex_tools::JsonSchema;
+pub use codex_tools::ShellCommandBackendConfig;
+pub use codex_tools::ToolsConfig;
+pub use codex_tools::ToolsConfigParams;
+pub use codex_tools::UnifiedExecShellMode;
+pub use codex_tools::ZshForkConfig;
 
 #[cfg(test)]
 pub(crate) use codex_tools::mcp_call_tool_result_output_schema;
 
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ShellCommandBackendConfig {
-    Classic,
-    ZshFork,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum UnifiedExecShellMode {
-    Direct,
-    ZshFork(ZshForkConfig),
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct ZshForkConfig {
-    pub(crate) shell_zsh_path: AbsolutePathBuf,
-    pub(crate) main_execve_wrapper_exe: AbsolutePathBuf,
-}
-
-impl UnifiedExecShellMode {
-    pub fn for_session(
-        shell_command_backend: ShellCommandBackendConfig,
-        user_shell: &Shell,
-        shell_zsh_path: Option<&PathBuf>,
-        main_execve_wrapper_exe: Option<&PathBuf>,
-    ) -> Self {
-        if cfg!(unix)
-            && shell_command_backend == ShellCommandBackendConfig::ZshFork
-            && matches!(user_shell.shell_type, ShellType::Zsh)
-            && let (Some(shell_zsh_path), Some(main_execve_wrapper_exe)) =
-                (shell_zsh_path, main_execve_wrapper_exe)
-            && let (Ok(shell_zsh_path), Ok(main_execve_wrapper_exe)) = (
-                AbsolutePathBuf::try_from(shell_zsh_path.as_path())
-                    .inspect_err(|e| tracing::warn!("Failed to convert shell_zsh_path `{shell_zsh_path:?}`: {e:?}")),
-                AbsolutePathBuf::try_from(main_execve_wrapper_exe.as_path()).inspect_err(|e| {
-                    tracing::warn!("Failed to convert main_execve_wrapper_exe `{main_execve_wrapper_exe:?}`: {e:?}")
-                }),
-            )
-        {
-            Self::ZshFork(ZshForkConfig {
-                shell_zsh_path,
-                main_execve_wrapper_exe,
-            })
-        } else {
-            Self::Direct
-        }
+pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
+    match user_shell.shell_type {
+        ShellType::Zsh => ToolUserShellType::Zsh,
+        ShellType::Bash => ToolUserShellType::Bash,
+        ShellType::PowerShell => ToolUserShellType::PowerShell,
+        ShellType::Sh => ToolUserShellType::Sh,
+        ShellType::Cmd => ToolUserShellType::Cmd,
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ToolsConfig {
-    pub available_models: Vec<ModelPreset>,
-    pub shell_type: ConfigShellToolType,
-    shell_command_backend: ShellCommandBackendConfig,
-    pub unified_exec_shell_mode: UnifiedExecShellMode,
-    pub allow_login_shell: bool,
-    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
-    pub web_search_mode: Option<WebSearchMode>,
-    pub web_search_config: Option<WebSearchConfig>,
-    pub web_search_tool_type: WebSearchToolType,
-    pub image_gen_tool: bool,
-    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
-    pub search_tool: bool,
-    pub tool_suggest: bool,
-    pub exec_permission_approvals_enabled: bool,
-    pub request_permissions_tool_enabled: bool,
-    pub code_mode_enabled: bool,
-    pub code_mode_only_enabled: bool,
-    pub js_repl_enabled: bool,
-    pub js_repl_tools_only: bool,
-    pub can_request_original_image_detail: bool,
-    pub collab_tools: bool,
-    pub multi_agent_v2: bool,
-    pub request_user_input: bool,
-    pub default_mode_request_user_input: bool,
-    pub experimental_supported_tools: Vec<String>,
-    pub agent_jobs_tools: bool,
-    pub agent_jobs_worker_tools: bool,
-}
-
-pub(crate) struct ToolsConfigParams<'a> {
-    pub(crate) model_info: &'a ModelInfo,
-    pub(crate) available_models: &'a Vec<ModelPreset>,
-    pub(crate) features: &'a Features,
-    pub(crate) web_search_mode: Option<WebSearchMode>,
-    pub(crate) session_source: SessionSource,
-    pub(crate) sandbox_policy: &'a SandboxPolicy,
-    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
-}
-
-fn unified_exec_allowed_in_environment(
-    is_windows: bool,
-    sandbox_policy: &SandboxPolicy,
-    windows_sandbox_level: WindowsSandboxLevel,
-) -> bool {
-    !(is_windows
-        && windows_sandbox_level != WindowsSandboxLevel::Disabled
-        && !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ))
-}
-
-impl ToolsConfig {
-    pub fn new(params: &ToolsConfigParams) -> Self {
-        let ToolsConfigParams {
-            model_info,
-            available_models: available_models_ref,
-            features,
-            web_search_mode,
-            session_source,
-            sandbox_policy,
-            windows_sandbox_level,
-        } = params;
-        let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
-        let include_code_mode = features.enabled(Feature::CodeMode);
-        let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
-        let include_js_repl = features.enabled(Feature::JsRepl);
-        let include_js_repl_tools_only =
-            include_js_repl && features.enabled(Feature::JsReplToolsOnly);
-        let include_collab_tools = features.enabled(Feature::Collab);
-        let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
-        let include_agent_jobs = features.enabled(Feature::SpawnCsv);
-        let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
-        let include_default_mode_request_user_input =
-            include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
-        let include_search_tool =
-            model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
-        let include_tool_suggest = features.enabled(Feature::ToolSuggest)
-            && features.enabled(Feature::Apps)
-            && features.enabled(Feature::Plugins);
-        let include_original_image_detail = can_request_original_image_detail(features, model_info);
-        let include_image_gen_tool =
-            features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
-        let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
-        let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
-        let shell_command_backend =
-            if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
-                ShellCommandBackendConfig::ZshFork
-            } else {
-                ShellCommandBackendConfig::Classic
-            };
-        let unified_exec_allowed = unified_exec_allowed_in_environment(
-            cfg!(target_os = "windows"),
-            sandbox_policy,
-            *windows_sandbox_level,
-        );
-        let shell_type = if !features.enabled(Feature::ShellTool) {
-            ConfigShellToolType::Disabled
-        } else if features.enabled(Feature::ShellZshFork) {
-            ConfigShellToolType::ShellCommand
-        } else if features.enabled(Feature::UnifiedExec) && unified_exec_allowed {
-            // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
-            if codex_utils_pty::conpty_supported() {
-                ConfigShellToolType::UnifiedExec
-            } else {
-                ConfigShellToolType::ShellCommand
-            }
-        } else if model_info.shell_type == ConfigShellToolType::UnifiedExec && !unified_exec_allowed
-        {
-            ConfigShellToolType::ShellCommand
-        } else {
-            model_info.shell_type
-        };
-
-        let apply_patch_tool_type = match model_info.apply_patch_tool_type {
-            Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
-            Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
-            None => {
-                if include_apply_patch_tool {
-                    Some(ApplyPatchToolType::Freeform)
-                } else {
-                    None
-                }
-            }
-        };
-
-        let agent_jobs_worker_tools = include_agent_jobs
-            && matches!(
-                session_source,
-                SessionSource::SubAgent(SubAgentSource::Other(label))
-                    if label.starts_with("agent_job:")
-            );
-
-        Self {
-            available_models: available_models_ref.to_vec(),
-            shell_type,
-            shell_command_backend,
-            unified_exec_shell_mode: UnifiedExecShellMode::Direct,
-            allow_login_shell: true,
-            apply_patch_tool_type,
-            web_search_mode: *web_search_mode,
-            web_search_config: None,
-            web_search_tool_type: model_info.web_search_tool_type,
-            image_gen_tool: include_image_gen_tool,
-            agent_roles: BTreeMap::new(),
-            search_tool: include_search_tool,
-            tool_suggest: include_tool_suggest,
-            exec_permission_approvals_enabled,
-            request_permissions_tool_enabled,
-            code_mode_enabled: include_code_mode,
-            code_mode_only_enabled: include_code_mode_only,
-            js_repl_enabled: include_js_repl,
-            js_repl_tools_only: include_js_repl_tools_only,
-            can_request_original_image_detail: include_original_image_detail,
-            collab_tools: include_collab_tools,
-            multi_agent_v2: include_multi_agent_v2,
-            request_user_input: include_request_user_input,
-            default_mode_request_user_input: include_default_mode_request_user_input,
-            experimental_supported_tools: model_info.experimental_supported_tools.clone(),
-            agent_jobs_tools: include_agent_jobs,
-            agent_jobs_worker_tools,
-        }
+fn agent_type_description(config: &ToolsConfig) -> String {
+    if config.agent_type_description.is_empty() {
+        crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new())
+    } else {
+        config.agent_type_description.clone()
     }
-
-    pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
-        self.agent_roles = agent_roles;
-        self
-    }
-
-    pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
-        self.allow_login_shell = allow_login_shell;
-        self
-    }
-
-    pub fn with_unified_exec_shell_mode(
-        mut self,
-        unified_exec_shell_mode: UnifiedExecShellMode,
-    ) -> Self {
-        self.unified_exec_shell_mode = unified_exec_shell_mode;
-        self
-    }
-
-    pub fn with_unified_exec_shell_mode_for_session(
-        mut self,
-        user_shell: &Shell,
-        shell_zsh_path: Option<&PathBuf>,
-        main_execve_wrapper_exe: Option<&PathBuf>,
-    ) -> Self {
-        self.unified_exec_shell_mode = UnifiedExecShellMode::for_session(
-            self.shell_command_backend,
-            user_shell,
-            shell_zsh_path,
-            main_execve_wrapper_exe,
-        );
-        self
-    }
-
-    pub fn with_web_search_config(mut self, web_search_config: Option<WebSearchConfig>) -> Self {
-        self.web_search_config = web_search_config;
-        self
-    }
-
-    pub fn for_code_mode_nested_tools(&self) -> Self {
-        let mut nested = self.clone();
-        nested.code_mode_enabled = false;
-        nested.code_mode_only_enabled = false;
-        nested
-    }
-}
-
-fn supports_image_generation(model_info: &ModelInfo) -> bool {
-    model_info.input_modalities.contains(&InputModality::Image)
 }
 
 /// TODO(dylan): deprecate once we get rid of json tool
@@ -775,13 +520,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     if config.collab_tools {
         if config.multi_agent_v2 {
+            let agent_type_description = agent_type_description(config);
             push_tool_spec(
                 &mut builder,
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
-                    agent_type_description: crate::agent::role::spawn_tool_spec::build(
-                        &config.agent_roles,
-                    ),
+                    agent_type_description,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -827,13 +571,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
             builder.register_handler("close_agent", Arc::new(CloseAgentHandlerV2));
             builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
         } else {
+            let agent_type_description = agent_type_description(config);
             push_tool_spec(
                 &mut builder,
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
-                    agent_type_description: crate::agent::role::spawn_tool_spec::build(
-                        &config.agent_roles,
-                    ),
+                    agent_type_description,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,

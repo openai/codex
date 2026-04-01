@@ -1721,6 +1721,7 @@ dependencies = [
  "clap",
  "codex-client",
  "codex-cloud-tasks-client",
+ "codex-cloud-tasks-mock-client",
  "codex-core",
  "codex-git-utils",
  "codex-login",
@@ -1750,10 +1751,19 @@ dependencies = [
  "chrono",
  "codex-backend-client",
  "codex-git-utils",
- "diffy",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codex-cloud-tasks-mock-client"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "codex-cloud-tasks-client",
+ "diffy",
 ]
 
 [[package]]
@@ -2647,11 +2657,15 @@ version = "0.0.0"
 dependencies = [
  "codex-app-server-protocol",
  "codex-code-mode",
+ "codex-features",
  "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-pty",
  "pretty_assertions",
  "rmcp",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
