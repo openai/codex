@@ -851,7 +851,6 @@ impl MessageProcessor {
                     .process_request(
                         connection_id,
                         other,
-                        session.product_client_id.clone(),
                         session.app_server_client_name.clone(),
                         session.client_version.clone(),
                         request_context,

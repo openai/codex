@@ -229,7 +229,7 @@ impl AgentControl {
                     parent_thread
                         .codex
                         .session
-                        .analytics_client_metadata()
+                        .app_server_client_metadata()
                         .await
                 }
                 Err(error) => {
@@ -238,8 +238,7 @@ impl AgentControl {
                         parent_thread_id = %parent_thread_id,
                         "skipping subagent thread analytics: failed to load parent thread metadata"
                     );
-                    crate::codex::AnalyticsClientMetadata {
-                        product_client_id: None,
+                    crate::codex::AppServerClientMetadata {
                         client_name: None,
                         client_version: None,
                     }

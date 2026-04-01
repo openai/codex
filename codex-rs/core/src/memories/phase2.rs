@@ -151,7 +151,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         .await
     {
         if session.enabled(Feature::GeneralAnalytics) {
-            let client_metadata = session.analytics_client_metadata().await;
+            let client_metadata = session.app_server_client_metadata().await;
             emit_subagent_session_started(
                 &session.services.analytics_events_client,
                 client_metadata,

@@ -687,7 +687,6 @@ impl CodexMessageProcessor {
         &mut self,
         connection_id: ConnectionId,
         request: ClientRequest,
-        app_server_product_client_id: Option<String>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         request_context: RequestContext,
@@ -706,7 +705,6 @@ impl CodexMessageProcessor {
                 self.thread_start(
                     to_connection_request_id(request_id),
                     params,
-                    app_server_product_client_id.clone(),
                     app_server_client_name.clone(),
                     app_server_client_version.clone(),
                     request_context,
@@ -812,7 +810,6 @@ impl CodexMessageProcessor {
                 self.turn_start(
                     to_connection_request_id(request_id),
                     params,
-                    app_server_product_client_id.clone(),
                     app_server_client_name.clone(),
                     app_server_client_version.clone(),
                 )
@@ -2061,7 +2058,6 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
-        app_server_product_client_id: Option<String>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         request_context: RequestContext,
@@ -2119,7 +2115,6 @@ impl CodexMessageProcessor {
                 runtime_feature_enablement,
                 cloud_requirements,
                 request_id,
-                app_server_product_client_id,
                 app_server_client_name,
                 app_server_client_version,
                 config,
@@ -2195,7 +2190,6 @@ impl CodexMessageProcessor {
         runtime_feature_enablement: BTreeMap<String, bool>,
         cloud_requirements: CloudRequirementsLoader,
         request_id: ConnectionRequestId,
-        app_server_product_client_id: Option<String>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
@@ -2281,7 +2275,6 @@ impl CodexMessageProcessor {
                 } = new_conv;
                 if let Err(error) = Self::set_app_server_client_info(
                     thread.as_ref(),
-                    app_server_product_client_id,
                     app_server_client_name,
                     app_server_client_version,
                 )
@@ -6356,7 +6349,6 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: TurnStartParams,
-        app_server_product_client_id: Option<String>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) {
@@ -6373,7 +6365,6 @@ impl CodexMessageProcessor {
         };
         if let Err(error) = Self::set_app_server_client_info(
             thread.as_ref(),
-            app_server_product_client_id,
             app_server_client_name,
             app_server_client_version,
         )
@@ -6473,16 +6464,11 @@ impl CodexMessageProcessor {
 
     async fn set_app_server_client_info(
         thread: &CodexThread,
-        app_server_product_client_id: Option<String>,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<(), JSONRPCErrorError> {
         thread
-            .set_app_server_client_info(
-                app_server_product_client_id,
-                app_server_client_name,
-                app_server_client_version,
-            )
+            .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,

@@ -99,7 +99,7 @@ pub(crate) async fn run_codex_thread_interactive(
     .await?;
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
         let thread_config = codex.thread_config_snapshot().await;
-        let client_metadata = parent_session.analytics_client_metadata().await;
+        let client_metadata = parent_session.app_server_client_metadata().await;
         emit_subagent_session_started(
             &parent_session.services.analytics_events_client,
             client_metadata,
