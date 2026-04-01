@@ -684,11 +684,7 @@ impl ConfigBuilder {
 }
 
 impl Config {
-    pub fn to_mcp_config(
-        &self,
-        auth: Option<&crate::auth::CodexAuth>,
-        plugins_manager: &crate::plugins::PluginsManager,
-    ) -> McpConfig {
+    pub fn to_mcp_config(&self, plugins_manager: &crate::plugins::PluginsManager) -> McpConfig {
         let loaded_plugins = plugins_manager.plugins_for_config(self);
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
@@ -698,7 +694,6 @@ impl Config {
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             codex_home: self.codex_home.clone(),
-            cli_auth_credentials_store_mode: self.cli_auth_credentials_store_mode,
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
             mcp_oauth_callback_url: self.mcp_oauth_callback_url.clone(),
@@ -708,7 +703,7 @@ impl Config {
             approval_policy: self.permissions.approval_policy.clone(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
-            connectors_enabled: self.features.apps_enabled_for_auth(auth),
+            apps_enabled: self.features.enabled(Feature::Apps),
             configured_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }

@@ -1,4 +1,3 @@
-use crate::CodexAuth;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
@@ -2070,22 +2069,21 @@ approval_mode = "approve"
 }
 
 #[test]
-fn to_mcp_config_enables_connectors_for_chatgpt_auth() -> std::io::Result<()> {
+fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
         codex_home.path().to_path_buf(),
     )?;
-    let _ = config.features.enable(Feature::Apps);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
-    let mcp_config = config.to_mcp_config(/*auth*/ None, &plugins_manager);
-    assert!(!mcp_config.connectors_enabled);
+    let mcp_config = config.to_mcp_config(&plugins_manager);
+    assert!(!mcp_config.apps_enabled);
 
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let mcp_config = config.to_mcp_config(Some(&auth), &plugins_manager);
-    assert!(mcp_config.connectors_enabled);
+    let _ = config.features.enable(Feature::Apps);
+    let mcp_config = config.to_mcp_config(&plugins_manager);
+    assert!(mcp_config.apps_enabled);
 
     Ok(())
 }

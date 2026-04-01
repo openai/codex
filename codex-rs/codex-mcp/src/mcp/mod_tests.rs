@@ -1,6 +1,6 @@
 use super::*;
 use codex_config::Constrained;
-use codex_login::AuthCredentialsStoreMode;
+use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::protocol::AskForApproval;
@@ -12,7 +12,6 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
         codex_home,
-        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::default(),
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
@@ -20,7 +19,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
-        connectors_enabled: false,
+        apps_enabled: false,
         configured_mcp_servers: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }
@@ -159,13 +158,14 @@ fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
 #[test]
 fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     let mut config = test_mcp_config(PathBuf::from("/tmp"));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     let mut servers = with_codex_apps_mcp(HashMap::new(), /*auth*/ None, &config);
     assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
 
-    config.connectors_enabled = true;
+    config.apps_enabled = true;
 
-    servers = with_codex_apps_mcp(servers, /*auth*/ None, &config);
+    servers = with_codex_apps_mcp(servers, Some(&auth), &config);
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps should be present when apps is enabled");
@@ -181,7 +181,8 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
 async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let mut config = test_mcp_config(codex_home.path().to_path_buf());
-    config.connectors_enabled = true;
+    config.apps_enabled = true;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     config.configured_mcp_servers.insert(
         "sample".to_string(),
@@ -226,7 +227,7 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
         },
     );
 
-    let effective = effective_mcp_servers(&config, /*auth*/ None);
+    let effective = effective_mcp_servers(&config, Some(&auth));
 
     let sample = effective.get("sample").expect("user server should exist");
     let docs = effective

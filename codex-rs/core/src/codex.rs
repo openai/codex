@@ -4251,8 +4251,7 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
-        let mcp_config =
-            config.to_mcp_config(auth.as_ref(), self.services.plugins_manager.as_ref());
+        let mcp_config = config.to_mcp_config(self.services.plugins_manager.as_ref());
         let tool_plugin_provenance = self
             .services
             .mcp_manager

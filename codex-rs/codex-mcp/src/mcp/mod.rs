@@ -12,8 +12,6 @@ use async_channel::unbounded;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
-use codex_login::AuthCredentialsStoreMode;
-use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::Resource;
@@ -66,7 +64,6 @@ pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
 pub struct McpConfig {
     pub chatgpt_base_url: String,
     pub codex_home: PathBuf,
-    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
     pub mcp_oauth_callback_port: Option<u16>,
     pub mcp_oauth_callback_url: Option<String>,
@@ -74,7 +71,7 @@ pub struct McpConfig {
     pub approval_policy: Constrained<AskForApproval>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub use_legacy_landlock: bool,
-    pub connectors_enabled: bool,
+    pub apps_enabled: bool,
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
@@ -231,7 +228,7 @@ pub fn with_codex_apps_mcp(
     auth: Option<&CodexAuth>,
     config: &McpConfig,
 ) -> HashMap<String, McpServerConfig> {
-    if config.connectors_enabled {
+    if config.apps_enabled && auth.is_some_and(CodexAuth::is_chatgpt_auth) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             codex_apps_mcp_server_config(config, auth),
@@ -260,15 +257,10 @@ pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
 
 pub async fn collect_mcp_snapshot(
     config: &McpConfig,
+    auth: Option<&CodexAuth>,
     submit_id: String,
 ) -> McpListToolsResponseEvent {
-    let auth_manager = AuthManager::shared(
-        config.codex_home.clone(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-    );
-    let auth = auth_manager.auth().await;
-    let mcp_servers = effective_mcp_servers(config, auth.as_ref());
+    let mcp_servers = effective_mcp_servers(config, auth);
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
@@ -302,7 +294,7 @@ pub async fn collect_mcp_snapshot(
         tx_event,
         sandbox_state,
         config.codex_home.clone(),
-        codex_apps_tools_cache_key(auth.as_ref()),
+        codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
     )
     .await;

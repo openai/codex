@@ -203,7 +203,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let mcp_config = config.to_mcp_config(auth.as_ref(), plugins_manager.as_ref());
+    let mcp_config = config.to_mcp_config(plugins_manager.as_ref());
     let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
