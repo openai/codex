@@ -100,12 +100,13 @@ impl CodexThread {
         self.codex.steer_input(input, expected_turn_id).await
     }
 
-    pub async fn set_app_server_client_name(
+    pub async fn set_app_server_client_info(
         &self,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
     ) -> ConstraintResult<()> {
         self.codex
-            .set_app_server_client_name(app_server_client_name)
+            .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
     }
 

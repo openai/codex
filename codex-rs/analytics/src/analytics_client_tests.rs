@@ -454,6 +454,8 @@ fn subagent_thread_started_review_serializes_expected_shape() {
         SubAgentThreadStartedInput {
             thread_id: "thread-review".to_string(),
             product_client_id: "codex-tui".to_string(),
+            client_name: Some("codex-tui".to_string()),
+            client_version: Some("1.0.0".to_string()),
             model: "gpt-5".to_string(),
             ephemeral: false,
             subagent_source: SubAgentSource::Review,
@@ -466,6 +468,14 @@ fn subagent_thread_started_review_serializes_expected_shape() {
     assert_eq!(
         payload["event_params"]["app_server_client"]["product_client_id"],
         "codex-tui"
+    );
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["client_name"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["client_version"],
+        "1.0.0"
     );
     assert_eq!(
         payload["event_params"]["app_server_client"]["rpc_transport"],
@@ -486,6 +496,8 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
         SubAgentThreadStartedInput {
             thread_id: "thread-spawn".to_string(),
             product_client_id: "codex-tui".to_string(),
+            client_name: Some("codex-tui".to_string()),
+            client_version: Some("1.0.0".to_string()),
             model: "gpt-5".to_string(),
             ephemeral: true,
             subagent_source: SubAgentSource::ThreadSpawn {
@@ -514,6 +526,8 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
         SubAgentThreadStartedInput {
             thread_id: "thread-memory".to_string(),
             product_client_id: "codex-tui".to_string(),
+            client_name: Some("codex-tui".to_string()),
+            client_version: Some("1.0.0".to_string()),
             model: "gpt-5".to_string(),
             ephemeral: false,
             subagent_source: SubAgentSource::MemoryConsolidation,
@@ -536,6 +550,8 @@ fn subagent_thread_started_other_serializes_expected_shape() {
         SubAgentThreadStartedInput {
             thread_id: "thread-guardian".to_string(),
             product_client_id: "codex-tui".to_string(),
+            client_name: Some("codex-tui".to_string()),
+            client_version: Some("1.0.0".to_string()),
             model: "gpt-5".to_string(),
             ephemeral: false,
             subagent_source: SubAgentSource::Other("guardian".to_string()),
@@ -558,6 +574,8 @@ async fn subagent_thread_started_publishes_without_initialize() {
                 SubAgentThreadStartedInput {
                     thread_id: "thread-review".to_string(),
                     product_client_id: "codex-tui".to_string(),
+                    client_name: Some("codex-tui".to_string()),
+                    client_version: Some("1.0.0".to_string()),
                     model: "gpt-5".to_string(),
                     ephemeral: false,
                     subagent_source: SubAgentSource::Review,

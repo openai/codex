@@ -98,10 +98,12 @@ pub(crate) async fn run_codex_thread_interactive(
     })
     .await?;
     let thread_config = codex.thread_config_snapshot().await;
-    let product_client_id = parent_session.analytics_product_client_id().await;
+    let client_metadata = parent_session.analytics_client_metadata().await;
     emit_subagent_session_started(
         &parent_session.services.analytics_events_client,
-        product_client_id,
+        client_metadata.product_client_id,
+        client_metadata.client_name,
+        client_metadata.client_version,
         codex.session.conversation_id,
         thread_config,
         subagent_source,

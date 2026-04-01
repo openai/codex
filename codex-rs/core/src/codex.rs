@@ -636,6 +636,7 @@ impl Codex {
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
+            app_server_client_version: None,
             session_source,
             dynamic_tools,
             persist_extended_history,
@@ -755,13 +756,15 @@ impl Codex {
         self.session.steer_input(input, expected_turn_id).await
     }
 
-    pub(crate) async fn set_app_server_client_name(
+    pub(crate) async fn set_app_server_client_info(
         &self,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
     ) -> ConstraintResult<()> {
         self.session
             .update_settings(SessionSettingsUpdate {
                 app_server_client_name,
+                app_server_client_version,
                 ..Default::default()
             })
             .await
@@ -1112,6 +1115,7 @@ pub(crate) struct SessionConfiguration {
     /// Optional service name tag for session metrics.
     metrics_service_name: Option<String>,
     app_server_client_name: Option<String>,
+    app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
@@ -1205,6 +1209,9 @@ impl SessionConfiguration {
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
         }
+        if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
+            next_configuration.app_server_client_version = Some(app_server_client_version);
+        }
         Ok(next_configuration)
     }
 }
@@ -1222,16 +1229,31 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) app_server_client_version: Option<String>,
+}
+
+pub(crate) struct AnalyticsClientMetadata {
+    pub(crate) product_client_id: String,
+    pub(crate) client_name: Option<String>,
+    pub(crate) client_version: Option<String>,
 }
 
 impl Session {
-    pub(crate) async fn analytics_product_client_id(&self) -> String {
+    pub(crate) async fn analytics_client_metadata(&self) -> AnalyticsClientMetadata {
         let state = self.state.lock().await;
-        state
+        let client_name = state.session_configuration.app_server_client_name.clone();
+        let client_version = state
             .session_configuration
-            .app_server_client_name
+            .app_server_client_version
+            .clone();
+        let product_client_id = client_name
             .clone()
-            .unwrap_or_else(|| crate::default_client::originator().value)
+            .unwrap_or_else(|| crate::default_client::originator().value);
+        AnalyticsClientMetadata {
+            product_client_id,
+            client_name,
+            client_version,
+        }
     }
 
     /// Builds the `x-codex-beta-features` header value for this session.
@@ -4372,6 +4394,8 @@ impl Session {
 pub(crate) fn emit_subagent_session_started(
     analytics_events_client: &crate::AnalyticsEventsClient,
     product_client_id: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
     thread_id: ThreadId,
     thread_config: ThreadConfigSnapshot,
     subagent_source: SubAgentSource,
@@ -4383,6 +4407,8 @@ pub(crate) fn emit_subagent_session_started(
     analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
         thread_id: thread_id.to_string(),
         product_client_id,
+        client_name,
+        client_version,
         model: thread_config.model,
         ephemeral: thread_config.ephemeral,
         subagent_source,
@@ -4757,6 +4783,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         app_server_client_name: None,
+                        app_server_client_version: None,
                     },
                 )
             }

@@ -150,10 +150,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         .get_agent_config_snapshot(thread_id)
         .await
     {
-        let product_client_id = session.analytics_product_client_id().await;
+        let client_metadata = session.analytics_client_metadata().await;
         emit_subagent_session_started(
             &session.services.analytics_events_client,
-            product_client_id,
+            client_metadata.product_client_id,
+            client_metadata.client_name,
+            client_metadata.client_version,
             thread_id,
             thread_config,
             SubAgentSource::MemoryConsolidation,

@@ -223,15 +223,19 @@ impl AgentControl {
             },
         )) = notification_source.as_ref()
         {
-            let product_client_id = match state.get_thread(*parent_thread_id).await {
+            let client_metadata = match state.get_thread(*parent_thread_id).await {
                 Ok(parent_thread) => {
                     parent_thread
                         .codex
                         .session
-                        .analytics_product_client_id()
+                        .analytics_client_metadata()
                         .await
                 }
-                Err(_) => crate::default_client::originator().value,
+                Err(_) => crate::codex::AnalyticsClientMetadata {
+                    product_client_id: crate::default_client::originator().value,
+                    client_name: None,
+                    client_version: None,
+                },
             };
             let thread_config = new_thread.thread.codex.thread_config_snapshot().await;
             emit_subagent_session_started(
@@ -241,7 +245,9 @@ impl AgentControl {
                     .session
                     .services
                     .analytics_events_client,
-                product_client_id,
+                client_metadata.product_client_id,
+                client_metadata.client_name,
+                client_metadata.client_version,
                 new_thread.thread_id,
                 thread_config,
                 subagent_source.clone(),

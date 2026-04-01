@@ -238,8 +238,8 @@ pub(crate) fn subagent_thread_started_event_request(
         thread_id: input.thread_id,
         app_server_client: CodexAppServerClientMetadata {
             product_client_id: input.product_client_id,
-            client_name: None,
-            client_version: None,
+            client_name: input.client_name,
+            client_version: input.client_version,
             rpc_transport: AppServerRpcTransport::InProcess,
             experimental_api_enabled: None,
         },
