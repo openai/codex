@@ -1,36 +1,39 @@
 pub mod auth;
 mod skill_dependencies;
-pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+pub use skill_dependencies::canonical_mcp_server_key;
+pub use skill_dependencies::collect_missing_mcp_dependencies;
 
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::unbounded;
+use codex_config::Constrained;
+use codex_config::McpServerConfig;
+use codex_config::McpServerTransportConfig;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::mcp::Tool;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_rmcp_client::OAuthCredentialsStoreMode;
 use serde_json::Value;
 
-use crate::AuthManager;
-use crate::CodexAuth;
-use crate::config::Config;
-use crate::config::types::McpServerConfig;
-use crate::config::types::McpServerTransportConfig;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
-use crate::plugins::PluginCapabilitySummary;
-use crate::plugins::PluginsManager;
+pub type McpManager = McpConnectionManager;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
+pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
@@ -57,6 +60,23 @@ pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
     sanitize_responses_api_tool_name(&format!(
         "{MCP_TOOL_NAME_PREFIX}{MCP_TOOL_NAME_DELIMITER}{server_name}{MCP_TOOL_NAME_DELIMITER}"
     ))
+}
+
+#[derive(Debug, Clone)]
+pub struct McpConfig {
+    pub chatgpt_base_url: String,
+    pub codex_home: PathBuf,
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+    pub mcp_oauth_callback_port: Option<u16>,
+    pub mcp_oauth_callback_url: Option<String>,
+    pub skill_mcp_dependency_install_enabled: bool,
+    pub approval_policy: Constrained<AskForApproval>,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub use_legacy_landlock: bool,
+    pub connectors_enabled: bool,
+    pub configured_mcp_servers: HashMap<String, McpServerConfig>,
+    pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -173,11 +193,11 @@ fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
     }
 }
 
-pub(crate) fn codex_apps_mcp_url(config: &Config) -> String {
+pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
     codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
 }
 
-fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> McpServerConfig {
+fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) -> McpServerConfig {
     let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
     let http_headers = if bearer_token_env_var.is_some() {
         None
@@ -206,13 +226,12 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
     }
 }
 
-pub(crate) fn with_codex_apps_mcp(
+pub fn with_codex_apps_mcp(
     mut servers: HashMap<String, McpServerConfig>,
-    connectors_enabled: bool,
     auth: Option<&CodexAuth>,
-    config: &Config,
+    config: &McpConfig,
 ) -> HashMap<String, McpServerConfig> {
-    if connectors_enabled {
+    if config.connectors_enabled {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             codex_apps_mcp_server_config(config, auth),
@@ -223,69 +242,34 @@ pub(crate) fn with_codex_apps_mcp(
     servers
 }
 
-pub struct McpManager {
-    plugins_manager: Arc<PluginsManager>,
+pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
+    config.configured_mcp_servers.clone()
 }
 
-impl McpManager {
-    pub fn new(plugins_manager: Arc<PluginsManager>) -> Self {
-        Self { plugins_manager }
-    }
-
-    pub fn configured_servers(&self, config: &Config) -> HashMap<String, McpServerConfig> {
-        configured_mcp_servers(config, self.plugins_manager.as_ref())
-    }
-
-    pub fn effective_servers(
-        &self,
-        config: &Config,
-        auth: Option<&CodexAuth>,
-    ) -> HashMap<String, McpServerConfig> {
-        effective_mcp_servers(config, auth, self.plugins_manager.as_ref())
-    }
-
-    pub fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
-        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
-        ToolPluginProvenance::from_capability_summaries(loaded_plugins.capability_summaries())
-    }
-}
-
-fn configured_mcp_servers(
-    config: &Config,
-    plugins_manager: &PluginsManager,
-) -> HashMap<String, McpServerConfig> {
-    let loaded_plugins = plugins_manager.plugins_for_config(config);
-    let mut servers = config.mcp_servers.get().clone();
-    for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
-        servers.entry(name).or_insert(plugin_server);
-    }
-    servers
-}
-
-fn effective_mcp_servers(
-    config: &Config,
+pub fn effective_mcp_servers(
+    config: &McpConfig,
     auth: Option<&CodexAuth>,
-    plugins_manager: &PluginsManager,
 ) -> HashMap<String, McpServerConfig> {
-    let servers = configured_mcp_servers(config, plugins_manager);
-    with_codex_apps_mcp(
-        servers,
-        config.features.apps_enabled_for_auth(auth),
-        auth,
-        config,
-    )
+    let servers = configured_mcp_servers(config);
+    with_codex_apps_mcp(servers, auth, config)
 }
 
-pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent {
+pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
+    ToolPluginProvenance::from_capability_summaries(&config.plugin_capability_summaries)
+}
+
+pub async fn collect_mcp_snapshot(
+    config: &McpConfig,
+    submit_id: String,
+) -> McpListToolsResponseEvent {
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     );
     let auth = auth_manager.auth().await;
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let mcp_servers = mcp_manager.effective_servers(config, auth.as_ref());
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
+    let mcp_servers = effective_mcp_servers(config, auth.as_ref());
+    let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
             tools: HashMap::new(),
@@ -306,14 +290,15 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        use_legacy_landlock: config.features.use_legacy_landlock(),
+        use_legacy_landlock: config.use_legacy_landlock,
     };
 
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries.clone(),
-        &config.permissions.approval_policy,
+        &config.approval_policy,
+        submit_id,
         tx_event,
         sandbox_state,
         config.codex_home.clone(),
@@ -359,7 +344,7 @@ pub fn group_tools_by_server(
     grouped
 }
 
-pub(crate) async fn collect_mcp_snapshot_from_manager(
+pub async fn collect_mcp_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
 ) -> McpListToolsResponseEvent {
@@ -372,7 +357,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
     let auth_statuses = auth_status_entries
         .iter()
         .map(|(name, entry)| (name.clone(), entry.auth_status))
-        .collect();
+        .collect::<HashMap<_, _>>();
 
     let tools = tools
         .into_iter()
@@ -389,7 +374,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
                 None
             }
         })
-        .collect();
+        .collect::<HashMap<_, _>>();
 
     let resources = resources
         .into_iter()
@@ -424,7 +409,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
                 .collect::<Vec<_>>();
             (name, resources)
         })
-        .collect();
+        .collect::<HashMap<_, _>>();
 
     let resource_templates = resource_templates
         .into_iter()
@@ -460,7 +445,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
                 .collect::<Vec<_>>();
             (name, templates)
         })
-        .collect();
+        .collect::<HashMap<_, _>>();
 
     McpListToolsResponseEvent {
         tools,

@@ -265,11 +265,11 @@ use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -1996,6 +1996,7 @@ impl Session {
             config.mcp_oauth_credentials_store_mode,
             auth_statuses.clone(),
             &session_configuration.approval_policy,
+            INITIAL_SUBMIT_ID.to_owned(),
             tx_event.clone(),
             sandbox_state,
             config.codex_home.clone(),
@@ -4246,16 +4247,13 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
+        let mcp_config =
+            config.to_mcp_config(auth.as_ref(), self.services.plugins_manager.as_ref());
         let tool_plugin_provenance = self
             .services
             .mcp_manager
             .tool_plugin_provenance(config.as_ref());
-        let mcp_servers = with_codex_apps_mcp(
-            mcp_servers,
-            self.features.apps_enabled_for_auth(auth.as_ref()),
-            auth.as_ref(),
-            config.as_ref(),
-        );
+        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         let sandbox_state = SandboxState {
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
@@ -4273,6 +4271,7 @@ impl Session {
             store_mode,
             auth_statuses,
             &turn_context.config.permissions.approval_policy,
+            turn_context.sub_id.clone(),
             self.get_tx_event(),
             sandbox_state,
             config.codex_home.clone(),
@@ -4615,8 +4614,6 @@ mod handlers {
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
-    use crate::mcp::auth::compute_auth_statuses;
-    use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::RolloutRecorder;
     use crate::rollout::session_index;
@@ -4625,6 +4622,8 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
+    use codex_mcp::mcp::auth::compute_auth_statuses;
+    use codex_mcp::mcp::collect_mcp_snapshot_from_manager;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;

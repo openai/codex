@@ -9,8 +9,8 @@ use codex_rmcp_client::discover_streamable_http_oauth;
 use futures::future::join_all;
 use tracing::warn;
 
-use crate::config::types::McpServerConfig;
-use crate::config::types::McpServerTransportConfig;
+use codex_config::McpServerConfig;
+use codex_config::McpServerTransportConfig;
 
 #[derive(Debug, Clone)]
 pub struct McpOAuthLoginConfig {

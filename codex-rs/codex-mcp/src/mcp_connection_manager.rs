@@ -20,9 +20,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::McpConfig;
 use crate::mcp::ToolPluginProvenance;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::mcp::sanitize_responses_api_tool_name;
+use crate::mcp::configured_mcp_servers;
+use crate::mcp::effective_mcp_servers;
+use crate::mcp::tool_plugin_provenance;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -79,11 +83,11 @@ use tracing::instrument;
 use tracing::warn;
 use url::Url;
 
-use crate::codex::INITIAL_SUBMIT_ID;
-use crate::config::types::McpServerConfig;
-use crate::config::types::McpServerTransportConfig;
-use crate::connectors::is_connector_id_allowed;
-use crate::connectors::sanitize_name;
+use codex_config::McpServerConfig;
+use codex_config::McpServerTransportConfig;
+use codex_login::CodexAuth;
+use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
+use codex_utils_plugins::mcp_connector::sanitize_name;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -112,9 +116,7 @@ fn sha1_hex(s: &str) -> String {
     format!("{sha1:x}")
 }
 
-pub(crate) fn codex_apps_tools_cache_key(
-    auth: Option<&crate::CodexAuth>,
-) -> CodexAppsToolsCacheKey {
+pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
     let token_data = auth.and_then(|auth| auth.get_token_data().ok());
     let account_id = token_data
         .as_ref()
@@ -180,20 +182,20 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ToolInfo {
-    pub(crate) server_name: String,
-    pub(crate) tool_name: String,
-    pub(crate) tool_namespace: String,
-    pub(crate) tool: Tool,
-    pub(crate) connector_id: Option<String>,
-    pub(crate) connector_name: Option<String>,
+pub struct ToolInfo {
+    pub server_name: String,
+    pub tool_name: String,
+    pub tool_namespace: String,
+    pub tool: Tool,
+    pub connector_id: Option<String>,
+    pub connector_name: Option<String>,
     #[serde(default)]
-    pub(crate) plugin_display_names: Vec<String>,
-    pub(crate) connector_description: Option<String>,
+    pub plugin_display_names: Vec<String>,
+    pub connector_description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CodexAppsToolsCacheKey {
+pub struct CodexAppsToolsCacheKey {
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
     is_workspace_account: bool,
@@ -576,14 +578,30 @@ pub struct SandboxState {
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
-pub(crate) struct McpConnectionManager {
+pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_origins: HashMap<String, String>,
     elicitation_requests: ElicitationRequestManager,
 }
 
 impl McpConnectionManager {
-    pub(crate) fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
+    pub fn configured_servers(&self, config: &McpConfig) -> HashMap<String, McpServerConfig> {
+        configured_mcp_servers(config)
+    }
+
+    pub fn effective_servers(
+        &self,
+        config: &McpConfig,
+        auth: Option<&CodexAuth>,
+    ) -> HashMap<String, McpServerConfig> {
+        effective_mcp_servers(config, auth)
+    }
+
+    pub fn tool_plugin_provenance(&self, config: &McpConfig) -> ToolPluginProvenance {
+        tool_plugin_provenance(config)
+    }
+
+    pub fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
@@ -591,18 +609,11 @@ impl McpConnectionManager {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_mcp_connection_manager_for_tests(
-        approval_policy: &Constrained<AskForApproval>,
-    ) -> Self {
-        Self::new_uninitialized(approval_policy)
-    }
-
-    pub(crate) fn has_servers(&self) -> bool {
+    pub fn has_servers(&self) -> bool {
         !self.clients.is_empty()
     }
 
-    pub(crate) fn server_origin(&self, server_name: &str) -> Option<&str> {
+    pub fn server_origin(&self, server_name: &str) -> Option<&str> {
         self.server_origins.get(server_name).map(String::as_str)
     }
 
@@ -618,6 +629,7 @@ impl McpConnectionManager {
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
+        submit_id: String,
         tx_event: Sender<Event>,
         initial_sandbox_state: SandboxState,
         codex_home: PathBuf,
@@ -630,6 +642,7 @@ impl McpConnectionManager {
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
+        let startup_submit_id = submit_id.clone();
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             if let Some(origin) = transport_origin(&cfg.transport) {
@@ -637,6 +650,7 @@ impl McpConnectionManager {
             }
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
+                startup_submit_id.as_str(),
                 &tx_event,
                 McpStartupUpdateEvent {
                     server: server_name.clone(),
@@ -664,6 +678,7 @@ impl McpConnectionManager {
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
+            let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
             let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
@@ -695,6 +710,7 @@ impl McpConnectionManager {
                 };
 
                 let _ = emit_update(
+                    submit_id.as_str(),
                     &tx_event,
                     McpStartupUpdateEvent {
                         server: server_name.clone(),
@@ -728,7 +744,7 @@ impl McpConnectionManager {
             }
             let _ = tx_event
                 .send(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    id: startup_submit_id,
                     msg: EventMsg::McpStartupComplete(summary),
                 })
                 .await;
@@ -756,7 +772,7 @@ impl McpConnectionManager {
             .await
     }
 
-    pub(crate) async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
+    pub async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
         let Some(async_managed_client) = self.clients.get(server_name) else {
             return false;
         };
@@ -767,7 +783,7 @@ impl McpConnectionManager {
         }
     }
 
-    pub(crate) async fn required_startup_failures(
+    pub async fn required_startup_failures(
         &self,
         required_servers: &[String],
     ) -> Vec<McpStartupFailure> {
@@ -1113,12 +1129,13 @@ impl McpConnectionManager {
 }
 
 async fn emit_update(
+    submit_id: &str,
     tx_event: &Sender<Event>,
     update: McpStartupUpdateEvent,
 ) -> Result<(), async_channel::SendError<Event>> {
     tx_event
         .send(Event {
-            id: INITIAL_SUBMIT_ID.to_owned(),
+            id: submit_id.to_string(),
             msg: EventMsg::McpStartupUpdate(update),
         })
         .await
@@ -1166,7 +1183,7 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
         .collect()
 }
 
-pub(crate) fn filter_non_codex_apps_mcp_tools_only(
+pub fn filter_non_codex_apps_mcp_tools_only(
     mcp_tools: &HashMap<String, ToolInfo>,
 ) -> HashMap<String, ToolInfo> {
     mcp_tools
