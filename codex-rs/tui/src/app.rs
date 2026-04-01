@@ -1687,10 +1687,7 @@ impl App {
                     .network_approval_context
                     .clone()
                     .and_then(convert_via_json);
-                let additional_permissions = params
-                    .additional_permissions
-                    .clone()
-                    .and_then(convert_via_json);
+                let additional_permissions = params.additional_permissions.clone().map(Into::into);
                 let proposed_execpolicy_amendment = params
                     .proposed_execpolicy_amendment
                     .clone()
@@ -1785,10 +1782,11 @@ impl App {
                     thread_label,
                     call_id: params.item_id.clone(),
                     reason: params.reason.clone(),
-                    permissions: serde_json::from_value(
-                        serde_json::to_value(&params.permissions).ok()?,
-                    )
-                    .ok()?,
+                    permissions: params.permissions.clone().into(),
+                    permissions_profile_persistence: params
+                        .permissions_profile_persistence
+                        .clone()
+                        .map(Into::into),
                 }),
             ),
             _ => None,
@@ -5936,6 +5934,7 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -5983,6 +5982,7 @@ mod tests {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -8076,6 +8076,8 @@ guardian_approval = true
     async fn inactive_thread_exec_approval_preserves_context() {
         let app = make_test_app().await;
         let thread_id = ThreadId::new();
+        let write_path = AbsolutePathBuf::try_from(PathBuf::from("/tmp/out.txt"))
+            .expect("path should be absolute");
         let mut request = exec_approval_request(
             thread_id,
             "turn-approval",
@@ -8093,7 +8095,10 @@ guardian_approval = true
             network: Some(AdditionalNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: None,
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: None,
+                write: Some(vec![write_path.clone()]),
+            }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
             host: "example.com".to_string(),
@@ -8125,7 +8130,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: None,
+                file_system: Some(FileSystemPermissions {
+                    read: None,
+                    write: Some(vec![write_path]),
+                }),
             })
         );
         assert_eq!(

@@ -379,7 +379,7 @@ impl AppCommand {
             Op::UserInputAnswer { id, response } => {
                 AppCommandView::UserInputAnswer { id, response }
             }
-            Op::RequestPermissionsResponse { id, response } => {
+            Op::RequestPermissionsResponse { id, response, .. } => {
                 AppCommandView::RequestPermissionsResponse { id, response }
             }
             Op::ReloadUserConfig => AppCommandView::ReloadUserConfig,

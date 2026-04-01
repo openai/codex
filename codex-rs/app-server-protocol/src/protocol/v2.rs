@@ -63,6 +63,7 @@ use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_protocol::protocol::PersistPermissionProfileAction as CorePersistPermissionProfileAction;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
@@ -80,6 +81,7 @@ use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::PermissionProfilePersistence as CorePermissionProfilePersistence;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
@@ -1139,6 +1141,21 @@ pub struct RequestPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfilePersistence {
+    pub profile_name: String,
+}
+
+impl From<CorePermissionProfilePersistence> for PermissionProfilePersistence {
+    fn from(value: CorePermissionProfilePersistence) -> Self {
+        Self {
+            profile_name: value.profile_name,
+        }
+    }
+}
+
 impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
     fn from(value: CoreRequestPermissionProfile) -> Self {
         Self {
@@ -1200,6 +1217,24 @@ impl From<GrantedPermissionProfile> for CorePermissionProfile {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<CorePermissionProfile> for GrantedPermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<CoreRequestPermissionProfile> for GrantedPermissionProfile {
+    fn from(value: CoreRequestPermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
         }
     }
 }
@@ -5759,18 +5794,91 @@ pub struct PermissionsRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    #[ts(optional = nullable)]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub permissions_profile_persistence: Option<PermissionProfilePersistence>,
 }
 
-v2_enum_from_core!(
-    #[derive(Default)]
-    pub enum PermissionGrantScope from CorePermissionGrantScope {
-        #[default]
-        Turn,
-        Session
+impl From<PermissionProfilePersistence> for CorePermissionProfilePersistence {
+    fn from(value: PermissionProfilePersistence) -> Self {
+        Self {
+            profile_name: value.profile_name,
+        }
     }
-);
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileAmendment {
+    pub profile_name: String,
+    pub permissions: AdditionalPermissionProfile,
+}
+
+impl From<CorePersistPermissionProfileAction> for PermissionProfileAmendment {
+    fn from(value: CorePersistPermissionProfileAction) -> Self {
+        Self {
+            profile_name: value.profile_name,
+            permissions: value.permissions.into(),
+        }
+    }
+}
+
+impl From<PermissionProfileAmendment> for CorePersistPermissionProfileAction {
+    fn from(value: PermissionProfileAmendment) -> Self {
+        Self {
+            profile_name: value.profile_name,
+            permissions: value.permissions.into(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+#[derive(Default)]
+pub enum PermissionGrantScope {
+    #[default]
+    Turn,
+    Session,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Persist {
+        permission_profile_amendment: PermissionProfileAmendment,
+    },
+}
+
+impl PermissionGrantScope {
+    pub fn to_core(self) -> CorePermissionGrantScope {
+        match self {
+            Self::Turn => CorePermissionGrantScope::Turn,
+            Self::Session => CorePermissionGrantScope::Session,
+            Self::Persist {
+                permission_profile_amendment,
+            } => CorePermissionGrantScope::Persist {
+                permission_profile_amendment: permission_profile_amendment.into(),
+            },
+        }
+    }
+}
+
+impl From<CorePermissionGrantScope> for PermissionGrantScope {
+    fn from(value: CorePermissionGrantScope) -> Self {
+        match value {
+            CorePermissionGrantScope::Turn => Self::Turn,
+            CorePermissionGrantScope::Session => Self::Session,
+            CorePermissionGrantScope::Persist {
+                permission_profile_amendment,
+            } => Self::Persist {
+                permission_profile_amendment: permission_profile_amendment.into(),
+            },
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -6146,6 +6254,7 @@ mod tests {
                 }),
             }
         );
+        assert_eq!(params.permissions_profile_persistence, None);
     }
 
     #[test]

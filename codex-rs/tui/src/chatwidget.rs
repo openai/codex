@@ -1370,7 +1370,7 @@ fn exec_approval_request_from_params(
         network_approval_context: params
             .network_approval_context
             .and_then(convert_via_json),
-        additional_permissions: params.additional_permissions.and_then(convert_via_json),
+        additional_permissions: params.additional_permissions.map(Into::into),
         turn_id: params.turn_id,
         approval_id: params.approval_id,
         proposed_execpolicy_amendment: params
@@ -1557,10 +1557,8 @@ fn request_permissions_from_params(
         turn_id: params.turn_id,
         call_id: params.item_id,
         reason: params.reason,
-        permissions: serde_json::from_value(
-            serde_json::to_value(params.permissions).unwrap_or(serde_json::Value::Null),
-        )
-        .unwrap_or_default(),
+        permissions: params.permissions.into(),
+        permissions_profile_persistence: params.permissions_profile_persistence.map(Into::into),
     }
 }
 
@@ -4508,6 +4506,7 @@ impl ChatWidget {
             call_id: ev.call_id,
             reason: ev.reason,
             permissions: ev.permissions,
+            permissions_profile_persistence: ev.permissions_profile_persistence,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);

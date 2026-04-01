@@ -584,6 +584,9 @@ impl TestCodexBuilder {
                 config.codex_self_exe = Some(codex_exec);
             }
         }
+        if let Some(path) = find_codex_cli_exe() {
+            config.codex_linux_sandbox_exe = Some(path);
+        }
 
         let mut mutators = vec![];
         swap(&mut self.config_mutators, &mut mutators);
@@ -600,6 +603,20 @@ impl TestCodexBuilder {
 
         Ok((config, cwd))
     }
+}
+
+fn find_codex_cli_exe() -> Option<PathBuf> {
+    codex_utils_cargo_bin::cargo_bin("codex")
+        .ok()
+        .filter(|path| path.file_stem().is_some_and(|stem| stem == "codex"))
+        .or_else(|| {
+            std::env::current_exe().ok().and_then(|exe| {
+                exe.parent()
+                    .and_then(|parent| parent.parent())
+                    .map(|parent| parent.join(format!("codex{}", std::env::consts::EXE_SUFFIX)))
+                    .filter(|path| path.is_file())
+            })
+        })
 }
 
 fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {

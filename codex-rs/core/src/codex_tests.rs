@@ -82,6 +82,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -2781,6 +2782,59 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
         .await;
 
     assert_eq!(session.granted_turn_permissions().await, None);
+}
+
+#[tokio::test]
+async fn request_permissions_response_persist_grants_session_permissions_after_successful_persist()
+{
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    let (tx_response, rx_response) = tokio::sync::oneshot::channel();
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        let active_turn = active_turn.as_mut().expect("active turn");
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.insert_pending_request_permissions("call-1".to_string(), tx_response);
+    }
+
+    let session = Arc::new(session);
+    let codex_home = AbsolutePathBuf::try_from(codex_home.as_path()).expect("absolute codex home");
+    let permissions = RequestPermissionProfile {
+        file_system: Some(codex_protocol::models::FileSystemPermissions {
+            read: Some(vec![codex_home.clone()]),
+            write: Some(vec![codex_home]),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+    let response = codex_protocol::request_permissions::RequestPermissionsResponse {
+        permissions: permissions.clone(),
+        scope: PermissionGrantScope::Persist {
+            permission_profile_amendment:
+                codex_protocol::protocol::PersistPermissionProfileAction {
+                    profile_name: "workspace".to_string(),
+                    permissions: permissions.clone().into(),
+                },
+        },
+    };
+
+    handlers::request_permissions_response(&session, "call-1".to_string(), response.clone()).await;
+
+    let received_response = tokio::time::timeout(StdDuration::from_secs(1), rx_response)
+        .await
+        .expect("request_permissions response timed out")
+        .expect("request_permissions response missing");
+    assert_eq!(received_response, response);
+    assert_eq!(
+        session.granted_turn_permissions().await,
+        Some(permissions.clone().into())
+    );
+    assert_eq!(
+        session.granted_session_permissions().await,
+        Some(permissions.into())
+    );
 }
 
 #[tokio::test]

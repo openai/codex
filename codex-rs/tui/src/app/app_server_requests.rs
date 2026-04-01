@@ -5,7 +5,6 @@ use crate::app_command::AppCommandView;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
@@ -153,15 +152,8 @@ impl PendingAppServerRequests {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(PermissionsRequestApprovalResponse {
-                            permissions: serde_json::from_value::<GrantedPermissionProfile>(
-                                serde_json::to_value(&response.permissions).map_err(|err| {
-                                    format!("failed to encode granted permissions: {err}")
-                                })?,
-                            )
-                            .map_err(|err| {
-                                format!("failed to decode granted permissions for app-server: {err}")
-                            })?,
-                            scope: response.scope.into(),
+                            permissions: response.permissions.clone().into(),
+                            scope: response.scope.clone().into(),
                         })
                         .map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")
@@ -348,6 +340,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     item_id: "perm-1".to_string(),
                     reason: None,
+                    permissions_profile_persistence: None,
                     permissions: serde_json::from_value(json!({
                         "network": { "enabled": null }
                     }))
