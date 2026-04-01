@@ -60,19 +60,43 @@ pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
     ))
 }
 
+/// MCP runtime settings derived from `codex_core::config::Config`.
+///
+/// This struct should contain only long-lived configuration values that the
+/// `codex-mcp` crate needs to construct server transports, enforce MCP
+/// approval/sandbox policy, locate OAuth state, and merge plugin-provided MCP
+/// servers. Request-scoped or auth-scoped state should not be stored here;
+/// thread those values explicitly into runtime entry points such as
+/// [`with_codex_apps_mcp`] and [`collect_mcp_snapshot`] so config objects do
+/// not go stale when auth changes.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
+    /// Base URL for ChatGPT-hosted app MCP servers, copied from the root config.
     pub chatgpt_base_url: String,
+    /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
+    /// Preferred credential store for MCP OAuth tokens.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+    /// Optional fixed localhost callback port for MCP OAuth login.
     pub mcp_oauth_callback_port: Option<u16>,
+    /// Optional OAuth redirect URI override for MCP login.
     pub mcp_oauth_callback_url: Option<String>,
+    /// Whether skill MCP dependency installation prompts are enabled.
     pub skill_mcp_dependency_install_enabled: bool,
+    /// Approval policy used for MCP tool calls and MCP elicitation requests.
     pub approval_policy: Constrained<AskForApproval>,
+    /// Optional path to `codex-linux-sandbox` for sandboxed MCP tool execution.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+    /// Whether to use legacy Landlock behavior in the MCP sandbox state.
     pub use_legacy_landlock: bool,
+    /// Whether the app MCP integration is enabled by config.
+    ///
+    /// ChatGPT auth is checked separately at runtime before the built-in apps
+    /// MCP server is added.
     pub apps_enabled: bool,
+    /// User-configured and plugin-provided MCP servers keyed by server name.
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
+    /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
 
