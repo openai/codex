@@ -262,6 +262,14 @@ use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
 use crate::instructions::UserInstructions;
+use crate::jobs::ClaimedJob;
+use crate::jobs::JOB_FIRED_BACKGROUND_EVENT_PREFIX;
+use crate::jobs::JOB_UPDATED_BACKGROUND_EVENT_PREFIX;
+use crate::jobs::JobTurnContext;
+use crate::jobs::JobsState;
+use crate::jobs::ThreadJob;
+use crate::jobs::job_prompt_input_item;
+use crate::jobs::job_turn_developer_instructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::auth::compute_auth_statuses;
@@ -812,13 +820,24 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Prevents concurrent job timers from claiming multiple jobs before a
+    /// newly started turn becomes the active turn.
+    job_start_in_progress: Mutex<bool>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    jobs: Mutex<JobsState>,
+    job_timers_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.job_timers_cancellation_token.cancel();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -859,6 +878,7 @@ pub(crate) struct TurnContext {
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
+    pub(crate) job_context: Option<JobTurnContext>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
@@ -967,6 +987,7 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
+            job_context: self.job_context.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
@@ -1433,6 +1454,7 @@ impl Session {
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
+            job_context: None,
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
@@ -1926,9 +1948,12 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            job_start_in_progress: Mutex::new(false),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
+            jobs: Mutex::new(JobsState::default()),
+            job_timers_cancellation_token: CancellationToken::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -2416,6 +2441,7 @@ impl Session {
                 session_configuration,
                 updates.final_output_json_schema,
                 sandbox_policy_changed,
+                /*job_context*/ None,
             )
             .await)
     }
@@ -2426,6 +2452,7 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         sandbox_policy_changed: bool,
+        job_context: Option<JobTurnContext>,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         self.services
@@ -2498,6 +2525,7 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        turn_context.job_context = job_context;
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
@@ -2603,8 +2631,178 @@ impl Session {
             session_configuration,
             /*final_output_json_schema*/ None,
             /*sandbox_policy_changed*/ false,
+            /*job_context*/ None,
         )
         .await
+    }
+
+    pub(crate) async fn new_job_turn_with_sub_id(
+        &self,
+        sub_id: String,
+        job_context: JobTurnContext,
+    ) -> Arc<TurnContext> {
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        self.new_turn_from_configuration(
+            sub_id,
+            session_configuration,
+            /*final_output_json_schema*/ None,
+            /*sandbox_policy_changed*/ false,
+            Some(job_context),
+        )
+        .await
+    }
+
+    pub(crate) async fn list_jobs(&self) -> Vec<ThreadJob> {
+        self.jobs.lock().await.list_jobs()
+    }
+
+    pub(crate) async fn create_job(
+        self: &Arc<Self>,
+        cron_expression: String,
+        prompt: String,
+        run_once: bool,
+    ) -> Result<ThreadJob, String> {
+        let schedule = crate::jobs::JobSchedule::parse(&cron_expression)?;
+        let timer_cancel = matches!(schedule, crate::jobs::JobSchedule::EverySeconds(_))
+            .then(CancellationToken::new);
+        let id = uuid::Uuid::new_v4().to_string();
+        let job = {
+            let mut jobs = self.jobs.lock().await;
+            jobs.create_job(
+                id.clone(),
+                cron_expression,
+                prompt,
+                run_once,
+                Utc::now(),
+                timer_cancel.clone(),
+            )?
+        };
+        if let (crate::jobs::JobSchedule::EverySeconds(seconds), Some(cancel)) =
+            (schedule, timer_cancel)
+        {
+            self.spawn_job_timer(id, seconds, cancel);
+        }
+        self.emit_job_updated_notification().await;
+        self.maybe_start_pending_job().await;
+        Ok(job)
+    }
+
+    pub(crate) async fn delete_job(&self, id: &str) -> bool {
+        let deleted = self.jobs.lock().await.delete_job(id);
+        if deleted {
+            self.emit_job_updated_notification().await;
+        }
+        deleted
+    }
+
+    pub(crate) async fn mark_after_turn_jobs_due(&self) {
+        self.jobs.lock().await.mark_after_turn_jobs_due();
+    }
+
+    pub(crate) async fn maybe_start_pending_job(self: &Arc<Self>) {
+        let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await;
+        let Some(ClaimedJob {
+            job,
+            context,
+            deleted_run_once_job,
+        }) = ({
+            let mut job_start_in_progress = self.job_start_in_progress.lock().await;
+            let mut active_turn = self.active_turn.lock().await;
+            if *job_start_in_progress || active_turn.is_some() || has_pending_turn_inputs {
+                None
+            } else {
+                let claimed = self.jobs.lock().await.claim_next_job(Utc::now());
+                if claimed.is_some() {
+                    *job_start_in_progress = true;
+                    *active_turn = Some(ActiveTurn::default());
+                }
+                claimed
+            }
+        })
+        else {
+            return;
+        };
+        self.emit_job_fired_notification(&job).await;
+        if deleted_run_once_job {
+            self.emit_job_updated_notification().await;
+        }
+        self.queue_response_items_for_next_turn(vec![job_prompt_input_item(&context)])
+            .await;
+        let turn_context = self
+            .new_job_turn_with_sub_id(uuid::Uuid::new_v4().to_string(), context)
+            .await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        let session = Arc::clone(self);
+        let result = tokio::task::spawn_blocking(move || {
+            futures::executor::block_on(session.start_task(
+                turn_context,
+                Vec::new(),
+                crate::tasks::RegularTask::new(),
+            ));
+        })
+        .await;
+        *self.job_start_in_progress.lock().await = false;
+        if let Err(err) = result {
+            warn!("failed to start job turn: {err}");
+        }
+    }
+
+    fn spawn_job_timer(
+        self: &Arc<Self>,
+        id: String,
+        seconds: u64,
+        cancellation_token: CancellationToken,
+    ) {
+        let weak = Arc::downgrade(self);
+        let session_cancel = self.job_timers_cancellation_token.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = session_cancel.cancelled() => break,
+                    _ = cancellation_token.cancelled() => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {}
+                }
+                let Some(session) = weak.upgrade() else {
+                    break;
+                };
+                session.jobs.lock().await.mark_job_due(&id, Utc::now());
+                session.maybe_start_pending_job().await;
+            }
+        });
+    }
+
+    async fn emit_job_updated_notification(&self) {
+        let jobs = self.list_jobs().await;
+        let Ok(payload) = serde_json::to_string(&jobs) else {
+            warn!("failed to serialize job update payload");
+            return;
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("{JOB_UPDATED_BACKGROUND_EVENT_PREFIX}{payload}"),
+            }),
+        })
+        .await;
+    }
+
+    async fn emit_job_fired_notification(&self, job: &ThreadJob) {
+        let Ok(payload) = serde_json::to_string(job) else {
+            warn!("failed to serialize job fired payload");
+            return;
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("{JOB_FIRED_BACKGROUND_EVENT_PREFIX}{payload}"),
+            }),
+        })
+        .await;
     }
 
     async fn build_settings_update_items(
@@ -3591,6 +3789,9 @@ impl Session {
         {
             developer_sections.push(developer_instructions.to_string());
         }
+        if let Some(job_context) = turn_context.job_context.as_ref() {
+            developer_sections.push(job_turn_developer_instructions(job_context));
+        }
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
@@ -4091,8 +4292,6 @@ impl Session {
         }
     }
 
-    /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
@@ -5538,6 +5737,7 @@ async fn spawn_review_thread(
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
+        job_context: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),

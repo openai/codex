@@ -44,6 +44,7 @@ mod git_info_tests;
 mod guardian;
 mod hook_runtime;
 pub mod instructions;
+pub mod jobs;
 pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;

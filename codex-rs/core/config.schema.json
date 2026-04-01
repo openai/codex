@@ -407,6 +407,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "job_scheduler": {
+              "type": "boolean"
+            },
             "js_repl": {
               "type": "boolean"
             },
@@ -2102,6 +2105,9 @@
           "type": "boolean"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "job_scheduler": {
           "type": "boolean"
         },
         "js_repl": {

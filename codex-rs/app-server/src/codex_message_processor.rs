@@ -125,6 +125,13 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadJob as ApiThreadJob;
+use codex_app_server_protocol::ThreadJobCreateParams;
+use codex_app_server_protocol::ThreadJobCreateResponse;
+use codex_app_server_protocol::ThreadJobDeleteParams;
+use codex_app_server_protocol::ThreadJobDeleteResponse;
+use codex_app_server_protocol::ThreadJobListParams;
+use codex_app_server_protocol::ThreadJobListResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -769,6 +776,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadJobCreate { request_id, params } => {
+                self.thread_job_create(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadJobDelete { request_id, params } => {
+                self.thread_job_delete(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadJobList { request_id, params } => {
+                self.thread_job_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
@@ -3572,6 +3591,96 @@ impl CodexMessageProcessor {
         );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_job_create(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadJobCreateParams,
+    ) {
+        let ThreadJobCreateParams {
+            thread_id,
+            cron_expression,
+            prompt,
+            run_once,
+        } = params;
+        let Some(thread) = self.load_job_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        match thread
+            .create_job(cron_expression, prompt, run_once.unwrap_or(false))
+            .await
+        {
+            Ok(job) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ThreadJobCreateResponse {
+                            job: api_thread_job_from_core(job),
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => self.send_invalid_request_error(request_id, err).await,
+        }
+    }
+
+    async fn thread_job_delete(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadJobDeleteParams,
+    ) {
+        let ThreadJobDeleteParams { thread_id, id } = params;
+        let Some(thread) = self.load_job_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        let deleted = thread.delete_job(&id).await;
+        self.outgoing
+            .send_response(request_id, ThreadJobDeleteResponse { deleted })
+            .await;
+    }
+
+    async fn thread_job_list(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadJobListParams,
+    ) {
+        let ThreadJobListParams { thread_id } = params;
+        let Some(thread) = self.load_job_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        let data = thread
+            .list_jobs()
+            .await
+            .into_iter()
+            .map(api_thread_job_from_core)
+            .collect();
+        self.outgoing
+            .send_response(request_id, ThreadJobListResponse { data })
+            .await;
+    }
+
+    async fn load_job_thread(
+        &mut self,
+        request_id: ConnectionRequestId,
+        thread_id: &str,
+    ) -> Option<Arc<CodexThread>> {
+        let (_, thread) = match self.load_thread(thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return None;
+            }
+        };
+        if !thread.enabled(Feature::JobScheduler) {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread {thread_id} does not support job scheduling"),
+            )
+            .await;
+            return None;
+        }
+        Some(thread)
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -8662,6 +8771,18 @@ fn build_thread_from_snapshot(
         git_info: None,
         name: None,
         turns: Vec::new(),
+    }
+}
+
+fn api_thread_job_from_core(value: codex_core::jobs::ThreadJob) -> ApiThreadJob {
+    ApiThreadJob {
+        id: value.id,
+        cron_expression: value.cron_expression,
+        prompt: value.prompt,
+        run_once: value.run_once,
+        created_at: value.created_at,
+        next_run_at: value.next_run_at,
+        last_run_at: value.last_run_at,
     }
 }
 

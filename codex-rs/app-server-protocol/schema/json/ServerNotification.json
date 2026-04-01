@@ -2985,6 +2985,81 @@
         }
       ]
     },
+    "ThreadJob": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "cronExpression": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nextRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "runOnce": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "createdAt",
+        "cronExpression",
+        "id",
+        "prompt",
+        "runOnce"
+      ],
+      "type": "object"
+    },
+    "ThreadJobFiredNotification": {
+      "properties": {
+        "job": {
+          "$ref": "#/definitions/ThreadJob"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadJobUpdatedNotification": {
+      "properties": {
+        "jobs": {
+          "items": {
+            "$ref": "#/definitions/ThreadJob"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobs",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadNameUpdatedNotification": {
       "properties": {
         "threadId": {
@@ -3938,6 +4013,46 @@
         "params"
       ],
       "title": "Thread/name/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/job/updated"
+          ],
+          "title": "Thread/job/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadJobUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/job/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/job/fired"
+          ],
+          "title": "Thread/job/firedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadJobFiredNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/job/firedNotification",
       "type": "object"
     },
     {

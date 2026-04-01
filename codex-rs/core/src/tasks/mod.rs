@@ -172,13 +172,13 @@ impl Session {
         self.start_task(turn_context, input, task).await;
     }
 
-    async fn start_task<T: SessionTask>(
+    pub(crate) async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
         task: T,
     ) {
-        let task: Arc<dyn SessionTask> = Arc::new(task);
+        let task: Arc<dyn SessionTask + Send + Sync> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
         let started_at = Instant::now();
@@ -453,6 +453,8 @@ impl Session {
             last_agent_message,
         });
         self.send_event(turn_context.as_ref(), event).await;
+        self.mark_after_turn_jobs_due().await;
+        self.maybe_start_pending_job().await;
 
         if should_clear_active_turn {
             let session = Arc::clone(self);

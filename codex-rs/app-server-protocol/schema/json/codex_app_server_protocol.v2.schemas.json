@@ -8348,6 +8348,46 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/job/updated"
+              ],
+              "title": "Thread/job/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadJobUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/job/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/job/fired"
+              ],
+              "title": "Thread/job/firedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadJobFiredNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/job/firedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/tokenUsage/updated"
               ],
               "title": "Thread/tokenUsage/updatedNotificationMethod",
@@ -10805,6 +10845,85 @@
           "type": "object"
         }
       ]
+    },
+    "ThreadJob": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "cronExpression": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nextRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "runOnce": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "createdAt",
+        "cronExpression",
+        "id",
+        "prompt",
+        "runOnce"
+      ],
+      "type": "object"
+    },
+    "ThreadJobFiredNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "job": {
+          "$ref": "#/definitions/ThreadJob"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job",
+        "threadId"
+      ],
+      "title": "ThreadJobFiredNotification",
+      "type": "object"
+    },
+    "ThreadJobUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "jobs": {
+          "items": {
+            "$ref": "#/definitions/ThreadJob"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobs",
+        "threadId"
+      ],
+      "title": "ThreadJobUpdatedNotification",
+      "type": "object"
     },
     "ThreadListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

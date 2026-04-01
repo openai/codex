@@ -82,11 +82,10 @@ impl StatusHistoryHandle {
         } else {
             compose_rate_limit_data_many(rate_limits, now)
         };
-        #[expect(clippy::expect_used)]
-        let mut state = self
-            .rate_limit_state
-            .write()
-            .expect("status history rate-limit state poisoned");
+        let mut state = match self.rate_limit_state.write() {
+            Ok(state) => state,
+            Err(err) => err.into_inner(),
+        };
         state.rate_limits = rate_limits;
         state.refreshing_rate_limits = false;
     }
@@ -559,11 +558,10 @@ impl HistoryCell for StatusHistoryCell {
             .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
-        #[expect(clippy::expect_used)]
-        let rate_limit_state = self
-            .rate_limit_state
-            .read()
-            .expect("status history rate-limit state poisoned");
+        let rate_limit_state = match self.rate_limit_state.read() {
+            Ok(state) => state,
+            Err(err) => err.into_inner(),
+        };
 
         if self.model_provider.is_some() {
             push_label(&mut labels, &mut seen, "Model provider");

@@ -32,6 +32,8 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::job_scheduler::format_job_summary;
+use crate::job_scheduler::parse_job_spec;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -1969,6 +1971,26 @@ impl App {
         });
     }
 
+    fn parse_thread_job_spec(&mut self, thread_id: ThreadId, spec: String) {
+        let config = self.config.clone();
+        let target = match self.remote_app_server_url.clone() {
+            Some(websocket_url) => crate::AppServerTarget::Remote {
+                websocket_url,
+                auth_token: self.remote_app_server_auth_token.clone(),
+            },
+            None => crate::AppServerTarget::Embedded,
+        };
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = parse_job_spec(config, target, spec.clone()).await;
+            app_event_tx.send(AppEvent::ThreadJobSpecParsed {
+                thread_id,
+                spec,
+                result,
+            });
+        });
+    }
+
     fn submit_feedback(
         &mut self,
         app_server: &AppServerSession,
@@ -2086,7 +2108,6 @@ impl App {
             self.handle_feedback_thread_event(event);
         }
     }
-
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
     /// render either the full tool/resource listing or an error into chat history.
     ///
@@ -3271,11 +3292,20 @@ impl App {
         app_server: &mut AppServerSession,
         started: AppServerStartedThread,
     ) -> Result<()> {
+        let thread_id = started.session.thread_id;
         self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
+        if self.config.features.enabled(Feature::JobScheduler) {
+            match app_server.thread_job_list(thread_id).await {
+                Ok(jobs) => self.chat_widget.on_thread_jobs_updated(jobs),
+                Err(err) => {
+                    tracing::warn!(%err, "failed to load thread jobs while attaching thread");
+                }
+            }
+        }
         self.backfill_loaded_subagent_threads(app_server).await;
         Ok(())
     }
@@ -4153,6 +4183,87 @@ impl App {
                 }
 
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenThreadJobs { thread_id } => {
+                match app_server.thread_job_list(thread_id).await {
+                    Ok(jobs) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.open_thread_jobs_popup(thread_id, jobs);
+                        }
+                    }
+                    Err(err) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to load thread jobs: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::CreateThreadJobFromSpec { thread_id, spec } => {
+                self.parse_thread_job_spec(thread_id, spec);
+            }
+            AppEvent::ThreadJobSpecParsed {
+                thread_id,
+                spec,
+                result,
+            } => match result {
+                Ok(parsed) => match app_server
+                    .thread_job_create(
+                        thread_id,
+                        parsed.cron_expression.clone(),
+                        parsed.prompt.clone(),
+                        parsed.run_once,
+                    )
+                    .await
+                {
+                    Ok(job) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            let summary =
+                                format_job_summary(&job.cron_expression, job.run_once, &job.prompt);
+                            self.chat_widget.add_info_message(
+                                format!("Created thread job from `/loop {spec}`."),
+                                Some(summary),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to create thread job: {err}"));
+                        }
+                    }
+                },
+                Err(err) => {
+                    if self.chat_widget.thread_id() == Some(thread_id) {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to parse `/loop {spec}`: {err}"));
+                    }
+                }
+            },
+            AppEvent::DeleteThreadJob { thread_id, id } => {
+                match app_server.thread_job_delete(thread_id, id.clone()).await {
+                    Ok(true) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.add_info_message(
+                                format!("Deleted thread job `{id}`."),
+                                /*hint*/ None,
+                            );
+                        }
+                    }
+                    Ok(false) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("No thread job matched `{id}`."));
+                        }
+                    }
+                    Err(err) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to delete thread job `{id}`: {err}"
+                            ));
+                        }
+                    }
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -7658,6 +7769,14 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let guardian_approvals = guardian_approvals_mode();
+        app.config
+            .features
+            .set_enabled(Feature::GuardianApproval, /*enabled*/ false)?;
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
+        app.config.approvals_reviewer = ApprovalsReviewer::User;
+        app.chat_widget
+            .set_approvals_reviewer(ApprovalsReviewer::User);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
@@ -7745,9 +7864,7 @@ mod tests {
         let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
-        app.config.config_layer_stack = app
-            .config
-            .config_layer_stack
+        app.config.config_layer_stack = codex_core::config_loader::ConfigLayerStack::default()
             .with_user_config(&config_toml_path, user_config);
         app.config
             .features

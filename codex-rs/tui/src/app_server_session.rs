@@ -30,6 +30,13 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadJob;
+use codex_app_server_protocol::ThreadJobCreateParams;
+use codex_app_server_protocol::ThreadJobCreateResponse;
+use codex_app_server_protocol::ThreadJobDeleteParams;
+use codex_app_server_protocol::ThreadJobDeleteResponse;
+use codex_app_server_protocol::ThreadJobListParams;
+use codex_app_server_protocol::ThreadJobListResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -297,6 +304,18 @@ impl AppServerSession {
         started_thread_from_start_response(response, config).await
     }
 
+    pub(crate) async fn start_ephemeral_thread(&mut self, config: &Config) -> Result<Thread> {
+        let request_id = self.next_request_id();
+        let mut params = thread_start_params_from_config(config, self.thread_params_mode());
+        params.ephemeral = Some(true);
+        let response: ThreadStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
+            .await
+            .wrap_err("thread/start failed for ephemeral TUI session")?;
+        Ok(response.thread)
+    }
+
     pub(crate) async fn resume_thread(
         &mut self,
         config: Config,
@@ -391,6 +410,65 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_job_create(
+        &mut self,
+        thread_id: ThreadId,
+        cron_expression: String,
+        prompt: String,
+        run_once: Option<bool>,
+    ) -> Result<ThreadJob> {
+        let request_id = self.next_request_id();
+        let response: ThreadJobCreateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadJobCreate {
+                request_id,
+                params: ThreadJobCreateParams {
+                    thread_id: thread_id.to_string(),
+                    cron_expression,
+                    prompt,
+                    run_once,
+                },
+            })
+            .await
+            .wrap_err("thread/job/create failed in TUI")?;
+        Ok(response.job)
+    }
+
+    pub(crate) async fn thread_job_delete(
+        &mut self,
+        thread_id: ThreadId,
+        id: String,
+    ) -> Result<bool> {
+        let request_id = self.next_request_id();
+        let response: ThreadJobDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadJobDelete {
+                request_id,
+                params: ThreadJobDeleteParams {
+                    thread_id: thread_id.to_string(),
+                    id,
+                },
+            })
+            .await
+            .wrap_err("thread/job/delete failed in TUI")?;
+        Ok(response.deleted)
+    }
+
+    pub(crate) async fn thread_job_list(&mut self, thread_id: ThreadId) -> Result<Vec<ThreadJob>> {
+        let request_id = self.next_request_id();
+        let response: ThreadJobListResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadJobList {
+                request_id,
+                params: ThreadJobListParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/job/list failed in TUI")?;
+        Ok(response.data)
     }
 
     #[allow(clippy::too_many_arguments)]

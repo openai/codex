@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadJob": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "cronExpression": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nextRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "runOnce": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "createdAt",
+        "cronExpression",
+        "id",
+        "prompt",
+        "runOnce"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "job": {
+      "$ref": "#/definitions/ThreadJob"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "job",
+    "threadId"
+  ],
+  "title": "ThreadJobFiredNotification",
+  "type": "object"
+}

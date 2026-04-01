@@ -96,6 +96,7 @@ mod hierarchical_agents;
 mod hooks;
 mod image_rollout;
 mod items;
+mod jobs;
 mod js_repl;
 mod json_result;
 mod live_cli;

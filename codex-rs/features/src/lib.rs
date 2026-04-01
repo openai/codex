@@ -172,6 +172,8 @@ pub enum Feature {
     Personality,
     /// Enable native artifact tools.
     Artifact,
+    /// Enable per-thread runtime job scheduling tools and APIs.
+    JobScheduler,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
@@ -811,6 +813,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Artifact,
         key: "artifact",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JobScheduler,
+        key: "job_scheduler",
+        stage: Stage::Experimental {
+            name: "Job Scheduler",
+            menu_description: "Enable thread-local scheduled jobs and the /loop command.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

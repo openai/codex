@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
+use crate::jobs::ThreadJob;
 use crate::state_db::StateDbHandle;
 
 #[derive(Clone, Debug)]
@@ -235,6 +236,26 @@ impl CodexThread {
         }
 
         Ok(*guard)
+    }
+
+    pub async fn create_job(
+        &self,
+        cron_expression: String,
+        prompt: String,
+        run_once: bool,
+    ) -> Result<ThreadJob, String> {
+        self.codex
+            .session
+            .create_job(cron_expression, prompt, run_once)
+            .await
+    }
+
+    pub async fn delete_job(&self, id: &str) -> bool {
+        self.codex.session.delete_job(id).await
+    }
+
+    pub async fn list_jobs(&self) -> Vec<ThreadJob> {
+        self.codex.session.list_jobs().await
     }
 }
 

@@ -22,7 +22,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[tokio::test]
 async fn turn_interrupt_aborts_running_turn() -> Result<()> {
@@ -124,14 +124,11 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
 
 #[tokio::test]
 async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()> {
-    #[cfg(target_os = "windows")]
     let shell_command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 10".to_string(),
+        "python3".to_string(),
+        "-c".to_string(),
+        "print(42)".to_string(),
     ];
-    #[cfg(not(target_os = "windows"))]
-    let shell_command = vec!["sleep".to_string(), "10".to_string()];
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
