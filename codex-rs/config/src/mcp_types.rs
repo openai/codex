@@ -100,9 +100,9 @@ pub struct McpServerConfig {
 
 /// Raw MCP config shape used for deserialization and JSON Schema generation.
 ///
-/// Keep `RawMcpServerConfig::into_validated_config()` exhaustively destructuring
-/// this struct so new TOML fields cannot be added here without updating the
-/// validation/mapping logic that produces [`McpServerConfig`].
+/// Keep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively
+/// destructuring this struct so new TOML fields cannot be added here without
+/// updating the validation/mapping logic that produces [`McpServerConfig`].
 #[derive(Deserialize, Clone, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RawMcpServerConfig {
@@ -152,8 +152,10 @@ pub struct RawMcpServerConfig {
     pub tools: Option<HashMap<String, McpServerToolConfig>>,
 }
 
-impl RawMcpServerConfig {
-    fn into_validated_config(self) -> Result<McpServerConfig, String> {
+impl TryFrom<RawMcpServerConfig> for McpServerConfig {
+    type Error = String;
+
+    fn try_from(raw: RawMcpServerConfig) -> Result<Self, Self::Error> {
         let Self {
             command,
             args,
@@ -176,7 +178,7 @@ impl RawMcpServerConfig {
             oauth_resource,
             _name: _,
             tools,
-        } = self;
+        } = raw;
 
         let startup_timeout_sec = match (startup_timeout_sec, startup_timeout_ms) {
             (Some(sec), _) => {
@@ -227,7 +229,7 @@ impl RawMcpServerConfig {
             return Err("invalid transport".to_string());
         };
 
-        Ok(McpServerConfig {
+        Ok(Self {
             transport,
             startup_timeout_sec,
             tool_timeout_sec,
@@ -249,7 +251,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         D: Deserializer<'de>,
     {
         RawMcpServerConfig::deserialize(deserializer)?
-            .into_validated_config()
+            .try_into()
             .map_err(SerdeError::custom)
     }
 }
