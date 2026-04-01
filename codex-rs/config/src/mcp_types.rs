@@ -98,8 +98,11 @@ pub struct McpServerConfig {
     pub tools: HashMap<String, McpServerToolConfig>,
 }
 
-// Raw MCP config shape used for deserialization and JSON Schema generation.
-// Keep this in sync with the validation logic in `McpServerConfig`.
+/// Raw MCP config shape used for deserialization and JSON Schema generation.
+///
+/// Keep `RawMcpServerConfig::into_validated_config()` exhaustively destructuring
+/// this struct so new TOML fields cannot be added here without updating the
+/// validation/mapping logic that produces [`McpServerConfig`].
 #[derive(Deserialize, Clone, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RawMcpServerConfig {
@@ -149,89 +152,105 @@ pub struct RawMcpServerConfig {
     pub tools: Option<HashMap<String, McpServerToolConfig>>,
 }
 
-impl<'de> Deserialize<'de> for McpServerConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let mut raw = RawMcpServerConfig::deserialize(deserializer)?;
+impl RawMcpServerConfig {
+    fn into_validated_config(self) -> Result<McpServerConfig, String> {
+        let Self {
+            command,
+            args,
+            env,
+            env_vars,
+            cwd,
+            http_headers,
+            env_http_headers,
+            url,
+            bearer_token,
+            bearer_token_env_var,
+            startup_timeout_sec,
+            startup_timeout_ms,
+            tool_timeout_sec,
+            enabled,
+            required,
+            enabled_tools,
+            disabled_tools,
+            scopes,
+            oauth_resource,
+            _name: _,
+            tools,
+        } = self;
 
-        let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
+        let startup_timeout_sec = match (startup_timeout_sec, startup_timeout_ms) {
             (Some(sec), _) => {
-                let duration = Duration::try_from_secs_f64(sec).map_err(SerdeError::custom)?;
-                Some(duration)
+                Some(Duration::try_from_secs_f64(sec).map_err(|err| err.to_string())?)
             }
             (None, Some(ms)) => Some(Duration::from_millis(ms)),
             (None, None) => None,
         };
-        let tool_timeout_sec = raw.tool_timeout_sec;
-        let enabled = raw.enabled.unwrap_or_else(default_enabled);
-        let required = raw.required.unwrap_or_default();
-        let enabled_tools = raw.enabled_tools.clone();
-        let disabled_tools = raw.disabled_tools.clone();
-        let scopes = raw.scopes.clone();
-        let oauth_resource = raw.oauth_resource.clone();
-        let tools = raw.tools.clone().unwrap_or_default();
 
-        fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
-        where
-            E: SerdeError,
-        {
+        fn throw_if_set<T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), String> {
             if value.is_none() {
                 return Ok(());
             }
-            Err(E::custom(format!(
-                "{field} is not supported for {transport}",
-            )))
+            Err(format!("{field} is not supported for {transport}"))
         }
 
-        let transport = if let Some(command) = raw.command.clone() {
-            throw_if_set("stdio", "url", raw.url.as_ref())?;
+        let transport = if let Some(command) = command {
+            throw_if_set("stdio", "url", url.as_ref())?;
             throw_if_set(
                 "stdio",
                 "bearer_token_env_var",
-                raw.bearer_token_env_var.as_ref(),
+                bearer_token_env_var.as_ref(),
             )?;
-            throw_if_set("stdio", "bearer_token", raw.bearer_token.as_ref())?;
-            throw_if_set("stdio", "http_headers", raw.http_headers.as_ref())?;
-            throw_if_set("stdio", "env_http_headers", raw.env_http_headers.as_ref())?;
-            throw_if_set("stdio", "oauth_resource", raw.oauth_resource.as_ref())?;
+            throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
+            throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
+            throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
+            throw_if_set("stdio", "oauth_resource", oauth_resource.as_ref())?;
             McpServerTransportConfig::Stdio {
                 command,
-                args: raw.args.clone().unwrap_or_default(),
-                env: raw.env.clone(),
-                env_vars: raw.env_vars.clone().unwrap_or_default(),
-                cwd: raw.cwd.take(),
+                args: args.unwrap_or_default(),
+                env,
+                env_vars: env_vars.unwrap_or_default(),
+                cwd,
             }
-        } else if let Some(url) = raw.url.clone() {
-            throw_if_set("streamable_http", "args", raw.args.as_ref())?;
-            throw_if_set("streamable_http", "env", raw.env.as_ref())?;
-            throw_if_set("streamable_http", "env_vars", raw.env_vars.as_ref())?;
-            throw_if_set("streamable_http", "cwd", raw.cwd.as_ref())?;
-            throw_if_set("streamable_http", "bearer_token", raw.bearer_token.as_ref())?;
+        } else if let Some(url) = url {
+            throw_if_set("streamable_http", "args", args.as_ref())?;
+            throw_if_set("streamable_http", "env", env.as_ref())?;
+            throw_if_set("streamable_http", "env_vars", env_vars.as_ref())?;
+            throw_if_set("streamable_http", "cwd", cwd.as_ref())?;
+            throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
             McpServerTransportConfig::StreamableHttp {
                 url,
-                bearer_token_env_var: raw.bearer_token_env_var.clone(),
-                http_headers: raw.http_headers.clone(),
-                env_http_headers: raw.env_http_headers.take(),
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
             }
         } else {
-            return Err(SerdeError::custom("invalid transport"));
+            return Err("invalid transport".to_string());
         };
 
-        Ok(Self {
+        Ok(McpServerConfig {
             transport,
             startup_timeout_sec,
             tool_timeout_sec,
-            enabled,
-            required,
+            enabled: enabled.unwrap_or_else(default_enabled),
+            required: required.unwrap_or_default(),
             disabled_reason: None,
             enabled_tools,
             disabled_tools,
             scopes,
             oauth_resource,
-            tools,
+            tools: tools.unwrap_or_default(),
         })
+    }
+}
+
+impl<'de> Deserialize<'de> for McpServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        RawMcpServerConfig::deserialize(deserializer)?
+            .into_validated_config()
+            .map_err(SerdeError::custom)
     }
 }
 
