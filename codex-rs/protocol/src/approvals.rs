@@ -105,44 +105,6 @@ pub enum GuardianCommandSource {
     UnifiedExec,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct GuardianCommandAssessmentAction {
-    pub source: GuardianCommandSource,
-    pub command: String,
-    pub cwd: PathBuf,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct GuardianExecveAssessmentAction {
-    pub source: GuardianCommandSource,
-    pub program: String,
-    pub argv: Vec<String>,
-    pub cwd: PathBuf,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct GuardianApplyPatchAssessmentAction {
-    pub cwd: PathBuf,
-    pub files: Vec<PathBuf>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct GuardianNetworkAccessAssessmentAction {
-    pub target: String,
-    pub host: String,
-    pub protocol: NetworkApprovalProtocol,
-    pub port: u16,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct GuardianMcpToolCallAssessmentAction {
-    pub server: String,
-    pub tool_name: String,
-    pub connector_id: Option<String>,
-    pub connector_name: Option<String>,
-    pub tool_title: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type", rename_all = "snake_case")]
