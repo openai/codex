@@ -228,11 +228,13 @@ macro_rules! assert_chatwidget_snapshot {
 }
 
 mod app_server;
+mod background_events;
 mod composer_submission;
 mod exec_flow;
+mod guardian;
 mod helpers;
 mod history_replay;
-mod mcp_guardian;
+mod mcp_startup;
 mod permissions;
 mod plan_mode;
 mod popups_and_settings;
