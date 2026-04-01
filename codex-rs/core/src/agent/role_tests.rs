@@ -153,6 +153,29 @@ async fn default_fork_context_for_role_uses_explicit_custom_role_override() {
 }
 
 #[tokio::test]
+async fn default_fork_context_for_role_uses_explicit_custom_role_override_from_config_toml() {
+    let home = TempDir::new().expect("create temp dir");
+    tokio::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.custom]
+description = "Custom role"
+fork_context = false
+"#,
+    )
+    .await
+    .expect("write config");
+
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load test config");
+
+    assert!(!default_fork_context_for_role(&config, Some("custom")));
+}
+
+#[tokio::test]
 #[ignore = "No role requiring it for now"]
 async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
