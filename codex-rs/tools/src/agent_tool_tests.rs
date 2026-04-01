@@ -208,3 +208,23 @@ fn list_agents_tool_includes_path_prefix_and_agent_fields() {
         json!(["agent_name", "agent_status", "last_task_message"])
     );
 }
+
+#[test]
+fn list_agents_tool_status_schema_includes_interrupted() {
+    let ToolSpec::Function(ResponsesApiTool { output_schema, .. }) = create_list_agents_tool()
+    else {
+        panic!("list_agents should be a function tool");
+    };
+
+    assert_eq!(
+        output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["properties"]
+            ["agent_status"]["allOf"][0]["oneOf"][0]["enum"],
+        json!([
+            "pending_init",
+            "running",
+            "interrupted",
+            "shutdown",
+            "not_found"
+        ])
+    );
+}

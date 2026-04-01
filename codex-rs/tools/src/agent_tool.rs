@@ -318,7 +318,7 @@ fn agent_status_output_schema() -> Value {
         "oneOf": [
             {
                 "type": "string",
-                "enum": ["pending_init", "running", "shutdown", "not_found"]
+                "enum": ["pending_init", "running", "interrupted", "shutdown", "not_found"]
             },
             {
                 "type": "object",
