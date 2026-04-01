@@ -270,7 +270,7 @@ fn docker_command_success<const N: usize>(args: [&str; N]) -> Result<()> {
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -286,7 +286,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -346,7 +346,7 @@ impl TestCodexBuilder {
     pub fn with_model(self, model: &str) -> Self {
         let new_model = model.to_string();
         self.with_config(move |config| {
-            config.model = Some(new_model.clone());
+            config.model = Some(new_model);
         })
     }
 

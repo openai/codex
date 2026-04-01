@@ -35,7 +35,7 @@ pub fn read_acl_mutex_exists() -> Result<bool> {
         if err == ERROR_FILE_NOT_FOUND {
             return Ok(false);
         }
-        return Err(anyhow::anyhow!("OpenMutexW failed: {}", err));
+        return Err(anyhow::anyhow!("OpenMutexW failed: {err}"));
     }
     unsafe {
         CloseHandle(handle);

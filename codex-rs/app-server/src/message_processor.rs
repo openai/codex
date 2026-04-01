@@ -71,9 +71,10 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_login::AuthMode as LoginAuthMode;
+use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
-use codex_login::auth::ExternalAuthRefresher;
 use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -103,7 +104,11 @@ impl ExternalAuthRefreshBridge {
 }
 
 #[async_trait]
-impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
+impl ExternalAuth for ExternalAuthRefreshBridge {
+    fn auth_mode(&self) -> LoginAuthMode {
+        LoginAuthMode::Chatgpt
+    }
+
     async fn refresh(
         &self,
         context: ExternalAuthRefreshContext,
@@ -212,7 +217,7 @@ impl MessageProcessor {
             enable_codex_api_key_env,
             rpc_transport,
         } = args;
-        let auth_manager = AuthManager::shared_with_external_chatgpt_auth_refresher(
+        let auth_manager = AuthManager::shared_with_external_auth(
             config.codex_home.clone(),
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode,
@@ -291,7 +296,7 @@ impl MessageProcessor {
     }
 
     pub(crate) fn clear_runtime_references(&self) {
-        self.auth_manager.clear_external_chatgpt_auth_refresher();
+        self.auth_manager.clear_external_auth();
     }
 
     pub(crate) async fn process_request(

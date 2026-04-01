@@ -40,7 +40,7 @@ impl ToolHandler for Handler {
             .map(str::trim)
             .filter(|role| !role.is_empty());
 
-        let initial_operation = parse_collab_input(/*message*/ None, Some(args.items))?;
+        let initial_operation = parse_collab_input(Some(args.message), /*items*/ None)?;
         let prompt = render_input_preview(&initial_operation);
 
         let session_source = turn.session_source.clone();
@@ -202,7 +202,7 @@ impl ToolHandler for Handler {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpawnAgentArgs {
-    items: Vec<UserInput>,
+    message: String,
     task_name: String,
     agent_type: Option<String>,
     model: Option<String>,

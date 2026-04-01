@@ -75,6 +75,7 @@ impl ToolHandler for Handler {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WaitArgs {
     timeout_ms: Option<i64>,
 }

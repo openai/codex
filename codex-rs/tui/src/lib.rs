@@ -79,9 +79,10 @@ mod app_event;
 mod app_event_sender;
 mod app_server_session;
 mod ascii_animation;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 mod audio_device;
-#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
 mod audio_device {
     use crate::app_event::RealtimeAudioDeviceKind;
 
@@ -151,9 +152,10 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 mod voice;
-#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
 mod voice {
     use crate::app_event_sender::AppEventSender;
     use codex_core::config::Config;

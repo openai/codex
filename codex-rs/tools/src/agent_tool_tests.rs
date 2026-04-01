@@ -56,9 +56,9 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(description.contains("visible display (`visible-model`)"));
     assert!(!description.contains("hidden display (`hidden-model`)"));
     assert!(properties.contains_key("task_name"));
-    assert!(properties.contains_key("items"));
+    assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
-    assert!(!properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
         properties.get("agent_type"),
@@ -68,7 +68,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     );
     assert_eq!(
         required,
-        Some(vec!["task_name".to_string(), "items".to_string()])
+        Some(vec!["task_name".to_string(), "message".to_string()])
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
@@ -95,7 +95,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 }
 
 #[test]
-fn send_message_tool_requires_items_and_uses_submission_output() {
+fn send_message_tool_requires_message_and_uses_submission_output() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -113,15 +113,47 @@ fn send_message_tool_requires_items_and_uses_submission_output() {
         panic!("send_message should use object params");
     };
     assert!(properties.contains_key("target"));
-    assert!(properties.contains_key("items"));
+    assert!(properties.contains_key("message"));
     assert!(!properties.contains_key("interrupt"));
-    assert!(!properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert_eq!(
         required,
-        Some(vec!["target".to_string(), "items".to_string()])
+        Some(vec!["target".to_string(), "message".to_string()])
     );
     assert_eq!(
         output_schema.expect("send_message output schema")["required"],
+        json!(["submission_id"])
+    );
+}
+
+#[test]
+fn assign_task_tool_requires_message_and_uses_submission_output() {
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = create_assign_task_tool()
+    else {
+        panic!("assign_task should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("assign_task should use object params");
+    };
+    assert!(properties.contains_key("target"));
+    assert!(properties.contains_key("message"));
+    assert!(properties.contains_key("interrupt"));
+    assert!(!properties.contains_key("items"));
+    assert_eq!(
+        required,
+        Some(vec!["target".to_string(), "message".to_string()])
+    );
+    assert_eq!(
+        output_schema.expect("assign_task output schema")["required"],
         json!(["submission_id"])
     );
 }
@@ -174,5 +206,25 @@ fn list_agents_tool_includes_path_prefix_and_agent_fields() {
     assert_eq!(
         output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["required"],
         json!(["agent_name", "agent_status", "last_task_message"])
+    );
+}
+
+#[test]
+fn list_agents_tool_status_schema_includes_interrupted() {
+    let ToolSpec::Function(ResponsesApiTool { output_schema, .. }) = create_list_agents_tool()
+    else {
+        panic!("list_agents should be a function tool");
+    };
+
+    assert_eq!(
+        output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["properties"]
+            ["agent_status"]["allOf"][0]["oneOf"][0]["enum"],
+        json!([
+            "pending_init",
+            "running",
+            "interrupted",
+            "shutdown",
+            "not_found"
+        ])
     );
 }

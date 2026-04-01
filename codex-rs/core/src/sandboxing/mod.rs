@@ -141,14 +141,7 @@ pub async fn execute_env(
     exec_request: ExecRequest,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    let effective_policy = exec_request.sandbox_policy.clone();
-    execute_exec_request(
-        exec_request,
-        &effective_policy,
-        stdout_stream,
-        /*after_spawn*/ None,
-    )
-    .await
+    execute_exec_request(exec_request, stdout_stream, /*after_spawn*/ None).await
 }
 
 pub async fn execute_exec_request_with_after_spawn(
@@ -156,6 +149,5 @@ pub async fn execute_exec_request_with_after_spawn(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    let effective_policy = exec_request.sandbox_policy.clone();
-    execute_exec_request(exec_request, &effective_policy, stdout_stream, after_spawn).await
+    execute_exec_request(exec_request, stdout_stream, after_spawn).await
 }

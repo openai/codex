@@ -147,12 +147,28 @@ fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
 }
 
 async fn open_state_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
-    let options = base_sqlite_options(path);
+    let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
         .await?;
     migrator.run(&pool).await?;
+    let auto_vacuum = sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+        .fetch_one(&pool)
+        .await?;
+    if auto_vacuum != SqliteAutoVacuum::Incremental as i64 {
+        // Existing state DBs need one non-transactional `VACUUM` before
+        // SQLite persists `auto_vacuum = INCREMENTAL` in the database header.
+        sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
+            .execute(&pool)
+            .await?;
+        // We do it on best effort. If the lock can't be acquired, it will be done at next run.
+        let _ = sqlx::query("VACUUM").execute(&pool).await;
+    }
+    // We do it on best effort. If the lock can't be acquired, it will be done at next run.
+    let _ = sqlx::query("PRAGMA incremental_vacuum")
+        .execute(&pool)
+        .await;
     Ok(pool)
 }
 
