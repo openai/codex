@@ -162,7 +162,8 @@ async fn open_state_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::
         sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
             .execute(&pool)
             .await?;
-        sqlx::query("VACUUM").execute(&pool).await?;
+        // We do it on best effort. If the lock can't be acquired, it will be done at next run.
+        let _ = sqlx::query("VACUUM").execute(&pool).await;
     }
     sqlx::query("PRAGMA incremental_vacuum")
         .execute(&pool)
