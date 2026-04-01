@@ -25,8 +25,7 @@ pub async fn load_global_mcp_servers(
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(err) => return Err(err),
     };
-    let parsed: TomlValue = raw
-        .parse::<TomlValue>()
+    let parsed = toml::from_str::<TomlValue>(&raw)
         .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
     let Some(servers_value) = parsed.get("mcp_servers") else {
         return Ok(BTreeMap::new());

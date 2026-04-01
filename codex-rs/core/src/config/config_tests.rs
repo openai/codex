@@ -2079,6 +2079,10 @@ fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
     let mcp_config = config.to_mcp_config(&plugins_manager);
+    assert!(mcp_config.apps_enabled);
+
+    let _ = config.features.disable(Feature::Apps);
+    let mcp_config = config.to_mcp_config(&plugins_manager);
     assert!(!mcp_config.apps_enabled);
 
     let _ = config.features.enable(Feature::Apps);
