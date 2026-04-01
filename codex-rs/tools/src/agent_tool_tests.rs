@@ -95,7 +95,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 }
 
 #[test]
-fn send_message_tool_requires_items_and_uses_submission_output() {
+fn send_message_tool_requires_message_and_uses_submission_output() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -113,12 +113,12 @@ fn send_message_tool_requires_items_and_uses_submission_output() {
         panic!("send_message should use object params");
     };
     assert!(properties.contains_key("target"));
-    assert!(properties.contains_key("items"));
+    assert!(properties.contains_key("message"));
     assert!(!properties.contains_key("interrupt"));
-    assert!(!properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert_eq!(
         required,
-        Some(vec!["target".to_string(), "items".to_string()])
+        Some(vec!["target".to_string(), "message".to_string()])
     );
     assert_eq!(
         output_schema.expect("send_message output schema")["required"],

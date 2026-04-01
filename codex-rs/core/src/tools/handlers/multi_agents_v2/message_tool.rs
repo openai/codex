@@ -1,7 +1,7 @@
 //! Shared argument parsing and dispatch for the v2 text-only agent messaging tools.
 //!
-//! `send_message` and `assign_task` intentionally expose the same input shape and differ only in
-//! whether the resulting `InterAgentCommunication` should wake the target immediately.
+//! `send_message` and `assign_task` share the same submission path and differ only in whether the
+//! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
 use crate::agent::control::render_input_preview;
@@ -42,7 +42,7 @@ impl MessageDeliveryMode {
 /// Input for the MultiAgentV2 `send_message` tool.
 pub(crate) struct SendMessageArgs {
     pub(crate) target: String,
-    pub(crate) items: Vec<UserInput>,
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +79,15 @@ impl ToolOutput for MessageToolResult {
     }
 }
 
+fn message_content(message: String) -> Result<String, FunctionCallError> {
+    if message.trim().is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "Empty message can't be sent to an agent".to_string(),
+        ));
+    }
+    Ok(message)
+}
+
 /// Validates that the tool input is non-empty text-only content and returns its preview string.
 fn text_content(
     items: &[UserInput],
@@ -101,11 +110,46 @@ fn text_content(
 }
 
 /// Handles the shared MultiAgentV2 text-message flow for both `send_message` and `assign_task`.
+pub(crate) async fn handle_message_string_tool(
+    invocation: ToolInvocation,
+    mode: MessageDeliveryMode,
+    target: String,
+    message: String,
+    interrupt: bool,
+) -> Result<MessageToolResult, FunctionCallError> {
+    handle_message_submission(
+        invocation,
+        mode,
+        target,
+        message_content(message)?,
+        interrupt,
+    )
+    .await
+}
+
+/// Handles the shared MultiAgentV2 text-message flow for both `send_message` and `assign_task`.
 pub(crate) async fn handle_message_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,
     target: String,
     items: Vec<UserInput>,
+    interrupt: bool,
+) -> Result<MessageToolResult, FunctionCallError> {
+    handle_message_submission(
+        invocation,
+        mode,
+        target,
+        text_content(&items, mode)?,
+        interrupt,
+    )
+    .await
+}
+
+async fn handle_message_submission(
+    invocation: ToolInvocation,
+    mode: MessageDeliveryMode,
+    target: String,
+    prompt: String,
     interrupt: bool,
 ) -> Result<MessageToolResult, FunctionCallError> {
     let ToolInvocation {
@@ -117,7 +161,6 @@ pub(crate) async fn handle_message_tool(
     } = invocation;
     let _ = payload;
     let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
-    let prompt = text_content(&items, mode)?;
     let receiver_agent = session
         .services
         .agent_control

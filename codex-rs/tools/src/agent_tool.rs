@@ -127,7 +127,12 @@ pub fn create_send_message_tool() -> ToolSpec {
                 ),
             },
         ),
-        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some("Message text to queue on the target agent.".to_string()),
+            },
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -138,7 +143,7 @@ pub fn create_send_message_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["target".to_string(), "items".to_string()]),
+            required: Some(vec!["target".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(send_input_output_schema()),

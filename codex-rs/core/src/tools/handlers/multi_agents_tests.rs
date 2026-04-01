@@ -496,7 +496,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             "send_message",
             function_payload(json!({
                 "target": "test_process",
-                "items": [{"type": "text", "text": "continue"}]
+                "message": "continue"
             })),
         ))
         .await
@@ -689,7 +689,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
             "send_message",
             function_payload(json!({
                 "target": "/root",
-                "items": [{"type": "text", "text": "done"}]
+                "message": "done"
             })),
         ))
         .await
@@ -952,7 +952,7 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_send_message_rejects_structured_items() {
+async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -999,14 +999,12 @@ async fn multi_agent_v2_send_message_rejects_structured_items() {
     );
 
     let Err(err) = SendMessageHandlerV2.handle(invocation).await else {
-        panic!("structured items should be rejected in v2");
+        panic!("legacy items field should be rejected in v2");
     };
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "send_message only supports text content in MultiAgentV2 for now".to_string()
-        )
-    );
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("legacy items field should surface as a model-facing error");
+    };
+    assert!(message.contains("unknown field `items`"));
 }
 
 #[tokio::test]
@@ -1050,7 +1048,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
         "send_message",
         function_payload(json!({
             "target": agent_id.to_string(),
-            "items": [{"type": "text", "text": "continue"}],
+            "message": "continue",
             "interrupt": true
         })),
     );
@@ -1062,7 +1060,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
         panic!("expected model-facing parse error");
     };
     assert!(message.starts_with(
-        "failed to parse function arguments: unknown field `interrupt`, expected `target` or `items`"
+        "failed to parse function arguments: unknown field `interrupt`, expected `target` or `message`"
     ));
 
     let ops = manager.captured_ops();
