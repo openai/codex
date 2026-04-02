@@ -8,7 +8,6 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
-use crate::agent::role::default_spawn_mode_for_role;
 use crate::agent::role::watchdog_interval_for_role;
 use crate::config::Config;
 use codex_features::Feature;
@@ -67,14 +66,10 @@ impl ToolHandler for Handler {
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
-        let default_spawn_mode = match default_spawn_mode_for_role(&turn.config, role_name) {
-            crate::config::AgentRoleSpawnMode::Spawn => SpawnMode::Spawn,
-            crate::config::AgentRoleSpawnMode::Fork => SpawnMode::Fork,
-        };
         let spawn_mode = args
             .spawn_mode
             .or_else(|| (args.fork_context && args.spawn_mode.is_none()).then_some(SpawnMode::Fork))
-            .unwrap_or(default_spawn_mode);
+            .unwrap_or(SpawnMode::Spawn);
         let watchdog_interval_s = watchdog_interval_for_role(&turn.config, role_name);
         let is_watchdog = watchdog_interval_s.is_some();
 
@@ -299,20 +294,24 @@ impl ToolHandler for Handler {
 
 async fn spawn_watchdog(
     agent_control: &crate::agent::AgentControl,
-    mut config: Config,
+    config: Config,
     prompt: String,
     owner_thread_id: ThreadId,
     child_depth: i32,
     interval_s: i64,
     spawn_source: SessionSource,
 ) -> codex_protocol::error::Result<ThreadId> {
-    config.mcp_servers.set(HashMap::new()).map_err(|err| {
-        codex_protocol::error::CodexErr::UnsupportedOperation(format!(
-            "failed to clear watchdog MCP servers: {err}"
-        ))
-    })?;
+    let mut handle_config = config.clone();
+    handle_config
+        .mcp_servers
+        .set(HashMap::new())
+        .map_err(|err| {
+            codex_protocol::error::CodexErr::UnsupportedOperation(format!(
+                "failed to clear watchdog MCP servers: {err}"
+            ))
+        })?;
     let target_thread_id = agent_control
-        .spawn_agent(config.clone(), Op::Interrupt, Some(spawn_source))
+        .spawn_agent(handle_config, Op::Interrupt, Some(spawn_source))
         .await?;
     let superseded_before_register = agent_control
         .unregister_watchdogs_for_owner(owner_thread_id)
