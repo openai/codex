@@ -18,7 +18,7 @@ diff --git a/builder/main.rs b/builder/main.rs
 +        .components()
 +        .any(|component| component.as_os_str() == "bazel-out")
  }
- 
+
  fn use_prebuilt_nasm() -> bool {
 +    let use_prebuilt_for_bazel_windows_msvc = is_bazel_windows_msvc_build_script();
      target_os() == "windows"
@@ -31,7 +31,7 @@ diff --git a/builder/main.rs b/builder/main.rs
 +        && (use_prebuilt_for_bazel_windows_msvc || !test_nasm_command())
          && (Some(true) == allow_prebuilt_nasm() || is_prebuilt_nasm())
  }
- 
+
  fn allow_prebuilt_nasm() -> Option<bool> {
 diff --git a/builder/nasm_builder.rs b/builder/nasm_builder.rs
 --- a/builder/nasm_builder.rs
@@ -40,7 +40,7 @@ diff --git a/builder/nasm_builder.rs b/builder/nasm_builder.rs
          if self.files.is_empty() {
              return vec![];
          }
- 
+
 -        if test_nasm_command() {
 +        if test_nasm_command() && !use_prebuilt_nasm() {
              for src in &self.files {

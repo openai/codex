@@ -1,9 +1,9 @@
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
-@@ -472,7 +472,19 @@
+@@ -472,6 +472,18 @@
          )
          ld_is_direct_driver = False
- 
+
 -    if not ld or toolchain.linker_preference == "rust":
 +    # The bootstrap process wrapper is built without the normal rules_rust
 +    # process wrapper. On Windows nightly toolchains that expose rust-lld, the
@@ -20,4 +20,3 @@
 +    if not ld or toolchain.linker_preference == "rust" or use_bootstrap_rust_linker:
          ld = toolchain.linker.path
          ld_is_direct_driver = toolchain.linker_type == "direct"
- 

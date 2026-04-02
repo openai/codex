@@ -22,6 +22,7 @@ members = [
     "cli",
     "connectors",
     "config",
+    "config-schema",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -117,6 +118,7 @@ codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
+codex-config-schema = { path = "config-schema" }
 codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
 codex-core-skills = { path = "core-skills" }

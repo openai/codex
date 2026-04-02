@@ -6,7 +6,7 @@ diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_sc
      """Translate GNU-flavored cc args when exec-side build scripts target Windows MSVC."""
      if toolchain.target_flag_value != toolchain.exec_triple.str or not toolchain.exec_triple.str.endswith("-pc-windows-msvc"):
          return args
- 
+
 -    rewritten = []
 -    skip_next = False
 -    for arg in args:
@@ -24,22 +24,22 @@ diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_sc
 +        if skip_next:
 +            skip_next = False
 +            continue
- 
+
          if arg == "-target":
 -            skip_next = True
 +            skip_next = True
              continue
- 
+
          if arg.startswith("-target=") or arg.startswith("--target="):
              continue
- 
+
          if arg == "-nostdlibinc" or arg.startswith("--sysroot"):
              continue
- 
+
 -        if "mingw-w64-" in arg or "mingw_import_libraries_directory" in arg or "mingw_crt_library_search_directory" in arg:
 +        if arg.startswith("-fstack-protector") or arg.startswith("-D_FORTIFY_SOURCE="):
              continue
- 
+
 -        if arg.startswith("-fstack-protector"):
 -            continue
 -
@@ -50,9 +50,9 @@ diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_sc
 +            if "mingw-w64-" in path or "mingw_import_libraries_directory" in path or "mingw_crt_library_search_directory" in path:
 +                skip_next = True
 +                continue
- 
+
          rewritten.append(arg)
- 
+
 -    return [
 -        "-target",
 -        toolchain.target_flag_value,
@@ -98,7 +98,7 @@ diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_sc
 +        rewritten.append(arg)
 +
 +    return rewritten
- 
+
  def get_cc_compile_args_and_env(cc_toolchain, feature_configuration):
      """Gather cc environment variables from the given `cc_toolchain`
 @@ -509,6 +550,7 @@ def _construct_build_script_env(
@@ -107,5 +107,5 @@ diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_sc
      env["LD"] = linker
 +    link_args = _rewrite_windows_exec_msvc_link_args(toolchain, link_args)
      env["LDFLAGS"] = " ".join(_pwd_flags(link_args))
- 
+
      # Defaults for cxx flags.

@@ -1,0 +1,10 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "config-schema",
+    crate_name = "codex_config_schema",
+    compile_data = ["//codex-rs/core:config.schema.json"],
+    rustc_env = {
+        "CARGO_MANIFEST_DIR": "codex-rs/config-schema",
+    },
+)

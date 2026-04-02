@@ -17,7 +17,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
 +            emit_warning("Skipping memcmp probe for Bazel windows-msvc build scripts.");
 +            return;
 +        }
- 
+
          let basename = "memcmp_invalid_stripped_check";
          let exec_path = out_dir().join(basename);
          let memcmp_build = cc::Build::default();
@@ -30,7 +30,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
                  memcmp_compile_args.push(flag.into());
              }
          }
- 
+
 -        if let Some(execroot) = Self::bazel_execroot(self.manifest_dir.as_path()) {
 +        if let Some(execroot) = bazel_execroot {
              // In Bazel build-script sandboxes, `cc` can pass `bazel-out/...` args

@@ -15,7 +15,7 @@ diff --git a/rust/extensions.bzl b/rust/extensions.bzl
                  "extra_target_triples": {repository_set.target_triple: [str(v) for v in repository_set.target_compatible_with]},
                  "name": repository_set.name,
 @@ -166,6 +167,9 @@ _COMMON_TAG_KWARGS = {
- 
+
  _RUST_REPOSITORY_SET_TAG_ATTRS = {
 +    "exec_compatible_with": attr.label_list(
 +        doc = "Execution platform constraints for this repository_set.",

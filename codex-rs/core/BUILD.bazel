@@ -2,6 +2,7 @@ load("//:defs.bzl", "codex_rust_crate")
 
 exports_files(
     [
+        "config.schema.json",
         "templates/collaboration_mode/default.md",
         "templates/collaboration_mode/plan.md",
     ],

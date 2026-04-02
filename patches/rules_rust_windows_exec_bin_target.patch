@@ -13,7 +13,7 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 @@ -129,6 +129,20 @@
      build_setting = config.bool(flag = True),
  )
- 
+
 -def _get_rustc_env(attr, toolchain, crate_name):
 +def _effective_target_arch(toolchain, use_exec_target):
 +    return toolchain.exec_triple.arch if use_exec_target else toolchain.target_arch
@@ -31,9 +31,9 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 +
 +def _get_rustc_env(attr, toolchain, crate_name, use_exec_target = False):
      """Gathers rustc environment variables
- 
+
 @@ -147,6 +161,6 @@
- 
+
      result = {
 -        "CARGO_CFG_TARGET_ARCH": "" if toolchain.target_arch == None else toolchain.target_arch,
 -        "CARGO_CFG_TARGET_OS": "" if toolchain.target_os == None else toolchain.target_os,
@@ -44,15 +44,15 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 @@ -997,9 +1011,11 @@
      if build_metadata and not use_json_output:
          fail("build_metadata requires parse_json_output")
- 
+
 +    use_exec_target = is_exec_configuration(ctx) and crate_info.type == "bin"
 +
      output_dir = getattr(crate_info.output, "dirname", None)
      linker_script = getattr(file, "linker_script", None)
- 
+
 -    env = _get_rustc_env(attr, toolchain, crate_info.name)
 +    env = _get_rustc_env(attr, toolchain, crate_info.name, use_exec_target)
- 
+
      # Wrapper args first
 @@ -1138,5 +1154,5 @@
      if error_format != "json":
@@ -64,7 +64,7 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 @@ -1144,6 +1160,6 @@
      if linker_script:
          rustc_flags.add(linker_script, format = "--codegen=link-arg=-T%s")
- 
+
      # Tell Rustc where to find the standard library (or libcore)
 -    rustc_flags.add_all(toolchain.rust_std_paths, before_each = "-L", format_each = "%s")
 +    rustc_flags.add_all(_effective_rust_std_paths(toolchain, use_exec_target), before_each = "-L", format_each = "%s")

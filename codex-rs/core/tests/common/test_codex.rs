@@ -486,6 +486,8 @@ impl TestCodexBuilder {
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
+                config.model_catalog.clone(),
+                config.custom_models.clone(),
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
             )

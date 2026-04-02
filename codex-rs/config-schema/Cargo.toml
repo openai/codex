@@ -1,0 +1,27 @@
+[package]
+name = "codex-config-schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "codex_config_schema"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-write-config-schema"
+path = "src/bin/config_schema.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-config = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

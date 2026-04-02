@@ -606,6 +606,34 @@
       },
       "type": "object"
     },
+    "CustomModelToml": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "description": "Provider-facing model slug used on API requests.",
+          "type": "string"
+        },
+        "model_auto_compact_token_limit": {
+          "description": "Optional auto-compaction token limit override applied when this alias is selected.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "model_context_window": {
+          "description": "Optional context window override applied when this alias is selected.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "name": {
+          "description": "User-facing alias shown in the model picker.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "name"
+      ],
+      "type": "object"
+    },
     "FeedbackConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -1982,6 +2010,14 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "custom_models": {
+      "default": [],
+      "description": "User-defined model aliases that can override model context settings.",
+      "items": {
+        "$ref": "#/definitions/CustomModelToml"
+      },
+      "type": "array"
     },
     "default_permissions": {
       "description": "Default named permissions profile to apply from the `[permissions]` table.",

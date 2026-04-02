@@ -101,6 +101,7 @@ use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -256,7 +257,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
         crate::model_provider_info::ModelProviderInfo::create_openai_provider(
-            /* base_url */ /*base_url*/ None,
+            /*base_url*/ None,
         ),
         codex_protocol::protocol::SessionSource::Exec,
         /*model_verbosity*/ None,
@@ -2489,6 +2490,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         config.codex_home.clone(),
         auth_manager.clone(),
         /*model_catalog*/ None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
@@ -2582,6 +2584,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         config.codex_home.clone(),
         auth_manager.clone(),
         /*model_catalog*/ None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
@@ -3419,6 +3422,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         config.codex_home.clone(),
         auth_manager.clone(),
         /*model_catalog*/ None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();

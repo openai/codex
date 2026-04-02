@@ -1814,6 +1814,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-config-schema"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-config",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-connectors"
 version = "0.0.0"
 dependencies = [
@@ -1848,6 +1862,7 @@ dependencies = [
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",
+ "codex-config-schema",
  "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
