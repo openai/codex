@@ -24,6 +24,7 @@ const MODEL_PROVIDER: &str = "openai";
 fn expected_summary(conversation_id: ThreadId, path: PathBuf) -> ConversationSummary {
     ConversationSummary {
         conversation_id,
+        forked_from_id: None,
         path,
         preview: PREVIEW.to_string(),
         timestamp: Some(META_RFC3339.to_string()),

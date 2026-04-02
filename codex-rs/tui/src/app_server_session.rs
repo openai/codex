@@ -945,6 +945,7 @@ async fn thread_session_state_from_thread_start_response(
 ) -> Result<ThreadSessionState, String> {
     thread_session_state_from_thread_response(
         &response.thread.id,
+        response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -966,6 +967,7 @@ async fn thread_session_state_from_thread_resume_response(
 ) -> Result<ThreadSessionState, String> {
     thread_session_state_from_thread_response(
         &response.thread.id,
+        response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -987,6 +989,7 @@ async fn thread_session_state_from_thread_fork_response(
 ) -> Result<ThreadSessionState, String> {
     thread_session_state_from_thread_response(
         &response.thread.id,
+        response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1027,6 +1030,7 @@ fn review_target_to_app_server(
 )]
 async fn thread_session_state_from_thread_response(
     thread_id: &str,
+    forked_from_id: Option<String>,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
     model: String,
@@ -1041,12 +1045,17 @@ async fn thread_session_state_from_thread_response(
 ) -> Result<ThreadSessionState, String> {
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
+    let forked_from_id = forked_from_id
+        .as_deref()
+        .map(ThreadId::from_string)
+        .transpose()
+        .map_err(|err| format!("forked_from_id is invalid: {err}"))?;
     let (history_log_id, history_entry_count) = message_history::history_metadata(config).await;
     let history_entry_count = u64::try_from(history_entry_count).unwrap_or(u64::MAX);
 
     Ok(ThreadSessionState {
         thread_id,
-        forked_from_id: None,
+        forked_from_id,
         thread_name,
         model,
         model_provider_id,
@@ -1164,9 +1173,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
+        let forked_from_id = ThreadId::new();
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
                 id: thread_id.to_string(),
+                forked_from_id: Some(forked_from_id.to_string()),
                 preview: "hello".to_string(),
                 ephemeral: false,
                 model_provider: "openai".to_string(),
@@ -1215,6 +1226,7 @@ mod tests {
         let started = started_thread_from_resume_response(response.clone(), &config)
             .await
             .expect("resume response should map");
+        assert_eq!(started.session.forked_from_id, Some(forked_from_id));
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
     }
@@ -1234,6 +1246,7 @@ mod tests {
 
         let session = thread_session_state_from_thread_response(
             &thread_id.to_string(),
+            /*forked_from_id*/ None,
             Some("restore".to_string()),
             /*rollout_path*/ None,
             "gpt-5.4".to_string(),
@@ -1251,6 +1264,34 @@ mod tests {
 
         assert_ne!(session.history_log_id, 0);
         assert_eq!(session.history_entry_count, 2);
+    }
+
+    #[tokio::test]
+    async fn session_configured_preserves_fork_source_thread_id() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let thread_id = ThreadId::new();
+        let forked_from_id = ThreadId::new();
+
+        let session = thread_session_state_from_thread_response(
+            &thread_id.to_string(),
+            Some(forked_from_id.to_string()),
+            Some("restore".to_string()),
+            /*rollout_path*/ None,
+            "gpt-5.4".to_string(),
+            "openai".to_string(),
+            /*service_tier*/ None,
+            AskForApproval::Never,
+            codex_protocol::config_types::ApprovalsReviewer::User,
+            SandboxPolicy::new_read_only_policy(),
+            PathBuf::from("/tmp/project"),
+            /*reasoning_effort*/ None,
+            &config,
+        )
+        .await
+        .expect("session should map");
+
+        assert_eq!(session.forked_from_id, Some(forked_from_id));
     }
 
     #[test]
