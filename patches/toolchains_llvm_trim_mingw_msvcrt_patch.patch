@@ -1,0 +1,29 @@
+diff --git a/runtimes/mingw/extension/mingw.bzl b/runtimes/mingw/extension/mingw.bzl
+--- a/runtimes/mingw/extension/mingw.bzl
++++ b/runtimes/mingw/extension/mingw.bzl
+@@ -11,7 +11,7 @@ def _mingw_extension_impl(module_ctx):
+         strip_prefix = "mingw-w64-v13.0.0",
+         build_file = "//runtimes/mingw:mingw.BUILD.bazel",
+         patches = [
+-            "//runtimes/mingw/patches:remove-fpreset-from-msvcrt-def.patch",
++            "//runtimes/mingw/patches:remove-fpreset-from-msvcrt-def-single-hunk.patch",
+         ],
+         patch_args = ["-p1"],
+     )
+diff --git a/runtimes/mingw/patches/remove-fpreset-from-msvcrt-def-single-hunk.patch b/runtimes/mingw/patches/remove-fpreset-from-msvcrt-def-single-hunk.patch
+new file mode 100644
+--- /dev/null
++++ b/runtimes/mingw/patches/remove-fpreset-from-msvcrt-def-single-hunk.patch
+@@ -0,0 +1,12 @@
++diff --git a/mingw-w64-crt/lib-common/msvcrt.def.in b/mingw-w64-crt/lib-common/msvcrt.def.in
++index 95b25012b..95b25012b 100644
++--- a/mingw-w64-crt/lib-common/msvcrt.def.in
+++++ b/mingw-w64-crt/lib-common/msvcrt.def.in
++@@ -603,7 +603,6 @@
++ _fmode DATA
++ _fpclass
++ F_NON_X64(_fpieee_flt)
++-_fpreset F_LD80(DATA)
++ _fputchar
++ _fputwchar
++ _fsopen

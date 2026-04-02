@@ -11,8 +11,10 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:llvm_windows_symlink_extract.patch",
+        "//patches:toolchains_llvm_trim_mingw_msvcrt_patch.patch",
     ],
 )
+
 # Abseil picks a MinGW pthread TLS path that does not match our hermetic
 # windows-gnullvm toolchain; force it onto the portable C++11 thread-local path.
 single_version_override(

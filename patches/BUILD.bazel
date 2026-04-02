@@ -12,6 +12,7 @@ exports_files([
     "rules_rust_windows_gnullvm_build_script.patch",
     "rules_rs_windows_gnullvm_exec.patch",
     "rusty_v8_prebuilt_out_dir.patch",
+    "toolchains_llvm_trim_mingw_msvcrt_patch.patch",
     "v8_bazel_rules.patch",
     "v8_module_deps.patch",
     "v8_source_portability.patch",
