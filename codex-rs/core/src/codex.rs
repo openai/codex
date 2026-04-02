@@ -1147,6 +1147,12 @@ impl SessionConfiguration {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier,
+            plan_mode_reasoning_effort: self.original_config_do_not_use.plan_mode_reasoning_effort,
+            model_verbosity: self.original_config_do_not_use.model_verbosity,
+            model_context_window: self.original_config_do_not_use.model_context_window,
+            model_auto_compact_token_limit: self
+                .original_config_do_not_use
+                .model_auto_compact_token_limit,
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
@@ -1154,6 +1160,7 @@ impl SessionConfiguration {
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
+            active_profile: self.original_config_do_not_use.active_profile.clone(),
             session_source: self.session_source.clone(),
         }
     }

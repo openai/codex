@@ -2,6 +2,7 @@ use super::*;
 use crate::CodexThread;
 use crate::ThreadManager;
 use crate::codex::make_session_and_context;
+use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::session_prefix::format_subagent_notification_message;
@@ -23,11 +24,14 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -88,6 +92,53 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+async fn install_role_with_model_provider_and_profile_override(turn: &mut TurnContext) -> String {
+    let role_name = "fork-context-role".to_string();
+    let role_config_path = turn.config.codex_home.join("fork-context-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"developer_instructions = "Forked children should keep the parent model config."
+model_provider = "role-provider"
+model_context_window = 12345
+model_auto_compact_token_limit = 1234
+model_verbosity = "low"
+plan_mode_reasoning_effort = "minimal"
+profile = "role-profile"
+service_tier = "fast"
+
+[profiles.role-profile]
+model_provider = "role-provider"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    let mut role_provider =
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
+    role_provider.name = "Role Provider".to_string();
+    config
+        .model_providers
+        .insert("role-provider".to_string(), role_provider);
+    config.service_tier = Some(ServiceTier::Flex);
+    config.plan_mode_reasoning_effort = Some(ReasoningEffort::High);
+    config.model_verbosity = Some(Verbosity::High);
+    config.model_context_window = Some(200_000);
+    config.model_auto_compact_token_limit = Some(180_000);
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Role with model-provider and profile overrides".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+            fork_context: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    role_name
 }
 
 fn history_contains_inter_agent_communication(
@@ -368,7 +419,8 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 
 #[tokio::test]
 async fn spawn_agent_fork_context_ignores_child_model_overrides() {
-    let (mut session, turn) = make_session_and_context().await;
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_model_provider_and_profile_override(&mut turn).await;
     let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
@@ -377,7 +429,15 @@ async fn spawn_agent_fork_context_ignores_child_model_overrides() {
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
     let expected_model = turn.model_info.slug.clone();
+    let expected_model_provider_id = turn.config.model_provider_id.clone();
+    let expected_model_provider_name = turn.provider.name.clone();
+    let expected_active_profile = turn.config.active_profile.clone();
     let expected_reasoning_effort = turn.reasoning_effort;
+    let expected_service_tier = turn.config.service_tier;
+    let expected_plan_mode_reasoning_effort = turn.config.plan_mode_reasoning_effort;
+    let expected_model_verbosity = turn.config.model_verbosity;
+    let expected_model_context_window = turn.config.model_context_window;
+    let expected_model_auto_compact_token_limit = turn.config.model_auto_compact_token_limit;
 
     let output = SpawnAgentHandler
         .handle(invocation(
@@ -386,6 +446,7 @@ async fn spawn_agent_fork_context_ignores_child_model_overrides() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
+                "agent_type": role_name,
                 "model": "not-a-real-model",
                 "reasoning_effort": "low",
                 "fork_context": true
@@ -409,12 +470,27 @@ async fn spawn_agent_fork_context_ignores_child_model_overrides() {
         .await;
 
     assert_eq!(snapshot.model, expected_model);
+    assert_eq!(snapshot.model_provider_id, expected_model_provider_id);
+    assert_eq!(snapshot.model_provider.name, expected_model_provider_name);
+    assert_eq!(snapshot.active_profile, expected_active_profile);
     assert_eq!(snapshot.reasoning_effort, expected_reasoning_effort);
+    assert_eq!(snapshot.service_tier, expected_service_tier);
+    assert_eq!(
+        snapshot.plan_mode_reasoning_effort,
+        expected_plan_mode_reasoning_effort
+    );
+    assert_eq!(snapshot.model_verbosity, expected_model_verbosity);
+    assert_eq!(snapshot.model_context_window, expected_model_context_window);
+    assert_eq!(
+        snapshot.model_auto_compact_token_limit,
+        expected_model_auto_compact_token_limit
+    );
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
-    let (mut session, turn) = make_session_and_context().await;
+async fn multi_agent_v2_spawn_fork_turns_ignores_child_model_overrides() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_model_provider_and_profile_override(&mut turn).await;
     let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
@@ -432,7 +508,15 @@ async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
         ..turn
     };
     let expected_model = turn.model_info.slug.clone();
+    let expected_model_provider_id = turn.config.model_provider_id.clone();
+    let expected_model_provider_name = turn.provider.name.clone();
+    let expected_active_profile = turn.config.active_profile.clone();
     let expected_reasoning_effort = turn.reasoning_effort;
+    let expected_service_tier = turn.config.service_tier;
+    let expected_plan_mode_reasoning_effort = turn.config.plan_mode_reasoning_effort;
+    let expected_model_verbosity = turn.config.model_verbosity;
+    let expected_model_context_window = turn.config.model_context_window;
+    let expected_model_auto_compact_token_limit = turn.config.model_auto_compact_token_limit;
 
     let output = SpawnAgentHandlerV2
         .handle(invocation(
@@ -441,9 +525,10 @@ async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
+                "agent_type": role_name,
                 "model": "not-a-real-model",
                 "reasoning_effort": "low",
-                "fork_context": true,
+                "fork_turns": "all",
                 "task_name": "fork_context_v2"
             })),
         ))
@@ -467,7 +552,21 @@ async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
         .await;
 
     assert_eq!(snapshot.model, expected_model);
+    assert_eq!(snapshot.model_provider_id, expected_model_provider_id);
+    assert_eq!(snapshot.model_provider.name, expected_model_provider_name);
+    assert_eq!(snapshot.active_profile, expected_active_profile);
     assert_eq!(snapshot.reasoning_effort, expected_reasoning_effort);
+    assert_eq!(snapshot.service_tier, expected_service_tier);
+    assert_eq!(
+        snapshot.plan_mode_reasoning_effort,
+        expected_plan_mode_reasoning_effort
+    );
+    assert_eq!(snapshot.model_verbosity, expected_model_verbosity);
+    assert_eq!(snapshot.model_context_window, expected_model_context_window);
+    assert_eq!(
+        snapshot.model_auto_compact_token_limit,
+        expected_model_auto_compact_token_limit
+    );
 }
 
 #[tokio::test]

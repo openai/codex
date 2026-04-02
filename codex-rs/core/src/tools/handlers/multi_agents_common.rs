@@ -238,6 +238,24 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     Ok(config)
 }
 
+/// Restores parent-owned model selection after role application on forked spawns.
+pub(crate) fn restore_forked_spawn_agent_model_config(config: &mut Config, turn: &TurnContext) {
+    config.model = Some(turn.model_info.slug.clone());
+    config.service_tier = turn.config.service_tier;
+    config.model_provider_id = turn.config.model_provider_id.clone();
+    config.model_provider = turn.provider.clone();
+    config.model_reasoning_effort = turn
+        .reasoning_effort
+        .or(turn.model_info.default_reasoning_level);
+    config.plan_mode_reasoning_effort = turn.config.plan_mode_reasoning_effort;
+    config.model_reasoning_summary = Some(turn.reasoning_summary);
+    config.model_verbosity = turn.config.model_verbosity;
+    config.model_context_window = turn.config.model_context_window;
+    config.model_auto_compact_token_limit = turn.config.model_auto_compact_token_limit;
+    config.model_supports_reasoning_summaries = turn.config.model_supports_reasoning_summaries;
+    config.active_profile = turn.config.active_profile.clone();
+}
+
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.
 ///
 /// These values are chosen by the live turn rather than persisted config, so leaving them stale

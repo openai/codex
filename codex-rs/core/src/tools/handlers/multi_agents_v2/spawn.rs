@@ -87,6 +87,9 @@ impl ToolHandler for Handler {
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
+        if fork_mode.is_some() {
+            restore_forked_spawn_agent_model_config(&mut config, turn.as_ref());
+        }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
         config.developer_instructions = Some(
