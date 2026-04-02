@@ -651,7 +651,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
-    if !json_mode && let Some(message) = codex_core::config::system_bwrap_warning() {
+    if !json_mode
+        && let Some(message) =
+            codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    {
         event_processor.process_warning(message);
     }
 
