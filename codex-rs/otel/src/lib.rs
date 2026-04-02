@@ -43,6 +43,24 @@ pub enum TelemetryAuthMode {
     Chatgpt,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WellKnownApiRequestError {
+    #[default]
+    None,
+    TooManyImages,
+    RequestSizeExceeded,
+}
+
+impl WellKnownApiRequestError {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::TooManyImages => "TooManyImages",
+            Self::RequestSizeExceeded => "RequestSizeExceeded",
+        }
+    }
+}
+
 impl From<codex_app_server_protocol::AuthMode> for TelemetryAuthMode {
     fn from(mode: codex_app_server_protocol::AuthMode) -> Self {
         match mode {

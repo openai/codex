@@ -10,6 +10,7 @@ use codex_login::token_data::PlanType;
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
+use tracing::warn;
 
 use crate::error::CodexErr;
 use crate::error::RetryLimitReachedError;
@@ -17,6 +18,12 @@ use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::model_provider_info::ModelProviderInfo;
 use codex_login::CodexAuth;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InlineImageRequestLimitBadRequestObservation {
+    pub(crate) bytes_exceeded: bool,
+    pub(crate) images_exceeded: bool,
+}
 
 pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
     match err {
@@ -63,6 +70,17 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()
+                    } else if let Some(observation) =
+                        inline_image_request_limit_bad_request_observation(&body_text)
+                    {
+                        warn!(
+                            response_status = %status,
+                            bytes_exceeded = observation.bytes_exceeded,
+                            images_exceeded = observation.images_exceeded,
+                            response_body = %body_text,
+                            "responses request rejected by upstream inline image limit"
+                        );
+                        CodexErr::InvalidRequest(body_text)
                     } else {
                         CodexErr::InvalidRequest(body_text)
                     }
@@ -138,6 +156,59 @@ fn extract_request_tracking_id(headers: Option<&HeaderMap>) -> Option<String> {
     extract_request_id(headers).or_else(|| extract_header(headers, CF_RAY_HEADER))
 }
 
+pub(crate) fn inline_image_request_limit_bad_request_observation(
+    body: &str,
+) -> Option<InlineImageRequestLimitBadRequestObservation> {
+    if let Ok(error) = serde_json::from_str::<BadRequestErrorResponse>(body) {
+        return inline_image_request_limit_observation(
+            &error.error.message,
+            error.error.code.as_deref(),
+            error.error.error_type.as_deref(),
+        );
+    }
+
+    inline_image_request_limit_observation_from_message(body)
+}
+
+pub(crate) fn inline_image_request_limit_observation(
+    message: &str,
+    code: Option<&str>,
+    error_type: Option<&str>,
+) -> Option<InlineImageRequestLimitBadRequestObservation> {
+    if matches!(
+        (code, error_type),
+        (Some("max_images_per_request"), _) | (_, Some("max_images_per_request"))
+    ) {
+        return Some(InlineImageRequestLimitBadRequestObservation {
+            bytes_exceeded: false,
+            images_exceeded: true,
+        });
+    }
+
+    inline_image_request_limit_observation_from_message(message)
+}
+
+fn inline_image_request_limit_observation_from_message(
+    message: &str,
+) -> Option<InlineImageRequestLimitBadRequestObservation> {
+    let bytes_exceeded = matches_inline_image_byte_limit_message(message);
+    if !bytes_exceeded {
+        return None;
+    }
+
+    Some(InlineImageRequestLimitBadRequestObservation {
+        bytes_exceeded,
+        images_exceeded: false,
+    })
+}
+
+fn matches_inline_image_byte_limit_message(message: &str) -> bool {
+    message
+        .strip_prefix("Total image data in 'input' exceeds the ")
+        .and_then(|rest| rest.split_once(" byte limit"))
+        .is_some_and(|(limit, _)| !limit.is_empty() && limit.chars().all(|c| c.is_ascii_digit()))
+}
+
 fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
     extract_header(headers, REQUEST_ID_HEADER)
         .or_else(|| extract_header(headers, OAI_REQUEST_ID_HEADER))
@@ -199,6 +270,19 @@ pub(crate) fn auth_provider_from_auth(
 #[derive(Debug, Deserialize)]
 struct UsageErrorResponse {
     error: UsageErrorBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct BadRequestErrorResponse {
+    error: BadRequestErrorBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct BadRequestErrorBody {
+    message: String,
+    #[serde(rename = "type")]
+    error_type: Option<String>,
+    code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

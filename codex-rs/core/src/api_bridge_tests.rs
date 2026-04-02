@@ -132,6 +132,65 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
 }
 
 #[test]
+fn inline_image_request_limit_bad_request_matches_byte_limit_copy() {
+    assert_eq!(
+        inline_image_request_limit_bad_request_observation(
+            "Total image data in 'input' exceeds the 536870912 byte limit."
+        ),
+        Some(InlineImageRequestLimitBadRequestObservation {
+            bytes_exceeded: true,
+            images_exceeded: false,
+        })
+    );
+}
+
+#[test]
+fn inline_image_request_limit_bad_request_matches_live_byte_limit_copy() {
+    assert_eq!(
+        inline_image_request_limit_bad_request_observation(
+            "Total image data in 'input' exceeds the 536870912 byte limit for a single /v1/responses request."
+        ),
+        Some(InlineImageRequestLimitBadRequestObservation {
+            bytes_exceeded: true,
+            images_exceeded: false,
+        })
+    );
+}
+
+#[test]
+fn inline_image_request_limit_bad_request_matches_structured_image_count_error() {
+    assert_eq!(
+        inline_image_request_limit_bad_request_observation(
+            r#"{"error":{"message":"Invalid request.","type":"max_images_per_request","param":null,"code":"max_images_per_request"}}"#
+        ),
+        Some(InlineImageRequestLimitBadRequestObservation {
+            bytes_exceeded: false,
+            images_exceeded: true,
+        })
+    );
+}
+
+#[test]
+fn inline_image_request_limit_bad_request_ignores_message_only_image_count_copy() {
+    assert_eq!(
+        inline_image_request_limit_bad_request_observation(
+            "This request contains 1501 images, which exceeds the 1500 image limit for a single Responses API request."
+        ),
+        None
+    );
+}
+
+#[test]
+fn inline_image_request_limit_bad_request_ignores_other_bad_requests() {
+    assert_eq!(
+        inline_image_request_limit_bad_request_observation(
+            "Request body is missing required field: input"
+        ),
+        None
+    );
+}
+
+#[test]
 fn core_auth_provider_reports_when_auth_header_will_attach() {
     let auth = CoreAuthProvider {
         token: Some("access-token".to_string()),

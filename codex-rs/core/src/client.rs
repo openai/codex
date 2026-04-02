@@ -32,6 +32,7 @@ use std::sync::atomic::Ordering;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
+use crate::api_bridge::inline_image_request_limit_bad_request_observation;
 use crate::api_bridge::map_api_error;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -66,6 +67,7 @@ use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::build_reqwest_client;
 use codex_otel::SessionTelemetry;
+use codex_otel::WellKnownApiRequestError;
 use codex_otel::current_span_w3c_trace_context;
 
 use codex_protocol::ThreadId;
@@ -1679,6 +1681,22 @@ fn api_error_http_status(error: &ApiError) -> Option<u16> {
     }
 }
 
+fn upstream_inline_image_request_limit_observation_from_transport_error(
+    error: &TransportError,
+) -> Option<crate::api_bridge::InlineImageRequestLimitBadRequestObservation> {
+    let TransportError::Http {
+        status,
+        body: Some(body_text),
+        ..
+    } = error
+    else {
+        return None;
+    };
+    if *status != StatusCode::BAD_REQUEST {
+        return None;
+    }
+    inline_image_request_limit_bad_request_observation(body_text)
+}
 struct ApiTelemetry {
     session_telemetry: SessionTelemetry,
     auth_context: AuthRequestTelemetryContext,
@@ -1715,6 +1733,17 @@ impl RequestTelemetry for ApiTelemetry {
         let debug = error
             .map(extract_response_debug_context)
             .unwrap_or_default();
+        let well_known_error = match error
+            .and_then(upstream_inline_image_request_limit_observation_from_transport_error)
+        {
+            Some(observation) if observation.images_exceeded => {
+                WellKnownApiRequestError::TooManyImages
+            }
+            Some(observation) if observation.bytes_exceeded => {
+                WellKnownApiRequestError::RequestSizeExceeded
+            }
+            Some(_) | None => WellKnownApiRequestError::None,
+        };
         self.session_telemetry.record_api_request(
             attempt,
             status,
@@ -1730,6 +1759,7 @@ impl RequestTelemetry for ApiTelemetry {
             debug.cf_ray.as_deref(),
             debug.auth_error.as_deref(),
             debug.auth_error_code.as_deref(),
+            well_known_error,
         );
         emit_feedback_request_tags_with_auth_env(
             &FeedbackRequestTags {

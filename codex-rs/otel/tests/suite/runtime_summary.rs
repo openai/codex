@@ -2,6 +2,7 @@ use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::WellKnownApiRequestError;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::metrics::Result;
@@ -62,6 +63,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         /*cf_ray*/ None,
         /*auth_error*/ None,
         /*auth_error_code*/ None,
+        WellKnownApiRequestError::None,
     );
     manager.record_websocket_request(
         Duration::from_millis(400),

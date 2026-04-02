@@ -9,6 +9,7 @@ pub const WEBSOCKET_REQUEST_COUNT_METRIC: &str = "codex.websocket.request";
 pub const WEBSOCKET_REQUEST_DURATION_METRIC: &str = "codex.websocket.request.duration_ms";
 pub const WEBSOCKET_EVENT_COUNT_METRIC: &str = "codex.websocket.event";
 pub const WEBSOCKET_EVENT_DURATION_METRIC: &str = "codex.websocket.event.duration_ms";
+pub const INLINE_IMAGE_REQUEST_LIMIT_METRIC: &str = "codex.responses.inline_image_limit";
 pub const RESPONSES_API_OVERHEAD_DURATION_METRIC: &str = "codex.responses_api_overhead.duration_ms";
 pub const RESPONSES_API_INFERENCE_TIME_DURATION_METRIC: &str =
     "codex.responses_api_inference_time.duration_ms";

@@ -1,5 +1,6 @@
 use crate::TelemetryAuthMode;
 use crate::ToolDecisionSource;
+use crate::WellKnownApiRequestError;
 use crate::events::shared::log_and_trace_event;
 use crate::events::shared::log_event;
 use crate::events::shared::trace_event;
@@ -9,6 +10,7 @@ use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::INLINE_IMAGE_REQUEST_LIMIT_METRIC;
 use crate::metrics::names::PROFILE_USAGE_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
@@ -62,6 +64,63 @@ const RESPONSES_API_ENGINE_IAPI_TTFT_FIELD: &str = "engine_iapi_ttft_total_ms";
 const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total_ms";
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
+const INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_UPSTREAM_REJECTED: &str = "upstream_rejected";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InlineImageRequestLimitObservation {
+    bytes_exceeded: bool,
+    images_exceeded: bool,
+}
+
+fn bool_metric_tag(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+fn matches_inline_image_byte_limit_message(message: &str) -> bool {
+    message
+        .strip_prefix("Total image data in 'input' exceeds the ")
+        .and_then(|rest| rest.split_once(" byte limit"))
+        .is_some_and(|(limit, _)| !limit.is_empty() && limit.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn inline_image_request_limit_observation_from_error_fields(
+    message: Option<&str>,
+    code: Option<&str>,
+    error_type: Option<&str>,
+) -> Option<InlineImageRequestLimitObservation> {
+    if matches!(
+        (code, error_type),
+        (Some("max_images_per_request"), _) | (_, Some("max_images_per_request"))
+    ) {
+        return Some(InlineImageRequestLimitObservation {
+            bytes_exceeded: false,
+            images_exceeded: true,
+        });
+    }
+
+    if message.is_some_and(matches_inline_image_byte_limit_message) {
+        return Some(InlineImageRequestLimitObservation {
+            bytes_exceeded: true,
+            images_exceeded: false,
+        });
+    }
+
+    None
+}
+
+fn inline_image_request_limit_observation_from_event_json(
+    event_json: &serde_json::Value,
+) -> Option<InlineImageRequestLimitObservation> {
+    let error = event_json
+        .get("response")
+        .and_then(|response| response.get("error"))
+        .or_else(|| event_json.get("error"))?;
+    inline_image_request_limit_observation_from_error_fields(
+        error.get("message").and_then(serde_json::Value::as_str),
+        error.get("code").and_then(serde_json::Value::as_str),
+        error.get("type").and_then(serde_json::Value::as_str),
+    )
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthEnvTelemetryMetadata {
@@ -98,6 +157,30 @@ pub struct SessionTelemetry {
 }
 
 impl SessionTelemetry {
+    fn record_upstream_inline_image_request_limit_observation(
+        &self,
+        observation: InlineImageRequestLimitObservation,
+    ) {
+        self.counter(
+            INLINE_IMAGE_REQUEST_LIMIT_METRIC,
+            /*inc*/ 1,
+            &[
+                (
+                    "outcome",
+                    INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_UPSTREAM_REJECTED,
+                ),
+                (
+                    "bytes_exceeded",
+                    bool_metric_tag(observation.bytes_exceeded),
+                ),
+                (
+                    "images_exceeded",
+                    bool_metric_tag(observation.images_exceeded),
+                ),
+            ],
+        );
+    }
+
     pub fn with_auth_env(mut self, auth_env: AuthEnvTelemetryMetadata) -> Self {
         self.metadata.auth_env = auth_env;
         self
@@ -382,6 +465,7 @@ impl SessionTelemetry {
             /*cf_ray*/ None,
             /*auth_error*/ None,
             /*auth_error_code*/ None,
+            WellKnownApiRequestError::None,
         );
 
         response
@@ -404,21 +488,31 @@ impl SessionTelemetry {
         cf_ray: Option<&str>,
         auth_error: Option<&str>,
         auth_error_code: Option<&str>,
+        well_known_error: WellKnownApiRequestError,
     ) {
         let success = status.is_some_and(|code| (200..=299).contains(&code)) && error.is_none();
         let success_str = if success { "true" } else { "false" };
         let status_str = status
             .map(|code| code.to_string())
             .unwrap_or_else(|| "none".to_string());
+        let well_known_error_str = well_known_error.as_str();
         self.counter(
             API_CALL_COUNT_METRIC,
             /*inc*/ 1,
-            &[("status", status_str.as_str()), ("success", success_str)],
+            &[
+                ("status", status_str.as_str()),
+                ("success", success_str),
+                ("well_known_error", well_known_error_str),
+            ],
         );
         self.record_duration(
             API_CALL_DURATION_METRIC,
             duration,
-            &[("status", status_str.as_str()), ("success", success_str)],
+            &[
+                ("status", status_str.as_str()),
+                ("success", success_str),
+                ("well_known_error", well_known_error_str),
+            ],
         );
         log_and_trace_event!(
             self,
@@ -444,6 +538,7 @@ impl SessionTelemetry {
                 auth.cf_ray = cf_ray,
                 auth.error = auth_error,
                 auth.error_code = auth_error_code,
+                well_known_error = well_known_error_str,
             },
             log: {},
             trace: {},
@@ -603,6 +698,13 @@ impl SessionTelemetry {
                                 self.record_responses_websocket_timing_metrics(&value);
                             }
                             if kind.as_deref() == Some("response.failed") {
+                                if let Some(observation) =
+                                    inline_image_request_limit_observation_from_event_json(&value)
+                                {
+                                    self.record_upstream_inline_image_request_limit_observation(
+                                        observation,
+                                    );
+                                }
                                 success = false;
                                 error_message = value
                                     .get("response")
@@ -683,6 +785,13 @@ impl SessionTelemetry {
                 } else {
                     match serde_json::from_str::<serde_json::Value>(&sse.data) {
                         Ok(error) if sse.event == "response.failed" => {
+                            if let Some(observation) =
+                                inline_image_request_limit_observation_from_event_json(&error)
+                            {
+                                self.record_upstream_inline_image_request_limit_observation(
+                                    observation,
+                                );
+                            }
                             self.sse_event_failed(Some(&sse.event), duration, &error);
                         }
                         Ok(content) if sse.event == "response.output_item.done" => {
@@ -1082,6 +1191,10 @@ impl SessionTelemetry {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_telemetry_tests.rs"]
+mod tests;
 
 fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration> {
     let value = value?;

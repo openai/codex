@@ -2,6 +2,7 @@ use codex_otel::AuthEnvTelemetryMetadata;
 use codex_otel::OtelProvider;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::WellKnownApiRequestError;
 use opentelemetry::KeyValue;
 use opentelemetry::logs::AnyValue;
 use opentelemetry::trace::TracerProvider as _;
@@ -527,6 +528,7 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
             Some("ray-401"),
             Some("missing_authorization_header"),
             Some("token_expired"),
+            WellKnownApiRequestError::None,
         );
     });
 
@@ -585,6 +587,12 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
         Some("/responses")
     );
     assert_eq!(
+        request_log_attrs
+            .get("well_known_error")
+            .map(String::as_str),
+        Some("None")
+    );
+    assert_eq!(
         request_log_attrs.get("auth.error").map(String::as_str),
         Some("missing_authorization_header")
     );
@@ -635,6 +643,12 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
     assert_eq!(
         request_trace_attrs.get("endpoint").map(String::as_str),
         Some("/responses")
+    );
+    assert_eq!(
+        request_trace_attrs
+            .get("well_known_error")
+            .map(String::as_str),
+        Some("None")
     );
     assert_eq!(
         request_trace_attrs
