@@ -32,7 +32,7 @@ mod artifacts {
 /// Phase 1 (startup extraction).
 mod phase_one {
     /// Default model used for phase 1.
-    pub(super) const MODEL: &str = "gpt-5.1-codex-mini";
+    pub(super) const MODEL: &str = "gpt-5.4-mini";
     /// Default reasoning effort used for phase 1.
     pub(super) const REASONING_EFFORT: super::ReasoningEffort = super::ReasoningEffort::Low;
     /// Prompt used for phase 1.
