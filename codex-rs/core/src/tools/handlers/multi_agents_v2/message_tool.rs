@@ -125,7 +125,7 @@ async fn handle_message_submission(
             .is_some_and(AgentPath::is_root)
     {
         return Err(FunctionCallError::RespondToModel(
-            "Follow-up tasks can't be sent to the root agent".to_string(),
+            "Tasks can't be assigned to the root agent".to_string(),
         ));
     }
     if interrupt {
