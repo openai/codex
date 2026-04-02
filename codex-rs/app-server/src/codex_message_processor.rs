@@ -3523,6 +3523,11 @@ impl CodexMessageProcessor {
             }
             build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
         };
+        if thread.forked_from_id.is_none()
+            && let Some(rollout_path) = rollout_path.as_ref()
+        {
+            thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
+        }
         self.attach_thread_name(thread_uuid, &mut thread).await;
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {

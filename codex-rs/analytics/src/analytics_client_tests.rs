@@ -58,6 +58,7 @@ use tokio::sync::mpsc;
 fn sample_thread(thread_id: &str, ephemeral: bool) -> Thread {
     Thread {
         id: thread_id.to_string(),
+        forked_from_id: None,
         preview: "first prompt".to_string(),
         ephemeral,
         model_provider: "openai".to_string(),
