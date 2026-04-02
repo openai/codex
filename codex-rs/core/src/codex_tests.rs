@@ -18,6 +18,7 @@ use crate::tools::format_exec_output_str;
 use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -69,6 +70,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
@@ -4779,6 +4781,75 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     .await;
 
     assert_eq!(sess.get_pending_input().await, vec![queued_item]);
+}
+
+#[tokio::test]
+async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "late queue-only update".to_string(),
+        /*trigger_turn*/ false,
+    );
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    sess.defer_mailbox_delivery_to_next_turn(&tc.sub_id).await;
+    sess.enqueue_mailbox_communication(communication.clone());
+
+    assert!(
+        !sess.has_pending_input().await,
+        "queue-only mailbox mail should stay buffered once the current turn emitted its answer"
+    );
+    assert_eq!(sess.get_pending_input().await, Vec::new());
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![communication.to_response_input_item()],
+    );
+}
+
+#[tokio::test]
+async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    sess.defer_mailbox_delivery_to_next_turn(&tc.sub_id).await;
+    sess.enqueue_mailbox_communication(InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "late trigger update".to_string(),
+        /*trigger_turn*/ true,
+    ));
+
+    assert!(
+        !sess.has_pending_input().await,
+        "trigger-turn mailbox mail should not extend the current turn after its answer boundary"
+    );
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    assert!(sess.has_trigger_turn_mailbox_items().await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

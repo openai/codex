@@ -29,6 +29,17 @@ pub(crate) struct ActiveTurn {
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
 }
 
+/// Whether mailbox deliveries should still be folded into the current turn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum MailboxDeliveryPhase {
+    /// Incoming mailbox messages can still be consumed by the current turn.
+    #[default]
+    CurrentTurn,
+    /// The current turn already emitted visible final answer text; mailbox
+    /// messages should remain queued for a later turn.
+    NextTurn,
+}
+
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
@@ -81,6 +92,7 @@ pub(crate) struct TurnState {
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -200,6 +212,14 @@ impl TurnState {
 
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    pub(crate) fn defer_mailbox_delivery_to_next_turn(&mut self) {
+        self.mailbox_delivery_phase = MailboxDeliveryPhase::NextTurn;
+    }
+
+    pub(crate) fn accepts_mailbox_delivery_for_current_turn(&self) -> bool {
+        self.mailbox_delivery_phase == MailboxDeliveryPhase::CurrentTurn
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

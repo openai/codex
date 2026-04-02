@@ -4044,6 +4044,25 @@ impl Session {
         }
     }
 
+    pub(crate) async fn defer_mailbox_delivery_to_next_turn(&self, sub_id: &str) {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            active.as_ref().and_then(|active_turn| {
+                active_turn
+                    .tasks
+                    .contains_key(sub_id)
+                    .then(|| Arc::clone(&active_turn.turn_state))
+            })
+        };
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        turn_state
+            .lock()
+            .await
+            .defer_mailbox_delivery_to_next_turn();
+    }
+
     pub(crate) fn subscribe_mailbox_seq(&self) -> watch::Receiver<u64> {
         self.mailbox.subscribe()
     }
@@ -4069,16 +4088,22 @@ impl Session {
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let pending_input = {
+        let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.take_pending_input()
+                    (
+                        ts.take_pending_input(),
+                        ts.accepts_mailbox_delivery_for_current_turn(),
+                    )
                 }
-                None => Vec::new(),
+                None => (Vec::new(), true),
             }
         };
+        if !accepts_mailbox_delivery {
+            return pending_input;
+        }
         let mailbox_items = {
             let mut mailbox_rx = self.mailbox_rx.lock().await;
             mailbox_rx
@@ -4118,17 +4143,26 @@ impl Session {
     }
 
     pub async fn has_pending_input(&self) -> bool {
-        if self.mailbox_rx.lock().await.has_pending() {
+        let (has_turn_pending_input, accepts_mailbox_delivery) = {
+            let active = self.active_turn.lock().await;
+            match active.as_ref() {
+                Some(at) => {
+                    let ts = at.turn_state.lock().await;
+                    (
+                        ts.has_pending_input(),
+                        ts.accepts_mailbox_delivery_for_current_turn(),
+                    )
+                }
+                None => (false, true),
+            }
+        };
+        if has_turn_pending_input {
             return true;
         }
-        let active = self.active_turn.lock().await;
-        match active.as_ref() {
-            Some(at) => {
-                let ts = at.turn_state.lock().await;
-                ts.has_pending_input()
-            }
-            None => false,
+        if !accepts_mailbox_delivery {
+            return false;
         }
+        self.mailbox_rx.lock().await.has_pending()
     }
 
     pub async fn list_resources(

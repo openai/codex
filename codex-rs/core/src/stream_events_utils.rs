@@ -23,6 +23,7 @@ use crate::tools::router::ToolRouter;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::state_db;
@@ -129,6 +130,13 @@ pub(crate) async fn record_completed_response_item(
 ) {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await;
+    if completed_item_defers_mailbox_delivery_to_next_turn(
+        item,
+        turn_context.collaboration_mode.mode == ModeKind::Plan,
+    ) {
+        sess.defer_mailbox_delivery_to_next_turn(&turn_context.sub_id)
+            .await;
+    }
     maybe_mark_thread_memory_mode_polluted_from_web_search(sess, turn_context, item).await;
     record_stage1_output_usage_for_completed_item(turn_context, item).await;
 }
@@ -424,6 +432,19 @@ pub(crate) fn last_assistant_message_from_item(
         return Some(stripped);
     }
     None
+}
+
+fn completed_item_defers_mailbox_delivery_to_next_turn(
+    item: &ResponseItem,
+    plan_mode: bool,
+) -> bool {
+    let ResponseItem::Message { role, phase, .. } = item else {
+        return false;
+    };
+    if role != "assistant" || matches!(phase, Some(MessagePhase::Commentary)) {
+        return false;
+    }
+    last_assistant_message_from_item(item, plan_mode).is_some()
 }
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {

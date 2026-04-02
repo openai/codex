@@ -1,3 +1,4 @@
+use super::completed_item_defers_mailbox_delivery_to_next_turn;
 use super::handle_non_tool_response_item;
 use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
@@ -6,10 +7,15 @@ use crate::codex::make_session_and_context;
 use crate::error::CodexErr;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 
 fn assistant_output_text(text: &str) -> ResponseItem {
+    assistant_output_text_with_phase(text, None)
+}
+
+fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     ResponseItem::Message {
         id: Some("msg-1".to_string()),
         role: "assistant".to_string(),
@@ -17,7 +23,7 @@ fn assistant_output_text(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: Some(true),
-        phase: None,
+        phase,
     }
 }
 
@@ -85,6 +91,24 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
         last_assistant_message_from_item(&item, /*plan_mode*/ true),
         None
     );
+}
+
+#[test]
+fn completed_item_defers_mailbox_delivery_for_final_answer_messages() {
+    let item = assistant_output_text("final answer");
+
+    assert!(completed_item_defers_mailbox_delivery_to_next_turn(
+        &item, /*plan_mode*/ false,
+    ));
+}
+
+#[test]
+fn completed_item_keeps_mailbox_delivery_open_for_commentary_messages() {
+    let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
+
+    assert!(!completed_item_defers_mailbox_delivery_to_next_turn(
+        &item, /*plan_mode*/ false,
+    ));
 }
 
 #[tokio::test]
