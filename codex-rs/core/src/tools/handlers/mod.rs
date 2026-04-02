@@ -18,9 +18,9 @@ mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 
-use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_sandboxing::policy_transforms::permission_profile_is_preapproved;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use serde_json::Value;
@@ -191,13 +191,18 @@ pub(super) async fn apply_granted_turn_permissions(
         additional_permissions.as_ref(),
         granted_permissions.as_ref(),
     );
-    let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
-        (Some(effective_permissions), Some(granted_permissions)) => {
-            intersect_permission_profiles(effective_permissions.clone(), granted_permissions)
-                == *effective_permissions
-        }
-        _ => false,
-    };
+    let session_cwd = session.cwd().await;
+    let permissions_preapproved =
+        match (effective_permissions.as_ref(), granted_permissions.as_ref()) {
+            (Some(effective_permissions), Some(granted_permissions)) => {
+                permission_profile_is_preapproved(
+                    effective_permissions,
+                    granted_permissions,
+                    session_cwd.as_path(),
+                )
+            }
+            _ => false,
+        };
 
     let sandbox_permissions =
         if effective_permissions.is_some() && !sandbox_permissions.uses_additional_permissions() {
@@ -239,12 +244,12 @@ mod tests {
 
     fn file_system_permissions(path: &std::path::Path) -> PermissionProfile {
         PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: None,
-                write: Some(vec![
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![
                     AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
                 ]),
-            }),
+            )),
             ..Default::default()
         }
     }

@@ -20,6 +20,7 @@ use codex_config::types::Notifications;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -545,6 +546,13 @@ fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::io::Re
                 access: FileSystemAccessMode::Write,
             },
         ]),
+    );
+    assert_eq!(
+        config.permissions.runtime_permission_profile(),
+        PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+        )
     );
     assert_eq!(
         config.permissions.sandbox_policy.get(),
@@ -1164,6 +1172,14 @@ exclude_slash_tmp = true
             config.permissions.network_sandbox_policy,
             NetworkSandboxPolicy::from(sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
+        );
+        assert_eq!(
+            config.permissions.runtime_permission_profile(),
+            PermissionProfile::from_runtime_permissions(
+                &config.permissions.file_system_sandbox_policy,
+                config.permissions.network_sandbox_policy,
+            ),
+            "case `{name}` should populate canonical permission profile from runtime policies"
         );
         assert_eq!(
             config

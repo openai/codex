@@ -74,7 +74,13 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
     .expect("outside dir should be absolute");
 
     assert_eq!(
-        permissions.and_then(|profile| profile.file_system.and_then(|fs| fs.write)),
-        Some(vec![expected_outside])
+        permissions,
+        Some(PermissionProfile {
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![]),
+                Some(vec![expected_outside]),
+            )),
+            ..Default::default()
+        })
     );
 }
