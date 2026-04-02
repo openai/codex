@@ -12,6 +12,7 @@ pub use codex_rollout::find_conversation_path_by_id_str;
 pub use codex_rollout::find_thread_name_by_id;
 pub use codex_rollout::find_thread_path_by_id_str;
 pub use codex_rollout::find_thread_path_by_name_str;
+pub use codex_rollout::resolve_fork_reference_rollout_path;
 pub use codex_rollout::rollout_date_parts;
 
 impl codex_rollout::RolloutConfigView for Config {

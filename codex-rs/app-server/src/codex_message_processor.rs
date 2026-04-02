@@ -212,6 +212,7 @@ use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
+use codex_core::materialize_rollout_items_for_replay;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
@@ -8467,13 +8468,17 @@ pub(crate) async fn read_summary_from_rollout(
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.as_ref().map(map_git_info);
     let updated_at = updated_at.or_else(|| timestamp.clone());
+    let preview = read_rollout_items_from_rollout(path)
+        .await
+        .map(|items| preview_from_rollout_items(&items))
+        .unwrap_or_default();
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
         timestamp,
         updated_at,
         path: path.to_path_buf(),
-        preview: String::new(),
+        preview,
         model_provider,
         cwd: session_meta.cwd,
         cli_version: session_meta.cli_version,
@@ -8490,6 +8495,10 @@ pub(crate) async fn read_rollout_items_from_rollout(
         InitialHistory::Forked(items) => items,
         InitialHistory::Resumed(resumed) => resumed.history,
     };
+
+    if let Some(codex_home) = codex_home_from_rollout_path(path) {
+        return Ok(materialize_rollout_items_for_replay(codex_home, &items).await);
+    }
 
     Ok(items)
 }
@@ -8596,6 +8605,17 @@ fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
             None => preview,
         })
         .unwrap_or_default()
+}
+
+fn codex_home_from_rollout_path(path: &Path) -> Option<&Path> {
+    path.ancestors().find_map(|ancestor| {
+        let name = ancestor.file_name().and_then(OsStr::to_str)?;
+        if name == codex_core::SESSIONS_SUBDIR || name == codex_core::ARCHIVED_SESSIONS_SUBDIR {
+            ancestor.parent()
+        } else {
+            None
+        }
+    })
 }
 
 fn with_thread_spawn_agent_metadata(

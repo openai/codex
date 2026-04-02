@@ -3,7 +3,6 @@ use crate::codex::make_session_and_context;
 use crate::config::test_config;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::RefreshStrategy;
-use crate::rollout::RolloutRecorder;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -15,6 +14,7 @@ use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
@@ -42,8 +42,8 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
-#[test]
-fn truncates_before_requested_user_message() {
+#[tokio::test]
+async fn truncates_before_requested_user_message() {
     let items = [
         user_msg("u1"),
         assistant_msg("a1"),
@@ -74,6 +74,7 @@ fn truncates_before_requested_user_message() {
         .map(RolloutItem::ResponseItem)
         .collect();
     let truncated = truncate_before_nth_user_message(
+        Path::new("/tmp"),
         InitialHistory::Forked(initial),
         /*n*/ 1,
         &SnapshotTurnState {
@@ -81,7 +82,8 @@ fn truncates_before_requested_user_message() {
             active_turn_id: None,
             active_turn_start_index: None,
         },
-    );
+    )
+    .await;
     let got_items = truncated.get_rollout_items();
     let expected_items = vec![
         RolloutItem::ResponseItem(items[0].clone()),
@@ -99,6 +101,7 @@ fn truncates_before_requested_user_message() {
         .map(RolloutItem::ResponseItem)
         .collect();
     let truncated2 = truncate_before_nth_user_message(
+        Path::new("/tmp"),
         InitialHistory::Forked(initial2.clone()),
         /*n*/ 2,
         &SnapshotTurnState {
@@ -106,15 +109,16 @@ fn truncates_before_requested_user_message() {
             active_turn_id: None,
             active_turn_start_index: None,
         },
-    );
+    )
+    .await;
     assert_eq!(
         serde_json::to_value(truncated2.get_rollout_items()).unwrap(),
         serde_json::to_value(initial2).unwrap()
     );
 }
 
-#[test]
-fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
+#[tokio::test]
+async fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
     let items = vec![
         RolloutItem::ResponseItem(user_msg("u1")),
         RolloutItem::ResponseItem(assistant_msg("a1")),
@@ -123,14 +127,16 @@ fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
     ];
 
     let truncated = truncate_before_nth_user_message(
+        Path::new("/tmp"),
         InitialHistory::Forked(items.clone()),
-        usize::MAX,
+        /*n*/ -1,
         &SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id: None,
             active_turn_start_index: None,
         },
-    );
+    )
+    .await;
 
     assert_eq!(
         serde_json::to_value(truncated.get_rollout_items()).unwrap(),
@@ -157,8 +163,8 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
     let _: fn(&ThreadManager, Config, std::path::PathBuf) = assert_legacy_snapshot_callsite;
 }
 
-#[test]
-fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
+#[tokio::test]
+async fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
     let items = vec![
         RolloutItem::ResponseItem(user_msg("u1")),
         RolloutItem::ResponseItem(assistant_msg("a1")),
@@ -182,10 +188,12 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
     );
 
     let truncated = truncate_before_nth_user_message(
+        Path::new("/tmp"),
         InitialHistory::Forked(items.clone()),
-        usize::MAX,
+        /*n*/ -1,
         &snapshot_state,
-    );
+    )
+    .await;
 
     assert_eq!(
         serde_json::to_value(truncated.get_rollout_items()).unwrap(),
@@ -209,6 +217,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .collect();
 
     let truncated = truncate_before_nth_user_message(
+        Path::new("/tmp"),
         InitialHistory::Forked(rollout_items),
         /*n*/ 1,
         &SnapshotTurnState {
@@ -216,7 +225,8 @@ async fn ignores_session_prefix_messages_when_truncating() {
             active_turn_id: None,
             active_turn_start_index: None,
         },
-    );
+    )
+    .await;
     let got_items = truncated.get_rollout_items();
 
     let expected: Vec<RolloutItem> = vec![

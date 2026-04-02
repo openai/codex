@@ -14,12 +14,15 @@ use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_rollout_truncation::fork_reference_user_message_boundary;
+use crate::thread_rollout_truncation::materialize_rollout_items_for_replay;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -309,9 +312,28 @@ impl AgentControl {
         let mut forked_rollout_items = RolloutRecorder::get_rollout_history(&rollout_path)
             .await?
             .get_rollout_items();
-        if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
-            forked_rollout_items =
-                truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+        if forked_rollout_items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+        {
+            forked_rollout_items = materialize_rollout_items_for_replay(
+                config.codex_home.as_path(),
+                &forked_rollout_items,
+            )
+            .await;
+        }
+        match fork_mode {
+            SpawnAgentForkMode::FullHistory => {
+                let fork_boundary = fork_reference_user_message_boundary(&forked_rollout_items);
+                forked_rollout_items.push(RolloutItem::ForkReference(ForkReferenceItem {
+                    rollout_path: rollout_path.clone(),
+                    nth_user_message: fork_boundary,
+                }));
+            }
+            SpawnAgentForkMode::LastNTurns(last_n_turns) => {
+                forked_rollout_items =
+                    truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+            }
         }
 
         let mut output =

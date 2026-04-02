@@ -5,11 +5,19 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use std::path::PathBuf;
+use tempfile::TempDir;
 
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -54,6 +62,53 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+fn write_rollout_items(
+    root: &Path,
+    thread_id: ThreadId,
+    items: &[RolloutItem],
+) -> std::io::Result<PathBuf> {
+    let rollout_dir = root
+        .join(crate::SESSIONS_SUBDIR)
+        .join("2026")
+        .join("03")
+        .join("05");
+    std::fs::create_dir_all(&rollout_dir)?;
+    let rollout_path = rollout_dir.join(format!("rollout-2026-03-05T00-00-00-{thread_id}.jsonl"));
+    let session_meta_line = RolloutLine {
+        timestamp: "2026-03-05T00:00:00Z".to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                timestamp: "2026-03-05T00:00:00Z".to_string(),
+                cwd: root.to_path_buf(),
+                originator: "codex".to_string(),
+                cli_version: "test".to_string(),
+                source: SessionSource::Exec,
+                agent_nickname: None,
+                agent_role: None,
+                agent_path: None,
+                model_provider: Some("openai".to_string()),
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+                forked_from_id: None,
+            },
+            git: None,
+        }),
+    };
+    let mut text = format!("{}\n", serde_json::to_string(&session_meta_line).unwrap());
+    for item in items {
+        let line = RolloutLine {
+            timestamp: "2026-03-05T00:00:01Z".to_string(),
+            item: item.clone(),
+        };
+        text.push_str(&serde_json::to_string(&line).unwrap());
+        text.push('\n');
+    }
+    std::fs::write(&rollout_path, text)?;
+    Ok(rollout_path)
+}
+
 #[tokio::test]
 async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previous_turn_settings()
 {
@@ -91,6 +146,125 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
+}
+
+#[tokio::test]
+async fn reconstruct_history_materializes_fork_reference_rollout_items() {
+    let (session, turn_context) = make_session_and_context().await;
+    let dir = TempDir::new().expect("create temp dir");
+    let parent_thread_id = ThreadId::new();
+    let parent_rollout_path = write_rollout_items(
+        dir.path(),
+        parent_thread_id,
+        &[
+            RolloutItem::ResponseItem(user_message("first user")),
+            RolloutItem::ResponseItem(assistant_message("first reply")),
+            RolloutItem::ResponseItem(user_message("second user")),
+            RolloutItem::ResponseItem(assistant_message("second reply")),
+        ],
+    )
+    .expect("write parent rollout");
+    let rollout_items = vec![RolloutItem::ForkReference(ForkReferenceItem {
+        rollout_path: parent_rollout_path,
+        nth_user_message: 1,
+    })];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        reconstructed.history,
+        vec![user_message("first user"), assistant_message("first reply")]
+    );
+}
+
+#[tokio::test]
+async fn record_initial_history_forked_materializes_fork_reference_rollout_items() {
+    let (session, turn_context) = make_session_and_context().await;
+    let codex_home = turn_context.config.codex_home.clone();
+    let parent_thread_id = ThreadId::new();
+    let parent_rollout_path = write_rollout_items(
+        codex_home.as_path(),
+        parent_thread_id,
+        &[
+            RolloutItem::ResponseItem(user_message("first user")),
+            RolloutItem::ResponseItem(assistant_message("first reply")),
+            RolloutItem::ResponseItem(user_message("second user")),
+            RolloutItem::ResponseItem(assistant_message("second reply")),
+        ],
+    )
+    .expect("write parent rollout");
+    let rollout_items = vec![RolloutItem::ForkReference(ForkReferenceItem {
+        rollout_path: parent_rollout_path,
+        nth_user_message: 1,
+    })];
+
+    session
+        .record_initial_history(InitialHistory::Forked(rollout_items))
+        .await;
+
+    let history = session.state.lock().await.clone_history();
+    assert_eq!(
+        vec![user_message("first user"), assistant_message("first reply")],
+        history.raw_items()
+    );
+    assert!(session.reference_context_item().await.is_none());
+}
+
+#[tokio::test]
+async fn reconstruct_history_resolves_fork_reference_after_parent_archive_and_unarchive() {
+    let (session, turn_context) = make_session_and_context().await;
+    let codex_home = turn_context.config.codex_home.clone();
+    let parent_thread_id = ThreadId::new();
+    let parent_rollout_path = write_rollout_items(
+        codex_home.as_path(),
+        parent_thread_id,
+        &[
+            RolloutItem::ResponseItem(user_message("first user")),
+            RolloutItem::ResponseItem(assistant_message("first reply")),
+            RolloutItem::ResponseItem(user_message("second user")),
+            RolloutItem::ResponseItem(assistant_message("second reply")),
+        ],
+    )
+    .expect("write parent rollout");
+    let rollout_items = vec![RolloutItem::ForkReference(ForkReferenceItem {
+        rollout_path: parent_rollout_path.clone(),
+        nth_user_message: 1,
+    })];
+    let expected_history = vec![user_message("first user"), assistant_message("first reply")];
+
+    let archived_rollout_dir = codex_home
+        .join(crate::ARCHIVED_SESSIONS_SUBDIR)
+        .join("2026")
+        .join("03")
+        .join("05");
+    std::fs::create_dir_all(&archived_rollout_dir).expect("create archived rollout dir");
+    let archived_rollout_path = archived_rollout_dir.join(
+        parent_rollout_path
+            .file_name()
+            .expect("parent rollout file name"),
+    );
+    std::fs::rename(&parent_rollout_path, &archived_rollout_path).expect("archive parent rollout");
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+    assert_eq!(reconstructed.history, expected_history);
+
+    let unarchived_rollout_dir = codex_home
+        .join(crate::SESSIONS_SUBDIR)
+        .join("2026")
+        .join("03")
+        .join("05");
+    std::fs::create_dir_all(&unarchived_rollout_dir).expect("create unarchived rollout dir");
+    std::fs::rename(&archived_rollout_path, &parent_rollout_path)
+        .expect("unarchive parent rollout");
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+    assert_eq!(reconstructed.history, expected_history);
 }
 
 #[tokio::test]

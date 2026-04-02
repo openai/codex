@@ -5,11 +5,15 @@
 
 use crate::context_manager::is_user_turn_boundary;
 use crate::event_mapping;
+use crate::resolve_fork_reference_rollout_path;
+use crate::rollout::RolloutRecorder;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
+use std::path::Path;
+use tracing::warn;
 
 /// Return the indices of user message boundaries in a rollout.
 ///
@@ -88,21 +92,30 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
     fork_turn_positions
 }
 
+/// Return the current fork boundary to persist in a `ForkReferenceItem`.
+///
+/// The boundary is the next user-message index in the current effective rollout. Persisting that
+/// snapshot, instead of a "live tail" sentinel, prevents later parent turns from being pulled
+/// into the child when the child rollout is replayed.
+pub(crate) fn fork_reference_user_message_boundary(items: &[RolloutItem]) -> i64 {
+    i64::try_from(user_message_positions_in_rollout(items).len()).unwrap_or(i64::MAX)
+}
+
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message.
 ///
 /// The boundary index is 0-based from the start of `items` (so `n_from_start = 0` returns
 /// a prefix that excludes the first user message and everything after it).
 ///
-/// If `n_from_start` is `usize::MAX`, this returns the full rollout (no truncation).
+/// If `n_from_start` is negative, this returns the full rollout (no truncation).
 /// If fewer than or equal to `n_from_start` user messages exist, this returns the full
 /// rollout unchanged.
 pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     items: &[RolloutItem],
-    n_from_start: usize,
+    n_from_start: i64,
 ) -> Vec<RolloutItem> {
-    if n_from_start == usize::MAX {
+    let Ok(n_from_start) = usize::try_from(n_from_start) else {
         return items.to_vec();
-    }
+    };
 
     let user_positions = user_message_positions_in_rollout(items);
 
@@ -151,6 +164,85 @@ fn is_trigger_turn_boundary(item: &ResponseItem) -> bool {
     role == "assistant"
         && InterAgentCommunication::from_message_content(content)
             .is_some_and(|communication| communication.trigger_turn)
+}
+
+/// Expand `ForkReference` items into the referenced parent rollout slices they encode.
+///
+/// This preserves child rollout compactness on disk while letting replay callers rebuild the
+/// effective inherited transcript before reconstructing conversation history or deriving thread
+/// summaries.
+pub async fn materialize_rollout_items_for_replay(
+    codex_home: &Path,
+    rollout_items: &[RolloutItem],
+) -> Vec<RolloutItem> {
+    const MAX_FORK_REFERENCE_DEPTH: usize = 8;
+
+    let mut materialized = Vec::new();
+    let mut stack: Vec<(Vec<RolloutItem>, usize, usize)> = vec![(rollout_items.to_vec(), 0, 0)];
+
+    while let Some((items, mut idx, depth)) = stack.pop() {
+        while idx < items.len() {
+            match &items[idx] {
+                RolloutItem::ForkReference(reference) => {
+                    if depth >= MAX_FORK_REFERENCE_DEPTH {
+                        warn!(
+                            "skipping fork reference recursion at depth {} for {:?}",
+                            depth, reference.rollout_path
+                        );
+                        materialized.push(RolloutItem::ForkReference(reference.clone()));
+                        idx += 1;
+                        continue;
+                    }
+
+                    let resolved_rollout_path = match resolve_fork_reference_rollout_path(
+                        codex_home,
+                        &reference.rollout_path,
+                    )
+                    .await
+                    {
+                        Ok(path) => path,
+                        Err(err) => {
+                            warn!(
+                                "failed to resolve fork reference rollout {:?}: {err}",
+                                reference.rollout_path
+                            );
+                            materialized.push(RolloutItem::ForkReference(reference.clone()));
+                            idx += 1;
+                            continue;
+                        }
+                    };
+                    let parent_history = match RolloutRecorder::get_rollout_history(
+                        &resolved_rollout_path,
+                    )
+                    .await
+                    {
+                        Ok(history) => history,
+                        Err(err) => {
+                            warn!(
+                                "failed to load fork reference rollout {:?} (resolved from {:?}): {err}",
+                                resolved_rollout_path, reference.rollout_path
+                            );
+                            materialized.push(RolloutItem::ForkReference(reference.clone()));
+                            idx += 1;
+                            continue;
+                        }
+                    };
+                    let parent_items = truncate_rollout_before_nth_user_message_from_start(
+                        &parent_history.get_rollout_items(),
+                        reference.nth_user_message,
+                    );
+
+                    stack.push((items, idx + 1, depth));
+                    stack.push((parent_items, 0, depth + 1));
+                    break;
+                }
+                item => materialized.push(item.clone()),
+            }
+            idx += 1;
+        }
+    }
+
+    materialized
 }
 
 #[cfg(test)]

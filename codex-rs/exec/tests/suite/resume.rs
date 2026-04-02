@@ -147,9 +147,9 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(&repo_root)
-        .arg(&prompt2)
         .arg("resume")
         .arg("--last")
+        .arg(&prompt2)
         .assert()
         .success();
 

@@ -2269,12 +2269,20 @@ impl InitialHistory {
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
-                    _ => None,
+                    RolloutItem::ForkReference(_)
+                    | RolloutItem::ResponseItem(_)
+                    | RolloutItem::Compacted(_)
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::EventMsg(_) => None,
                 })
             }
             InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.id),
-                _ => None,
+                RolloutItem::ForkReference(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
             }),
         }
     }
@@ -2564,10 +2572,45 @@ pub struct SessionMetaLine {
     pub git: Option<GitInfo>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+pub struct ForkReferenceItem {
+    pub rollout_path: PathBuf,
+    #[serde(
+        deserialize_with = "deserialize_fork_reference_nth_user_message",
+        default
+    )]
+    pub nth_user_message: i64,
+}
+
+fn deserialize_fork_reference_nth_user_message<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    let Value::Number(number) = value else {
+        return Err(serde::de::Error::custom(
+            "expected integer fork reference boundary",
+        ));
+    };
+
+    if let Some(nth_user_message) = number.as_i64() {
+        return Ok(nth_user_message);
+    }
+
+    if number.as_u64().is_some() {
+        return Ok(i64::MAX);
+    }
+
+    Err(serde::de::Error::custom(
+        "expected integer fork reference boundary",
+    ))
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
+    ForkReference(ForkReferenceItem),
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
@@ -3681,6 +3724,23 @@ mod tests {
         assert_eq!(
             SessionSource::Unknown.restriction_product(),
             Some(Product::Codex)
+        );
+    }
+
+    #[test]
+    fn fork_reference_item_deserializes_legacy_usize_max_boundary() {
+        let item: ForkReferenceItem = serde_json::from_value(json!({
+            "rollout_path": "/tmp/rollout.jsonl",
+            "nth_user_message": u64::MAX,
+        }))
+        .expect("legacy fork reference item should deserialize");
+
+        assert_eq!(
+            item,
+            ForkReferenceItem {
+                rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
+                nth_user_message: i64::MAX,
+            }
         );
     }
 

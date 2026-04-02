@@ -84,11 +84,34 @@ fn finalize_active_segment<'a>(
 }
 
 impl Session {
+    pub(super) async fn materialize_rollout_items_for_replay(
+        &self,
+        rollout_items: &[RolloutItem],
+    ) -> Vec<RolloutItem> {
+        let codex_home = {
+            self.state
+                .lock()
+                .await
+                .session_configuration
+                .codex_home
+                .clone()
+        };
+        crate::rollout::truncation::materialize_rollout_items_for_replay(
+            codex_home.as_path(),
+            rollout_items,
+        )
+        .await
+    }
+
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        let rollout_items = self
+            .materialize_rollout_items_for_replay(rollout_items)
+            .await;
+        let rollout_items = rollout_items.as_slice();
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
@@ -207,7 +230,9 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
                 }
-                RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
+                RolloutItem::EventMsg(_)
+                | RolloutItem::ForkReference(_)
+                | RolloutItem::SessionMeta(_) => {}
             }
 
             if base_replacement_history.is_some()
@@ -275,6 +300,7 @@ impl Session {
                     history.drop_last_n_user_turns(rollback.num_turns);
                 }
                 RolloutItem::EventMsg(_)
+                | RolloutItem::ForkReference(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::SessionMeta(_) => {}
             }

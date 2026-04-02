@@ -3,9 +3,11 @@ use crate::codex::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -102,7 +104,8 @@ fn truncation_max_keeps_full_rollout() {
         RolloutItem::ResponseItem(user_msg("u2")),
     ];
 
-    let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, usize::MAX);
+    let truncated =
+        truncate_rollout_before_nth_user_message_from_start(&rollout, /*n_from_start*/ -1);
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
@@ -314,5 +317,27 @@ fn truncates_rollout_to_last_n_fork_turns_keeps_full_rollout_when_n_is_large() {
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),
         serde_json::to_value(&rollout).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn materialize_rollout_items_for_replay_preserves_unresolved_fork_references() {
+    let codex_home = TempDir::new().unwrap();
+    let fork_reference = RolloutItem::ForkReference(ForkReferenceItem {
+        rollout_path: "missing-rollout.jsonl".into(),
+        nth_user_message: 1,
+    });
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        fork_reference.clone(),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+    ];
+
+    let materialized =
+        materialize_rollout_items_for_replay(codex_home.path(), &rollout_items).await;
+
+    assert_eq!(
+        serde_json::to_value(&materialized).unwrap(),
+        serde_json::to_value(&rollout_items).unwrap()
     );
 }
