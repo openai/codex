@@ -164,7 +164,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
     type Error = String;
 
     fn try_from(raw: RawMcpServerConfig) -> Result<Self, Self::Error> {
-        let Self {
+        let RawMcpServerConfig {
             command,
             args,
             env,
