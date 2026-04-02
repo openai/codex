@@ -11,6 +11,7 @@ use codex_rmcp_client::ElicitationAction;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
+use codex_tools::TOOL_SUGGEST_TOOL_NAME;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use rmcp::model::RequestId;
 use serde::Deserialize;
@@ -30,7 +31,6 @@ use crate::tools::registry::ToolKind;
 
 pub struct ToolSuggestHandler;
 
-pub(crate) const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
 const TOOL_SUGGEST_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
 
 #[derive(Debug, Deserialize)]
