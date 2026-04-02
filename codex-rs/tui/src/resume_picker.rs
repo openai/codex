@@ -2589,6 +2589,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            forked_from_id: None,
             preview: String::from("remote thread"),
             ephemeral: false,
             model_provider: String::from("openai"),
