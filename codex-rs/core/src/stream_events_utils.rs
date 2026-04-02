@@ -438,13 +438,18 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> bool {
-    let ResponseItem::Message { role, phase, .. } = item else {
-        return false;
-    };
-    if role != "assistant" || matches!(phase, Some(MessagePhase::Commentary)) {
-        return false;
+    match item {
+        ResponseItem::Message { role, phase, .. } => {
+            if role != "assistant" || matches!(phase, Some(MessagePhase::Commentary)) {
+                return false;
+            }
+            // Treat `None` like final-answer text so untagged providers default
+            // to the safer "defer mailbox mail" behavior.
+            last_assistant_message_from_item(item, plan_mode).is_some()
+        }
+        ResponseItem::ImageGenerationCall { .. } => true,
+        _ => false,
     }
-    last_assistant_message_from_item(item, plan_mode).is_some()
 }
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {

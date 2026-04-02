@@ -218,6 +218,10 @@ impl TurnState {
         self.mailbox_delivery_phase = MailboxDeliveryPhase::NextTurn;
     }
 
+    pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
+        self.mailbox_delivery_phase = MailboxDeliveryPhase::CurrentTurn;
+    }
+
     pub(crate) fn accepts_mailbox_delivery_for_current_turn(&self) -> bool {
         self.mailbox_delivery_phase == MailboxDeliveryPhase::CurrentTurn
     }

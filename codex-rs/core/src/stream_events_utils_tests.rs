@@ -94,7 +94,7 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
 }
 
 #[test]
-fn completed_item_defers_mailbox_delivery_for_final_answer_messages() {
+fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
     let item = assistant_output_text("final answer");
 
     assert!(completed_item_defers_mailbox_delivery_to_next_turn(
@@ -107,6 +107,20 @@ fn completed_item_keeps_mailbox_delivery_open_for_commentary_messages() {
     let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
 
     assert!(!completed_item_defers_mailbox_delivery_to_next_turn(
+        &item, /*plan_mode*/ false,
+    ));
+}
+
+#[test]
+fn completed_item_defers_mailbox_delivery_for_image_generation_calls() {
+    let item = ResponseItem::ImageGenerationCall {
+        id: "ig-1".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: None,
+        result: "Zm9v".to_string(),
+    };
+
+    assert!(completed_item_defers_mailbox_delivery_to_next_turn(
         &item, /*plan_mode*/ false,
     ));
 }

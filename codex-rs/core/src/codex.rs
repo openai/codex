@@ -4023,6 +4023,7 @@ impl Session {
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
+        turn_state.accept_mailbox_delivery_for_current_turn();
         Ok(active_turn_id.clone())
     }
 
