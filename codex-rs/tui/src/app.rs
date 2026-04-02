@@ -1047,11 +1047,35 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
     .then_some(turn_error)
 }
 
-fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
-    let TypedRequestError::Server { source, .. } = error else {
-        return false;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActiveTurnSteerRace {
+    Missing,
+    ExpectedTurnMismatch { actual_turn_id: String },
+}
+
+fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRace> {
+    let TypedRequestError::Server { method, source } = error else {
+        return None;
     };
-    source.message == "no active turn to steer"
+    if method != "turn/steer" {
+        return None;
+    }
+    if source.message == "no active turn to steer" {
+        return Some(ActiveTurnSteerRace::Missing);
+    }
+
+    // App-server steer mismatches mean our cached active turn id is stale, but the response
+    // includes the server's current active turn so we can resynchronize and retry once.
+    let mismatch_prefix = "expected active turn id `";
+    let mismatch_separator = "` but found `";
+    let actual_turn_id = source
+        .message
+        .strip_prefix(mismatch_prefix)?
+        .split_once(mismatch_separator)?
+        .1
+        .strip_suffix('`')?
+        .to_string();
+    Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
 impl App {
@@ -2223,25 +2247,65 @@ impl App {
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                    match app_server
-                        .turn_steer(thread_id, turn_id, items.to_vec())
-                        .await
-                    {
-                        Ok(_) => return Ok(true),
-                        Err(error) => {
-                            if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
-                                if !self.chat_widget.enqueue_rejected_steer() {
-                                    self.chat_widget.add_error_message(turn_error.message);
+                    let mut steer_turn_id = turn_id;
+                    let mut retried_after_turn_mismatch = false;
+                    loop {
+                        match app_server
+                            .turn_steer(thread_id, steer_turn_id.clone(), items.to_vec())
+                            .await
+                        {
+                            Ok(_) => return Ok(true),
+                            Err(error) => {
+                                if let Some(turn_error) =
+                                    active_turn_not_steerable_turn_error(&error)
+                                {
+                                    if !self.chat_widget.enqueue_rejected_steer() {
+                                        self.chat_widget.add_error_message(turn_error.message);
+                                    }
+                                    return Ok(true);
                                 }
-                                return Ok(true);
-                            } else if active_turn_missing_steer_error(&error) {
-                                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-                                    let mut store = channel.store.lock().await;
-                                    store.clear_active_turn_id();
+                                match active_turn_steer_race(&error) {
+                                    Some(ActiveTurnSteerRace::Missing) => {
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.clear_active_turn_id();
+                                        }
+                                        should_start_turn = true;
+                                        break;
+                                    }
+                                    Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                                        actual_turn_id,
+                                    }) if !retried_after_turn_mismatch
+                                        && actual_turn_id != steer_turn_id =>
+                                    {
+                                        // Review flows can swap the active turn before the TUI
+                                        // processes the corresponding notification. Retry once with
+                                        // the server-reported turn id so non-steerable review turns
+                                        // still fall through to the existing queueing behavior.
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.active_turn_id = Some(actual_turn_id.clone());
+                                        }
+                                        steer_turn_id = actual_turn_id;
+                                        retried_after_turn_mismatch = true;
+                                    }
+                                    Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                                        actual_turn_id,
+                                    }) => {
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.active_turn_id = Some(actual_turn_id);
+                                        }
+                                        return Err(error.into());
+                                    }
+                                    None => return Err(error.into()),
                                 }
-                                should_start_turn = true;
-                            } else {
-                                return Err(error.into());
                             }
                         }
                     }
@@ -9660,7 +9724,7 @@ guardian_approval = true
     }
 
     #[test]
-    fn active_turn_missing_steer_error_detects_stale_turn_race() {
+    fn active_turn_steer_race_detects_missing_active_turn() {
         let error = TypedRequestError::Server {
             method: "turn/steer".to_string(),
             source: JSONRPCErrorError {
@@ -9670,8 +9734,31 @@ guardian_approval = true
             },
         };
 
-        assert!(active_turn_missing_steer_error(&error));
+        assert_eq!(
+            active_turn_steer_race(&error),
+            Some(ActiveTurnSteerRace::Missing)
+        );
         assert_eq!(active_turn_not_steerable_turn_error(&error), None);
+    }
+
+    #[test]
+    fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: "expected active turn id `turn-expected` but found `turn-actual`"
+                    .to_string(),
+                data: None,
+            },
+        };
+
+        assert_eq!(
+            active_turn_steer_race(&error),
+            Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                actual_turn_id: "turn-actual".to_string(),
+            })
+        );
     }
 
     #[test]
