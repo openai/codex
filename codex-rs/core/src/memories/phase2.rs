@@ -127,7 +127,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     }
 
     // 5. Spawn the agent
-    let prompt = agent::get_prompt(config, &selection);
+    let prompt = agent::get_prompt(config, &selection).await;
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let thread_id = match session
         .services
@@ -320,12 +320,12 @@ mod agent {
         Some(agent_config)
     }
 
-    pub(super) fn get_prompt(
+    pub(super) async fn get_prompt(
         config: Arc<Config>,
         selection: &codex_state::Phase2InputSelection,
     ) -> Vec<UserInput> {
         let root = memory_root(&config.codex_home);
-        let prompt = build_consolidation_prompt(&root, selection);
+        let prompt = build_consolidation_prompt(&root, selection).await;
         vec![UserInput::Text {
             text: prompt,
             text_elements: vec![],

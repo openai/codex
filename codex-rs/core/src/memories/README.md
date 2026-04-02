@@ -13,6 +13,9 @@ Memory prompt templates live under `codex-rs/core/templates/memories/`.
   - `read_path.md`
 - In `codex`, edit those undated template files in place.
 - The dated snapshot-copy workflow is used in the separate `openai/project/agent_memory/write` harness repo, not here.
+- At runtime, Phase 2 also appends any `*.md` files from
+  `~/.codex/memories/consolidation/` to the end of the consolidation prompt, in
+  sorted path order. Missing directories are skipped.
 
 ## When it runs
 

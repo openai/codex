@@ -53,14 +53,39 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
     assert!(message.contains(&expected_truncated));
 }
 
-#[test]
-fn build_consolidation_prompt_renders_embedded_template() {
+#[tokio::test]
+async fn build_consolidation_prompt_renders_embedded_template_without_modules() {
     let prompt =
-        build_consolidation_prompt(Path::new("/tmp/memories"), &Phase2InputSelection::default());
+        build_consolidation_prompt(Path::new("/tmp/memories"), &Phase2InputSelection::default())
+            .await;
 
     assert!(prompt.contains("Folder structure (under /tmp/memories/):"));
     assert!(prompt.contains("**Diff since last consolidation:**"));
     assert!(prompt.contains("- selected inputs this run: 0"));
+}
+
+#[tokio::test]
+async fn build_consolidation_prompt_appends_modules_in_sorted_order() {
+    let temp = tempdir().unwrap();
+    let memories_dir = temp.path();
+    let modules_dir = memories_dir.join("consolidation");
+    tokio_fs::create_dir_all(&modules_dir).await.unwrap();
+    tokio_fs::write(modules_dir.join("02-second.md"), "second module\n")
+        .await
+        .unwrap();
+    tokio_fs::write(modules_dir.join("01-first.md"), "first module\n")
+        .await
+        .unwrap();
+    tokio_fs::write(modules_dir.join("ignored.txt"), "ignored module\n")
+        .await
+        .unwrap();
+
+    let prompt = build_consolidation_prompt(memories_dir, &Phase2InputSelection::default()).await;
+
+    let first_index = prompt.find("first module").unwrap();
+    let second_index = prompt.find("second module").unwrap();
+    assert!(first_index < second_index);
+    assert!(!prompt.contains("ignored module"));
 }
 
 #[tokio::test]
