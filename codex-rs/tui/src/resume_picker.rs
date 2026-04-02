@@ -1360,11 +1360,10 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
         return vec!["No results for your search".italic().dim()].into();
     }
 
-    if state.all_rows.is_empty() && state.pagination.num_scanned_files == 0 {
-        return vec!["No sessions yet".italic().dim()].into();
-    }
-
     if state.pagination.loading.is_pending() {
+        if state.all_rows.is_empty() && state.pagination.num_scanned_files == 0 {
+            return vec!["Loading sessions…".italic().dim()].into();
+        }
         return vec!["Loading older sessions…".italic().dim()].into();
     }
 
