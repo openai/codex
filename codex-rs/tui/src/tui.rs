@@ -453,6 +453,10 @@ impl Tui {
         self.pending_history_lines.clear();
     }
 
+    /// Resize the inline viewport to `height` rows, scrolling content above it if
+    /// the viewport would extend past the bottom of the screen. Returns `true` when
+    /// the caller must invalidate the diff buffer (Zellij mode), because the scroll
+    /// was performed with raw newlines that ratatui cannot track.
     fn update_inline_viewport(
         terminal: &mut Terminal,
         height: u16,
@@ -485,6 +489,10 @@ impl Tui {
         Ok(needs_full_repaint)
     }
 
+    /// Push content above the viewport upward by `scroll_by` rows using raw
+    /// newlines at the screen bottom. This is the Zellij-safe alternative to
+    /// `scroll_region_up`, which relies on DECSTBM sequences Zellij does not
+    /// support.
     fn scroll_zellij_expanded_viewport(
         terminal: &mut Terminal,
         size: Size,
@@ -500,6 +508,9 @@ impl Tui {
         Ok(())
     }
 
+    /// Write any buffered history lines above the viewport and clear the buffer.
+    /// Returns `true` when Zellij mode was used, signaling that the caller must
+    /// invalidate the diff buffer for a full repaint.
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
         pending_history_lines: &mut Vec<Line<'static>>,

@@ -3683,6 +3683,12 @@ impl ChatComposer {
         );
     }
 
+    /// Paint the composer's text input area, prompt chevron, and placeholder text.
+    ///
+    /// In Zellij sessions the textarea uses explicit `Color::Reset` foreground styling
+    /// to prevent the multiplexer's pane chrome from bleeding into cell styles, and
+    /// substitutes hardcoded colors for `.bold()` / `.dim()` modifiers that Zellij
+    /// renders inconsistently. The standard path is unchanged.
     fn render_textarea(
         &self,
         composer_rect: Rect,

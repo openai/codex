@@ -29,6 +29,12 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+/// Selects the terminal escape strategy for inserting history lines above the viewport.
+///
+/// Standard terminals support `DECSTBM` scroll regions and Reverse Index (`ESC M`),
+/// which let us slide existing content down without redrawing it. Zellij silently
+/// drops or mishandles those sequences, so `Zellij` mode falls back to emitting
+/// newlines at the bottom of the screen and writing lines at absolute positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertHistoryMode {
     Standard,
@@ -57,8 +63,14 @@ where
     insert_history_lines_with_mode(terminal, lines, InsertHistoryMode::Standard)
 }
 
-/// Insert `lines` above the viewport using the terminal's backend writer
-/// (avoids direct stdout references).
+/// Insert `lines` above the viewport, using the escape strategy selected by `mode`.
+///
+/// In `Standard` mode this manipulates DECSTBM scroll regions to slide existing
+/// scrollback down and writes new lines into the freed space. In `Zellij` mode it
+/// emits newlines at the screen bottom to create space (since Zellij ignores scroll
+/// region escapes) and writes lines at computed absolute positions. Both modes
+/// update `terminal.viewport_area` so subsequent draw passes know where the
+/// viewport moved to.
 pub fn insert_history_lines_with_mode<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
@@ -129,38 +141,7 @@ where
             if i > 0 {
                 queue!(writer, Print("\r\n"))?;
             }
-            let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
-            if physical_rows > 1 {
-                queue!(writer, SavePosition)?;
-                for _ in 1..physical_rows {
-                    queue!(writer, MoveDown(1), MoveToColumn(0))?;
-                    queue!(writer, Clear(ClearType::UntilNewLine))?;
-                }
-                queue!(writer, RestorePosition)?;
-            }
-            queue!(
-                writer,
-                SetColors(Colors::new(
-                    line.style
-                        .fg
-                        .map(std::convert::Into::into)
-                        .unwrap_or(CColor::Reset),
-                    line.style
-                        .bg
-                        .map(std::convert::Into::into)
-                        .unwrap_or(CColor::Reset)
-                ))
-            )?;
-            queue!(writer, Clear(ClearType::UntilNewLine))?;
-            let merged_spans: Vec<Span> = line
-                .spans
-                .iter()
-                .map(|s| Span {
-                    style: s.style.patch(line.style),
-                    content: s.content.clone(),
-                })
-                .collect();
-            write_spans(writer, merged_spans.iter())?;
+            write_history_line(writer, line, wrap_width)?;
         }
     } else {
         let cursor_top = if area.bottom() < screen_size.height {
@@ -204,40 +185,9 @@ where
         // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
         queue!(writer, MoveTo(0, cursor_top))?;
 
-        for line in wrapped {
+        for line in &wrapped {
             queue!(writer, Print("\r\n"))?;
-            let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
-            if physical_rows > 1 {
-                queue!(writer, SavePosition)?;
-                for _ in 1..physical_rows {
-                    queue!(writer, MoveDown(1), MoveToColumn(0))?;
-                    queue!(writer, Clear(ClearType::UntilNewLine))?;
-                }
-                queue!(writer, RestorePosition)?;
-            }
-            queue!(
-                writer,
-                SetColors(Colors::new(
-                    line.style
-                        .fg
-                        .map(std::convert::Into::into)
-                        .unwrap_or(CColor::Reset),
-                    line.style
-                        .bg
-                        .map(std::convert::Into::into)
-                        .unwrap_or(CColor::Reset)
-                ))
-            )?;
-            queue!(writer, Clear(ClearType::UntilNewLine))?;
-            let merged_spans: Vec<Span> = line
-                .spans
-                .iter()
-                .map(|s| Span {
-                    style: s.style.patch(line.style),
-                    content: s.content.clone(),
-                })
-                .collect();
-            write_spans(writer, merged_spans.iter())?;
+            write_history_line(writer, line, wrap_width)?;
         }
 
         queue!(writer, ResetScrollRegion)?;
@@ -255,6 +205,46 @@ where
     }
 
     Ok(())
+}
+
+/// Render a single wrapped history line: clear continuation rows for wide lines,
+/// set foreground/background colors, and write styled spans. Caller is responsible
+/// for cursor positioning and any leading `\r\n`.
+fn write_history_line<W: Write>(writer: &mut W, line: &Line, wrap_width: usize) -> io::Result<()> {
+    let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
+    if physical_rows > 1 {
+        queue!(writer, SavePosition)?;
+        for _ in 1..physical_rows {
+            queue!(writer, MoveDown(1), MoveToColumn(0))?;
+            queue!(writer, Clear(ClearType::UntilNewLine))?;
+        }
+        queue!(writer, RestorePosition)?;
+    }
+    queue!(
+        writer,
+        SetColors(Colors::new(
+            line.style
+                .fg
+                .map(std::convert::Into::into)
+                .unwrap_or(CColor::Reset),
+            line.style
+                .bg
+                .map(std::convert::Into::into)
+                .unwrap_or(CColor::Reset)
+        ))
+    )?;
+    queue!(writer, Clear(ClearType::UntilNewLine))?;
+    // Merge line-level style into each span so that ANSI colors reflect
+    // line styles (e.g., blockquotes with green fg).
+    let merged_spans: Vec<Span> = line
+        .spans
+        .iter()
+        .map(|s| Span {
+            style: s.style.patch(line.style),
+            content: s.content.clone(),
+        })
+        .collect();
+    write_spans(writer, merged_spans.iter())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

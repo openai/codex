@@ -1357,6 +1357,8 @@ impl TextArea {
         self.render_lines_masked(area, buf, &lines, start..end, mask_char, base_style);
     }
 
+    /// Render the textarea with an explicit `base_style` applied to every cell,
+    /// used by the Zellij code path to override inherited terminal styles.
     pub(crate) fn render_ref_styled(
         &self,
         area: Rect,
