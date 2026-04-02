@@ -299,13 +299,18 @@ impl ToolHandler for Handler {
 
 async fn spawn_watchdog(
     agent_control: &crate::agent::AgentControl,
-    config: Config,
+    mut config: Config,
     prompt: String,
     owner_thread_id: ThreadId,
     child_depth: i32,
     interval_s: i64,
     spawn_source: SessionSource,
 ) -> codex_protocol::error::Result<ThreadId> {
+    config.mcp_servers.set(HashMap::new()).map_err(|err| {
+        codex_protocol::error::CodexErr::UnsupportedOperation(format!(
+            "failed to clear watchdog MCP servers: {err}"
+        ))
+    })?;
     let target_thread_id = agent_control
         .spawn_agent(config.clone(), Op::Interrupt, Some(spawn_source))
         .await?;

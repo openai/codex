@@ -315,8 +315,6 @@ impl WatchdogManager {
         });
         let mut helper_config = snapshot.config.clone();
         helper_config.ephemeral = true;
-<<<<<<< HEAD
-=======
         if let Err(err) = helper_config.mcp_servers.set(HashMap::new()) {
             warn!(
                 target_thread_id = %target_thread_id,
@@ -339,7 +337,6 @@ impl WatchdogManager {
                 (false, _) => Some(watchdog_prompt),
             };
         }
->>>>>>> 68b73e5eb9 (Fix watchdog wake/runtime plumbing)
         let helper_prompt =
             watchdog_helper_prompt(&helper_config, snapshot.owner_thread_id, &snapshot.prompt)
                 .await;
