@@ -614,6 +614,134 @@ async fn send_agent_message_to_root_thread_injects_response_items_when_enabled()
 }
 
 #[tokio::test]
+async fn send_watchdog_wakeup_strips_helper_prompt_scaffold_from_fallback_message() {
+    let harness = AgentControlHarness::new().await;
+    let (receiver_thread_id, _thread) = harness.start_thread().await;
+    let sender_thread_id = ThreadId::new();
+    let leaked_prompt = "# You are a Subagent\n\n\
+        Read AGENTS.watchdog.md before responding.\n\n\
+        Target agent id: 019cc0e8-38b6-7493-8e31-73a64c5843b6\n\n\
+        watchdog charter: keep the root AutoPlan aligned";
+
+    let submission_id = harness
+        .control
+        .send_watchdog_wakeup(
+            receiver_thread_id,
+            sender_thread_id,
+            leaked_prompt.to_string(),
+        )
+        .await
+        .expect("send_watchdog_wakeup should succeed");
+    assert!(submission_id.is_empty());
+    assert_no_injected_agent_inbox_payload(&harness, receiver_thread_id);
+}
+
+#[tokio::test]
+async fn send_watchdog_wakeup_preserves_benign_marker_mentions_in_regular_fallback_reports() {
+    let harness = AgentControlHarness::new().await;
+    let (receiver_thread_id, _thread) = harness.start_thread().await;
+    let sender_thread_id = ThreadId::new();
+    let message = "Watchdog report: the watchdog charter was refreshed and no action is needed.";
+
+    let submission_id = harness
+        .control
+        .send_watchdog_wakeup(receiver_thread_id, sender_thread_id, message.to_string())
+        .await
+        .expect("send_watchdog_wakeup should succeed");
+    assert!(!submission_id.is_empty());
+
+    let payload = injected_agent_inbox_payload(&harness, receiver_thread_id);
+    assert_eq!(
+        payload,
+        AgentInboxPayload::new(sender_thread_id, message.to_string())
+    );
+}
+
+#[tokio::test]
+async fn send_watchdog_wakeup_preserves_report_body_after_stripping_helper_scaffold() {
+    let harness = AgentControlHarness::new().await;
+    let (receiver_thread_id, _thread) = harness.start_thread().await;
+    let sender_thread_id = ThreadId::new();
+    let message = "# You are a Subagent\n\n\
+        Read AGENTS.watchdog.md before responding.\n\n\
+        Target agent id: 019cc0e8-38b6-7493-8e31-73a64c5843b6\n\n\
+        watchdog charter: keep the root AutoPlan aligned\n\n\
+        Watchdog report: branch checks are green.";
+
+    let submission_id = harness
+        .control
+        .send_watchdog_wakeup(receiver_thread_id, sender_thread_id, message.to_string())
+        .await
+        .expect("send_watchdog_wakeup should succeed");
+    assert!(!submission_id.is_empty());
+
+    let payload = injected_agent_inbox_payload(&harness, receiver_thread_id);
+    assert_eq!(
+        payload,
+        AgentInboxPayload::new(
+            sender_thread_id,
+            "Watchdog report: branch checks are green.".to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn send_watchdog_wakeup_strips_ordinary_prompt_instructions_before_report_marker() {
+    let harness = AgentControlHarness::new().await;
+    let (receiver_thread_id, _thread) = harness.start_thread().await;
+    let sender_thread_id = ThreadId::new();
+    let message = "# You are a Subagent\n\n\
+        More importantly, you are a **watchdog check-in agent**.\n\
+        Keep the root agent unblocked, on-task, and executing real work.\n\n\
+        Target agent id: 019cc0e8-38b6-7493-8e31-73a64c5843b6\n\n\
+        AUTOPLAN_WATCHDOG_REPORT\n\
+        required_action: rerun CI\n\
+        reason: current checks are stale";
+
+    let submission_id = harness
+        .control
+        .send_watchdog_wakeup(receiver_thread_id, sender_thread_id, message.to_string())
+        .await
+        .expect("send_watchdog_wakeup should succeed");
+    assert!(!submission_id.is_empty());
+
+    let payload = injected_agent_inbox_payload(&harness, receiver_thread_id);
+    assert_eq!(payload.sender_thread_id, sender_thread_id);
+    assert_eq!(
+        payload.message,
+        "AUTOPLAN_WATCHDOG_REPORT\n\
+        required_action: rerun CI\n\
+        reason: current checks are stale"
+    );
+    assert!(!payload.message.contains("# You are a Subagent"));
+    assert!(
+        !payload
+            .message
+            .contains("More importantly, you are a **watchdog check-in agent**.")
+    );
+    assert!(!payload.message.contains("Target agent id:"));
+}
+
+#[tokio::test]
+async fn send_watchdog_wakeup_emits_nothing_when_scaffold_has_no_report_marker() {
+    let harness = AgentControlHarness::new().await;
+    let (receiver_thread_id, _thread) = harness.start_thread().await;
+    let sender_thread_id = ThreadId::new();
+    let message = "# You are a Subagent\n\n\
+        More importantly, you are a **watchdog check-in agent**.\n\
+        Keep the root agent unblocked, on-task, and executing real work.\n\n\
+        Target agent id: 019cc0e8-38b6-7493-8e31-73a64c5843b6";
+
+    let submission_id = harness
+        .control
+        .send_watchdog_wakeup(receiver_thread_id, sender_thread_id, message.to_string())
+        .await
+        .expect("send_watchdog_wakeup should succeed");
+    assert!(submission_id.is_empty());
+    assert_no_injected_agent_inbox_payload(&harness, receiver_thread_id);
+}
+
+#[tokio::test]
 async fn send_inter_agent_communication_without_turn_queues_message_without_triggering_turn() {
     let harness = AgentControlHarness::new().await;
     let (thread_id, thread) = harness.start_thread().await;
@@ -2549,4 +2677,52 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails() 
         .shutdown_agent_tree(parent_thread_id)
         .await
         .expect("tree shutdown after partial subtree resume should succeed");
+}
+
+fn injected_agent_inbox_payload(
+    harness: &AgentControlHarness,
+    receiver_thread_id: ThreadId,
+) -> AgentInboxPayload {
+    let captured = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .find(|(thread_id, op)| {
+            *thread_id == receiver_thread_id && matches!(op, Op::InjectResponseItems { .. })
+        })
+        .expect("expected injected agent inbox op");
+
+    let Op::InjectResponseItems { items } = captured.1 else {
+        unreachable!("matched above");
+    };
+
+    let output = items
+        .iter()
+        .find_map(|item| match item {
+            ResponseInputItem::FunctionCallOutput { output, .. } => Some(output),
+            _ => None,
+        })
+        .expect("expected function call output item");
+    let output_text = output
+        .body
+        .to_text()
+        .expect("payload should convert to text");
+
+    serde_json::from_str(&output_text).expect("payload should be valid json")
+}
+
+fn assert_no_injected_agent_inbox_payload(
+    harness: &AgentControlHarness,
+    receiver_thread_id: ThreadId,
+) {
+    assert!(
+        harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .all(|(thread_id, op)| {
+                thread_id != receiver_thread_id || !matches!(op, Op::InjectResponseItems { .. })
+            }),
+        "expected no injected watchdog inbox op"
+    );
 }
