@@ -215,15 +215,19 @@ impl TurnState {
     }
 
     pub(crate) fn defer_mailbox_delivery_to_next_turn(&mut self) {
-        self.mailbox_delivery_phase = MailboxDeliveryPhase::NextTurn;
+        self.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
     }
 
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
-        self.mailbox_delivery_phase = MailboxDeliveryPhase::CurrentTurn;
+        self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
 
     pub(crate) fn accepts_mailbox_delivery_for_current_turn(&self) -> bool {
         self.mailbox_delivery_phase == MailboxDeliveryPhase::CurrentTurn
+    }
+
+    pub(crate) fn set_mailbox_delivery_phase(&mut self, phase: MailboxDeliveryPhase) {
+        self.mailbox_delivery_phase = phase;
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

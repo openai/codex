@@ -293,6 +293,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
+use crate::state::MailboxDeliveryPhase;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::tasks::GhostSnapshotTask;
@@ -4046,6 +4047,16 @@ impl Session {
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(&self, sub_id: &str) {
+        self.set_mailbox_delivery_phase(sub_id, MailboxDeliveryPhase::NextTurn)
+            .await;
+    }
+
+    pub(crate) async fn accept_mailbox_delivery_for_current_turn(&self, sub_id: &str) {
+        self.set_mailbox_delivery_phase(sub_id, MailboxDeliveryPhase::CurrentTurn)
+            .await;
+    }
+
+    async fn set_mailbox_delivery_phase(&self, sub_id: &str, phase: MailboxDeliveryPhase) {
         let turn_state = {
             let active = self.active_turn.lock().await;
             active.as_ref().and_then(|active_turn| {
@@ -4058,10 +4069,7 @@ impl Session {
         let Some(turn_state) = turn_state else {
             return;
         };
-        turn_state
-            .lock()
-            .await
-            .defer_mailbox_delivery_to_next_turn();
+        turn_state.lock().await.set_mailbox_delivery_phase(phase);
     }
 
     pub(crate) fn subscribe_mailbox_seq(&self) -> watch::Receiver<u64> {

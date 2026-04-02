@@ -213,6 +213,10 @@ pub(crate) async fn handle_output_item_done(
     match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
+            ctx.sess
+                .accept_mailbox_delivery_for_current_turn(&ctx.turn_context.sub_id)
+                .await;
+
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!(
                 thread_id = %ctx.sess.conversation_id,

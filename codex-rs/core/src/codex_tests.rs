@@ -4896,6 +4896,55 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
     );
 }
 
+#[tokio::test]
+async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "queued child update".to_string(),
+        /*trigger_turn*/ false,
+    );
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    sess.defer_mailbox_delivery_to_next_turn(&tc.sub_id).await;
+    sess.enqueue_mailbox_communication(communication.clone());
+
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "test_tool".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-1".to_string(),
+    };
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&sess),
+        turn_context: Arc::clone(&tc),
+        tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
+        cancellation_token: CancellationToken::new(),
+    };
+
+    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
+        .await
+        .expect("tool call should be handled");
+
+    assert!(output.needs_follow_up);
+    assert!(output.tool_future.is_some());
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![communication.to_response_input_item()],
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
