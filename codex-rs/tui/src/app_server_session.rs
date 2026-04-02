@@ -867,6 +867,7 @@ fn thread_start_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
+        experimental_raw_events: true,
         persist_extended_history: true,
         ..ThreadStartParams::default()
     }
