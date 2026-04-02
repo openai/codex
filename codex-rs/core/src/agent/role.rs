@@ -416,7 +416,7 @@ Rules:
 - Close the watchdog handle only when it is no longer needed or when replacing it with a new watchdog."#.to_string()),
                         model: None,
                         config_file: None,
-                        watchdog_interval_s: Some(crate::config::DEFAULT_WATCHDOG_INTERVAL_S),
+                        watchdog_interval_s: None,
                         nickname_candidates: None,
                     }
                 ),

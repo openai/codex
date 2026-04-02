@@ -4916,6 +4916,7 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_mcp::mcp::auth::compute_auth_statuses;
     use codex_mcp::mcp::collect_mcp_snapshot_from_manager;
+    use codex_protocol::protocol::AGENT_INBOX_KIND;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -5116,6 +5117,7 @@ mod handlers {
                         text_elements: Vec::new(),
                     }]
                 });
+            let skip_mcp_refresh = is_synthetic_agent_inbox_turn(&turn_input, &pending_items);
             let turn_sub_id = if attempts == 1 {
                 sub_id.clone()
             } else {
@@ -5125,8 +5127,10 @@ mod handlers {
             // Keep injected inbox wakeups visible to telemetry after the TurnContext field rename.
             current_context.session_telemetry.user_prompt(&turn_input);
 
-            sess.refresh_mcp_servers_if_requested(&current_context)
-                .await;
+            if !skip_mcp_refresh {
+                sess.refresh_mcp_servers_if_requested(&current_context)
+                    .await;
+            }
             sess.spawn_task(
                 Arc::clone(&current_context),
                 turn_input,
@@ -5150,6 +5154,24 @@ mod handlers {
         };
         let _ = items.remove(0);
         Some(user_message.content)
+    }
+
+    fn is_synthetic_agent_inbox_turn(
+        turn_input: &[UserInput],
+        pending_items: &[ResponseInputItem],
+    ) -> bool {
+        let is_empty_user_message = matches!(
+            turn_input,
+            [UserInput::Text {
+                text,
+                text_elements,
+            }] if text.is_empty() && text_elements.is_empty()
+        );
+        is_empty_user_message
+            && matches!(
+                pending_items.first(),
+                Some(ResponseInputItem::FunctionCall { name, .. }) if name == AGENT_INBOX_KIND
+            )
     }
 
     pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {

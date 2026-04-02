@@ -678,12 +678,16 @@ enabled = false
 }
 
 #[tokio::test]
-async fn watchdog_interval_for_role_returns_built_in_watchdog_interval() {
-    let (_home, config) = test_config_with_cli_overrides(Vec::new()).await;
+async fn watchdog_interval_for_role_uses_configured_watchdog_interval_for_builtin_watchdog() {
+    let (_home, config) = test_config_with_cli_overrides(vec![(
+        "watchdog_interval_s".to_string(),
+        TomlValue::Integer(1),
+    )])
+    .await;
 
     assert_eq!(
         watchdog_interval_for_role(&config, Some("watchdog")),
-        Some(crate::config::DEFAULT_WATCHDOG_INTERVAL_S)
+        Some(1)
     );
     assert_eq!(watchdog_interval_for_role(&config, Some("default")), None);
 }

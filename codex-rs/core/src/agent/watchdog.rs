@@ -315,6 +315,31 @@ impl WatchdogManager {
         });
         let mut helper_config = snapshot.config.clone();
         helper_config.ephemeral = true;
+<<<<<<< HEAD
+=======
+        if let Err(err) = helper_config.mcp_servers.set(HashMap::new()) {
+            warn!(
+                target_thread_id = %target_thread_id,
+                "failed to clear watchdog helper MCP servers: {err}"
+            );
+        }
+        if helper_config
+            .features
+            .enabled(Feature::AgentPromptInjection)
+        {
+            let watchdog_prompt = load_watchdog_prompt(&helper_config.codex_home).await;
+            helper_config.developer_instructions = match (
+                watchdog_prompt.trim().is_empty(),
+                helper_config.developer_instructions,
+            ) {
+                (true, existing) => existing,
+                (false, Some(existing)) if !existing.trim().is_empty() => {
+                    Some(format!("{existing}\n\n{watchdog_prompt}"))
+                }
+                (false, _) => Some(watchdog_prompt),
+            };
+        }
+>>>>>>> 68b73e5eb9 (Fix watchdog wake/runtime plumbing)
         let helper_prompt =
             watchdog_helper_prompt(&helper_config, snapshot.owner_thread_id, &snapshot.prompt)
                 .await;

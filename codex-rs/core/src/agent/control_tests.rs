@@ -1170,6 +1170,151 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         history_contains_text(history.raw_items(), "current parent task"),
         "forked child history should keep the parent user message from the requested last-N turn window"
     );
+<<<<<<< HEAD
+=======
+    assert_eq!(injected_output.success, Some(true));
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_skips_output_when_parent_spawn_call_is_missing() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .inject_user_message_without_turn("parent seed context".to_string())
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread.codex.session.flush_rollout().await;
+
+    let synthetic_call_id = format!("watchdog_{parent_thread_id}");
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some(synthetic_call_id.clone()),
+                post_fork_developer_message: None,
+            },
+        )
+        .await
+        .expect("forked spawn should succeed")
+        .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+
+    assert!(!history.raw_items().iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::FunctionCallOutput { call_id, .. } if call_id == &synthetic_call_id
+        )
+    }));
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let turn_context = parent_thread.codex.session.new_default_turn().await;
+    let parent_spawn_call_id = "spawn-call-unflushed".to_string();
+    let parent_spawn_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: parent_spawn_call_id.clone(),
+    };
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+        .await;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("forked spawn should flush parent rollout before loading history")
+        .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+
+    let mut parent_call_index = None;
+    let mut injected_output_index = None;
+    for (idx, item) in history.raw_items().iter().enumerate() {
+        match item {
+            ResponseItem::FunctionCall { call_id, .. } if call_id == &parent_spawn_call_id => {
+                parent_call_index = Some(idx);
+            }
+            ResponseItem::FunctionCallOutput { call_id, .. }
+                if call_id == &parent_spawn_call_id =>
+            {
+                injected_output_index = Some(idx);
+            }
+            _ => {}
+        }
+    }
+
+    let parent_call_index =
+        parent_call_index.expect("forked child should include the parent spawn_agent call");
+    let injected_output_index = injected_output_index
+        .expect("forked child should include synthetic output for the parent spawn_agent call");
+    assert!(parent_call_index < injected_output_index);
+>>>>>>> 68b73e5eb9 (Fix watchdog wake/runtime plumbing)
 
     let _ = harness
         .control

@@ -15,6 +15,7 @@ use codex_features::Feature;
 use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 pub(crate) struct Handler;
@@ -306,7 +307,7 @@ async fn spawn_watchdog(
     spawn_source: SessionSource,
 ) -> codex_protocol::error::Result<ThreadId> {
     let target_thread_id = agent_control
-        .spawn_agent_handle(config.clone(), Some(spawn_source))
+        .spawn_agent(config.clone(), Op::Interrupt, Some(spawn_source))
         .await?;
     let superseded_before_register = agent_control
         .unregister_watchdogs_for_owner(owner_thread_id)
