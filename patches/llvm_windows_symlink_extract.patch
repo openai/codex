@@ -14,7 +14,7 @@ index 89dcf81..cf27c92 100644
 +        "llvm/utils/mlgo-utils/combine_training_corpus.py",
 +        "llvm/docs/_themes/llvm-theme",
      ]
- 
+
      test_docs_subprojects = [
 diff --git a/runtimes/mingw/BUILD.bazel b/runtimes/mingw/BUILD.bazel
 index ebd99db..9eb5d5b 100644
@@ -23,7 +23,7 @@ index ebd99db..9eb5d5b 100644
 @@ -334,6 +334,30 @@ stub_library(
      name = "stdc++",
  )
- 
+
 +# Clang may inject -lssp and -lssp_nonshared for windows-gnu links.
 +# Provide compatibility archives in the MinGW runtime search directory.
 +stub_library(

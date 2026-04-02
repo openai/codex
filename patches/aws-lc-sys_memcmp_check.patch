@@ -7,13 +7,13 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
  use std::collections::HashMap;
 -use std::path::PathBuf;
 +use std::path::{Path, PathBuf};
- 
+
  #[non_exhaustive]
  #[derive(PartialEq, Eq)]
 @@ -681,6 +681,16 @@
          }
          let mut memcmp_compile_args = Vec::from(memcmp_compiler.args());
- 
+
 +        // Keep the probe self-contained and avoid invoking external debug tools
 +        // (for example `dsymutil`) that may be missing in hermetic sandboxes.
 +        memcmp_compile_args.retain(|arg| {
@@ -30,7 +30,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
 @@ -692,6 +702,15 @@
              }
          }
- 
+
 +        if let Some(execroot) = Self::bazel_execroot(self.manifest_dir.as_path()) {
 +            // In Bazel build-script sandboxes, `cc` can pass `bazel-out/...` args
 +            // relative to the execroot while the process runs from elsewhere.

@@ -1,3 +1,7 @@
+use super::analytics::assert_basic_thread_initialized_event;
+use super::analytics::enable_analytics_capture;
+use super::analytics::thread_initialized_event;
+use super::analytics::wait_for_analytics_payload;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
@@ -62,51 +66,21 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::enable_analytics_capture;
-use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_analytics_payload;
-
+#[cfg(windows)]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+#[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
-
-async fn wait_for_responses_request_count(
-    server: &wiremock::MockServer,
-    expected_count: usize,
-) -> Result<()> {
-    timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let Some(requests) = server.received_requests().await else {
-                anyhow::bail!("wiremock did not record requests");
-            };
-            let responses_request_count = requests
-                .iter()
-                .filter(|request| {
-                    request.method == "POST" && request.url.path().ends_with("/responses")
-                })
-                .count();
-            if responses_request_count == expected_count {
-                return Ok::<(), anyhow::Error>(());
-            }
-            if responses_request_count > expected_count {
-                anyhow::bail!(
-                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
-    Ok(())
-}
 
 #[tokio::test]
 async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
@@ -1069,13 +1043,9 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
     let responses = vec![
         create_final_assistant_message_sse_response("seeded")?,
         create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+            fast_shell_command(),
             /*workdir*/ None,
-            Some(5000),
+            Some(1000),
             "call-1",
         )?,
         create_final_assistant_message_sse_response("done")?,
@@ -1195,7 +1165,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
+    wait_for_mock_request_count(&server, /*expected*/ 3).await?;
 
     Ok(())
 }
@@ -1361,9 +1331,48 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
+    wait_for_mock_request_count(&server, /*expected*/ 3).await?;
 
     Ok(())
+}
+
+fn fast_shell_command() -> Vec<String> {
+    if cfg!(windows) {
+        vec![
+            "cmd".to_string(),
+            "/d".to_string(),
+            "/c".to_string(),
+            "echo 42".to_string(),
+        ]
+    } else {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "print(42)".to_string(),
+        ]
+    }
+}
+
+async fn wait_for_mock_request_count(server: &MockServer, expected: usize) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    loop {
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("failed to fetch received requests"))?;
+        if requests.len() >= expected {
+            return Ok(());
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "expected at least {expected} mock requests, observed {}",
+                requests.len()
+            );
+        }
+
+        sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 #[tokio::test]

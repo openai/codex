@@ -8,7 +8,7 @@ index 9648e4a..88efd41 100644
 --- a/orig/v8-14.6.202.11/bazel/defs.bzl
 +++ b/mod/v8-14.6.202.11/bazel/defs.bzl
 @@ -97,7 +97,7 @@ v8_config = rule(
- 
+
  def _default_args():
      return struct(
 -        deps = [":define_flags", "@libcxx//:libc++"],
@@ -75,12 +75,12 @@ index 85f31b7..7314584 100644
 -    default = "none",
 +    default = "False",
  )
- 
+
  # Default setting for v8_enable_pointer_compression.
 @@ -4077,28 +4077,14 @@ filegroup(
      }),
  )
- 
+
 -v8_library(
 -  name = "lib_dragonbox",
 -  srcs = ["third_party/dragonbox/src/include/dragonbox/dragonbox.h"],
@@ -94,7 +94,7 @@ index 85f31b7..7314584 100644
 +    name = "lib_dragonbox",
 +    actual = "@dragonbox//:dragonbox",
  )
- 
+
 -v8_library(
 -  name = "lib_fp16",
 -  srcs = ["third_party/fp16/src/include/fp16.h"],
@@ -110,7 +110,7 @@ index 85f31b7..7314584 100644
 +    name = "lib_fp16",
 +    actual = "@fp16//:fp16",
  )
- 
+
  filegroup(
 @@ -4405,6 +4391,20 @@ genrule(
      srcs = [
@@ -155,11 +155,11 @@ index 85f31b7..7314584 100644
 +        requirement("markupsafe"),
      ],
  )
- 
+
 @@ -4448,6 +4451,15 @@ filegroup(
      ],
  )
- 
+
 +cc_library(
 +    name = "rusty_v8_internal_headers",
 +    hdrs = [
@@ -175,7 +175,7 @@ index 85f31b7..7314584 100644
 @@ -4567,16 +4579,9 @@ cc_library(
      ],
  )
- 
+
 -cc_library(
 -  name = "simdutf",
 -  srcs = ["third_party/simdutf/simdutf.cpp"],
@@ -190,7 +190,7 @@ index 85f31b7..7314584 100644
 +    name = "simdutf",
 +    actual = "@simdutf//:simdutf",
  )
- 
+
  v8_library(
 @@ -4593,7 +4598,7 @@ v8_library(
      copts = ["-Wno-implicit-fallthrough"],
@@ -216,7 +216,7 @@ index 85f31b7..7314584 100644
      actual = "icu/v8",
 +    visibility = ["//visibility:public"],
  )
- 
+
  v8_library(
 @@ -4715,7 +4721,7 @@ v8_binary(
      ],
@@ -226,7 +226,7 @@ index 85f31b7..7314584 100644
 +        "@icu//:icu",
      ],
  )
- 
+
 diff --git a/orig/v8-14.6.202.11/bazel/BUILD.icu b/mod/v8-14.6.202.11/bazel/BUILD.icu
 index 5fda2f4..381386c 100644
 --- a/orig/v8-14.6.202.11/bazel/BUILD.icu

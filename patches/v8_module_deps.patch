@@ -62,13 +62,13 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +    commit = "3d2de1816307bac63c16a297e8c4dc501b4076df",
 +    remote = "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git",
 +)
- 
+
  pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
  pip.parse(
 @@ -22,171 +72,3 @@
  )
  use_repo(pip, "v8_python_deps")
- 
+
 -# Define the local LLVM toolchain repository
 -llvm_toolchain_repository = use_repo_rule("//bazel/toolchain:llvm_repository.bzl", "llvm_toolchain_repository")
 -
@@ -248,22 +248,22 @@ new file mode 100644
 +@@ -2,7 +2,7 @@
 + load("@bazel_skylib//lib:selects.bzl", "selects")
 + load("@rules_license//rules:license.bzl", "license")
-+ 
++
 +-load("@rules_cc//cc:defs.bzl", "cc_test")
 ++load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 + # Placeholder#2 for Guitar, do not remove
-+ 
++
 + package(
 +@@ -134,11 +134,7 @@ COPTS = select({
 +     ],
 + })
-+ 
++
 +-DEFINES = select({
 +-    ":compiler_msvc": ["HWY_SHARED_DEFINE"],
 +-    ":compiler_clangcl": ["HWY_SHARED_DEFINE"],
 +-    "//conditions:default": [],
 +-})
 ++DEFINES = []
-+ 
++
 + # Unused on Bazel builds, where this is not defined/known; Copybara replaces
 + # usages with an empty list.

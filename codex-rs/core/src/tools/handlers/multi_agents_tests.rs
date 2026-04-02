@@ -1851,7 +1851,10 @@ async fn send_input_rejects_invalid_id() {
     let FunctionCallError::RespondToModel(msg) = err else {
         panic!("expected respond-to-model error");
     };
-    assert!(msg.starts_with("invalid agent id not-a-uuid:"));
+    assert_eq!(
+        msg,
+        "agent_name must use only lowercase letters, digits, and underscores"
+    );
 }
 
 #[tokio::test]
@@ -3204,6 +3207,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
 
     let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
     let mut expected = (*turn.config).clone();
+    expected.features = config.features.clone();
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.clone();

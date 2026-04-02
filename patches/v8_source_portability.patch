@@ -8,7 +8,7 @@ index 179a10f..4791e96 100644
 +++ b/mod/v8-14.6.202.11/src/base/bits.h
 @@ -270,11 +270,17 @@ inline constexpr uint32_t RoundDownToPowerOfTwo32(uint32_t value) {
  }
- 
+
  // Precondition: 0 <= shift < 32
 +#ifdef RotateRight32
 +#undef RotateRight32
@@ -16,7 +16,7 @@ index 179a10f..4791e96 100644
  inline constexpr uint32_t RotateRight32(uint32_t value, uint32_t shift) {
    return (value >> shift) | (value << ((32 - shift) & 31));
  }
- 
+
  // Precondition: 0 <= shift < 32
 +#ifdef RotateLeft32
 +#undef RotateLeft32
@@ -31,7 +31,7 @@ index 6176ed4..a02043d 100644
 @@ -64,6 +64,7 @@ namespace {
  volatile sig_atomic_t in_signal_handler = 0;
  bool dump_stack_in_signal_handler = true;
- 
+
 +#if HAVE_EXECINFO_H
  // The prefix used for mangled symbols, per the Itanium C++ ABI:
  // http://www.codesourcery.com/cxx-abi/abi.html#mangling
@@ -39,7 +39,7 @@ index 6176ed4..a02043d 100644
 @@ -73,7 +74,6 @@ const char kMangledSymbolPrefix[] = "_Z";
  const char kSymbolCharacters[] =
      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
- 
+
 -#if HAVE_EXECINFO_H
  // Demangles C++ symbols in the given text. Example:
  //
@@ -49,14 +49,14 @@ index 861cfe4..1e73954 100644
 --- a/orig/v8-14.6.202.11/src/base/export-template.h
 +++ b/mod/v8-14.6.202.11/src/base/export-template.h
 @@ -153,8 +153,10 @@
- 
+
  EXPORT_TEMPLATE_TEST(DEFAULT, );
  EXPORT_TEMPLATE_TEST(DEFAULT, __attribute__((visibility("default"))));
 +#if defined(_MSC_VER)
  EXPORT_TEMPLATE_TEST(MSVC_HACK, __declspec(dllexport));
  EXPORT_TEMPLATE_TEST(DEFAULT, __declspec(dllimport));
 +#endif
- 
+
  #undef EXPORT_TEMPLATE_TEST
  #undef EXPORT_TEMPLATE_TEST_DEFAULT_DEFAULT
 diff --git a/orig/v8-14.6.202.11/src/base/platform/platform-posix.cc b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
@@ -65,12 +65,12 @@ index 420df0b..6f47969 100644
 +++ b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
 @@ -95,7 +95,7 @@ extern int madvise(caddr_t, size_t, int);
  #endif
- 
+
  #if defined(V8_LIBC_GLIBC)
 -extern "C" void* __libc_stack_end;
 +extern "C" void* __libc_stack_end V8_WEAK;
  #endif
- 
+
  namespace v8 {
 @@ -1476,7 +1476,8 @@ Stack::StackSlot Stack::ObtainCurrentThreadStackStart() {
    // __libc_stack_end is process global and thus is only valid for
@@ -94,13 +94,13 @@ index f5d9ddc..542ea1a 100644
 -
 -#ifndef __MINGW64_VERSION_MAJOR
 +#if !defined(__MINGW64_VERSION_MAJOR)
- 
+
  #define _TRUNCATE 0
  #define STRUNCATE 80
 @@ -81,9 +79,6 @@ inline void MemoryFence() {
    __asm__ __volatile__("xchgl %%eax,%0 ":"=r" (barrier));
  }
- 
+
 -#endif  // __MINGW64_VERSION_MAJOR
 -
 -
@@ -110,25 +110,25 @@ index f5d9ddc..542ea1a 100644
 @@ -134,6 +129,8 @@ int strncpy_s(char* dest, size_t dest_size, const char* source, size_t count) {
    return 0;
  }
- 
+
 +#endif  // !defined(__MINGW64_VERSION_MAJOR)
 +
  #endif  // __MINGW32__
- 
+
  namespace v8 {
 @@ -743,8 +740,10 @@ void OS::StrNCpy(char* dest, int length, const char* src, size_t n) {
  }
- 
- 
+
+
 +#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
  #undef _TRUNCATE
  #undef STRUNCATE
 +#endif
- 
+
  DEFINE_LAZY_LEAKY_OBJECT_GETTER(RandomNumberGenerator,
                                  GetPlatformRandomNumberGenerator)
 @@ -1894,3 +1893,4 @@ Stack::StackSlot Stack::GetCurrentStackPosition() {
- 
+
  }  // namespace base
  }  // namespace v8
 +
@@ -294,9 +294,9 @@ index bda0e43..b44f1d9 100644
 --- a/orig/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
 +++ b/mod/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
 @@ -23,7 +23,7 @@ extern int pkey_free(int pkey) V8_WEAK;
- 
+
  namespace {
- 
+
 -bool KernelHasPkruFix() {
 +[[maybe_unused]] bool KernelHasPkruFix() {
    // PKU was broken on Linux kernels before 5.13 (see
@@ -319,9 +319,9 @@ index 27e748f..cbf886c 100644
 +#endif  // !V8_CC_MSVC || V8_OS_WIN
    memset(&gc_subroot_entries_, 0, sizeof(gc_subroot_entries_));
  }
- 
+
 @@ -3878,3 +3878,4 @@ void HeapSnapshotJSONSerializer::SerializeLocations() {
  }
- 
+
  }  // namespace v8::internal
 +

@@ -14,7 +14,10 @@ use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AGENT_INBOX_KIND;
+use codex_protocol::protocol::AgentInboxPayload;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -412,6 +415,179 @@ async fn send_input_submits_user_message() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
+}
+
+#[test]
+fn build_agent_inbox_items_emits_function_call_and_output() {
+    let sender_thread_id = ThreadId::new();
+    let items = build_agent_inbox_items(
+        sender_thread_id,
+        "watchdog update".to_string(),
+        /*prepend_turn_start_user_message*/ false,
+    )
+    .expect("tool role should build inbox items");
+
+    assert_eq!(items.len(), 2);
+
+    let call_id = match &items[0] {
+        ResponseInputItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+        } => {
+            assert_eq!(name, AGENT_INBOX_KIND);
+            assert_eq!(arguments, "{}");
+            call_id.clone()
+        }
+        other => panic!("expected function call item, got {other:?}"),
+    };
+
+    match &items[1] {
+        ResponseInputItem::FunctionCallOutput {
+            call_id: output_call_id,
+            output,
+        } => {
+            assert_eq!(output_call_id, &call_id);
+            let output_text = output
+                .body
+                .to_text()
+                .expect("payload should convert to text");
+            let payload: AgentInboxPayload =
+                serde_json::from_str(&output_text).expect("payload should be valid json");
+            assert!(payload.injected);
+            assert_eq!(payload.kind, AGENT_INBOX_KIND);
+            assert_eq!(payload.sender_thread_id, sender_thread_id);
+            assert_eq!(payload.message, "watchdog update");
+        }
+        other => panic!("expected function call output item, got {other:?}"),
+    }
+}
+
+#[test]
+fn build_agent_inbox_items_prepends_empty_user_message_when_requested() {
+    let sender_thread_id = ThreadId::new();
+    let items = build_agent_inbox_items(
+        sender_thread_id,
+        "watchdog update".to_string(),
+        /*prepend_turn_start_user_message*/ true,
+    )
+    .expect("tool role should build inbox items");
+
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items[0],
+        ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: String::new(),
+            }],
+        }
+    );
+    assert_matches!(&items[1], ResponseInputItem::FunctionCall { .. });
+    assert_matches!(&items[2], ResponseInputItem::FunctionCallOutput { .. });
+}
+
+#[tokio::test]
+async fn send_agent_message_to_root_thread_defaults_to_user_input() {
+    let harness = AgentControlHarness::new().await;
+    let (receiver_thread_id, _thread) = harness.start_thread().await;
+    let sender_thread_id = ThreadId::new();
+
+    let submission_id = harness
+        .control
+        .send_agent_message(
+            receiver_thread_id,
+            sender_thread_id,
+            "watchdog update".to_string(),
+        )
+        .await
+        .expect("send_agent_message should succeed");
+    assert!(!submission_id.is_empty());
+
+    let expected = (
+        receiver_thread_id,
+        Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "watchdog update".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        },
+    );
+    let captured = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .find(|entry| *entry == expected);
+
+    assert_eq!(captured, Some(expected));
+}
+
+#[tokio::test]
+async fn send_agent_message_to_root_thread_injects_response_items_when_enabled() {
+    let mut harness = AgentControlHarness::new().await;
+    harness.config.agent_use_function_call_inbox = true;
+    let (receiver_thread_id, _thread) = harness.start_thread().await;
+    let sender_thread_id = ThreadId::new();
+
+    let submission_id = harness
+        .control
+        .send_agent_message(
+            receiver_thread_id,
+            sender_thread_id,
+            "watchdog update".to_string(),
+        )
+        .await
+        .expect("send_agent_message should succeed");
+    assert!(!submission_id.is_empty());
+
+    let captured = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .find(|(thread_id, op)| {
+            *thread_id == receiver_thread_id && matches!(op, Op::InjectResponseItems { .. })
+        })
+        .expect("expected injected agent inbox op");
+
+    let Op::InjectResponseItems { items } = captured.1 else {
+        unreachable!("matched above");
+    };
+    assert_eq!(items.len(), 3);
+    match &items[0] {
+        ResponseInputItem::Message { role, content } => {
+            assert_eq!(role, "user");
+            assert_eq!(
+                content,
+                &vec![ContentItem::InputText {
+                    text: String::new(),
+                }]
+            );
+        }
+        other => panic!("expected prepended user message, got {other:?}"),
+    }
+    match &items[1] {
+        ResponseInputItem::FunctionCall {
+            name, arguments, ..
+        } => {
+            assert_eq!(name, AGENT_INBOX_KIND);
+            assert_eq!(arguments, "{}");
+        }
+        other => panic!("expected function call item, got {other:?}"),
+    }
+    match &items[2] {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            let output_text = output
+                .body
+                .to_text()
+                .expect("payload should convert to text");
+            let payload: AgentInboxPayload =
+                serde_json::from_str(&output_text).expect("payload should be valid json");
+            assert_eq!(payload.sender_thread_id, sender_thread_id);
+            assert_eq!(payload.message, "watchdog update");
+        }
+        other => panic!("expected function call output item, got {other:?}"),
+    }
 }
 
 #[tokio::test]

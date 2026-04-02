@@ -36,6 +36,24 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Agent Inbox Delivery
+
+By default, inbound messages from other agents are delivered to non-subagent threads as normal
+user input. If you want those handoffs to appear as explicit non-user transcript activity, you can
+opt into a synthetic function-call/function-call-output envelope:
+
+```toml
+[features]
+agent_function_call_inbox = true
+```
+
+When enabled, Codex injects inbound agent messages into non-subagent threads as an `agent_inbox`
+function-call/function-call-output pair. This is primarily a model-behavior workaround for cases
+where you want a subagent handoff to start a valid turn while still being clearly marked as
+non-user activity in the transcript.
+
+Messages sent to subagents continue to arrive as normal user input.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

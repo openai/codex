@@ -4,7 +4,7 @@ diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_sc
 @@ -120,6 +120,63 @@
      executable = True,
  )
- 
+
 +def _strip_stack_protector_for_windows_llvm_mingw(toolchain, args):
 +    """Drop stack protector flags unsupported by llvm-mingw build-script probes."""
 +    if "windows-gnullvm" not in toolchain.target_flag_value:
@@ -64,11 +64,11 @@ diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_sc
 +
  def get_cc_compile_args_and_env(cc_toolchain, feature_configuration):
      """Gather cc environment variables from the given `cc_toolchain`
- 
+
 @@ -503,6 +560,10 @@
          if not env["AR"]:
              env["AR"] = cc_toolchain.ar_executable
- 
+
 +        cc_c_args = _strip_stack_protector_for_windows_llvm_mingw(toolchain, cc_c_args)
 +        cc_cxx_args = _strip_stack_protector_for_windows_llvm_mingw(toolchain, cc_cxx_args)
 +        cc_c_args = _rewrite_windows_exec_msvc_cc_args(toolchain, cc_c_args)

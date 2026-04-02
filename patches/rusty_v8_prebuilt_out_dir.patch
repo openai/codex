@@ -6,7 +6,7 @@
 +++ b/build.rs
 @@ -543,10 +543,15 @@
  }
- 
+
  fn static_lib_name(suffix: &str) -> String {
 -  let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
 -  if target_os == "windows" {
@@ -25,7 +25,7 @@
 @@ -577,7 +577,23 @@
    path
  }
- 
+
 +fn out_dir_abs() -> PathBuf {
 +  let cwd = env::current_dir().unwrap();
 +
@@ -45,10 +45,10 @@
 +
    build_dir().join("gn_out").join("obj")
  }
- 
+
 @@ -794,22 +810,23 @@
  }
- 
+
  fn print_link_flags() {
 +  let target = env::var("TARGET").unwrap();
    println!("cargo:rustc-link-lib=static=rusty_v8");
@@ -60,7 +60,7 @@
          .split_whitespace()
          .any(|ba| ba == "use_custom_libcxx=false")
      });
- 
+
    if should_dyn_link_libcxx {
      // Based on https://github.com/alexcrichton/cc-rs/blob/fba7feded71ee4f63cfe885673ead6d7b4f2f454/src/lib.rs#L2462
      if let Ok(stdlib) = env::var("CXXSTDLIB") {
