@@ -1319,6 +1319,7 @@
     },
     "RawMcpServerConfig": {
       "additionalProperties": false,
+      "description": "Raw MCP config shape used for deserialization and JSON Schema generation.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
       "properties": {
         "args": {
           "default": null,
