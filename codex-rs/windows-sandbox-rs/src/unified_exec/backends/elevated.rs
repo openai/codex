@@ -40,13 +40,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         &command,
     )?;
 
-    let mut transport = spawn_runner_transport(
-        codex_home,
-        cwd,
-        &elevated.sandbox_creds,
-        elevated.common.logs_base_dir.as_deref(),
-    )?;
-    transport.send_spawn_request(SpawnRequest {
+    let spawn_request = SpawnRequest {
         command: command.clone(),
         cwd: cwd.to_path_buf(),
         env: env_map.clone(),
@@ -59,8 +53,20 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         tty,
         stdin_open,
         use_private_desktop,
-    })?;
-    transport.read_spawn_ready()?;
+    };
+    let codex_home = codex_home.to_path_buf();
+    let cwd = cwd.to_path_buf();
+    let sandbox_creds = elevated.sandbox_creds.clone();
+    let logs_base_dir = elevated.common.logs_base_dir.clone();
+    let transport = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut transport =
+            spawn_runner_transport(&codex_home, &cwd, &sandbox_creds, logs_base_dir.as_deref())?;
+        transport.send_spawn_request(spawn_request)?;
+        transport.read_spawn_ready()?;
+        Ok(transport)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("runner handshake task failed: {err}"))??;
     let (pipe_write, pipe_read) = transport.into_files();
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);

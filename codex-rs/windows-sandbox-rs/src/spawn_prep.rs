@@ -31,7 +31,9 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::HLOCAL;
 
 pub(crate) struct SpawnContext {
     pub(crate) policy: SandboxPolicy,
@@ -49,9 +51,35 @@ pub(crate) struct ElevatedSpawnContext {
 
 pub(crate) struct LegacySessionSecurity {
     pub(crate) h_token: HANDLE,
-    pub(crate) psid_generic: *mut c_void,
-    pub(crate) psid_workspace: Option<*mut c_void>,
+    pub(crate) psid_generic: LocalSid,
+    pub(crate) psid_workspace: Option<LocalSid>,
     pub(crate) cap_sid_str: String,
+}
+
+pub(crate) struct LocalSid {
+    psid: *mut c_void,
+}
+
+impl LocalSid {
+    pub(crate) fn from_string(sid: &str) -> Result<Self> {
+        let psid = unsafe { convert_string_sid_to_sid(sid) }
+            .ok_or_else(|| anyhow::anyhow!("invalid SID string: {sid}"))?;
+        Ok(Self { psid })
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut c_void {
+        self.psid
+    }
+}
+
+impl Drop for LocalSid {
+    fn drop(&mut self) {
+        if !self.psid.is_null() {
+            unsafe {
+                LocalFree(self.psid as HLOCAL);
+            }
+        }
+    }
 }
 
 pub(crate) fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
@@ -110,26 +138,21 @@ pub(crate) fn prepare_legacy_session_security(
     cwd: &Path,
 ) -> Result<LegacySessionSecurity> {
     let caps = load_or_create_cap_sids(codex_home)?;
-    let (h_token, psid_generic, psid_workspace, cap_sid_str): (
-        HANDLE,
-        *mut c_void,
-        Option<*mut c_void>,
-        String,
-    ) = unsafe {
+    let (h_token, psid_generic, psid_workspace, cap_sid_str) = unsafe {
         match policy {
             SandboxPolicy::ReadOnly { .. } => {
-                let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
-                let (h_token, psid) = create_readonly_token_with_cap(psid)?;
+                let psid = LocalSid::from_string(&caps.readonly)?;
+                let (h_token, _psid) = create_readonly_token_with_cap(psid.as_ptr())?;
                 (h_token, psid, None, caps.readonly.clone())
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
-                let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                let psid_generic = LocalSid::from_string(&caps.workspace)?;
                 let workspace_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-                let psid_workspace = convert_string_sid_to_sid(&workspace_sid).unwrap();
+                let psid_workspace = LocalSid::from_string(&workspace_sid)?;
                 let base = get_current_token_for_restriction()?;
                 let h_token = create_workspace_write_token_with_caps_from(
                     base,
-                    &[psid_generic, psid_workspace],
+                    &[psid_generic.as_ptr(), psid_workspace.as_ptr()],
                 );
                 CloseHandle(base);
                 let h_token = h_token?;
@@ -176,8 +199,8 @@ pub(crate) fn apply_legacy_session_acl_rules(
     sandbox_policy_cwd: &Path,
     current_dir: &Path,
     env_map: &HashMap<String, String>,
-    psid_generic: *mut c_void,
-    psid_workspace: Option<*mut c_void>,
+    psid_generic: &LocalSid,
+    psid_workspace: Option<&LocalSid>,
     persist_aces: bool,
 ) -> Vec<PathBuf> {
     let AllowDenyPaths { allow, deny } =
@@ -189,27 +212,27 @@ pub(crate) fn apply_legacy_session_acl_rules(
             let psid = if matches!(policy, SandboxPolicy::WorkspaceWrite { .. })
                 && is_command_cwd_root(p, &canonical_cwd)
             {
-                psid_workspace.unwrap_or(psid_generic)
+                psid_workspace.unwrap_or(psid_generic).as_ptr()
             } else {
-                psid_generic
+                psid_generic.as_ptr()
             };
             if matches!(add_allow_ace(p, psid), Ok(true)) && !persist_aces {
                 guards.push(p.clone());
             }
         }
         for p in &deny {
-            if let Ok(added) = add_deny_write_ace(p, psid_generic) {
+            if let Ok(added) = add_deny_write_ace(p, psid_generic.as_ptr()) {
                 if added && !persist_aces {
                     guards.push(p.clone());
                 }
             }
         }
-        allow_null_device(psid_generic);
+        allow_null_device(psid_generic.as_ptr());
         if let Some(psid_workspace) = psid_workspace {
-            allow_null_device(psid_workspace);
+            allow_null_device(psid_workspace.as_ptr());
             if persist_aces && matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                let _ = protect_workspace_codex_dir(current_dir, psid_workspace);
-                let _ = protect_workspace_agents_dir(current_dir, psid_workspace);
+                let _ = protect_workspace_codex_dir(current_dir, psid_workspace.as_ptr());
+                let _ = protect_workspace_agents_dir(current_dir, psid_workspace.as_ptr());
             }
         }
     }
@@ -238,13 +261,13 @@ pub(crate) fn prepare_elevated_spawn_context(
     let caps = load_or_create_cap_sids(codex_home)?;
     let (psid_to_use, cap_sids) = match &common.policy {
         SandboxPolicy::ReadOnly { .. } => (
-            unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
+            LocalSid::from_string(&caps.readonly)?,
             vec![caps.readonly.clone()],
         ),
         SandboxPolicy::WorkspaceWrite { .. } => {
             let cap_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
             (
-                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
+                LocalSid::from_string(&caps.workspace)?,
                 vec![caps.workspace.clone(), cap_sid],
             )
         }
@@ -260,7 +283,7 @@ pub(crate) fn prepare_elevated_spawn_context(
         env_map,
     );
     unsafe {
-        allow_null_device(psid_to_use);
+        allow_null_device(psid_to_use.as_ptr());
     }
 
     Ok(ElevatedSpawnContext {

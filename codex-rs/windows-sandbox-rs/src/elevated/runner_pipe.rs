@@ -19,7 +19,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
@@ -86,6 +88,9 @@ pub fn create_named_pipe(name: &str, access: u32, sandbox_username: &str) -> io:
             &mut sa as *mut SECURITY_ATTRIBUTES,
         )
     };
+    unsafe {
+        LocalFree(sd as HLOCAL);
+    }
     if h == 0 || h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
         return Err(io::Error::from_raw_os_error(unsafe {
             GetLastError() as i32

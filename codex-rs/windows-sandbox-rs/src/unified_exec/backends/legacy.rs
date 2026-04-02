@@ -13,7 +13,7 @@ use crate::spawn_prep::allow_null_device_for_workspace_write;
 use crate::spawn_prep::apply_legacy_session_acl_rules;
 use crate::spawn_prep::prepare_legacy_session_security;
 use crate::spawn_prep::prepare_legacy_spawn_context;
-use crate::token::convert_string_sid_to_sid;
+use crate::spawn_prep::LocalSid;
 use anyhow::Result;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
@@ -238,10 +238,10 @@ fn finalize_exit(
     }
 
     if let Some(cap_sid) = cap_sid {
-        if let Some(sid) = unsafe { convert_string_sid_to_sid(&cap_sid) } {
+        if let Ok(sid) = LocalSid::from_string(&cap_sid) {
             unsafe {
                 for path in guards {
-                    revoke_ace(&path, sid);
+                    revoke_ace(&path, sid.as_ptr());
                 }
             }
         }
@@ -308,8 +308,8 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         sandbox_policy_cwd,
         &common.current_dir,
         &env_map,
-        security.psid_generic,
-        security.psid_workspace,
+        &security.psid_generic,
+        security.psid_workspace.as_ref(),
         persist_aces,
     );
 
@@ -346,9 +346,9 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         Err(err) => {
             unsafe {
                 if !persist_aces && !guards.is_empty() {
-                    if let Some(sid) = convert_string_sid_to_sid(&security.cap_sid_str) {
+                    if let Ok(sid) = LocalSid::from_string(&security.cap_sid_str) {
                         for path in &guards {
-                            revoke_ace(path, sid);
+                            revoke_ace(path, sid.as_ptr());
                         }
                     }
                 }
