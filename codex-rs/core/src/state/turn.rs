@@ -224,10 +224,6 @@ impl TurnState {
         !self.pending_input.is_empty()
     }
 
-    pub(crate) fn defer_mailbox_delivery_to_next_turn(&mut self) {
-        self.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
-    }
-
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
         self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
