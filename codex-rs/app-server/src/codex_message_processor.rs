@@ -235,6 +235,7 @@ use codex_features::Feature;
 use codex_features::Stage;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::git_diff_to_remote;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManager;
 use codex_login::AuthMode as CoreAuthMode;
 use codex_login::CLIENT_ID;
@@ -255,6 +256,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
@@ -2190,10 +2192,11 @@ impl CodexMessageProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) {
-        let config = match derive_config_from_params(
+        let requested_cwd = typesafe_overrides.cwd.clone();
+        let mut config = match derive_config_from_params(
             &cli_overrides,
-            config_overrides,
-            typesafe_overrides,
+            config_overrides.clone(),
+            typesafe_overrides.clone(),
             &cloud_requirements,
             &listener_task_context.codex_home,
             &runtime_feature_enablement,
@@ -2210,6 +2213,56 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        if requested_cwd.is_some()
+            && !config.active_project.is_trusted()
+            && matches!(
+                config.permissions.sandbox_policy.get(),
+                codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                    | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                    | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+            )
+        {
+            let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
+                .unwrap_or_else(|| config.cwd.to_path_buf());
+            if let Err(err) = codex_core::config::set_project_trust_level(
+                &listener_task_context.codex_home,
+                trust_target.as_path(),
+                TrustLevel::Trusted,
+            ) {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to persist trusted project state: {err}"),
+                    data: None,
+                };
+                listener_task_context
+                    .outgoing
+                    .send_error(request_id, error)
+                    .await;
+                return;
+            }
+
+            config = match derive_config_from_params(
+                &cli_overrides,
+                config_overrides,
+                typesafe_overrides,
+                &cloud_requirements,
+                &listener_task_context.codex_home,
+                &runtime_feature_enablement,
+            )
+            .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = config_load_error(&err);
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+            };
+        }
 
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
