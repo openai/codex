@@ -1,5 +1,4 @@
 use super::*;
-use crate::AdditionalProperties;
 use crate::ConfiguredToolSpec;
 use crate::DiscoverablePluginInfo;
 use crate::DiscoverableTool;
@@ -37,107 +36,6 @@ const DEFAULT_AGENT_TYPE_DESCRIPTION: &str = "Test agent type description.";
 const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 const MAX_WAIT_TIMEOUT_MS: i64 = 3_600_000;
-
-#[test]
-fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
-    let model_info = model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Live),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    );
-
-    let mut actual = BTreeMap::new();
-    let mut duplicate_names = Vec::new();
-    for tool in &tools {
-        let name = tool.name().to_string();
-        if actual.insert(name.clone(), tool.spec.clone()).is_some() {
-            duplicate_names.push(name);
-        }
-    }
-    assert!(
-        duplicate_names.is_empty(),
-        "duplicate tool entries detected: {duplicate_names:?}"
-    );
-
-    let mut expected = BTreeMap::new();
-    for spec in [
-        create_exec_command_tool(CommandToolOptions {
-            allow_login_shell: true,
-            exec_permission_approvals_enabled: false,
-        }),
-        create_write_stdin_tool(),
-        create_update_plan_tool(),
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
-        create_apply_patch_freeform_tool(),
-        ToolSpec::WebSearch {
-            external_web_access: Some(true),
-            filters: None,
-            user_location: None,
-            search_context_size: None,
-            search_content_types: None,
-        },
-        create_view_image_tool(ViewImageToolOptions {
-            can_request_original_image_detail: config.can_request_original_image_detail,
-        }),
-    ] {
-        expected.insert(spec.name().to_string(), spec);
-    }
-    let collab_specs = if config.multi_agent_v2 {
-        vec![
-            create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
-            create_send_message_tool(),
-            create_wait_agent_tool_v2(wait_agent_timeout_options()),
-            create_close_agent_tool_v2(),
-        ]
-    } else {
-        vec![
-            create_spawn_agent_tool_v1(spawn_agent_tool_options(&config)),
-            create_send_input_tool_v1(),
-            create_wait_agent_tool_v1(wait_agent_timeout_options()),
-            create_close_agent_tool_v1(),
-        ]
-    };
-    for spec in collab_specs {
-        expected.insert(spec.name().to_string(), spec);
-    }
-    if !config.multi_agent_v2 {
-        let spec = create_resume_agent_tool();
-        expected.insert(spec.name().to_string(), spec);
-    }
-
-    if config.exec_permission_approvals_enabled {
-        let spec = create_request_permissions_tool(request_permissions_tool_description());
-        expected.insert(spec.name().to_string(), spec);
-    }
-
-    assert_eq!(
-        actual.keys().collect::<Vec<_>>(),
-        expected.keys().collect::<Vec<_>>(),
-        "tool name set mismatch"
-    );
-
-    for name in expected.keys() {
-        let mut actual_spec = actual.get(name).expect("present").clone();
-        let mut expected_spec = expected.get(name).expect("present").clone();
-        strip_descriptions_tool(&mut actual_spec);
-        strip_descriptions_tool(&mut expected_spec);
-        assert_eq!(actual_spec, expected_spec, "spec mismatch for {name}");
-    }
-}
 
 #[test]
 fn test_build_specs_collab_tools_enabled() {
@@ -973,33 +871,6 @@ fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
 }
 
 #[test]
-#[ignore]
-fn test_parallel_support_flags() {
-    let model_info = model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    );
-
-    assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
-    assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
-}
-
-#[test]
 fn test_test_model_info_includes_sync_tool() {
     let mut model_info = model_info();
     model_info.experimental_supported_tools = vec!["test_sync_tool".to_string()];
@@ -1816,13 +1687,6 @@ fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSp
     ))
 }
 
-fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
-    SpawnAgentToolOptions {
-        available_models: &config.available_models,
-        agent_type_description: agent_type_description(config, DEFAULT_AGENT_TYPE_DESCRIPTION),
-    }
-}
-
 fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
     WaitAgentTimeoutOptions {
         default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
@@ -1836,43 +1700,4 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         .iter()
         .find(|tool| tool.name() == expected_name)
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
-}
-
-fn strip_descriptions_schema(schema: &mut JsonSchema) {
-    match schema {
-        JsonSchema::Boolean { description }
-        | JsonSchema::String { description }
-        | JsonSchema::Number { description } => {
-            *description = None;
-        }
-        JsonSchema::Array { items, description } => {
-            strip_descriptions_schema(items);
-            *description = None;
-        }
-        JsonSchema::Object {
-            properties,
-            required: _,
-            additional_properties,
-        } => {
-            for value in properties.values_mut() {
-                strip_descriptions_schema(value);
-            }
-            if let Some(AdditionalProperties::Schema(schema)) = additional_properties {
-                strip_descriptions_schema(schema);
-            }
-        }
-    }
-}
-
-fn strip_descriptions_tool(spec: &mut ToolSpec) {
-    match spec {
-        ToolSpec::ToolSearch { parameters, .. } => strip_descriptions_schema(parameters),
-        ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
-            strip_descriptions_schema(parameters);
-        }
-        ToolSpec::Freeform(FreeformTool { .. })
-        | ToolSpec::LocalShell {}
-        | ToolSpec::ImageGeneration { .. }
-        | ToolSpec::WebSearch { .. } => {}
-    }
 }

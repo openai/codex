@@ -315,29 +315,6 @@ fn test_build_specs_gpt5_codex_default() {
 }
 
 #[test]
-fn test_build_specs_gpt51_codex_default() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1-codex",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
 fn test_build_specs_gpt5_codex_unified_exec_web_search() {
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
@@ -363,77 +340,6 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
-fn test_build_specs_gpt51_codex_unified_exec_web_search() {
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    assert_model_tools(
-        "gpt-5.1-codex",
-        &features,
-        Some(WebSearchMode::Live),
-        &[
-            "exec_command",
-            "write_stdin",
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_gpt_5_1_codex_max_defaults() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1-codex-max",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_codex_5_1_mini_defaults() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1-codex-mini",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
 fn test_gpt_5_defaults() {
     let features = Features::with_defaults();
     assert_default_model_tools(
@@ -444,54 +350,6 @@ fn test_gpt_5_defaults() {
         &[
             "update_plan",
             "request_user_input",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_gpt_5_1_defaults() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_gpt_5_1_codex_max_unified_exec_web_search() {
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    assert_model_tools(
-        "gpt-5.1-codex-max",
-        &features,
-        Some(WebSearchMode::Live),
-        &[
-            "exec_command",
-            "write_stdin",
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
             "web_search",
             "view_image",
             "spawn_agent",

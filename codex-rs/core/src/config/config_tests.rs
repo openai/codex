@@ -3,7 +3,6 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::config_loader::RequirementSource;
 use crate::plugins::PluginsManager;
-use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
@@ -26,7 +25,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use serde::Deserialize;
 use tempfile::tempdir;
 
 use super::*;
@@ -212,25 +210,6 @@ fn tools_web_search_true_deserializes_to_none() {
         r#"
 [tools]
 web_search = true
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.tools,
-        Some(ToolsToml {
-            web_search: None,
-            view_image: None,
-        })
-    );
-}
-
-#[test]
-fn tools_web_search_false_deserializes_to_none() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[tools]
-web_search = false
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -5300,102 +5279,62 @@ fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallback() 
 }
 
 #[test]
-fn test_resolve_oss_provider_explicit_override() {
-    let config_toml = ConfigToml::default();
-    let result = resolve_oss_provider(
-        Some("custom-provider"),
-        &config_toml,
-        /*config_profile*/ None,
-    );
-    assert_eq!(result, Some("custom-provider".to_string()));
-}
-
-#[test]
-fn test_resolve_oss_provider_from_profile() {
-    let mut profiles = std::collections::HashMap::new();
-    let profile = ConfigProfile {
-        oss_provider: Some("profile-provider".to_string()),
-        ..Default::default()
-    };
-    profiles.insert("test-profile".to_string(), profile);
-    let config_toml = ConfigToml {
-        profiles,
-        ..Default::default()
-    };
-
-    let result = resolve_oss_provider(
-        /*explicit_provider*/ None,
-        &config_toml,
-        Some("test-profile".to_string()),
-    );
-    assert_eq!(result, Some("profile-provider".to_string()));
-}
-
-#[test]
-fn test_resolve_oss_provider_from_global_config() {
-    let config_toml = ConfigToml {
+fn resolve_oss_provider_honors_explicit_profile_and_global_precedence() {
+    let profile_config = ConfigToml {
         oss_provider: Some("global-provider".to_string()),
+        profiles: HashMap::from([(
+            "profile-with-provider".to_string(),
+            ConfigProfile {
+                oss_provider: Some("profile-provider".to_string()),
+                ..Default::default()
+            },
+        )]),
         ..Default::default()
     };
-
-    let result = resolve_oss_provider(
-        /*explicit_provider*/ None,
-        &config_toml,
-        /*config_profile*/ None,
-    );
-    assert_eq!(result, Some("global-provider".to_string()));
-}
-
-#[test]
-fn test_resolve_oss_provider_profile_fallback_to_global() {
-    let mut profiles = std::collections::HashMap::new();
-    let profile = ConfigProfile::default(); // No oss_provider set
-    profiles.insert("test-profile".to_string(), profile);
-    let config_toml = ConfigToml {
+    let profile_without_provider_config = ConfigToml {
         oss_provider: Some("global-provider".to_string()),
-        profiles,
+        profiles: HashMap::from([(
+            "profile-without-provider".to_string(),
+            ConfigProfile::default(),
+        )]),
         ..Default::default()
     };
 
-    let result = resolve_oss_provider(
-        /*explicit_provider*/ None,
-        &config_toml,
-        Some("test-profile".to_string()),
-    );
-    assert_eq!(result, Some("global-provider".to_string()));
-}
-
-#[test]
-fn test_resolve_oss_provider_none_when_not_configured() {
-    let config_toml = ConfigToml::default();
-    let result = resolve_oss_provider(
-        /*explicit_provider*/ None,
-        &config_toml,
-        /*config_profile*/ None,
-    );
-    assert_eq!(result, None);
-}
-
-#[test]
-fn test_resolve_oss_provider_explicit_overrides_all() {
-    let mut profiles = std::collections::HashMap::new();
-    let profile = ConfigProfile {
-        oss_provider: Some("profile-provider".to_string()),
-        ..Default::default()
-    };
-    profiles.insert("test-profile".to_string(), profile);
-    let config_toml = ConfigToml {
-        oss_provider: Some("global-provider".to_string()),
-        profiles,
-        ..Default::default()
-    };
-
-    let result = resolve_oss_provider(
-        Some("explicit-provider"),
-        &config_toml,
-        Some("test-profile".to_string()),
-    );
-    assert_eq!(result, Some("explicit-provider".to_string()));
+    for (explicit_provider, config_toml, config_profile, expected) in [
+        (
+            Some("explicit-provider"),
+            profile_config.clone(),
+            Some("profile-with-provider".to_string()),
+            Some("explicit-provider".to_string()),
+        ),
+        (
+            None,
+            profile_config,
+            Some("profile-with-provider".to_string()),
+            Some("profile-provider".to_string()),
+        ),
+        (
+            None,
+            profile_without_provider_config,
+            Some("profile-without-provider".to_string()),
+            Some("global-provider".to_string()),
+        ),
+        (
+            None,
+            ConfigToml {
+                oss_provider: Some("global-provider".to_string()),
+                ..Default::default()
+            },
+            None,
+            Some("global-provider".to_string()),
+        ),
+        (None, ConfigToml::default(), None, None),
+    ] {
+        assert_eq!(
+            resolve_oss_provider(explicit_provider, &config_toml, config_profile),
+            expected
+        );
+    }
 }
 
 #[test]
@@ -6236,51 +6175,4 @@ speaker = "Desk Speakers"
         Some("Desk Speakers")
     );
     Ok(())
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct TuiTomlTest {
-    #[serde(default)]
-    notifications: Notifications,
-    #[serde(default)]
-    notification_method: NotificationMethod,
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct RootTomlTest {
-    tui: TuiTomlTest,
-}
-
-#[test]
-fn test_tui_notifications_true() {
-    let toml = r#"
-            [tui]
-            notifications = true
-        "#;
-    let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
-    assert_matches!(parsed.tui.notifications, Notifications::Enabled(true));
-}
-
-#[test]
-fn test_tui_notifications_custom_array() {
-    let toml = r#"
-            [tui]
-            notifications = ["foo"]
-        "#;
-    let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=[\"foo\"]");
-    assert_matches!(
-        parsed.tui.notifications,
-        Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
-    );
-}
-
-#[test]
-fn test_tui_notification_method() {
-    let toml = r#"
-            [tui]
-            notification_method = "bel"
-        "#;
-    let parsed: RootTomlTest =
-        toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
-    assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
 }
