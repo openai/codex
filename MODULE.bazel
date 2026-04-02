@@ -71,6 +71,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_windows_gnullvm_exec.patch",
+        "//patches:rules_rs_delete_git_worktree_pointer.patch",
     ],
     version = "0.0.43",
 )
