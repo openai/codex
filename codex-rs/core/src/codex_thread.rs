@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
+use crate::context_manager::ContextWindowBreakdown;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::WatchRegistration;
@@ -128,6 +129,13 @@ impl CodexThread {
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         self.codex.session.total_token_usage().await
+    }
+
+    pub async fn context_window_breakdown(&self, verbose: bool) -> ContextWindowBreakdown {
+        self.codex
+            .session
+            .get_context_window_breakdown(verbose)
+            .await
     }
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.

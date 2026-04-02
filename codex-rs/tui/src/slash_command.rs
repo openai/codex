@@ -37,6 +37,7 @@ pub enum SlashCommand {
     Copy,
     Mention,
     Status,
+    Context,
     DebugConfig,
     Title,
     Statusline,
@@ -86,6 +87,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Context => "show a semantic breakdown of current context-window usage",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -132,6 +134,7 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Fast
+                | SlashCommand::Context
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -165,6 +168,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Context
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

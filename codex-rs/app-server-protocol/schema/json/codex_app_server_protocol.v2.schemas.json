@@ -1160,6 +1160,30 @@
             },
             "method": {
               "enum": [
+                "thread/context/read"
+              ],
+              "title": "Thread/context/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadContextReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/context/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/list"
               ],
               "title": "Skills/listRequestMethod",
@@ -10188,6 +10212,101 @@
     "ThreadCompactStartResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadCompactStartResponse",
+      "type": "object"
+    },
+    "ThreadContextReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "verbose": {
+          "description": "When true, include every contributing row instead of merging repeated labels.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadContextReadParams",
+      "type": "object"
+    },
+    "ThreadContextReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "context": {
+          "$ref": "#/definitions/ThreadContextWindowBreakdown"
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "title": "ThreadContextReadResponse",
+      "type": "object"
+    },
+    "ThreadContextWindowBreakdown": {
+      "properties": {
+        "modelContextWindow": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/definitions/ThreadContextWindowSection"
+          },
+          "type": "array"
+        },
+        "totalTokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sections",
+        "totalTokens"
+      ],
+      "type": "object"
+    },
+    "ThreadContextWindowDetail": {
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "tokens"
+      ],
+      "type": "object"
+    },
+    "ThreadContextWindowSection": {
+      "properties": {
+        "details": {
+          "items": {
+            "$ref": "#/definitions/ThreadContextWindowDetail"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "details",
+        "label",
+        "tokens"
+      ],
       "type": "object"
     },
     "ThreadForkParams": {

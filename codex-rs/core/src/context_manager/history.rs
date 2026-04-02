@@ -1,4 +1,6 @@
 use crate::codex::TurnContext;
+use crate::context_manager::context_breakdown;
+use crate::context_manager::context_breakdown::ContextWindowBreakdown;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -151,6 +153,20 @@ impl ContextManager {
             .fold(0i64, i64::saturating_add);
 
         Some(base_tokens.saturating_add(items_tokens))
+    }
+
+    pub(crate) fn get_context_window_breakdown(
+        &self,
+        base_instructions: &BaseInstructions,
+        model_context_window: Option<i64>,
+        verbose: bool,
+    ) -> ContextWindowBreakdown {
+        context_breakdown::build_context_window_breakdown(
+            &self.items,
+            base_instructions,
+            model_context_window,
+            verbose,
+        )
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -493,7 +509,7 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .saturating_sub(650)
 }
 
-fn estimate_item_token_count(item: &ResponseItem) -> i64 {
+pub(super) fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     let model_visible_bytes = estimate_response_item_model_visible_bytes(item);
     approx_tokens_from_byte_count_i64(model_visible_bytes)
 }

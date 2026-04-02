@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "threadId": {
+      "type": "string"
+    },
+    "verbose": {
+      "description": "When true, include every contributing row instead of merging repeated labels.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadContextReadParams",
+  "type": "object"
+}

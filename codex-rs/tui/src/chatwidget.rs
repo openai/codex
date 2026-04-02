@@ -5267,6 +5267,9 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Context => {
+                self.add_context_window_breakdown_output(/*verbose*/ false);
+            }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
@@ -5392,6 +5395,17 @@ impl ChatWidget {
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
                     }
+                }
+            }
+            SlashCommand::Context => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+                if trimmed.eq_ignore_ascii_case("verbose") {
+                    self.add_context_window_breakdown_output(/*verbose*/ true);
+                } else {
+                    self.add_error_message("Usage: /context [verbose]".to_string());
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
@@ -9947,6 +9961,38 @@ impl ChatWidget {
         if !active
             .as_any()
             .is::<history_cell::McpInventoryLoadingCell>()
+        {
+            return;
+        }
+        self.active_cell = None;
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    /// Begin the asynchronous context-window breakdown flow.
+    ///
+    /// The spinner lives in `active_cell` and is cleared by
+    /// [`clear_context_window_breakdown_loading`] once the result arrives.
+    pub(crate) fn add_context_window_breakdown_output(&mut self, verbose: bool) {
+        self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(crate::context_window::new_context_window_loading(
+            self.config.animations,
+        )));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+        self.app_event_tx
+            .send(AppEvent::FetchContextWindowBreakdown { verbose });
+    }
+
+    /// Remove the `/context` loading spinner if it is still the active cell.
+    pub(crate) fn clear_context_window_breakdown_loading(&mut self) {
+        let Some(active) = self.active_cell.as_ref() else {
+            return;
+        };
+        if !active
+            .as_any()
+            .is::<crate::context_window::ContextWindowLoadingCell>()
         {
             return;
         }

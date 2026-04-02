@@ -317,6 +317,10 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    ThreadContextRead => "thread/context/read" {
+        params: v2::ThreadContextReadParams,
+        response: v2::ThreadContextReadResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,

@@ -30,6 +30,7 @@ mod review;
 mod safety_check_downgrade;
 mod skills_list;
 mod thread_archive;
+mod thread_context_read;
 mod thread_fork;
 mod thread_list;
 mod thread_loaded_list;
