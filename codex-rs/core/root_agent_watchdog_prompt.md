@@ -38,7 +38,7 @@ Watchdog-specific `wait` guidance:
 
 Operational notes:
 - Do not call `send_input` on watchdog handles.
-- The tool returns a watchdog handle ID. When you no longer need the watchdog, stop it by calling `close_agent` on that handle ID.
+- The tool returns a watchdog handle ID. Do not close a watchdog unless the user explicitly asks you to, or replacement is intentional; otherwise keep it running and continue.
 
 Treat watchdog guidance as high-priority execution feedback. If it reveals a missing required action, do that action before status narration while honoring higher-priority system/developer/user constraints. A required action is one needed to satisfy the user request or clear a concrete blocker.
 
