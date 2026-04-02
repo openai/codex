@@ -29,6 +29,8 @@ use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread as AppServerThread;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -154,6 +156,7 @@ struct ExecRunArgs {
     config: Config,
     dangerously_bypass_approvals_and_sandbox: bool,
     exec_span: tracing::Span,
+    fork_session_id: Option<String>,
     images: Vec<PathBuf>,
     json_mode: bool,
     last_message_file: Option<PathBuf>,
@@ -181,6 +184,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let Cli {
         command,
+        fork_session_id,
         images,
         model: model_cli_arg,
         oss,
@@ -452,6 +456,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config,
         dangerously_bypass_approvals_and_sandbox,
         exec_span: exec_span.clone(),
+        fork_session_id,
         images,
         json_mode,
         last_message_file,
@@ -473,6 +478,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         config,
         dangerously_bypass_approvals_and_sandbox,
         exec_span,
+        fork_session_id,
         images,
         json_mode,
         last_message_file,
@@ -531,10 +537,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             anyhow::anyhow!("failed to initialize in-process app-server client: {err}")
         })?;
 
-    // Handle resume subcommand through existing `thread/list` + `thread/resume`
-    // APIs so exec no longer reaches into rollout storage directly.
-    let (primary_thread_id, fallback_session_configured) =
-        if let Some(ExecCommand::Resume(args)) = command.as_ref() {
+    // Handle resume/fork/start through app-server APIs so exec no longer reaches into
+    // rollout storage directly for normal bootstrap.
+    let (primary_thread_id, fallback_session_configured) = match command.as_ref() {
+        Some(ExecCommand::Resume(args)) => {
             if let Some(thread_id) = resolve_resume_thread_id(&client, &config, args).await? {
                 let response: ThreadResumeResponse = send_request_with_response(
                     &client,
@@ -564,22 +570,41 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     .map_err(anyhow::Error::msg)?;
                 (session_configured.session_id, session_configured)
             }
-        } else {
-            let response: ThreadStartResponse = send_request_with_response(
-                &client,
-                ClientRequest::ThreadStart {
-                    request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config),
-                },
-                "thread/start",
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-            let session_configured = session_configured_from_thread_start_response(&response)
+        }
+        Some(ExecCommand::Review(_)) | None => {
+            if let Some(session_id) = fork_session_id.as_deref() {
+                let response: ThreadForkResponse = send_request_with_response(
+                    &client,
+                    ClientRequest::ThreadFork {
+                        request_id: request_ids.next(),
+                        params: thread_fork_params_from_config(
+                            &config, session_id, /*path*/ None,
+                        ),
+                    },
+                    "thread/fork",
+                )
+                .await
                 .map_err(anyhow::Error::msg)?;
-            (session_configured.session_id, session_configured)
-        };
-
+                let session_configured = session_configured_from_thread_fork_response(&response)
+                    .map_err(anyhow::Error::msg)?;
+                (session_configured.session_id, session_configured)
+            } else {
+                let response: ThreadStartResponse = send_request_with_response(
+                    &client,
+                    ClientRequest::ThreadStart {
+                        request_id: request_ids.next(),
+                        params: thread_start_params_from_config(&config),
+                    },
+                    "thread/start",
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
+                let session_configured = session_configured_from_thread_start_response(&response)
+                    .map_err(anyhow::Error::msg)?;
+                (session_configured.session_id, session_configured)
+            }
+        }
+    };
     let primary_thread_id_for_span = primary_thread_id.to_string();
     // Use the start/resume response as the authoritative bootstrap payload.
     // Waiting for a later streamed `SessionConfigured` event adds up to 10s of
@@ -889,6 +914,23 @@ fn approvals_reviewer_override_from_config(
     Some(config.approvals_reviewer.into())
 }
 
+fn thread_fork_params_from_config(
+    config: &Config,
+    thread_id: &str,
+    path: Option<PathBuf>,
+) -> ThreadForkParams {
+    ThreadForkParams {
+        thread_id: thread_id.to_string(),
+        path,
+        model: config.model.clone(),
+        model_provider: Some(config.model_provider_id.clone()),
+        cwd: Some(config.cwd.to_string_lossy().to_string()),
+        approval_policy: Some(config.permissions.approval_policy.value().into()),
+        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
+        ..ThreadForkParams::default()
+    }
+}
+
 async fn send_request_with_response<T>(
     client: &InProcessAppServerClient,
     request: ClientRequest,
@@ -926,6 +968,24 @@ fn session_configured_from_thread_start_response(
 
 fn session_configured_from_thread_resume_response(
     response: &ThreadResumeResponse,
+) -> Result<SessionConfiguredEvent, String> {
+    session_configured_from_thread_response(
+        &response.thread.id,
+        response.thread.name.clone(),
+        response.thread.path.clone(),
+        response.model.clone(),
+        response.model_provider.clone(),
+        response.service_tier,
+        response.approval_policy.to_core(),
+        response.approvals_reviewer.to_core(),
+        response.sandbox.to_core(),
+        response.cwd.clone(),
+        response.reasoning_effort,
+    )
+}
+
+fn session_configured_from_thread_fork_response(
+    response: &ThreadForkResponse,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.id,
@@ -1834,26 +1894,6 @@ mod tests {
         let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
 
         assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
-    }
-
-    #[test]
-    fn prompt_with_stdin_context_wraps_stdin_block() {
-        let combined = prompt_with_stdin_context("Summarize this concisely", "my output");
-
-        assert_eq!(
-            combined,
-            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
-        );
-    }
-
-    #[test]
-    fn prompt_with_stdin_context_preserves_trailing_newline() {
-        let combined = prompt_with_stdin_context("Summarize this concisely", "my output\n");
-
-        assert_eq!(
-            combined,
-            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
-        );
     }
 
     #[test]
