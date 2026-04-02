@@ -4352,7 +4352,12 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => {
+                    let mut thread = summary_to_thread(summary);
+                    thread.forked_from_id =
+                        forked_from_id_from_rollout(fork_rollout_path.as_path()).await;
+                    thread
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -8307,7 +8312,6 @@ async fn summary_from_thread_list_item(
         );
         return Some(ConversationSummary {
             conversation_id: thread_id,
-            forked_from_id: None,
             path: it.path,
             preview: it.first_user_message.unwrap_or_default(),
             timestamp,
@@ -8382,7 +8386,6 @@ fn summary_from_state_db_metadata(
     };
     ConversationSummary {
         conversation_id,
-        forked_from_id: None,
         path,
         preview,
         timestamp: Some(timestamp),
@@ -8480,7 +8483,6 @@ pub(crate) async fn read_summary_from_rollout(
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
-        forked_from_id: session_meta.forked_from_id,
         timestamp,
         updated_at,
         path: path.to_path_buf(),
@@ -8541,7 +8543,6 @@ fn extract_conversation_summary(
 
     Some(ConversationSummary {
         conversation_id,
-        forked_from_id: session_meta.forked_from_id,
         timestamp,
         updated_at,
         path,
@@ -8578,6 +8579,7 @@ async fn load_thread_summary_for_rollout(
                 rollout_path.display()
             )
         })?;
+    thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
     if let Some(persisted_metadata) = persisted_metadata {
         merge_mutable_thread_metadata(
             &mut thread,
@@ -8587,6 +8589,14 @@ async fn load_thread_summary_for_rollout(
         merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
     }
     Ok(thread)
+}
+
+async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
+    read_session_meta_line(path)
+        .await
+        .ok()
+        .and_then(|meta_line| meta_line.meta.forked_from_id)
+        .map(|thread_id| thread_id.to_string())
 }
 
 fn merge_mutable_thread_metadata(thread: &mut Thread, persisted_thread: Thread) {
@@ -8691,7 +8701,6 @@ fn build_thread_from_snapshot(
 pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
-        forked_from_id,
         path,
         preview,
         timestamp,
@@ -8713,7 +8722,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 
     Thread {
         id: conversation_id.to_string(),
-        forked_from_id: forked_from_id.map(|id| id.to_string()),
+        forked_from_id: None,
         preview,
         ephemeral: false,
         model_provider,
@@ -9092,7 +9101,6 @@ mod tests {
 
         let expected = ConversationSummary {
             conversation_id,
-            forked_from_id: None,
             timestamp: timestamp.clone(),
             updated_at: timestamp,
             path,
@@ -9149,7 +9157,6 @@ mod tests {
 
         let expected = ConversationSummary {
             conversation_id,
-            forked_from_id: None,
             timestamp: Some(timestamp.clone()),
             updated_at: Some("2025-09-05T16:53:11Z".to_string()),
             path: path.clone(),
@@ -9243,10 +9250,10 @@ mod tests {
         };
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
 
-        let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
-        let thread = summary_to_thread(summary);
-
-        assert_eq!(thread.forked_from_id, Some(forked_from_id.to_string()));
+        assert_eq!(
+            forked_from_id_from_rollout(path.as_path()).await,
+            Some(forked_from_id.to_string())
+        );
         Ok(())
     }
 
