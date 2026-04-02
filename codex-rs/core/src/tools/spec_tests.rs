@@ -32,6 +32,7 @@ use codex_tools::create_spawn_agent_tool_v2;
 use codex_tools::create_view_image_tool;
 use codex_tools::create_wait_agent_tool_v1;
 use codex_tools::create_wait_agent_tool_v2;
+use codex_tools::create_watchdog_self_close_tool;
 use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -169,6 +170,20 @@ fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
     );
 }
 
+fn assert_contains_top_level_tool_name(tools: &[ConfiguredToolSpec], expected: &str) {
+    assert!(
+        tools.iter().any(|tool| tool.name() == expected),
+        "expected top-level tool {expected} to be present"
+    );
+}
+
+fn assert_lacks_top_level_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
+    assert!(
+        !tools.iter().any(|tool| tool.name() == expected_absent),
+        "expected top-level tool {expected_absent} to be absent"
+    );
+}
+
 fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     match config.shell_type {
         ConfigShellToolType::Default => Some("shell"),
@@ -223,6 +238,38 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         }
     }
     panic!("expected tool {expected_name}")
+}
+
+fn find_namespaced_tool(
+    tools: &[ConfiguredToolSpec],
+    namespace_name: &str,
+    expected_name: &str,
+) -> ConfiguredToolSpec {
+    let namespace = tools
+        .iter()
+        .find_map(|tool| match &tool.spec {
+            ToolSpec::Namespace(namespace) if namespace.name == namespace_name => Some(namespace),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected namespace {namespace_name}"));
+
+    let tool = namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            codex_tools::ResponsesApiNamespaceTool::Function(tool)
+                if tool.name == expected_name =>
+            {
+                Some(tool.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected tool {expected_name} in {namespace_name}"));
+
+    ConfiguredToolSpec::new(
+        ToolSpec::Function(tool),
+        /*supports_parallel_tool_calls*/ false,
+    )
 }
 
 fn strip_descriptions_schema(schema: &mut JsonSchema) {
@@ -406,12 +453,19 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         ];
         if config.agent_watchdog {
             collab_specs.push(create_list_agents_tool(config.agent_watchdog));
-            collab_specs.push(create_compact_parent_context_tool());
         }
         collab_specs
     };
-    let spec = create_agent_tools_namespace(collab_specs.split_off(0));
-    expected.insert(spec.name().to_string(), spec);
+    for spec in collab_specs.split_off(0) {
+        expected.insert(spec.name().to_string(), spec);
+    }
+    if config.agent_watchdog {
+        let spec = create_watchdog_tools_namespace(vec![
+            create_compact_parent_context_tool(),
+            create_watchdog_self_close_tool(),
+        ]);
+        expected.insert(spec.name().to_string(), spec);
+    }
 
     if config.exec_permission_approvals_enabled {
         let spec = create_request_permissions_tool(request_permissions_tool_description());
@@ -456,12 +510,71 @@ fn test_build_specs_collab_tools_enabled() {
         &[],
     )
     .build();
+    assert_contains_tool_names(&tools, &["tool_search"]);
     assert_contains_tool_names(
         &tools,
         &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
     assert_lacks_tool_name(&tools, "list_agents");
+    assert_lacks_tool_name(&tools, "watchdog");
+}
+
+#[test]
+fn test_build_specs_watchdog_collab_tools_include_self_close_tool() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    features.enable(Feature::AgentWatchdog);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert_contains_top_level_tool_name(&tools, "watchdog");
+    assert_contains_top_level_tool_name(&tools, "spawn_agent");
+    assert_contains_top_level_tool_name(&tools, "send_input");
+    assert_contains_top_level_tool_name(&tools, "wait_agent");
+    assert_contains_top_level_tool_name(&tools, "close_agent");
+    assert_contains_top_level_tool_name(&tools, "list_agents");
+    assert_contains_tool_names(&tools, &["tool_search", "list_agents", "close_agent"]);
+    assert_lacks_top_level_tool_name(&tools, "watchdog_self_close");
+    assert_lacks_top_level_tool_name(&tools, "compact_parent_context");
+
+    let watchdog_self_close = find_namespaced_tool(&tools, "watchdog", "watchdog_self_close");
+    let ToolSpec::Function(ResponsesApiTool {
+        defer_loading: Some(deferred),
+        ..
+    }) = &watchdog_self_close.spec
+    else {
+        panic!("watchdog_self_close should be a function tool");
+    };
+    assert!(*deferred);
+    let compact_parent_context = find_namespaced_tool(&tools, "watchdog", "compact_parent_context");
+    let ToolSpec::Function(ResponsesApiTool {
+        defer_loading: Some(deferred),
+        ..
+    }) = &compact_parent_context.spec
+    else {
+        panic!("compact_parent_context should be a function tool");
+    };
+    assert!(*deferred);
 }
 
 #[test]
@@ -1407,6 +1520,7 @@ fn test_build_specs_gpt5_codex_default() {
         &[
             "update_plan",
             "request_user_input",
+            "tool_search",
             "apply_patch",
             "web_search",
             "view_image",
@@ -1430,6 +1544,7 @@ fn test_build_specs_gpt51_codex_default() {
         &[
             "update_plan",
             "request_user_input",
+            "tool_search",
             "apply_patch",
             "web_search",
             "view_image",
@@ -1455,6 +1570,7 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "write_stdin",
             "update_plan",
             "request_user_input",
+            "tool_search",
             "apply_patch",
             "web_search",
             "view_image",
@@ -1480,6 +1596,7 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "write_stdin",
             "update_plan",
             "request_user_input",
+            "tool_search",
             "apply_patch",
             "web_search",
             "view_image",
@@ -1503,6 +1620,7 @@ fn test_gpt_5_1_codex_max_defaults() {
         &[
             "update_plan",
             "request_user_input",
+            "tool_search",
             "apply_patch",
             "web_search",
             "view_image",
@@ -1526,6 +1644,7 @@ fn test_codex_5_1_mini_defaults() {
         &[
             "update_plan",
             "request_user_input",
+            "tool_search",
             "apply_patch",
             "web_search",
             "view_image",
@@ -1549,6 +1668,7 @@ fn test_gpt_5_defaults() {
         &[
             "update_plan",
             "request_user_input",
+            "tool_search",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1571,6 +1691,7 @@ fn test_gpt_5_1_defaults() {
         &[
             "update_plan",
             "request_user_input",
+            "tool_search",
             "apply_patch",
             "web_search",
             "view_image",

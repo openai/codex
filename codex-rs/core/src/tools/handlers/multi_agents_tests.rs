@@ -2,6 +2,7 @@ use super::*;
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ThreadManager;
+use crate::agent::WatchdogRegistration;
 use crate::built_in_model_providers;
 use crate::codex::make_session_and_context;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
@@ -27,6 +28,7 @@ use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHand
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+use crate::tools::handlers::multi_agents_v2::WatchdogSelfCloseHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
@@ -84,6 +86,47 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+async fn attach_watchdog_helper_for_tests(
+    manager: &ThreadManager,
+    agent_control: &crate::agent::AgentControl,
+    config: &crate::config::Config,
+) -> ThreadId {
+    let owner = manager
+        .start_thread(config.clone())
+        .await
+        .expect("owner thread should start");
+    let target = agent_control
+        .spawn_agent_handle(config.clone(), /*session_source*/ None)
+        .await
+        .expect("watchdog target thread should start");
+    let helper = manager
+        .start_thread(config.clone())
+        .await
+        .expect("helper thread should start");
+    agent_control
+        .register_watchdog(WatchdogRegistration {
+            owner_thread_id: owner.thread_id,
+            target_thread_id: target,
+            child_depth: 1,
+            interval_s: 30,
+            prompt: "check in".to_string(),
+            config: config.clone(),
+        })
+        .await
+        .expect("watchdog registration should succeed");
+    agent_control
+        .set_watchdog_active_helper_for_tests(target, helper.thread_id)
+        .await;
+    assert_eq!(
+        agent_control
+            .watchdog_owner_for_active_helper(helper.thread_id)
+            .await,
+        Some(owner.thread_id),
+        "watchdog helper should be registered for owner"
+    );
+    helper.thread_id
 }
 
 fn history_contains_inter_agent_communication(
@@ -170,6 +213,11 @@ struct ListedAgentResult {
     agent_name: String,
     agent_status: serde_json::Value,
     last_task_message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct WatchdogSelfCloseResult {
+    previous_status: AgentStatus,
 }
 
 #[tokio::test]
@@ -401,7 +449,7 @@ async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
 }
 
 #[tokio::test]
-async fn spawn_agent_watchdog_role_returns_handle_without_spawn_mode() {
+async fn spawn_agent_watchdog_role_returns_handle_with_role_defaults() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -2414,6 +2462,116 @@ async fn close_agent_submits_shutdown_and_returns_previous_status() {
 
     let status_after = manager.agent_control().get_status(agent_id).await;
     assert_eq!(status_after, AgentStatus::NotFound);
+}
+
+#[tokio::test]
+async fn watchdog_self_close_rejects_non_watchdog_thread() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let agent_control = manager.agent_control();
+    let thread = manager
+        .start_thread(turn.config.as_ref().clone())
+        .await
+        .expect("thread should start");
+    session.services.agent_control = agent_control.clone();
+    session.conversation_id = thread.thread_id;
+
+    let err = WatchdogSelfCloseHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "watchdog_self_close",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect_err("non-watchdog threads should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "watchdog_self_close is only available in watchdog check-in threads.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn watchdog_self_close_closes_watchdog_helper_and_returns_previous_status() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let agent_control = manager.agent_control();
+    session.services.agent_control = agent_control.clone();
+    let helper_thread_id =
+        attach_watchdog_helper_for_tests(&manager, &agent_control, turn.config.as_ref()).await;
+    session.conversation_id = helper_thread_id;
+    let status_before = agent_control.get_status(helper_thread_id).await;
+
+    let output = WatchdogSelfCloseHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "watchdog_self_close",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect("watchdog helper should be allowed to self-close");
+    let (content, success) = expect_text_output(output);
+    let result: WatchdogSelfCloseResult =
+        serde_json::from_str(&content).expect("watchdog self-close result should be json");
+
+    assert_eq!(
+        result,
+        WatchdogSelfCloseResult {
+            previous_status: status_before,
+        }
+    );
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        agent_control.get_status(helper_thread_id).await,
+        AgentStatus::NotFound
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_watchdog_self_close_closes_watchdog_helper_and_returns_previous_status() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let agent_control = manager.agent_control();
+    session.services.agent_control = agent_control.clone();
+    let mut config = turn.config.as_ref().clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let helper_thread_id =
+        attach_watchdog_helper_for_tests(&manager, &agent_control, &config).await;
+    session.conversation_id = helper_thread_id;
+    turn.config = Arc::new(config);
+    let status_before = agent_control.get_status(helper_thread_id).await;
+
+    let output = WatchdogSelfCloseHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "watchdog_self_close",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect("watchdog helper should be allowed to self-close");
+    let (content, success) = expect_text_output(output);
+    let result: WatchdogSelfCloseResult =
+        serde_json::from_str(&content).expect("watchdog self-close result should be json");
+
+    assert_eq!(
+        result,
+        WatchdogSelfCloseResult {
+            previous_status: status_before,
+        }
+    );
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        agent_control.get_status(helper_thread_id).await,
+        AgentStatus::NotFound
+    );
 }
 
 #[tokio::test]

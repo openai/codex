@@ -52,13 +52,15 @@ When you detect these, prescribe the corrective action explicitly.
 
 Use only the multi-agent tools that exist here:
 
-- `spawn_agent` (prefer `spawn_mode = "fork"` when shared context matters).
+- `spawn_agent` (prefer `fork_context = true` when shared context matters).
 - `send_input`.
-- `compact_parent_context` (watchdog-only recovery tool; see below).
+- `tool_search` to discover deferred watchdog-only tools in the `watchdog` namespace.
+- `watchdog.compact_parent_context` (watchdog-only recovery tool; see below).
+- `watchdog.watchdog_self_close` (watchdog-only immediate exit tool; see below).
 - `wait`.
 - `close_agent`.
 
-There is no cancel tool. Use `close_agent` to stop agents that are done or no longer needed.
+There is no cancel tool. Use `watchdog.watchdog_self_close` to stop this watchdog check-in thread when its job is complete; use `close_agent` to stop subagents that are done or no longer needed.
 
 When recommending watchdogs to the root agent, keep `agent_type` at the default.
 
@@ -72,7 +74,7 @@ For token protocols (for example `ping N` / `pong N`), treat those as literal te
 
 ## Parent Recovery via Context Compaction
 
-`compact_parent_context` asks the system to abbreviate/compact redundant parent-thread context so the parent can recover from loops.
+`watchdog.compact_parent_context` asks the system to abbreviate/compact redundant parent-thread context so the parent can recover from loops.
 
 Use it only as a last resort:
 
@@ -80,7 +82,9 @@ Use it only as a last resort:
 - The parent is taking no meaningful actions (no concrete commands/edits/tests) and making no progress.
 - You already sent at least one direct corrective instruction with `send_input`, and it was ignored.
 
-Do not call `compact_parent_context` for routine nudges or normal delays. Prefer precise `send_input` guidance first.
+`watchdog.watchdog_self_close` asks the runtime to end the current watchdog check-in thread immediately. Use it only after reporting status and when the check-in has no remaining work, to avoid idle watchdog loops.
+
+Do not call `watchdog.compact_parent_context` for routine nudges or normal delays. Prefer precise `send_input` guidance first.
 
 ## Style
 

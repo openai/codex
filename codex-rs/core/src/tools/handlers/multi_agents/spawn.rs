@@ -11,7 +11,6 @@ use crate::agent::role::default_fork_context_for_role;
 use crate::agent::role::watchdog_interval_for_role;
 use crate::config::Config;
 use codex_features::Feature;
-use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::SessionSource;
 use std::collections::HashSet;
 
@@ -198,13 +197,6 @@ impl ToolHandler for Handler {
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
-                    spawn_mode: if is_watchdog {
-                        AgentSpawnMode::Watchdog
-                    } else if fork_context {
-                        AgentSpawnMode::Fork
-                    } else {
-                        AgentSpawnMode::Spawn
-                    },
                     status,
                 }
                 .into(),

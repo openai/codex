@@ -312,6 +312,23 @@ pub fn create_close_agent_tool_v2() -> ToolSpec {
     })
 }
 
+pub fn create_watchdog_self_close_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "watchdog_self_close".to_string(),
+        description:
+            "Watchdog-only: close this watchdog check-in thread and terminate immediately."
+                .to_string(),
+        strict: false,
+        defer_loading: Some(true),
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(close_agent_output_schema()),
+    })
+}
+
 fn agent_status_output_schema() -> Value {
     json!({
         "oneOf": [

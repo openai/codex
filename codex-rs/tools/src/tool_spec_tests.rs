@@ -9,6 +9,7 @@ use crate::JsonSchema;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiTool;
 use crate::create_tools_json_for_responses_api;
+use crate::create_watchdog_self_close_tool;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
 use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
@@ -112,6 +113,32 @@ fn configured_tool_spec_name_delegates_to_tool_spec() {
         .name(),
         "lookup_order"
     );
+}
+
+#[test]
+fn watchdog_self_close_tool_spec_is_deferred_and_parameterless() {
+    let ToolSpec::Function(ResponsesApiTool {
+        name,
+        defer_loading,
+        parameters,
+        output_schema,
+        ..
+    }) = create_watchdog_self_close_tool()
+    else {
+        panic!("watchdog_self_close should be a function tool");
+    };
+
+    assert_eq!(name, "watchdog_self_close");
+    assert_eq!(defer_loading, Some(true));
+    assert_eq!(
+        parameters,
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(AdditionalProperties::Boolean(false)),
+        }
+    );
+    assert!(output_schema.is_some());
 }
 
 #[test]

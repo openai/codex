@@ -50,6 +50,7 @@ pub(crate) use resume_agent::Handler as ResumeAgentHandler;
 pub(crate) use send_input::Handler as SendInputHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
+pub(crate) use watchdog_self_close::Handler as WatchdogSelfCloseHandler;
 
 pub mod close_agent;
 mod compact_parent_context;
@@ -58,6 +59,7 @@ mod resume_agent;
 mod send_input;
 mod spawn;
 pub(crate) mod wait;
+mod watchdog_self_close;
 
 #[cfg(test)]
 #[path = "multi_agents_tests.rs"]
