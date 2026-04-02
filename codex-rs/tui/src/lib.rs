@@ -49,7 +49,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnContextItem;
 use codex_state::log_db;
-use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -1549,7 +1548,7 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
             AltScreenMode::Never => false,
             AltScreenMode::Auto => {
                 let terminal_info = terminal_info();
-                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
+                !terminal_info.is_zellij()
             }
         }
     }

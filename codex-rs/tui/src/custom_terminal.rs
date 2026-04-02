@@ -424,6 +424,11 @@ where
         Ok(())
     }
 
+    /// Force the next draw pass to repaint the entire viewport.
+    pub fn invalidate_viewport(&mut self) {
+        self.previous_buffer_mut().reset();
+    }
+
     /// Clear terminal scrollback (if supported) and force a full redraw.
     pub fn clear_scrollback(&mut self) -> io::Result<()> {
         if self.viewport_area.is_empty() {
