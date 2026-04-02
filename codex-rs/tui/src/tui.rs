@@ -569,11 +569,10 @@ impl Tui {
                 terminal.invalidate_viewport();
             }
 
-            let area = terminal.viewport_area;
-
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
             {
+                let area = terminal.viewport_area;
                 let inline_area_bottom = if self.alt_screen_active.load(Ordering::Relaxed) {
                     self.alt_saved_viewport
                         .map(|r| r.bottom().saturating_sub(1))
