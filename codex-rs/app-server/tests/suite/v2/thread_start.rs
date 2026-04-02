@@ -771,7 +771,9 @@ fn create_config_toml_without_approval_policy(
     codex_home: &Path,
     server_uri: &str,
 ) -> std::io::Result<()> {
-    create_config_toml_with_optional_approval_policy(codex_home, server_uri, None)
+    create_config_toml_with_optional_approval_policy(
+        codex_home, server_uri, /*approval_policy*/ None,
+    )
 }
 
 fn create_config_toml_with_optional_approval_policy(
