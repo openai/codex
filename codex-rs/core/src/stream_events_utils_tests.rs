@@ -12,7 +12,7 @@ use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 
 fn assistant_output_text(text: &str) -> ResponseItem {
-    assistant_output_text_with_phase(text, None)
+    assistant_output_text_with_phase(text, /*phase*/ None)
 }
 
 fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
