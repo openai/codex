@@ -1190,23 +1190,11 @@ impl AgentControl {
                 .owner_for_active_helper(child_thread_id)
                 .await
             {
-                let helper_sent_input = match control.upgrade() {
-                    Ok(state) => state
-                        .get_thread(child_thread_id)
-                        .await
-                        .ok()
-                        .map(|thread| thread.last_completed_turn_used_agent_send_input())
-                        .unwrap_or(false),
-                    Err(_) => false,
-                };
-                if !helper_sent_input {
-                    let fallback_message = watchdog_fallback_message_from_status(&status);
-                    if let Some(message) = fallback_message {
-                        let _ = control
-                            .send_watchdog_wakeup(owner_thread_id, child_thread_id, message)
-                            .await;
-                    }
-                }
+                // The watchdog manager owns helper fallback delivery and cleanup.
+                // Returning here avoids duplicate `agent_inbox` injections for one helper
+                // completion: the generic child completion watcher and the watchdog manager
+                // should not both forward the same helper's final assistant message.
+                let _ = owner_thread_id;
                 return;
             }
 
