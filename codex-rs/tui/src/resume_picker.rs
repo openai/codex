@@ -791,9 +791,6 @@ impl PickerState {
             let Some(thread_id) = row.thread_id else {
                 continue;
             };
-            if row.thread_name.is_some() {
-                continue;
-            }
             if self.thread_name_cache.contains_key(&thread_id) {
                 continue;
             }
@@ -817,11 +814,14 @@ impl PickerState {
             let Some(thread_id) = row.thread_id else {
                 continue;
             };
-            let thread_name = self.thread_name_cache.get(&thread_id).cloned().flatten();
-            if row.thread_name == thread_name {
+            let Some(thread_name) = self.thread_name_cache.get(&thread_id).cloned().flatten()
+            else {
+                continue;
+            };
+            if row.thread_name.as_ref() == Some(&thread_name) {
                 continue;
             }
-            row.thread_name = thread_name;
+            row.thread_name = Some(thread_name);
             updated = true;
         }
 
@@ -2274,6 +2274,57 @@ mod tests {
 
         let snapshot = terminal.backend().to_string();
         assert_snapshot!("resume_picker_thread_names", snapshot);
+    }
+
+    #[tokio::test]
+    async fn update_thread_names_prefers_local_session_index_names() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let thread_id =
+            ThreadId::from_string("11111111-1111-1111-1111-111111111111").expect("thread id");
+        let session_index_entry = json!({
+            "id": thread_id,
+            "thread_name": "Saved session name",
+            "updated_at": "2025-01-01T00:00:00Z",
+        });
+        std::fs::write(
+            tempdir.path().join("session_index.jsonl"),
+            format!("{session_index_entry}\n"),
+        )
+        .expect("write session index");
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            tempdir.path().to_path_buf(),
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        state.all_rows = vec![Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("First prompt"),
+            thread_id: Some(thread_id),
+            thread_name: Some(String::from("stale backend title")),
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+        state.filtered_rows = state.all_rows.clone();
+
+        state.update_thread_names().await;
+
+        assert_eq!(
+            state.all_rows[0].thread_name,
+            Some(String::from("Saved session name"))
+        );
+        assert_eq!(
+            state.filtered_rows[0].display_preview(),
+            "Saved session name"
+        );
     }
 
     #[test]
