@@ -4897,6 +4897,52 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
 }
 
 #[tokio::test]
+async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "queued child update".to_string(),
+        /*trigger_turn*/ false,
+    );
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    sess.defer_mailbox_delivery_to_next_turn(&tc.sub_id).await;
+    sess.enqueue_mailbox_communication(communication.clone());
+    sess.steer_input(
+        vec![UserInput::Text {
+            text: "follow up".to_string(),
+            text_elements: Vec::new(),
+        }],
+        Some(&tc.sub_id),
+    )
+    .await
+    .expect("steered input should be accepted");
+
+    sess.defer_mailbox_delivery_to_next_turn(&tc.sub_id).await;
+
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![
+            ResponseInputItem::from(vec![UserInput::Text {
+                text: "follow up".to_string(),
+                text_elements: Vec::new(),
+            }]),
+            communication.to_response_input_item(),
+        ],
+    );
+}
+
+#[tokio::test]
 async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let communication = InterAgentCommunication::new(
