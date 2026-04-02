@@ -670,10 +670,15 @@ impl AgentControl {
             )
             .await;
         if result.is_ok() {
+            self.note_owner_input(agent_id).await;
             self.state
                 .update_last_task_message(agent_id, last_task_message);
         }
         result
+    }
+
+    pub(crate) async fn note_owner_input(&self, agent_id: ThreadId) {
+        self.watchdogs.note_owner_input(agent_id).await;
     }
 
     /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
@@ -1238,6 +1243,16 @@ impl AgentControl {
     #[cfg(test)]
     pub(crate) async fn force_watchdog_due_for_tests(&self, target_thread_id: ThreadId) {
         self.watchdogs.force_due_for_tests(target_thread_id).await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn watchdog_owner_idle_since_is_none_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        self.watchdogs
+            .owner_idle_since_is_none_for_tests(target_thread_id)
+            .await
     }
 
     #[cfg(test)]

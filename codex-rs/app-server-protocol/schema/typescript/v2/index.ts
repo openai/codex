@@ -273,6 +273,8 @@ export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";
 export type { ThreadForkParams } from "./ThreadForkParams";
 export type { ThreadForkResponse } from "./ThreadForkResponse";
+export type { ThreadInputActivityParams } from "./ThreadInputActivityParams";
+export type { ThreadInputActivityResponse } from "./ThreadInputActivityResponse";
 export type { ThreadItem } from "./ThreadItem";
 export type { ThreadListParams } from "./ThreadListParams";
 export type { ThreadListResponse } from "./ThreadListResponse";

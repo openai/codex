@@ -301,6 +301,10 @@ client_request_definitions! {
         params: v2::ThreadBackgroundTerminalsCleanParams,
         response: v2::ThreadBackgroundTerminalsCleanResponse,
     },
+    ThreadInputActivity => "thread/inputActivity" {
+        params: v2::ThreadInputActivityParams,
+        response: v2::ThreadInputActivityResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,

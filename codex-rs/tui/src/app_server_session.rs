@@ -30,6 +30,8 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadInputActivityParams;
+use codex_app_server_protocol::ThreadInputActivityResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -451,6 +453,21 @@ impl AppServerSession {
             })
             .await
             .wrap_err("turn/interrupt failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_input_activity(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadInputActivityResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadInputActivity {
+                request_id,
+                params: ThreadInputActivityParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/inputActivity failed in TUI")?;
         Ok(())
     }
 

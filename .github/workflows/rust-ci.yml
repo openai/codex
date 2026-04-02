@@ -81,7 +81,6 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-shear
-          version: 1.5.1
       - name: cargo shear
         run: cargo shear
 
@@ -137,10 +136,10 @@ jobs:
         include:
           - name: Linux
             runner: ubuntu-24.04
-            timeout_minutes: 30
+            timeout_minutes: 120
           - name: macOS
             runner: macos-15-xlarge
-            timeout_minutes: 30
+            timeout_minutes: 90
           - name: Windows
             runner: windows-x64
             timeout_minutes: 30

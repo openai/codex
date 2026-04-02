@@ -238,6 +238,7 @@ const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
+const WATCHDOG_OWNER_ACTIVITY_SIGNAL_INTERVAL: Duration = Duration::from_secs(1);
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
@@ -866,6 +867,8 @@ pub(crate) struct ChatWidget {
     /// We require the second press to match this key so `Ctrl+C` followed by
     /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
     quit_shortcut_key: Option<KeyBinding>,
+    // Last time we sent a lightweight owner-activity signal for the running thread.
+    last_watchdog_owner_activity_signal_at: Option<Instant>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
@@ -2281,6 +2284,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.last_watchdog_owner_activity_signal_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
         self.saw_plan_update_this_turn = false;
@@ -2351,6 +2355,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
+        self.last_watchdog_owner_activity_signal_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
@@ -4589,6 +4594,7 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
+            last_watchdog_owner_activity_signal_at: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -4659,6 +4665,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        let composer_before = self.bottom_pane.composer_text_with_pending();
         match key_event {
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -4828,6 +4835,7 @@ impl ChatWidget {
                 InputResult::None => {}
             },
         }
+        self.maybe_signal_watchdog_owner_activity_if_draft_changed(&composer_before);
     }
 
     /// Attach a local image to the composer when the active model supports image inputs.
@@ -4852,7 +4860,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn apply_external_edit(&mut self, text: String) {
+        let composer_before = self.bottom_pane.composer_text_with_pending();
         self.bottom_pane.apply_external_edit(text);
+        self.maybe_signal_watchdog_owner_activity_if_draft_changed(&composer_before);
         self.request_redraw();
     }
 
@@ -5401,7 +5411,36 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
+        let composer_before = self.bottom_pane.composer_text_with_pending();
         self.bottom_pane.handle_paste(text);
+        self.maybe_signal_watchdog_owner_activity_if_draft_changed(&composer_before);
+    }
+
+    fn maybe_signal_watchdog_owner_activity_if_draft_changed(&mut self, composer_before: &str) {
+        if self.bottom_pane.composer_text_with_pending() == composer_before {
+            return;
+        }
+        self.maybe_signal_watchdog_owner_activity();
+    }
+
+    fn maybe_signal_watchdog_owner_activity(&mut self) {
+        if !self.agent_turn_running {
+            return;
+        }
+        let Some(thread_id) = self.thread_id else {
+            return;
+        };
+        let now = Instant::now();
+        if let Some(last_signal_at) = self.last_watchdog_owner_activity_signal_at
+            && now.duration_since(last_signal_at) < WATCHDOG_OWNER_ACTIVITY_SIGNAL_INTERVAL
+        {
+            return;
+        }
+        self.last_watchdog_owner_activity_signal_at = Some(now);
+        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+            thread_id,
+            op: AppCommand::note_owner_activity().into(),
+        });
     }
 
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).

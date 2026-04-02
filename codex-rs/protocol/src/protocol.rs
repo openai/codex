@@ -234,6 +234,9 @@ pub enum Op {
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
+    /// Mark owner-side input activity without starting or steering a turn.
+    NoteOwnerActivity,
+
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
     CleanBackgroundTerminals,
@@ -594,6 +597,7 @@ impl Op {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Interrupt => "interrupt",
+            Self::NoteOwnerActivity => "note_owner_activity",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",

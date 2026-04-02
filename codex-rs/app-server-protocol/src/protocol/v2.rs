@@ -2995,6 +2995,18 @@ pub struct ThreadBackgroundTerminalsCleanResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadInputActivityParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadInputActivityResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
     /// The number of turns to drop from the end of the thread. Must be >= 1.
@@ -6410,6 +6422,38 @@ mod tests {
 
         let decoded = serde_json::from_value::<ThreadShellCommandResponse>(value)
             .expect("deserialize thread/shellCommand response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn thread_input_activity_params_round_trip() {
+        let params = ThreadInputActivityParams {
+            thread_id: "thr_123".to_string(),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize thread/inputActivity params");
+        assert_eq!(
+            value,
+            json!({
+                "threadId": "thr_123",
+            })
+        );
+
+        let decoded = serde_json::from_value::<ThreadInputActivityParams>(value)
+            .expect("deserialize thread/inputActivity params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_input_activity_response_round_trip() {
+        let response = ThreadInputActivityResponse {};
+
+        let value =
+            serde_json::to_value(&response).expect("serialize thread/inputActivity response");
+        assert_eq!(value, json!({}));
+
+        let decoded = serde_json::from_value::<ThreadInputActivityResponse>(value)
+            .expect("deserialize thread/inputActivity response");
         assert_eq!(decoded, response);
     }
 

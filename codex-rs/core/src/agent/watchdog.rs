@@ -438,12 +438,33 @@ impl WatchdogManager {
         true
     }
 
+    pub(crate) async fn note_owner_input(&self, owner_thread_id: ThreadId) {
+        let mut registrations = self.registrations.lock().await;
+        for entry in registrations.values_mut() {
+            if entry.registration.owner_thread_id == owner_thread_id {
+                entry.owner_idle_since = None;
+                entry.owner_was_running = true;
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) async fn force_due_for_tests(&self, target_thread_id: ThreadId) {
         let mut registrations = self.registrations.lock().await;
         if let Some(entry) = registrations.get_mut(&target_thread_id) {
             entry.force_due_once = true;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn owner_idle_since_is_none_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        let registrations = self.registrations.lock().await;
+        registrations
+            .get(&target_thread_id)
+            .map(|entry| entry.owner_idle_since.is_none())
     }
 
     async fn update_after_spawn(

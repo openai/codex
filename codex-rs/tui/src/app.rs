@@ -2062,6 +2062,10 @@ impl App {
                 app_server.turn_interrupt(thread_id, turn_id).await?;
                 Ok(true)
             }
+            AppCommandView::NoteOwnerActivity => {
+                app_server.thread_input_activity(thread_id).await?;
+                Ok(true)
+            }
             AppCommandView::UserTurn {
                 items,
                 cwd,

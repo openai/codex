@@ -2163,6 +2163,7 @@ async fn make_chatwidget_manual(
         pending_notification: None,
         quit_shortcut_expires_at: None,
         quit_shortcut_key: None,
+        last_watchdog_owner_activity_signal_at: None,
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
@@ -2223,6 +2224,21 @@ fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     }
 }
 
+fn next_owner_activity_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::NoteOwnerActivity) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected owner activity op but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected owner activity op but channel closed")
+            }
+        }
+    }
+}
+
 fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     loop {
         match op_rx.try_recv() {
@@ -2276,6 +2292,29 @@ async fn worked_elapsed_from_resets_when_timer_restarts() {
     // Simulate status timer resetting (e.g., status indicator recreated for a new task).
     assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 3), 3);
     assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 7), 4);
+}
+
+#[tokio::test]
+async fn typing_during_running_turn_emits_owner_activity_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.agent_turn_running = true;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+
+    next_owner_activity_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn non_mutating_keypress_during_running_turn_does_not_emit_owner_activity_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.agent_turn_running = true;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+
+    assert_no_submit_op(&mut op_rx);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
