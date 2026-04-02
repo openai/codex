@@ -207,7 +207,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         &[
             "spawn_agent",
             "send_message",
-            "assign_task",
+            "followup_task",
             "wait_agent",
             "close_agent",
             "list_agents",
@@ -269,9 +269,9 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         Some(&vec!["target".to_string(), "message".to_string()])
     );
 
-    let assign_task = find_tool(&tools, "assign_task");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &assign_task.spec else {
-        panic!("assign_task should be a function tool");
+    let followup_task = find_tool(&tools, "followup_task");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &followup_task.spec else {
+        panic!("followup_task should be a function tool");
     };
     let JsonSchema::Object {
         properties,
@@ -279,7 +279,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         ..
     } = parameters
     else {
-        panic!("assign_task should use object params");
+        panic!("followup_task should use object params");
     };
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));

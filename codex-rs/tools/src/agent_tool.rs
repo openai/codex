@@ -150,7 +150,7 @@ pub fn create_send_message_tool() -> ToolSpec {
     })
 }
 
-pub fn create_assign_task_tool() -> ToolSpec {
+pub fn create_followup_task_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
@@ -178,7 +178,7 @@ pub fn create_assign_task_tool() -> ToolSpec {
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "assign_task".to_string(),
+        name: "followup_task".to_string(),
         description: "Add a message to an existing non-root agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. In MultiAgentV2, this tool currently supports text content only."
             .to_string(),
         strict: false,

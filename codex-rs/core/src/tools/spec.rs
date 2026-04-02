@@ -60,8 +60,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
-    use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
     use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -136,9 +136,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolHandlerKind::ApplyPatch => {
                 builder.register_handler(handler.name, apply_patch_handler.clone());
             }
-            ToolHandlerKind::AssignTaskV2 => {
-                builder.register_handler(handler.name, Arc::new(AssignTaskHandlerV2));
-            }
             ToolHandlerKind::CloseAgentV1 => {
                 builder.register_handler(handler.name, Arc::new(CloseAgentHandler));
             }
@@ -153,6 +150,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::DynamicTool => {
                 builder.register_handler(handler.name, dynamic_tool_handler.clone());
+            }
+            ToolHandlerKind::FollowupTaskV2 => {
+                builder.register_handler(handler.name, Arc::new(FollowupTaskHandlerV2));
             }
             ToolHandlerKind::JsRepl => {
                 builder.register_handler(handler.name, js_repl_handler.clone());

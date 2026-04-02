@@ -18,11 +18,11 @@ use crate::collect_tool_search_app_infos;
 use crate::collect_tool_suggest_entries;
 use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;
-use crate::create_assign_task_tool;
 use crate::create_close_agent_tool_v1;
 use crate::create_close_agent_tool_v2;
 use crate::create_code_mode_tool;
 use crate::create_exec_command_tool;
+use crate::create_followup_task_tool;
 use crate::create_image_generation_tool;
 use crate::create_js_repl_reset_tool;
 use crate::create_js_repl_tool;
@@ -358,7 +358,7 @@ pub fn build_tool_registry_plan(
                 config.code_mode_enabled,
             );
             plan.push_spec(
-                create_assign_task_tool(),
+                create_followup_task_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
@@ -379,7 +379,7 @@ pub fn build_tool_registry_plan(
             );
             plan.register_handler("spawn_agent", ToolHandlerKind::SpawnAgentV2);
             plan.register_handler("send_message", ToolHandlerKind::SendMessageV2);
-            plan.register_handler("assign_task", ToolHandlerKind::AssignTaskV2);
+            plan.register_handler("followup_task", ToolHandlerKind::FollowupTaskV2);
             plan.register_handler("wait_agent", ToolHandlerKind::WaitAgentV2);
             plan.register_handler("close_agent", ToolHandlerKind::CloseAgentV2);
             plan.register_handler("list_agents", ToolHandlerKind::ListAgentsV2);

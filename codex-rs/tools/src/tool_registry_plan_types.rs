@@ -12,12 +12,12 @@ use std::collections::HashMap;
 pub enum ToolHandlerKind {
     AgentJobs,
     ApplyPatch,
-    AssignTaskV2,
     CloseAgentV1,
     CloseAgentV2,
     CodeModeExecute,
     CodeModeWait,
     DynamicTool,
+    FollowupTaskV2,
     JsRepl,
     JsReplReset,
     ListAgentsV2,
