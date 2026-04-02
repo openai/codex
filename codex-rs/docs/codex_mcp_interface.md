@@ -13,7 +13,7 @@ Codex exposes MCP-compatible methods to manage threads, turns, accounts, config,
 At a glance:
 
 - Primary v2 RPCs
-  - `thread/start`, `thread/resume`, `thread/fork`, `thread/read`, `thread/list`
+  - `thread/start`, `thread/resume`, `thread/fork`, `thread/read`, `thread/context/read`, `thread/list`
   - `turn/start`, `turn/steer`, `turn/interrupt`
   - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
   - `config/read`, `config/value/write`, `config/batchWrite`
@@ -51,6 +51,8 @@ Use the separate `codex mcp` subcommand to manage configured MCP server launcher
 ## Threads and turns
 
 Use the v2 thread and turn APIs for all new integrations. `thread/start` creates a thread, `turn/start` submits user input, `turn/interrupt` stops an in-flight turn, and `thread/list` / `thread/read` expose persisted history.
+
+Use `thread/context/read` for a live, approximate, sectioned breakdown of the loaded thread's current model-visible context window.
 
 `getConversationSummary` remains as a compatibility helper for clients that still need a summary lookup by `conversationId` or `rolloutPath`.
 

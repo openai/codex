@@ -23,6 +23,7 @@ use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
+use crate::context_window;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
@@ -76,6 +77,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::ThreadContextReadResponse;
+use codex_app_server_protocol::ThreadContextWindowBreakdown;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
@@ -1891,6 +1894,33 @@ impl App {
         });
     }
 
+    fn fetch_context_window_breakdown(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        verbose: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed(ClientRequest::ThreadContextRead {
+                    request_id: RequestId::String(format!(
+                        "thread-context-read-{}",
+                        Uuid::new_v4()
+                    )),
+                    params: codex_app_server_protocol::ThreadContextReadParams {
+                        thread_id: thread_id.to_string(),
+                        verbose,
+                    },
+                })
+                .await
+                .map(|response: ThreadContextReadResponse| response.context)
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::ContextWindowBreakdownLoaded { result });
+        });
+    }
+
     fn refresh_rate_limits(&mut self, app_server: &AppServerSession, request_id: u64) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
@@ -2129,12 +2159,45 @@ impl App {
             ));
     }
 
+    fn handle_context_window_breakdown_result(
+        &mut self,
+        result: Result<ThreadContextWindowBreakdown, String>,
+    ) {
+        self.chat_widget.clear_context_window_breakdown_loading();
+        self.clear_committed_context_window_breakdown_loading();
+
+        match result {
+            Ok(context) => {
+                self.chat_widget
+                    .add_to_history(context_window::new_context_window_output(&context));
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to load context breakdown: {err}"));
+            }
+        }
+    }
+
     fn clear_committed_mcp_inventory_loading(&mut self) {
         let Some(index) = self
             .transcript_cells
             .iter()
             .rposition(|cell| cell.as_any().is::<history_cell::McpInventoryLoadingCell>())
         else {
+            return;
+        };
+
+        self.transcript_cells.remove(index);
+        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+            overlay.replace_cells(self.transcript_cells.clone());
+        }
+    }
+
+    fn clear_committed_context_window_breakdown_loading(&mut self) {
+        let Some(index) = self.transcript_cells.iter().rposition(|cell| {
+            cell.as_any()
+                .is::<context_window::ContextWindowLoadingCell>()
+        }) else {
             return;
         };
 
@@ -4422,6 +4485,18 @@ impl App {
             }
             AppEvent::McpInventoryLoaded { result } => {
                 self.handle_mcp_inventory_result(result);
+            }
+            AppEvent::FetchContextWindowBreakdown { verbose } => {
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    self.fetch_context_window_breakdown(app_server, thread_id, verbose);
+                } else {
+                    self.handle_context_window_breakdown_result(Err(
+                        "session is not initialized yet".to_string(),
+                    ));
+                }
+            }
+            AppEvent::ContextWindowBreakdownLoaded { result } => {
+                self.handle_context_window_breakdown_result(result);
             }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
