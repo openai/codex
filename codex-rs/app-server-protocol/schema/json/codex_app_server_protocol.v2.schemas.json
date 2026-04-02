@@ -968,6 +968,54 @@
             },
             "method": {
               "enum": [
+                "thread/createApiKey/start"
+              ],
+              "title": "Thread/createApiKey/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadCreateApiKeyStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/createApiKey/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/createApiKey/finish"
+              ],
+              "title": "Thread/createApiKey/finishRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadCreateApiKeyFinishParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/createApiKey/finishRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -9905,6 +9953,111 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadCompactStartResponse",
       "type": "object"
+    },
+    "ThreadCreateApiKeyFinishParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadCreateApiKeyFinishParams",
+      "type": "object"
+    },
+    "ThreadCreateApiKeyFinishResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "defaultProjectId": {
+          "type": "string"
+        },
+        "defaultProjectTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "organizationId": {
+          "type": "string"
+        },
+        "organizationTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "projectApiKey": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "defaultProjectId",
+        "organizationId",
+        "projectApiKey"
+      ],
+      "title": "ThreadCreateApiKeyFinishResponse",
+      "type": "object"
+    },
+    "ThreadCreateApiKeyStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadCreateApiKeyStartParams",
+      "type": "object"
+    },
+    "ThreadCreateApiKeyStartResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "alreadySet"
+              ],
+              "title": "AlreadySetv2::ThreadCreateApiKeyStartResponseStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "AlreadySetv2::ThreadCreateApiKeyStartResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "authUrl": {
+              "type": "string"
+            },
+            "callbackPort": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "status": {
+              "enum": [
+                "started"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "authUrl",
+            "callbackPort",
+            "status"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ThreadCreateApiKeyStartResponse"
     },
     "ThreadForkParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

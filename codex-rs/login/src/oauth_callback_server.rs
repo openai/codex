@@ -65,6 +65,10 @@ impl AuthorizationCodeServer {
         &self.code_verifier
     }
 
+    pub(crate) fn shutdown(&self) {
+        self.shutdown_handle.shutdown();
+    }
+
     pub async fn wait_for_code(self, timeout: Duration) -> io::Result<String> {
         let AuthorizationCodeServer {
             server_handle,

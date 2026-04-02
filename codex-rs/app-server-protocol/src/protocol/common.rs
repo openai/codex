@@ -245,6 +245,14 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
+    ThreadCreateApiKeyStart => "thread/createApiKey/start" {
+        params: v2::ThreadCreateApiKeyStartParams,
+        response: v2::ThreadCreateApiKeyStartResponse,
+    },
+    ThreadCreateApiKeyFinish => "thread/createApiKey/finish" {
+        params: v2::ThreadCreateApiKeyFinishParams,
+        response: v2::ThreadCreateApiKeyFinishResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,

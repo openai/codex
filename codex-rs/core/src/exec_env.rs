@@ -24,6 +24,25 @@ pub fn create_env(
     populate_env(std::env::vars(), policy, thread_id)
 }
 
+/// Merge session dependency env into a prepared execution environment and mark
+/// those keys as explicit overrides so shell snapshots preserve them.
+pub(crate) fn apply_dependency_env(
+    env: &mut HashMap<String, String>,
+    explicit_env_overrides: &mut HashMap<String, String>,
+    dependency_env: &HashMap<String, String>,
+) {
+    if dependency_env.is_empty() {
+        return;
+    }
+
+    env.extend(dependency_env.clone());
+    for key in dependency_env.keys() {
+        if let Some(value) = env.get(key) {
+            explicit_env_overrides.insert(key.clone(), value.clone());
+        }
+    }
+}
+
 fn populate_env<I>(
     vars: I,
     policy: &ShellEnvironmentPolicy,

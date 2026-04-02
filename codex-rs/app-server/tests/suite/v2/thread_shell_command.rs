@@ -15,6 +15,8 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadCreateApiKeyStartParams;
+use codex_app_server_protocol::ThreadCreateApiKeyStartResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -35,6 +37,58 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const PROCESS_ENV_KEY: &str = "OPENAI_API_KEY";
+const PROCESS_ENV_VALUE: &str = "codex-test-process-env-value";
+
+#[tokio::test]
+async fn thread_create_api_key_start_skips_when_openai_api_key_is_set() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+
+    let server = create_mock_responses_server_sequence(vec![]).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.as_path(),
+        &[(PROCESS_ENV_KEY, Some(PROCESS_ENV_VALUE))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            persist_extended_history: true,
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let create_api_key_id = mcp
+        .send_thread_create_api_key_start_request(ThreadCreateApiKeyStartParams {
+            thread_id: thread.id,
+        })
+        .await?;
+    let create_api_key_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(create_api_key_id)),
+    )
+    .await??;
+    let response = to_response::<ThreadCreateApiKeyStartResponse>(create_api_key_resp)?;
+    assert_eq!(response, ThreadCreateApiKeyStartResponse::AlreadySet);
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> Result<()> {

@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "oneOf": [
+    {
+      "properties": {
+        "status": {
+          "enum": [
+            "alreadySet"
+          ],
+          "title": "AlreadySetv2::ThreadCreateApiKeyStartResponseStatus",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "AlreadySetv2::ThreadCreateApiKeyStartResponse",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "authUrl": {
+          "type": "string"
+        },
+        "callbackPort": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "started"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "authUrl",
+        "callbackPort",
+        "status"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "ThreadCreateApiKeyStartResponse"
+}

@@ -65,6 +65,10 @@ impl PendingCreateApiKey {
         self.callback_server.open_browser()
     }
 
+    pub fn shutdown(&self) {
+        self.callback_server.shutdown();
+    }
+
     pub async fn finish(self) -> Result<CreatedApiKey, CreateApiKeyError> {
         let code = self
             .callback_server
