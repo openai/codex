@@ -1217,10 +1217,14 @@ impl TextArea {
         else {
             return 0;
         };
+        // Non-ASCII characters (CJK, etc.) each act as their own word unit: stop immediately.
+        if !ch.is_ascii() {
+            return self.adjust_pos_out_of_elements(first_non_ws_idx, /*prefer_start*/ true);
+        }
         let is_separator = is_word_separator(ch);
         let mut start = first_non_ws_idx;
         for (idx, ch) in prefix[..first_non_ws_idx].char_indices().rev() {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
+            if ch.is_whitespace() || !ch.is_ascii() || is_word_separator(ch) != is_separator {
                 start = idx + ch.len_utf8();
                 break;
             }
@@ -1239,10 +1243,15 @@ impl TextArea {
         let Some((_, first_ch)) = iter.next() else {
             return word_start;
         };
+        // Non-ASCII characters (CJK, etc.) each act as their own word unit: stop after one char.
+        if !first_ch.is_ascii() {
+            let end = word_start + first_ch.len_utf8();
+            return self.adjust_pos_out_of_elements(end, /*prefer_start*/ false);
+        }
         let is_separator = is_word_separator(first_ch);
         let mut end = self.text.len();
         for (idx, ch) in iter {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
+            if ch.is_whitespace() || !ch.is_ascii() || is_word_separator(ch) != is_separator {
                 end = word_start + idx;
                 break;
             }
@@ -2016,6 +2025,54 @@ mod tests {
         // If at end, end_of_next_word returns len
         t.set_cursor(t.text().len());
         assert_eq!(t.end_of_next_word(), t.text().len());
+    }
+
+    #[test]
+    fn word_navigation_cjk_backward() {
+        // Each CJK character is 3 bytes in UTF-8.
+        // 你(0..3) 好(3..6) 世(6..9) 界(9..12)
+        let mut t = ta_with("你好世界");
+        t.set_cursor(12);
+        assert_eq!(t.beginning_of_previous_word(), 9, "should land at start of 界");
+        t.set_cursor(9);
+        assert_eq!(t.beginning_of_previous_word(), 6, "should land at start of 世");
+        t.set_cursor(6);
+        assert_eq!(t.beginning_of_previous_word(), 3, "should land at start of 好");
+        t.set_cursor(3);
+        assert_eq!(t.beginning_of_previous_word(), 0, "should land at start of 你");
+    }
+
+    #[test]
+    fn word_navigation_cjk_forward() {
+        let mut t = ta_with("你好世界");
+        t.set_cursor(0);
+        assert_eq!(t.end_of_next_word(), 3, "should stop after 你");
+        t.set_cursor(3);
+        assert_eq!(t.end_of_next_word(), 6, "should stop after 好");
+        t.set_cursor(6);
+        assert_eq!(t.end_of_next_word(), 9, "should stop after 世");
+        t.set_cursor(9);
+        assert_eq!(t.end_of_next_word(), 12, "should stop after 界");
+    }
+
+    #[test]
+    fn word_navigation_mixed_ascii_cjk() {
+        // "hello你好": hello is bytes 0..5, 你 is 5..8, 好 is 8..11
+        let mut t = ta_with("hello你好");
+        // Forward: "hello" as one word, then each CJK char individually
+        t.set_cursor(0);
+        assert_eq!(t.end_of_next_word(), 5, "should stop after 'hello'");
+        t.set_cursor(5);
+        assert_eq!(t.end_of_next_word(), 8, "should stop after 你");
+        t.set_cursor(8);
+        assert_eq!(t.end_of_next_word(), 11, "should stop after 好");
+        // Backward
+        t.set_cursor(11);
+        assert_eq!(t.beginning_of_previous_word(), 8, "should land at start of 好");
+        t.set_cursor(8);
+        assert_eq!(t.beginning_of_previous_word(), 5, "should land at start of 你");
+        t.set_cursor(5);
+        assert_eq!(t.beginning_of_previous_word(), 0, "should land at start of 'hello'");
     }
 
     #[test]
