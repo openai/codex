@@ -21,6 +21,10 @@
           "description": "Human-facing role documentation used in spawn tool guidance. Required unless supplied by the referenced agent role file.",
           "type": "string"
         },
+        "fork_context": {
+          "description": "Default fork-context behavior for this role.",
+          "type": "boolean"
+        },
         "nickname_candidates": {
           "description": "Candidate nicknames for agents spawned with this role.",
           "items": {

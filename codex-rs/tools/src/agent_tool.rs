@@ -576,7 +576,7 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
             "model".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional model override for the new agent. Replaces the inherited model."
+                    "Optional model override for the new agent. Replaces the inherited model only when fork_context is false; forked children always inherit the parent model."
                         .to_string(),
                 ),
             },
@@ -585,7 +585,7 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
             "reasoning_effort".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort only when fork_context is false; forked children always inherit the parent reasoning effort."
                         .to_string(),
                 ),
             },
@@ -620,7 +620,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             "model".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional model override for the new agent. Replaces the inherited model."
+                    "Optional model override for the new agent. Replaces the inherited model only when fork_turns is `none`; forked children always inherit the parent model."
                         .to_string(),
                 ),
             },
@@ -629,7 +629,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             "reasoning_effort".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort only when fork_turns is `none`; forked children always inherit the parent reasoning effort."
                         .to_string(),
                 ),
             },

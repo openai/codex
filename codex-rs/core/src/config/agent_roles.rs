@@ -157,6 +157,7 @@ fn merge_missing_role_fields(role: &mut AgentRoleConfig, fallback: &AgentRoleCon
         .nickname_candidates
         .clone()
         .or(fallback.nickname_candidates.clone());
+    role.fork_context = role.fork_context.or(fallback.fork_context);
 }
 
 fn agents_toml_from_layer(layer_toml: &TomlValue) -> std::io::Result<Option<AgentsToml>> {
@@ -190,6 +191,7 @@ fn agent_role_config_from_toml(
         description,
         config_file,
         nickname_candidates,
+        fork_context: role.fork_context,
     })
 }
 
@@ -480,6 +482,7 @@ fn discover_agent_roles_in_dir(
                 description: parsed_file.description,
                 config_file: Some(agent_file),
                 nickname_candidates: parsed_file.nickname_candidates,
+                fork_context: None,
             },
         );
     }

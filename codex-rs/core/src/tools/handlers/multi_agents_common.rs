@@ -225,13 +225,35 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     let mut config = (*base_config).clone();
     config.model = Some(turn.model_info.slug.clone());
     config.model_provider = turn.provider.clone();
-    config.model_reasoning_effort = turn.reasoning_effort;
+    // Forked children must preserve the spawning turn's effective model settings, including a
+    // model catalog default effort, so their config snapshot matches the actual request shape.
+    config.model_reasoning_effort = turn
+        .reasoning_effort
+        .or(turn.model_info.default_reasoning_level);
     config.model_reasoning_summary = Some(turn.reasoning_summary);
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     Ok(config)
+}
+
+/// Restores parent-owned model selection after role application on forked spawns.
+pub(crate) fn restore_forked_spawn_agent_model_config(config: &mut Config, turn: &TurnContext) {
+    config.model = Some(turn.model_info.slug.clone());
+    config.service_tier = turn.config.service_tier;
+    config.model_provider_id = turn.config.model_provider_id.clone();
+    config.model_provider = turn.provider.clone();
+    config.model_reasoning_effort = turn
+        .reasoning_effort
+        .or(turn.model_info.default_reasoning_level);
+    config.plan_mode_reasoning_effort = turn.config.plan_mode_reasoning_effort;
+    config.model_reasoning_summary = Some(turn.reasoning_summary);
+    config.model_verbosity = turn.config.model_verbosity;
+    config.model_context_window = turn.config.model_context_window;
+    config.model_auto_compact_token_limit = turn.config.model_auto_compact_token_limit;
+    config.model_supports_reasoning_summaries = turn.config.model_supports_reasoning_summaries;
+    config.active_profile = turn.config.active_profile.clone();
 }
 
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.

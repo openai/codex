@@ -31,7 +31,9 @@ const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
 const CHILD_PROMPT: &str = "child: do work";
 const INHERITED_MODEL: &str = "gpt-5.2-codex";
-const INHERITED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::XHigh;
+// Fork-context children inherit the spawning turn's effective effort, which resolves to the
+// model's default Medium effort in this test harness.
+const INHERITED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Medium;
 const REQUESTED_MODEL: &str = "gpt-5.1";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 const ROLE_MODEL: &str = "gpt-5.1-codex-max";
@@ -142,6 +144,7 @@ async fn setup_turn_one_with_spawned_child(
         server,
         json!({
             "message": CHILD_PROMPT,
+            "fork_context": false,
         }),
         child_response_delay,
         /*wait_for_parent_notification*/ true,
@@ -221,15 +224,16 @@ async fn setup_turn_one_with_custom_spawned_child(
     test.submit_turn(TURN_1_PROMPT).await?;
     if child_response_delay.is_none() && wait_for_parent_notification {
         let _ = wait_for_requests(&child_request_log).await?;
-        let rollout_path = test
-            .codex
-            .rollout_path()
-            .ok_or_else(|| anyhow::anyhow!("expected parent rollout path"))?;
+        let Some(rollout_path) = test.codex.rollout_path() else {
+            anyhow::bail!("rollout path");
+        };
         let deadline = Instant::now() + Duration::from_secs(6);
         loop {
-            let has_notification = tokio::fs::read_to_string(&rollout_path)
-                .await
-                .is_ok_and(|rollout| rollout.contains("<subagent_notification>"));
+            test.codex.ensure_rollout_materialized().await;
+            test.codex.flush_rollout().await;
+            let has_notification = std::fs::read_to_string(&rollout_path)
+                .ok()
+                .is_some_and(|rollout| rollout.contains("<subagent_notification>"));
             if has_notification {
                 break;
             }
@@ -413,8 +417,7 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_agent_requested_model_and_reasoning_override_inherited_settings_without_role()
--> Result<()> {
+async fn spawn_agent_inherits_parent_model_and_reasoning_without_role() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -429,17 +432,18 @@ async fn spawn_agent_requested_model_and_reasoning_override_inherited_settings_w
     )
     .await?;
 
-    assert_eq!(child_snapshot.model, REQUESTED_MODEL);
+    assert_eq!(child_snapshot.model, INHERITED_MODEL);
     assert_eq!(
         child_snapshot.reasoning_effort,
-        Some(REQUESTED_REASONING_EFFORT)
+        Some(INHERITED_REASONING_EFFORT)
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> Result<()> {
+async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings_without_fork_context()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -450,6 +454,7 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
             "agent_type": "custom",
             "model": REQUESTED_MODEL,
             "reasoning_effort": REQUESTED_REASONING_EFFORT,
+            "fork_context": false,
         }),
         |builder| {
             builder.with_config(|config| {
@@ -467,6 +472,7 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
                         description: Some("Custom role".to_string()),
                         config_file: Some(role_path),
                         nickname_candidates: None,
+                        fork_context: None,
                     },
                 );
             })
@@ -515,6 +521,7 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
                 description: Some("Custom role".to_string()),
                 config_file: Some(role_path),
                 nickname_candidates: None,
+                fork_context: None,
             },
         );
     });

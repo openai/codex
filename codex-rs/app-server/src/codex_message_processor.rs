@@ -8841,6 +8841,10 @@ mod tests {
             model: "gpt-5".to_string(),
             model_provider_id: "openai".to_string(),
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
+            plan_mode_reasoning_effort: None,
+            model_verbosity: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
@@ -8848,6 +8852,7 @@ mod tests {
             ephemeral: false,
             reasoning_effort: None,
             personality: None,
+            active_profile: None,
             session_source: SessionSource::Cli,
         };
 

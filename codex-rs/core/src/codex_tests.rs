@@ -2372,6 +2372,7 @@ enabled = false
             description: None,
             config_file: Some(role_path),
             nickname_candidates: None,
+            fork_context: None,
         },
     );
     crate::agent::role::apply_role_to_config(&mut child_config, Some("custom"))
