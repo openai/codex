@@ -126,18 +126,18 @@ fn detects_term_program() {
 fn terminal_info_reports_is_zellij() {
     let zellij = terminal_info(
         TerminalName::Unknown,
-        None,
-        None,
-        None,
+        /*term_program*/ None,
+        /*version*/ None,
+        /*term*/ None,
         Some(Multiplexer::Zellij {}),
     );
     assert!(zellij.is_zellij());
 
     let non_zellij = terminal_info(
         TerminalName::Unknown,
-        None,
-        None,
-        None,
+        /*term_program*/ None,
+        /*version*/ None,
+        /*term*/ None,
         Some(Multiplexer::Tmux { version: None }),
     );
     assert!(!non_zellij.is_zellij());
