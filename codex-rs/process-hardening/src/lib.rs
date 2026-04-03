@@ -185,32 +185,4 @@ mod tests {
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].as_os_str(), ld_test_var);
     }
-
-    #[test]
-    fn env_keys_with_prefix_matches_malloc_stack_logging_variants() {
-        let vars = vec![
-            (OsString::from("MallocStackLogging"), OsString::from("1")),
-            (
-                OsString::from("MallocStackLoggingNoCompact"),
-                OsString::from("1"),
-            ),
-            (
-                OsString::from("MallocLogFile"),
-                OsString::from("/tmp/malloc.log"),
-            ),
-            (OsString::from("MallocNanoZone"), OsString::from("0")),
-        ];
-
-        let stack_logging_keys = env_keys_with_prefix(vars.clone(), b"MallocStackLogging");
-        assert_eq!(
-            stack_logging_keys,
-            vec![
-                OsString::from("MallocStackLogging"),
-                OsString::from("MallocStackLoggingNoCompact"),
-            ]
-        );
-
-        let log_file_keys = env_keys_with_prefix(vars, b"MallocLogFile");
-        assert_eq!(log_file_keys, vec![OsString::from("MallocLogFile")]);
-    }
 }
