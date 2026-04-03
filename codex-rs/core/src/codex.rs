@@ -7432,6 +7432,8 @@ async fn try_run_sampling_request(
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 if sess.mailbox_rx.lock().await.has_pending_queue_only() {
+                    sess.accept_mailbox_delivery_for_current_turn(&turn_context.sub_id)
+                        .await;
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
