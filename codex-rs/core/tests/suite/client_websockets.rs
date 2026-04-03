@@ -1762,6 +1762,7 @@ async fn websocket_harness_with_provider_options(
         /*auth_manager*/ None,
         conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
+        conversation_id,
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
