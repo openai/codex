@@ -6,7 +6,7 @@ use codex_api::TransportError;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::WireApi;
+use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;

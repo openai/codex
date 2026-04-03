@@ -6,7 +6,6 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::error::CodexErr;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
@@ -14,6 +13,7 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::error::CodexErr;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;

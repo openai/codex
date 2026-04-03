@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::exec::ExecToolCallOutput;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;

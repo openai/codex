@@ -15,9 +15,11 @@ workspace = true
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 codex-api = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 codex-collaboration-mode-templates = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
+codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }

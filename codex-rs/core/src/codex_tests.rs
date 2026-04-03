@@ -10,16 +10,18 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
-use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
-use crate::exec::ExecToolCallOutput;
 use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::model_info;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -254,9 +256,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*auth_manager*/ None,
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
-        crate::model_provider_info::ModelProviderInfo::create_openai_provider(
-            /* base_url */ /*base_url*/ None,
-        ),
+        ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -531,7 +531,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 async fn get_base_instructions_no_user_content() {
     let prompt_with_apply_patch_instructions =
         include_str!("../prompt_with_apply_patch_instructions.md");
-    let models_response = codex_models_manager::bundled_models_response()
+    let models_response = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model_info_for_slug = |slug: &str, config: &Config| {
         let model = models_response

@@ -1,15 +1,15 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
 use codex_config::types::ShellEnvironmentPolicy;
-use codex_core::error::CodexErr;
-use codex_core::error::Result;
-use codex_core::error::SandboxErr;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -63,7 +63,7 @@ async fn run_cmd_output(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
-) -> codex_core::exec::ExecToolCallOutput {
+) -> codex_protocol::exec_output::ExecToolCallOutput {
     run_cmd_result_with_writable_roots(
         cmd,
         writable_roots,
@@ -81,7 +81,7 @@ async fn run_cmd_result_with_writable_roots(
     timeout_ms: u64,
     use_legacy_landlock: bool,
     network_access: bool,
-) -> Result<codex_core::exec::ExecToolCallOutput> {
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: writable_roots
             .iter()
@@ -116,7 +116,7 @@ async fn run_cmd_result_with_policies(
     network_sandbox_policy: NetworkSandboxPolicy,
     timeout_ms: u64,
     use_legacy_landlock: bool,
-) -> Result<codex_core::exec::ExecToolCallOutput> {
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
@@ -148,7 +148,7 @@ async fn run_cmd_result_with_policies(
     .await
 }
 
-fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) -> bool {
+fn is_bwrap_unavailable_output(output: &codex_protocol::exec_output::ExecToolCallOutput) -> bool {
     output.stderr.text.contains(BWRAP_UNAVAILABLE_ERR)
         || (output
             .stderr
@@ -181,9 +181,9 @@ async fn should_skip_bwrap_tests() -> bool {
 }
 
 fn expect_denied(
-    result: Result<codex_core::exec::ExecToolCallOutput>,
+    result: Result<codex_protocol::exec_output::ExecToolCallOutput>,
     context: &str,
-) -> codex_core::exec::ExecToolCallOutput {
+) -> codex_protocol::exec_output::ExecToolCallOutput {
     match result {
         Ok(output) => {
             assert_ne!(output.exit_code, 0, "{context}: expected nonzero exit code");

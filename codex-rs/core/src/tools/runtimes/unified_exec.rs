@@ -5,8 +5,6 @@ Handles approval + sandbox orchestration for unified exec requests, delegating t
 the process manager to spawn PTYs once an ExecRequest is prepared.
 */
 use crate::command_canonicalization::canonicalize_command_for_approval;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
@@ -36,6 +34,8 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;

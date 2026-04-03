@@ -54,8 +54,8 @@ use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
 use codex_api::response_create_client_metadata;
+use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
-use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
@@ -92,27 +92,28 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
 
-use crate::api_bridge::CoreAuthProvider;
-use crate::api_bridge::auth_provider_from_auth;
-use crate::api_bridge::map_api_error;
-use crate::auth_env_telemetry::AuthEnvTelemetry;
-use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::error::CodexErr;
-use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::model_provider_info::WireApi;
-use crate::provider_auth::auth_manager_for_provider;
-use crate::response_debug_context::extract_response_debug_context;
-use crate::response_debug_context::extract_response_debug_context_from_api_error;
-use crate::response_debug_context::telemetry_api_error_message;
-use crate::response_debug_context::telemetry_transport_error_message;
-use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
-use crate::util::emit_feedback_request_tags_with_auth_env;
+use codex_api::api_bridge::CoreAuthProvider;
+use codex_api::api_bridge::map_api_error;
+use codex_feedback::FeedbackRequestTags;
+use codex_feedback::emit_feedback_request_tags_with_auth_env;
+use codex_login::api_bridge::auth_provider_from_auth;
+use codex_login::auth_env_telemetry::AuthEnvTelemetry;
+use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
+use codex_login::provider_auth::auth_manager_for_provider;
+use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
+use codex_response_debug_context::extract_response_debug_context;
+use codex_response_debug_context::extract_response_debug_context_from_api_error;
+use codex_response_debug_context::telemetry_api_error_message;
+use codex_response_debug_context::telemetry_transport_error_message;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -125,7 +126,7 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
-    Duration::from_millis(crate::model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
+    Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///

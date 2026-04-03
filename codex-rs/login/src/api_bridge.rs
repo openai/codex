@@ -1,7 +1,5 @@
+use codex_api::api_bridge::CoreAuthProvider;
 use codex_model_provider_info::ModelProviderInfo;
-
-pub use codex_api::api_bridge::CoreAuthProvider;
-pub use codex_api::api_bridge::map_api_error;
 
 use crate::CodexAuth;
 

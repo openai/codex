@@ -38,6 +38,8 @@ codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
@@ -133,7 +135,6 @@ arboard = { workspace = true }
 codex-cli = { workspace = true }
 codex-core = { workspace = true }
 codex-mcp = { workspace = true }
-codex-models-manager = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::ModelProviderInfo;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
@@ -9,9 +8,10 @@ use crate::codex::PreviousTurnSettings;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
 use crate::util::backoff;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;

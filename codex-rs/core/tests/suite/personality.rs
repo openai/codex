@@ -1,7 +1,7 @@
 use codex_config::types::Personality;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_features::Feature;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;

@@ -23,6 +23,7 @@ codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }

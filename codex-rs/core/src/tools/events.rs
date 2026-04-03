@@ -1,11 +1,11 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
-use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;

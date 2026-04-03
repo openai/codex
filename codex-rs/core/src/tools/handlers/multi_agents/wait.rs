@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent::status::is_final;
-use crate::error::CodexErr;
+use codex_protocol::error::CodexErr;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;

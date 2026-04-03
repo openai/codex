@@ -8,23 +8,24 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::collaboration_mode_presets;
+use codex_models_manager::manager::ModelsManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use once_cell::sync::Lazy;
 
-use crate::ModelProviderInfo;
 use crate::ThreadManager;
 use crate::config::Config;
-use crate::models_manager::collaboration_mode_presets;
-use crate::models_manager::manager::ModelsManager;
 use crate::thread_manager;
 use crate::unified_exec;
-use codex_login::AuthManager;
-use codex_login::CodexAuth;
 
 static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
-    let mut response = codex_models_manager::bundled_models_response()
+    let mut response = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     response.models.sort_by(|a, b| a.priority.cmp(&b.priority));
     let mut presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();

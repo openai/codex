@@ -3,14 +3,14 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use crate::error::Result;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
-use codex_core::exec::ExecToolCallOutput;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::error::Result;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;

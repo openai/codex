@@ -13,7 +13,6 @@ use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::apps::render_apps_section;
-use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::compact::InitialContextInjection;
@@ -23,10 +22,6 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
-#[cfg(test)]
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::manager::ModelsManager;
-use crate::models_manager::manager::RefreshStrategy;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -69,12 +64,17 @@ use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::mcp_connection_manager::McpConnectionManager;
 use codex_mcp::mcp_connection_manager::SandboxState;
 use codex_mcp::mcp_connection_manager::ToolInfo as McpToolInfo;
 use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
 use codex_mcp::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+#[cfg(test)]
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
@@ -168,7 +168,6 @@ use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -184,13 +183,14 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::environment_context::EnvironmentContext;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
-#[cfg(test)]
-use crate::exec::StreamOutput;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
 use codex_config::types::ShellEnvironmentPolicy;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
+#[cfg(test)]
+use codex_protocol::exec_output::StreamOutput;
 
 mod rollout_reconstruction;
 #[cfg(test)]
@@ -551,13 +551,13 @@ impl Codex {
 
         let config = Arc::new(config);
         let refresh_strategy = match session_source {
-            SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,
-            _ => crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+            SessionSource::SubAgent(_) => codex_models_manager::manager::RefreshStrategy::Offline,
+            _ => codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
         };
         if config.model.is_none()
             || !matches!(
                 refresh_strategy,
-                crate::models_manager::manager::RefreshStrategy::Offline
+                codex_models_manager::manager::RefreshStrategy::Offline
             )
         {
             let _ = models_manager.list_models(refresh_strategy).await;

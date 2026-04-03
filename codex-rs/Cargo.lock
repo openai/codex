@@ -1418,6 +1418,7 @@ dependencies = [
  "codex-git-utils",
  "codex-login",
  "codex-mcp",
+ "codex-models-manager",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1864,6 +1865,7 @@ dependencies = [
  "codex-instructions",
  "codex-login",
  "codex-mcp",
+ "codex-model-provider-info",
  "codex-models-manager",
  "codex-network-proxy",
  "codex-otel",
@@ -2007,6 +2009,7 @@ dependencies = [
  "codex-feedback",
  "codex-git-utils",
  "codex-login",
+ "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
@@ -2230,6 +2233,7 @@ name = "codex-lmstudio"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-model-provider-info",
  "reqwest",
  "serde_json",
  "tokio",
@@ -2320,6 +2324,7 @@ dependencies = [
  "codex-exec-server",
  "codex-features",
  "codex-login",
+ "codex-models-manager",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-cli",
@@ -2364,9 +2369,11 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-api",
+ "codex-app-server-protocol",
  "codex-collaboration-mode-templates",
  "codex-feedback",
  "codex-login",
+ "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
  "codex-response-debug-context",
@@ -2424,6 +2431,7 @@ dependencies = [
  "async-stream",
  "bytes",
  "codex-core",
+ "codex-model-provider-info",
  "futures",
  "pretty_assertions",
  "reqwest",
@@ -2781,6 +2789,7 @@ dependencies = [
  "codex-git-utils",
  "codex-login",
  "codex-mcp",
+ "codex-model-provider-info",
  "codex-models-manager",
  "codex-otel",
  "codex-protocol",
@@ -2945,6 +2954,7 @@ version = "0.0.0"
 dependencies = [
  "codex-core",
  "codex-lmstudio",
+ "codex-model-provider-info",
  "codex-ollama",
 ]
 
@@ -3016,6 +3026,7 @@ name = "codex-utils-sandbox-summary"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-model-provider-info",
  "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
@@ -3287,6 +3298,7 @@ dependencies = [
  "codex-exec-server",
  "codex-features",
  "codex-login",
+ "codex-model-provider-info",
  "codex-models-manager",
  "codex-protocol",
  "codex-utils-absolute-path",

@@ -6,10 +6,6 @@ use codex_protocol::ThreadId;
 use rand::Rng;
 use tracing::error;
 
-pub(crate) use codex_feedback::FeedbackRequestTags;
-#[cfg(test)]
-pub(crate) use codex_feedback::emit_feedback_request_tags;
-pub(crate) use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_shell_command::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;

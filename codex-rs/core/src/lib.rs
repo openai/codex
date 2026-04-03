@@ -5,13 +5,9 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-pub use codex_login::api_bridge;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
-pub use codex_login as auth;
-pub use codex_login::auth_env_telemetry;
-pub use codex_login::default_client;
 mod client;
 mod client_common;
 pub mod codex;
@@ -32,7 +28,6 @@ pub mod connectors;
 mod context_manager;
 mod contextual_user_message;
 mod environment_context;
-pub use codex_protocol::error;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
@@ -48,7 +43,6 @@ pub mod landlock;
 pub mod mcp;
 mod mcp_skill_dependencies;
 mod mcp_tool_approval_templates;
-pub use codex_models_manager as models_manager;
 mod network_policy_decision;
 pub mod network_proxy_loader;
 mod original_image_detail;
@@ -60,8 +54,6 @@ mod mcp_tool_call;
 mod memories;
 pub mod mention_syntax;
 pub mod message_history;
-pub use codex_login::model_provider_info;
-pub use codex_login::provider_auth;
 pub mod utils;
 pub use utils::path_utils;
 pub mod personality_migration;
@@ -100,25 +92,11 @@ pub(crate) use skills::skills_load_input_from_config;
 mod skills_watcher;
 mod stream_events_utils;
 pub mod test_support;
-mod text_encoding {
-    pub use codex_protocol::exec_output::bytes_to_string_smart;
-}
 mod unified_exec;
 pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
-pub use codex_login::DEFAULT_LMSTUDIO_PORT;
-pub use codex_login::DEFAULT_OLLAMA_PORT;
-pub use codex_login::LMSTUDIO_OSS_PROVIDER_ID;
-pub use codex_login::ModelProviderInfo;
-pub use codex_login::OLLAMA_OSS_PROVIDER_ID;
-pub use codex_login::OPENAI_PROVIDER_ID;
-pub use codex_login::WireApi;
-pub use codex_login::built_in_model_providers;
-pub use codex_login::create_oss_provider_with_base_url;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
-pub use text_encoding::bytes_to_string_smart;
 mod event_mapping;
-pub use codex_response_debug_context as response_debug_context;
 pub mod review_format;
 pub mod review_prompts;
 mod thread_manager;

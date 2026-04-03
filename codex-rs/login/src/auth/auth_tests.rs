@@ -2,6 +2,7 @@ use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
@@ -107,7 +108,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
     .unwrap()
     .unwrap();
     assert_eq!(None, auth.api_key());
-    assert_eq!(crate::AuthMode::Chatgpt, auth.auth_mode());
+    assert_eq!(AuthMode::Chatgpt, auth.auth_mode());
     assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-12345"));
 
     let auth_dot_json = auth
@@ -157,7 +158,7 @@ async fn loads_api_key_from_auth_json() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(auth.auth_mode(), crate::AuthMode::ApiKey);
+    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
 
     assert!(auth.get_token_data().is_err());
@@ -283,7 +284,7 @@ async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
 
     assert_eq!(first.as_deref(), Some("provider-token"));
     assert_eq!(second.as_deref(), Some("provider-token"));
-    assert_eq!(manager.auth_mode(), Some(crate::AuthMode::ApiKey));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
     assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ApiKey));
 }
 

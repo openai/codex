@@ -2,6 +2,7 @@ use super::manager::ExternalAuth;
 use super::manager::ExternalAuthRefreshContext;
 use super::manager::ExternalAuthTokens;
 use async_trait::async_trait;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use std::fmt;
 use std::io;
@@ -28,8 +29,8 @@ impl BearerTokenRefresher {
 
 #[async_trait]
 impl ExternalAuth for BearerTokenRefresher {
-    fn auth_mode(&self) -> crate::AuthMode {
-        crate::AuthMode::ApiKey
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::ApiKey
     }
 
     async fn resolve(&self) -> io::Result<Option<ExternalAuthTokens>> {

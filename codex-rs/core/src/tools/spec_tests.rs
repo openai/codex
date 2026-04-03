@@ -1,5 +1,4 @@
 use crate::config::test_config;
-use crate::models_manager::model_info::with_config_overrides;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::test_support::construct_model_info_offline;
@@ -10,6 +9,8 @@ use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::model_info::with_config_overrides;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -159,7 +160,7 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
 
 fn model_info_from_models_json(slug: &str) -> ModelInfo {
     let config = test_config();
-    let response = codex_models_manager::bundled_models_response()
+    let response = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = response
         .models

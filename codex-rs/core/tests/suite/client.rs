@@ -1,18 +1,18 @@
-use crate::error::CodexErr;
 use codex_core::ModelClient;
-use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
-use codex_core::WireApi;
-use codex_core::built_in_model_providers;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_features::Feature;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
+use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -22,6 +22,7 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -1635,7 +1636,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
     )
     .await;
 
-    let mut model_catalog = codex_models_manager::bundled_models_response()
+    let mut model_catalog = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models
@@ -1748,7 +1749,7 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
     )
     .await;
 
-    let mut model_catalog = codex_models_manager::bundled_models_response()
+    let mut model_catalog = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models

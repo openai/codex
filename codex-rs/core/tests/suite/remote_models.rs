@@ -4,11 +4,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -976,7 +977,7 @@ async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> M
 }
 
 fn bundled_model_slug() -> String {
-    let response = codex_models_manager::bundled_models_response()
+    let response = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     response
         .models

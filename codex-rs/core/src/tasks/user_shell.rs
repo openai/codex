@@ -10,9 +10,7 @@ use uuid::Uuid;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
-use crate::exec::ExecToolCallOutput;
 use crate::exec::StdoutStream;
-use crate::exec::StreamOutput;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
@@ -20,6 +18,8 @@ use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::user_shell_command::user_shell_command_record_item;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
