@@ -156,15 +156,22 @@ impl SkillPopup {
         }
 
         out.sort_by(|a, b| {
-            self.mentions[a.0]
-                .sort_rank
-                .cmp(&self.mentions[b.0].sort_rank)
-                .then_with(|| a.2.cmp(&b.2))
-                .then_with(|| {
-                    let an = self.mentions[a.0].display_name.as_str();
-                    let bn = self.mentions[b.0].display_name.as_str();
-                    an.cmp(bn)
+            if filter.is_empty() {
+                self.mentions[a.0]
+                    .sort_rank
+                    .cmp(&self.mentions[b.0].sort_rank)
+            } else {
+                a.2.cmp(&b.2).then_with(|| {
+                    self.mentions[a.0]
+                        .sort_rank
+                        .cmp(&self.mentions[b.0].sort_rank)
                 })
+            }
+            .then_with(|| {
+                let an = self.mentions[a.0].display_name.as_str();
+                let bn = self.mentions[b.0].display_name.as_str();
+                an.cmp(bn)
+            })
         });
 
         out
@@ -236,7 +243,11 @@ mod tests {
         }
     }
 
-    fn named_mention_item(display_name: &str, search_terms: &[&str]) -> MentionItem {
+    fn ranked_mention_item(
+        display_name: &str,
+        search_terms: &[&str],
+        sort_rank: u8,
+    ) -> MentionItem {
         MentionItem {
             display_name: display_name.to_string(),
             description: None,
@@ -247,8 +258,12 @@ mod tests {
                 .collect(),
             path: None,
             category_tag: Some("[Skill]".to_string()),
-            sort_rank: 1,
+            sort_rank,
         }
+    }
+
+    fn named_mention_item(display_name: &str, search_terms: &[&str]) -> MentionItem {
+        ranked_mention_item(display_name, search_terms, 1)
     }
 
     #[test]
@@ -320,6 +335,26 @@ mod tests {
                 "Plugin Creator".to_string(),
                 "Logging Best Practices".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn query_match_score_sorts_before_plugin_rank_bias() {
+        let mut popup = SkillPopup::new(vec![
+            ranked_mention_item("Copilot PR", &["copilot-pr", "Copilot PR"], 0),
+            ranked_mention_item("PR Babysitter", &["babysit-pr", "PR Babysitter"], 1),
+        ]);
+        popup.set_query("pr");
+
+        let filtered_names: Vec<String> = popup
+            .filtered_items()
+            .into_iter()
+            .map(|idx| popup.mentions[idx].display_name.clone())
+            .collect();
+
+        assert_eq!(
+            filtered_names,
+            vec!["PR Babysitter".to_string(), "Copilot PR".to_string()]
         );
     }
 }
