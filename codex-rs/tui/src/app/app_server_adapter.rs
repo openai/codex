@@ -1104,6 +1104,8 @@ mod tests {
                     status: TurnStatus::Completed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             }),
         )
         .expect("notification should bridge");
@@ -1316,6 +1318,8 @@ mod tests {
                     status: TurnStatus::Interrupted,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             }),
         )
         .expect("notification should bridge");
@@ -1352,6 +1356,8 @@ mod tests {
                         additional_details: None,
                     }),
                 },
+                completed_at: 0,
+                duration_ms: None,
             }),
         )
         .expect("notification should bridge");

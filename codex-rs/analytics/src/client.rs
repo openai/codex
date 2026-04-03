@@ -12,9 +12,13 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnResolvedConfigFact;
 use crate::reducer::AnalyticsReducer;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
@@ -153,6 +157,14 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_request(&self, connection_id: u64, request_id: RequestId, request: ClientRequest) {
+        self.record_fact(AnalyticsFact::Request {
+            connection_id,
+            request_id,
+            request: Box::new(request),
+        });
+    }
+
     pub fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
         if !self.queue.should_enqueue_app_used(&tracking, &app) {
             return;
@@ -169,6 +181,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(
             crate::facts::PluginUsedInput { tracking, plugin },
         )));
+    }
+
+    pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
+        ));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
@@ -219,6 +237,10 @@ impl AnalyticsEventsClient {
             connection_id,
             response: Box::new(response),
         });
+    }
+
+    pub fn track_notification(&self, notification: ServerNotification) {
+        self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
     }
 }
 

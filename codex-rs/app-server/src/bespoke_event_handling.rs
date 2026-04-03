@@ -12,6 +12,7 @@ use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -141,6 +142,8 @@ use std::convert::TryFrom;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -258,6 +261,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
     thread_manager: Arc<ThreadManager>,
+    analytics_events_client: AnalyticsEventsClient,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
@@ -289,7 +293,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = TurnStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn,
+                    created_at: set_turn_started_at(&thread_state).await,
                 };
+                analytics_events_client
+                    .track_notification(ServerNotification::TurnStarted(notification.clone()));
                 outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notification))
                     .await;
@@ -302,7 +309,14 @@ pub(crate) async fn apply_bespoke_event_handling(
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
                 .await;
-            handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+            handle_turn_complete(
+                conversation_id,
+                event_turn_id,
+                Some(&analytics_events_client),
+                &outgoing,
+                &thread_state,
+            )
+            .await;
         }
         EventMsg::SkillsUpdateAvailable => {
             if let ApiVersion::V2 = api_version {
@@ -1350,8 +1364,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TokenCount(token_count_event) => {
-            handle_token_count_event(conversation_id, event_turn_id, token_count_event, &outgoing)
-                .await;
+            handle_token_count_event(
+                conversation_id,
+                event_turn_id,
+                token_count_event,
+                Some(&analytics_events_client),
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::Error(ev) => {
             thread_watch_manager
@@ -1947,8 +1967,11 @@ async fn emit_turn_completed_with_status(
     event_turn_id: String,
     status: TurnStatus,
     error: Option<TurnError>,
+    started_at_ms: Option<i64>,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    let completed_at_ms = now_unix_timestamp_millis();
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
@@ -1957,7 +1980,14 @@ async fn emit_turn_completed_with_status(
             error,
             status,
         },
+        completed_at: completed_at_ms / 1000,
+        duration_ms: started_at_ms
+            .map(|started_at_ms| completed_at_ms.saturating_sub(started_at_ms)),
     };
+    if let Some(analytics_events_client) = analytics_events_client {
+        analytics_events_client
+            .track_notification(ServerNotification::TurnCompleted(notification.clone()));
+    }
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
         .await;
@@ -2101,17 +2131,28 @@ async fn find_and_remove_turn_summary(
 async fn handle_turn_complete(
     conversation_id: ThreadId,
     event_turn_id: String,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let started_at_ms = turn_summary.started_at_ms;
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
         None => (TurnStatus::Completed, None),
     };
 
-    emit_turn_completed_with_status(conversation_id, event_turn_id, status, error, outgoing).await;
+    emit_turn_completed_with_status(
+        conversation_id,
+        event_turn_id,
+        status,
+        error,
+        started_at_ms,
+        analytics_events_client,
+        outgoing,
+    )
+    .await;
 }
 
 async fn handle_turn_interrupted(
@@ -2120,16 +2161,32 @@ async fn handle_turn_interrupted(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
 
     emit_turn_completed_with_status(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
         /*error*/ None,
+        turn_summary.started_at_ms,
+        /*analytics_events_client*/ None,
         outgoing,
     )
     .await;
+}
+
+async fn set_turn_started_at(thread_state: &Arc<Mutex<ThreadState>>) -> i64 {
+    let started_at_ms = now_unix_timestamp_millis();
+    let mut state = thread_state.lock().await;
+    state.turn_summary.started_at_ms = Some(started_at_ms);
+    started_at_ms / 1000
+}
+
+fn now_unix_timestamp_millis() -> i64 {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 async fn handle_thread_rollback_failed(
@@ -2158,6 +2215,7 @@ async fn handle_token_count_event(
     conversation_id: ThreadId,
     turn_id: String,
     token_count_event: TokenCountEvent,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
@@ -2167,6 +2225,11 @@ async fn handle_token_count_event(
             turn_id,
             token_usage,
         };
+        if let Some(analytics_events_client) = analytics_events_client {
+            analytics_events_client.track_notification(
+                ServerNotification::ThreadTokenUsageUpdated(notification.clone()),
+            );
+        }
         outgoing
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
             .await;
@@ -3284,6 +3347,7 @@ mod tests {
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3372,6 +3436,7 @@ mod tests {
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3502,6 +3567,7 @@ mod tests {
                 info: Some(info),
                 rate_limits: Some(rate_limits),
             },
+            /*analytics_events_client*/ None,
             &outgoing,
         )
         .await;
@@ -3556,6 +3622,7 @@ mod tests {
                 info: None,
                 rate_limits: None,
             },
+            /*analytics_events_client*/ None,
             &outgoing,
         )
         .await;
@@ -3632,7 +3699,14 @@ mod tests {
             &thread_state,
         )
         .await;
-        handle_turn_complete(conversation_a, a_turn1.clone(), &outgoing, &thread_state).await;
+        handle_turn_complete(
+            conversation_a,
+            a_turn1.clone(),
+            /*analytics_events_client*/ None,
+            &outgoing,
+            &thread_state,
+        )
+        .await;
 
         // Turn 1 on conversation B
         let b_turn1 = "b_turn1".to_string();
@@ -3646,11 +3720,25 @@ mod tests {
             &thread_state,
         )
         .await;
-        handle_turn_complete(conversation_b, b_turn1.clone(), &outgoing, &thread_state).await;
+        handle_turn_complete(
+            conversation_b,
+            b_turn1.clone(),
+            /*analytics_events_client*/ None,
+            &outgoing,
+            &thread_state,
+        )
+        .await;
 
         // Turn 2 on conversation A
         let a_turn2 = "a_turn2".to_string();
-        handle_turn_complete(conversation_a, a_turn2.clone(), &outgoing, &thread_state).await;
+        handle_turn_complete(
+            conversation_a,
+            a_turn2.clone(),
+            /*analytics_events_client*/ None,
+            &outgoing,
+            &thread_state,
+        )
+        .await;
 
         // Verify: A turn 1
         let msg = recv_broadcast_message(&mut rx).await?;

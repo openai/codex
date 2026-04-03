@@ -677,6 +677,8 @@ mod tests {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         })
     }
 

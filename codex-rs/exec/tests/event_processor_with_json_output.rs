@@ -145,6 +145,7 @@ fn turn_started_emits_turn_started_event() {
                 status: TurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }));
 
     assert_eq!(
@@ -1067,6 +1068,8 @@ fn plan_update_emits_started_then_updated_then_completed() {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
     assert_eq!(
@@ -1123,6 +1126,8 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
 
@@ -1202,6 +1207,8 @@ fn token_usage_update_is_emitted_on_turn_completion() {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
     assert_eq!(
@@ -1237,6 +1244,8 @@ fn turn_completion_recovers_final_message_from_turn_items() {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
 
@@ -1311,6 +1320,8 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
 
@@ -1368,6 +1379,8 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
 
@@ -1408,6 +1421,8 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
 
@@ -1456,6 +1471,8 @@ fn failed_turn_clears_stale_final_message() {
                     codex_error_info: None,
                 }),
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
 
@@ -1479,6 +1496,8 @@ fn turn_completion_falls_back_to_final_plan_text() {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
 
@@ -1527,6 +1546,8 @@ fn turn_failure_prefers_structured_error_message() {
                 status: TurnStatus::Failed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         },
     ));
     assert_eq!(

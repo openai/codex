@@ -537,6 +537,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         Some(ReplayKind::ThreadSnapshot),
     );
@@ -687,6 +688,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         /*replay_kind*/ None,
     );

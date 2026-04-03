@@ -44,6 +44,7 @@ pub(crate) enum ThreadListenerCommand {
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
+    pub(crate) started_at_ms: Option<i64>,
     pub(crate) file_change_started: HashSet<String>,
     pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,

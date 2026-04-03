@@ -1559,6 +1559,11 @@
     }
   },
   "properties": {
+    "createdAt": {
+      "description": "Unix timestamp (in seconds) when the turn started.",
+      "format": "int64",
+      "type": "integer"
+    },
     "threadId": {
       "type": "string"
     },
@@ -1567,6 +1572,7 @@
     }
   },
   "required": [
+    "createdAt",
     "threadId",
     "turn"
   ],

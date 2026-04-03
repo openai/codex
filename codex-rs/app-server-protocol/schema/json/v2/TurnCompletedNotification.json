@@ -1559,6 +1559,19 @@
     }
   },
   "properties": {
+    "completedAt": {
+      "description": "Unix timestamp (in seconds) when the turn completed.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "durationMs": {
+      "description": "Duration between turn start and completion in milliseconds, if known.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "threadId": {
       "type": "string"
     },
@@ -1567,6 +1580,7 @@
     }
   },
   "required": [
+    "completedAt",
     "threadId",
     "turn"
   ],
