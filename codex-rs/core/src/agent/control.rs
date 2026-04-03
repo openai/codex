@@ -100,7 +100,21 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             "assistant" => *phase == Some(MessagePhase::FinalAnswer),
             _ => false,
         },
-        RolloutItem::ResponseItem(_) => false,
+        RolloutItem::ResponseItem(
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::Other,
+        ) => false,
         RolloutItem::Compacted(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::SessionMeta(_)
