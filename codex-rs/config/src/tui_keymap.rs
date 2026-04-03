@@ -29,11 +29,13 @@ use std::collections::BTreeMap;
 pub enum TuiKeymapPreset {
     /// Pointer alias to the latest shipped preset.
     ///
-    /// Today this resolves to `v1`.
+    /// Today this resolves to `v2`.
     #[default]
     Latest,
-    /// Frozen keymap defaults that preserve legacy/current shortcut behavior.
+    /// Frozen initial configurable keymap defaults.
     V1,
+    /// Current defaults with post-`v1` compatibility aliases.
+    V2,
 }
 
 /// Normalized string representation of a keybinding (for example `ctrl-a`).

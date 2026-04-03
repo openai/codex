@@ -20,9 +20,9 @@
 
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
-use codex_core::config::types::KeybindingsSpec;
-use codex_core::config::types::TuiKeymap;
-use codex_core::config::types::TuiKeymapPreset;
+use codex_config::types::KeybindingsSpec;
+use codex_config::types::TuiKeymap;
+use codex_config::types::TuiKeymapPreset;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use std::collections::HashMap;
@@ -489,7 +489,8 @@ impl RuntimeKeymap {
 
     fn defaults_for_preset(preset: TuiKeymapPreset) -> Self {
         match preset {
-            TuiKeymapPreset::Latest | TuiKeymapPreset::V1 => Self::defaults_v1(),
+            TuiKeymapPreset::Latest | TuiKeymapPreset::V2 => Self::defaults_v2(),
+            TuiKeymapPreset::V1 => Self::defaults_v1(),
         }
     }
 
@@ -693,6 +694,17 @@ impl RuntimeKeymap {
                 ],
             },
         }
+    }
+
+    /// Current keymap defaults for preset `v2`.
+    ///
+    /// This keeps `v1` intact and restores `alt-d` as a forward-word delete
+    /// alias so `latest` preserves editor behavior from `main`.
+    fn defaults_v2() -> Self {
+        let mut defaults = Self::defaults_v1();
+        defaults.editor.delete_forward_word =
+            default_bindings![alt(KeyCode::Char('d')), alt(KeyCode::Delete)];
+        defaults
     }
 
     /// Reject ambiguous bindings in scopes that are evaluated together.
@@ -1083,7 +1095,7 @@ fn parse_keybinding(spec: &str) -> Option<KeyBinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::config::types::KeybindingSpec;
+    use codex_config::types::KeybindingSpec;
 
     fn one(spec: &str) -> KeybindingsSpec {
         KeybindingsSpec::One(KeybindingSpec(spec.to_string()))

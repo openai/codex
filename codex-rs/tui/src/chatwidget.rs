@@ -354,6 +354,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
+#[cfg(test)]
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;

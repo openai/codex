@@ -553,10 +553,8 @@ impl TextArea {
             // Insert plain characters (and Shift-modified). Do not insert when ALT is held,
             // because many terminals map Option/Meta combos to ALT+<char>.
             self.insert_str(&c.to_string());
-            return;
         }
 
-        #[cfg(feature = "debug-logs")]
         tracing::debug!("Unhandled key event in TextArea: {:?}", event);
     }
 
@@ -1582,6 +1580,25 @@ impl TextArea {
         }
 
         self.adjust_pos_out_of_elements(end, /*prefer_start*/ false)
+    }
+
+    pub(crate) fn beginning_of_next_word(&self) -> usize {
+        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
+        else {
+            return self.text.len();
+        };
+        let word_start = self.cursor_pos + first_non_ws;
+        if word_start != self.cursor_pos {
+            return self.adjust_pos_out_of_elements(word_start, /*prefer_start*/ true);
+        }
+        let end = self.end_of_next_word();
+        if end >= self.text.len() {
+            return self.text.len();
+        }
+        let Some(next_non_ws) = self.text[end..].find(|c: char| !c.is_whitespace()) else {
+            return self.text.len();
+        };
+        self.adjust_pos_out_of_elements(end + next_non_ws, /*prefer_start*/ true)
     }
 
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {

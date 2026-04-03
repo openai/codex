@@ -2902,16 +2902,23 @@
       "description": "Versioned keymap defaults.",
       "oneOf": [
         {
-          "description": "Pointer alias to the latest shipped preset.\n\nToday this resolves to `v1`.",
+          "description": "Pointer alias to the latest shipped preset.\n\nToday this resolves to `v2`.",
           "enum": [
             "latest"
           ],
           "type": "string"
         },
         {
-          "description": "Frozen keymap defaults that preserve legacy/current shortcut behavior.",
+          "description": "Frozen initial configurable keymap defaults.",
           "enum": [
             "v1"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Current defaults with post-`v1` compatibility aliases.",
+          "enum": [
+            "v2"
           ],
           "type": "string"
         }

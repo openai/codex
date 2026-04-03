@@ -385,6 +385,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
+        let enabled = self.composer.toggle_vim_enabled();
+        self.request_redraw();
+        enabled
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }
@@ -952,6 +958,7 @@ impl BottomPane {
         self.composer.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn composer_is_vim_insert(&self) -> bool {
         self.composer.is_vim_insert()
     }
