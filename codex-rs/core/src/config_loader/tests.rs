@@ -1385,6 +1385,70 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
 }
 
 #[tokio::test]
+async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let cases = [
+        ("untrusted", Some(TrustLevel::Untrusted), true),
+        ("unknown", None, true),
+        ("trusted", Some(TrustLevel::Trusted), false),
+    ];
+
+    for (name, trust_level, expect_disabled) in cases {
+        let codex_home = tmp.path().join(format!("home_no_config_{name}"));
+        tokio::fs::create_dir_all(&codex_home).await?;
+        if let Some(trust_level) = trust_level {
+            make_config_for_test(
+                &codex_home,
+                &project_root,
+                trust_level,
+                /*project_root_markers*/ None,
+            )
+            .await?;
+        }
+
+        let layers = load_config_layers_state(
+            &codex_home,
+            Some(cwd.clone()),
+            &[] as &[(String, TomlValue)],
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await?;
+        let project_layers: Vec<_> = layers
+            .get_layers(
+                super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+            .collect();
+        assert_eq!(
+            project_layers.len(),
+            1,
+            "expected one project layer for {name}"
+        );
+        assert_eq!(
+            project_layers[0].disabled_reason.is_some(),
+            expect_disabled,
+            "unexpected disabled state for {name}",
+        );
+        assert_eq!(
+            project_layers[0].config,
+            TomlValue::Table(toml::map::Map::new())
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");

@@ -87,11 +87,11 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use dunce::canonicalize as normalize_path;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
-use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -1730,25 +1730,56 @@ impl ConfigToml {
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
     pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let projects = self.projects.clone().unwrap_or_default();
+        let mut projects = HashMap::new();
+        for (key, project_config) in self.projects.clone().unwrap_or_default() {
+            for normalized_key in Self::normalized_project_lookup_keys(Path::new(&key)) {
+                projects.insert(normalized_key, project_config.clone());
+            }
+        }
 
-        if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
-            return Some(project_config.clone());
+        for normalized_cwd in Self::normalized_project_lookup_keys(resolved_cwd) {
+            if let Some(project_config) = projects.get(&normalized_cwd) {
+                return Some(project_config.clone());
+            }
         }
 
         // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd)
-            && let Some(project_config_for_root) =
-                projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
-        {
-            return Some(project_config_for_root.clone());
+        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
+            for normalized_repo_root in Self::normalized_project_lookup_keys(&repo_root) {
+                if let Some(project_config_for_root) = projects.get(&normalized_repo_root) {
+                    return Some(project_config_for_root.clone());
+                }
+            }
         }
 
         None
     }
 
+    fn normalized_project_lookup_keys(path: &Path) -> Vec<String> {
+        let normalized_path =
+            Self::normalize_project_lookup_key_string(path.to_string_lossy().to_string());
+        let normalized_canonical_path = Self::normalize_project_lookup_key_string(
+            normalize_path(path)
+                .unwrap_or_else(|_| path.to_path_buf())
+                .to_string_lossy()
+                .to_string(),
+        );
+        if normalized_path == normalized_canonical_path {
+            vec![normalized_path]
+        } else {
+            vec![normalized_path, normalized_canonical_path]
+        }
+    }
+
+    fn normalize_project_lookup_key_string(key: String) -> String {
+        if cfg!(windows) {
+            key.to_ascii_lowercase()
+        } else {
+            key
+        }
+    }
     pub fn get_config_profile(
         &self,
         override_profile: Option<String>,
