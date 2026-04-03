@@ -137,31 +137,18 @@ impl SkillPopup {
                 continue;
             }
 
-            let mut best_match: Option<(Option<Vec<usize>>, i32)> = None;
-
-            if let Some((indices, score)) = fuzzy_match(&mention.display_name, filter) {
-                best_match = Some((Some(indices), score));
-            }
-
-            for term in &mention.search_terms {
-                if term == &mention.display_name {
-                    continue;
-                }
-
-                if let Some((_indices, score)) = fuzzy_match(term, filter) {
-                    match best_match.as_mut() {
-                        Some((best_indices, best_score)) => {
-                            if score > *best_score {
-                                *best_score = score;
-                                *best_indices = None;
-                            }
-                        }
-                        None => {
-                            best_match = Some((None, score));
-                        }
-                    }
-                }
-            }
+            let best_match =
+                if let Some((indices, score)) = fuzzy_match(&mention.display_name, filter) {
+                    Some((Some(indices), score))
+                } else {
+                    mention
+                        .search_terms
+                        .iter()
+                        .filter(|term| *term != &mention.display_name)
+                        .filter_map(|term| fuzzy_match(term, filter).map(|(_indices, score)| score))
+                        .min()
+                        .map(|score| (None, score))
+                };
 
             if let Some((indices, score)) = best_match {
                 out.push((idx, indices, score));
@@ -249,6 +236,21 @@ mod tests {
         }
     }
 
+    fn named_mention_item(display_name: &str, search_terms: &[&str]) -> MentionItem {
+        MentionItem {
+            display_name: display_name.to_string(),
+            description: None,
+            insert_text: format!("${display_name}"),
+            search_terms: search_terms
+                .iter()
+                .map(|term| (*term).to_string())
+                .collect(),
+            path: None,
+            category_tag: Some("[Skill]".to_string()),
+            sort_rank: 1,
+        }
+    }
+
     #[test]
     fn filtered_mentions_preserve_results_beyond_popup_height() {
         let popup = SkillPopup::new((0..(MAX_POPUP_ROWS + 2)).map(mention_item).collect());
@@ -287,5 +289,37 @@ mod tests {
         }
 
         insta::assert_snapshot!("skill_popup_scrolled", render_popup(&popup, /*width*/ 72));
+    }
+
+    #[test]
+    fn display_name_match_sorting_beats_worse_secondary_search_term_matches() {
+        let mut popup = SkillPopup::new(vec![
+            named_mention_item("pr-review-triage", &["pr-review-triage"]),
+            named_mention_item("prd", &["prd"]),
+            named_mention_item("PR Babysitter", &["babysit-pr", "PR Babysitter"]),
+            named_mention_item("Plugin Creator", &["plugin-creator", "Plugin Creator"]),
+            named_mention_item(
+                "Logging Best Practices",
+                &["logging-best-practices", "Logging Best Practices"],
+            ),
+        ]);
+        popup.set_query("pr");
+
+        let filtered_names: Vec<String> = popup
+            .filtered_items()
+            .into_iter()
+            .map(|idx| popup.mentions[idx].display_name.clone())
+            .collect();
+
+        assert_eq!(
+            filtered_names,
+            vec![
+                "PR Babysitter".to_string(),
+                "pr-review-triage".to_string(),
+                "prd".to_string(),
+                "Plugin Creator".to_string(),
+                "Logging Best Practices".to_string(),
+            ]
+        );
     }
 }
