@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::WatchdogRegistration;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -2795,6 +2796,45 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
 
     (session, turn_context)
+}
+
+#[tokio::test]
+async fn should_stop_watchdog_turn_after_send_input_only_for_active_watchdog_helpers() {
+    let (session, mut turn_context) = make_session_and_context().await;
+
+    session.mark_turn_used_agent_send_input();
+    assert!(!should_stop_watchdog_turn_after_send_input(&session, &turn_context).await);
+
+    let owner_thread_id = ThreadId::new();
+    let target_thread_id = ThreadId::new();
+    turn_context.session_source =
+        SessionSource::SubAgent(codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+            parent_thread_id: owner_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+    session
+        .services
+        .agent_control
+        .register_watchdog(WatchdogRegistration {
+            owner_thread_id,
+            target_thread_id,
+            child_depth: 1,
+            interval_s: 1,
+            prompt: "ping".to_string(),
+            config: (*turn_context.config).clone(),
+        })
+        .await
+        .expect("register watchdog");
+    session
+        .services
+        .agent_control
+        .set_watchdog_active_helper_for_tests(target_thread_id, session.conversation_id)
+        .await;
+
+    assert!(should_stop_watchdog_turn_after_send_input(&session, &turn_context).await);
 }
 
 #[tokio::test]
