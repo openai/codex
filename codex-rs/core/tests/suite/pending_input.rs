@@ -256,7 +256,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queued_inter_agent_mail_triggers_follow_up_after_message_item() {
+async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_item() {
     let (gate_message_done_tx, gate_message_done_rx) = oneshot::channel();
 
     let first_chunks = vec![
@@ -272,7 +272,16 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_message_item() {
             gate: Some(gate_message_done_rx),
             body: responses::sse(vec![
                 ev_output_text_delta("first answer"),
-                ev_message_item_done("msg-1", "first answer"),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "id": "msg-1",
+                        "content": [{"type": "output_text", "text": "first answer"}],
+                        "phase": "commentary",
+                    }
+                }),
                 ev_message_item_added("msg-stale", ""),
                 ev_output_text_delta("stale final"),
                 ev_message_item_done("msg-stale", "stale final"),
