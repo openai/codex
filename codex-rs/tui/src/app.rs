@@ -470,8 +470,10 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
-fn emit_system_bwrap_warning(app_event_tx: &AppEventSender) {
-    let Some(message) = codex_core::config::system_bwrap_warning() else {
+fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
+    let Some(message) =
+        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    else {
         return;
     };
 
@@ -3564,7 +3566,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
-        emit_system_bwrap_warning(&app_event_tx);
+        emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
