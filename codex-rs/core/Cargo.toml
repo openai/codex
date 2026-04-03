@@ -54,6 +54,7 @@ codex-response-debug-context = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-sandboxing = { workspace = true }
+codex-shell = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-tools = { workspace = true }

@@ -25,6 +25,7 @@ members = [
     "config",
     "shell-command",
     "shell-escalation",
+    "shell",
     "skills",
     "core",
     "core-skills",
@@ -157,6 +158,7 @@ codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
+codex-shell = { path = "shell" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }

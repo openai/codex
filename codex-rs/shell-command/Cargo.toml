@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 codex-protocol = { workspace = true }
+codex-shell = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 once_cell = { workspace = true }
 regex = { workspace = true }

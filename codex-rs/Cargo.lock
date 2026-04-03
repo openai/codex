@@ -1877,6 +1877,7 @@ dependencies = [
  "codex-rollout",
  "codex-sandboxing",
  "codex-secrets",
+ "codex-shell",
  "codex-shell-command",
  "codex-shell-escalation",
  "codex-state",
@@ -2657,12 +2658,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-shell"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-otel",
+ "codex-protocol",
+ "codex-utils-pty",
+ "libc",
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "which 8.0.0",
+]
+
+[[package]]
 name = "codex-shell-command"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "codex-protocol",
+ "codex-shell",
  "codex-utils-absolute-path",
  "once_cell",
  "pretty_assertions",
@@ -2756,6 +2776,7 @@ dependencies = [
  "codex-code-mode",
  "codex-features",
  "codex-protocol",
+ "codex-shell",
  "codex-utils-absolute-path",
  "codex-utils-pty",
  "pretty_assertions",

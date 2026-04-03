@@ -69,7 +69,6 @@ mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
 mod session_startup_prewarm;
-mod shell_detect;
 pub mod skills;
 pub(crate) use skills::SkillError;
 pub(crate) use skills::SkillInjections;

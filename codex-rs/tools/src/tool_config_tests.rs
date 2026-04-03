@@ -9,6 +9,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_shell::ShellType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -103,7 +104,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     assert_eq!(
         tools_config
             .with_unified_exec_shell_mode_for_session(
-                ToolUserShellType::Zsh,
+                ShellType::Zsh,
                 Some(&PathBuf::from(if cfg!(windows) {
                     r"C:\opt\codex\zsh"
                 } else {

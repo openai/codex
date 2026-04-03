@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -9,7 +10,7 @@ fn detects_zsh() {
 
     let shell_path = zsh_shell.shell_path;
 
-    assert_eq!(shell_path, std::path::Path::new("/bin/zsh"));
+    assert_eq!(shell_path, Path::new("/bin/zsh"));
 }
 
 #[test]
@@ -19,7 +20,7 @@ fn fish_fallback_to_zsh() {
 
     let shell_path = zsh_shell.shell_path;
 
-    assert_eq!(shell_path, std::path::Path::new("/bin/zsh"));
+    assert_eq!(shell_path, Path::new("/bin/zsh"));
 }
 
 #[test]
@@ -28,7 +29,7 @@ fn detects_bash() {
     let shell_path = bash_shell.shell_path;
 
     assert!(
-        shell_path.file_name().and_then(|name| name.to_str()) == Some("bash"),
+        shell_path.file_stem().and_then(|name| name.to_str()) == Some("bash"),
         "shell path: {shell_path:?}",
     );
 }
@@ -38,7 +39,7 @@ fn detects_sh() {
     let sh_shell = get_shell(ShellType::Sh, /*path*/ None).unwrap();
     let shell_path = sh_shell.shell_path;
     assert!(
-        shell_path.file_name().and_then(|name| name.to_str()) == Some("sh"),
+        shell_path.file_stem().and_then(|name| name.to_str()) == Some("sh"),
         "shell path: {shell_path:?}",
     );
 }
@@ -49,7 +50,7 @@ fn can_run_on_shell_test() {
     if cfg!(windows) {
         assert!(shell_works(
             get_shell(ShellType::PowerShell, /*path*/ None),
-            "Out-String 'Works'",
+            "Write-Output 'Works'",
             /*required*/ true,
         ));
         assert!(shell_works(
@@ -89,11 +90,17 @@ fn can_run_on_shell_test() {
 fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
     if let Some(shell) = shell {
         let args = shell.derive_exec_args(command, /*use_login_shell*/ false);
+        let shell_name = shell.name();
         let output = Command::new(args[0].clone())
             .args(&args[1..])
             .output()
             .unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "{shell_name} shell command failed: status={:?} stderr={:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr),
+        );
         assert!(String::from_utf8_lossy(&output.stdout).contains("Works"));
         true
     } else {
@@ -103,11 +110,7 @@ fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
 
 #[test]
 fn derive_exec_args() {
-    let test_bash_shell = Shell {
-        shell_type: ShellType::Bash,
-        shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: empty_shell_snapshot_receiver(),
-    };
+    let test_bash_shell = Shell::new(ShellType::Bash, PathBuf::from("/bin/bash"));
     assert_eq!(
         test_bash_shell.derive_exec_args("echo hello", /*use_login_shell*/ false),
         vec!["/bin/bash", "-c", "echo hello"]
@@ -117,11 +120,7 @@ fn derive_exec_args() {
         vec!["/bin/bash", "-lc", "echo hello"]
     );
 
-    let test_zsh_shell = Shell {
-        shell_type: ShellType::Zsh,
-        shell_path: PathBuf::from("/bin/zsh"),
-        shell_snapshot: empty_shell_snapshot_receiver(),
-    };
+    let test_zsh_shell = Shell::new(ShellType::Zsh, PathBuf::from("/bin/zsh"));
     assert_eq!(
         test_zsh_shell.derive_exec_args("echo hello", /*use_login_shell*/ false),
         vec!["/bin/zsh", "-c", "echo hello"]
@@ -131,11 +130,7 @@ fn derive_exec_args() {
         vec!["/bin/zsh", "-lc", "echo hello"]
     );
 
-    let test_powershell_shell = Shell {
-        shell_type: ShellType::PowerShell,
-        shell_path: PathBuf::from("pwsh.exe"),
-        shell_snapshot: empty_shell_snapshot_receiver(),
-    };
+    let test_powershell_shell = Shell::new(ShellType::PowerShell, PathBuf::from("pwsh.exe"));
     assert_eq!(
         test_powershell_shell.derive_exec_args("echo hello", /*use_login_shell*/ false),
         vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
@@ -146,8 +141,9 @@ fn derive_exec_args() {
     );
 }
 
-#[tokio::test]
-async fn test_current_shell_detects_zsh() {
+#[test]
+#[cfg(unix)]
+fn test_current_shell_detects_zsh() {
     let shell = Command::new("sh")
         .arg("-c")
         .arg("echo $SHELL")
@@ -158,17 +154,13 @@ async fn test_current_shell_detects_zsh() {
     if shell_path.ends_with("/zsh") {
         assert_eq!(
             default_user_shell(),
-            Shell {
-                shell_type: ShellType::Zsh,
-                shell_path: PathBuf::from(shell_path),
-                shell_snapshot: empty_shell_snapshot_receiver(),
-            }
+            Shell::new(ShellType::Zsh, PathBuf::from(shell_path))
         );
     }
 }
 
-#[tokio::test]
-async fn detects_powershell_as_default() {
+#[test]
+fn detects_powershell_as_default() {
     if !cfg!(windows) {
         return;
     }

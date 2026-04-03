@@ -290,6 +290,7 @@ use crate::rollout::policy::EventPersistenceMode;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::shell_snapshot::spawn_stale_snapshot_cleanup;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
@@ -1405,7 +1406,7 @@ impl Session {
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
         .with_unified_exec_shell_mode_for_session(
-            crate::tools::spec::tool_user_shell_type(user_shell),
+            user_shell.shell_type,
             shell_zsh_path,
             main_execve_wrapper_exe,
         )
@@ -1755,25 +1756,19 @@ impl Session {
             shell::default_user_shell()
         };
         // Create the mutable state for the Session.
-        let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
+        if config.features.enabled(Feature::ShellSnapshot) {
             if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
-                let (tx, rx) = watch::channel(Some(snapshot));
-                default_shell.shell_snapshot = rx;
-                tx
+                default_shell.set_shell_snapshot(Some(snapshot));
             } else {
-                ShellSnapshot::start_snapshotting(
+                default_shell.start_snapshotting(
                     config.codex_home.clone(),
                     conversation_id,
                     session_configuration.cwd.to_path_buf(),
-                    &mut default_shell,
                     session_telemetry.clone(),
-                )
+                );
+                spawn_stale_snapshot_cleanup(config.codex_home.clone(), conversation_id);
             }
-        } else {
-            let (tx, rx) = watch::channel(None);
-            default_shell.shell_snapshot = rx;
-            tx
-        };
+        }
         let thread_name =
             match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id)
                 .instrument(info_span!(
@@ -1889,7 +1884,6 @@ impl Session {
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
-            shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
@@ -2330,14 +2324,13 @@ impl Session {
             return;
         }
 
-        ShellSnapshot::refresh_snapshot(
+        self.services.user_shell.refresh_snapshot(
             codex_home.to_path_buf(),
             self.conversation_id,
             next_cwd.to_path_buf(),
-            self.services.user_shell.as_ref().clone(),
-            self.services.shell_snapshot_tx.clone(),
             self.services.session_telemetry.clone(),
         );
+        spawn_stale_snapshot_cleanup(codex_home.to_path_buf(), self.conversation_id);
     }
 
     pub(crate) async fn update_settings(
@@ -5529,7 +5522,7 @@ async fn spawn_review_thread(
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
     .with_unified_exec_shell_mode_for_session(
-        crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
+        sess.services.user_shell.shell_type,
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     )

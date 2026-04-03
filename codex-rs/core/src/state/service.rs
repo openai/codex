@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::RolloutRecorder;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
@@ -22,9 +20,9 @@ use codex_models_manager::manager::ModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_rollout::state_db::StateDbHandle;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
@@ -39,7 +37,6 @@ pub(crate) struct SessionServices {
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
-    pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: Arc<ExecPolicyManager>,
     pub(crate) auth_manager: Arc<AuthManager>,
