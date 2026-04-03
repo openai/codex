@@ -3349,6 +3349,13 @@ impl CodexMessageProcessor {
             cwd,
             search_term,
         } = params;
+        let cwd = match normalize_thread_list_cwd_filter(cwd) {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         let requested_page_size = limit
             .map(|value| value as usize)
@@ -3367,7 +3374,7 @@ impl CodexMessageProcessor {
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
-                    cwd: cwd.map(PathBuf::from),
+                    cwd,
                     search_term,
                 },
             )
@@ -7659,6 +7666,57 @@ impl CodexMessageProcessor {
             Ok(conv) => conv.rollout_path(),
             Err(_) => None,
         }
+    }
+}
+
+fn normalize_thread_list_cwd_filter(
+    cwd: Option<String>,
+) -> Result<Option<PathBuf>, JSONRPCErrorError> {
+    let Some(cwd) = cwd else {
+        return Ok(None);
+    };
+    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
+        .map(AbsolutePathBuf::into_path_buf)
+        .map(Some)
+        .map_err(|err| JSONRPCErrorError {
+            code: INVALID_PARAMS_ERROR_CODE,
+            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
+            data: None,
+        })
+}
+
+#[cfg(test)]
+mod thread_list_cwd_filter_tests {
+    use super::normalize_thread_list_cwd_filter;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn normalize_thread_list_cwd_filter_preserves_absolute_paths() {
+        let cwd = if cfg!(windows) {
+            String::from(r"C:\srv\repo-b")
+        } else {
+            String::from("/srv/repo-b")
+        };
+
+        assert_eq!(
+            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
+            Some(PathBuf::from(cwd))
+        );
+    }
+
+    #[test]
+    fn normalize_thread_list_cwd_filter_resolves_relative_paths_against_server_cwd()
+    -> std::io::Result<()> {
+        let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
+
+        assert_eq!(
+            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
+                .expect("cwd filter should parse"),
+            Some(expected)
+        );
+        Ok(())
     }
 }
 

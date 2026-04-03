@@ -160,6 +160,10 @@ impl AppServerSession {
         self
     }
 
+    pub(crate) fn remote_cwd_override(&self) -> Option<&std::path::Path> {
+        self.remote_cwd_override.as_deref()
+    }
+
     pub(crate) fn is_remote(&self) -> bool {
         matches!(self.client, AppServerClient::Remote(_))
     }

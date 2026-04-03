@@ -172,13 +172,18 @@ pub async fn run_resume_picker_with_app_server(
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
+    let cwd_filter = if show_all {
+        None
+    } else {
+        app_server.remote_cwd_override().map(Path::to_path_buf)
+    };
     run_session_picker_with_loader(
         tui,
         config,
         show_all,
         SessionPickerAction::Resume,
         is_remote,
-        spawn_app_server_page_loader(app_server, include_non_interactive, bg_tx),
+        spawn_app_server_page_loader(app_server, cwd_filter, include_non_interactive, bg_tx),
         bg_rx,
     )
     .await
@@ -192,13 +197,20 @@ pub async fn run_fork_picker_with_app_server(
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
+    let cwd_filter = if show_all {
+        None
+    } else {
+        app_server.remote_cwd_override().map(Path::to_path_buf)
+    };
     run_session_picker_with_loader(
         tui,
         config,
         show_all,
         SessionPickerAction::Fork,
         is_remote,
-        spawn_app_server_page_loader(app_server, /*include_non_interactive*/ false, bg_tx),
+        spawn_app_server_page_loader(
+            app_server, cwd_filter, /*include_non_interactive*/ false, bg_tx,
+        ),
         bg_rx,
     )
     .await
@@ -242,8 +254,8 @@ async fn run_session_picker_with_loader(
     let codex_home = config.codex_home.as_path();
     let filter_cwd = if show_all || is_remote {
         // Remote sessions live in the server's filesystem namespace, so the client
-        // process cwd is not a meaningful default filter. A real remote cwd filter
-        // would need an explicit server-side target cwd instead of current_dir().
+        // process cwd is not a meaningful row filter. If the user provided an
+        // explicit remote --cd, filtering is handled server-side in thread/list.
         None
     } else {
         std::env::current_dir().ok()
@@ -341,6 +353,7 @@ fn spawn_rollout_page_loader(
 
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
+    cwd_filter: Option<PathBuf>,
     include_non_interactive: bool,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PageLoader {
@@ -357,6 +370,7 @@ fn spawn_app_server_page_loader(
             let page = load_app_server_page(
                 &mut app_server,
                 cursor,
+                cwd_filter.as_deref(),
                 request.provider_filter,
                 request.sort_key,
                 include_non_interactive,
@@ -467,6 +481,7 @@ impl LoadingState {
 async fn load_app_server_page(
     app_server: &mut AppServerSession,
     cursor: Option<String>,
+    cwd_filter: Option<&Path>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
@@ -474,6 +489,7 @@ async fn load_app_server_page(
     let response = app_server
         .thread_list(thread_list_params(
             cursor,
+            cwd_filter,
             provider_filter,
             sort_key,
             include_non_interactive,
@@ -1101,6 +1117,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
 
 fn thread_list_params(
     cursor: Option<String>,
+    cwd_filter: Option<&Path>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
@@ -1119,7 +1136,7 @@ fn thread_list_params(
         source_kinds: (!include_non_interactive)
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
-        cwd: None,
+        cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
         search_term: None,
     }
 }
@@ -1836,6 +1853,7 @@ mod tests {
     fn remote_thread_list_params_omit_provider_filter() {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
+            Some(Path::new("repo/on/server")),
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
@@ -1847,12 +1865,14 @@ mod tests {
             params.source_kinds,
             Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
         );
+        assert_eq!(params.cwd.as_deref(), Some("repo/on/server"));
     }
 
     #[test]
     fn remote_thread_list_params_can_include_non_interactive_sources() {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
+            /*cwd_filter*/ None,
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ true,
