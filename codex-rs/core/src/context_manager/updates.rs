@@ -33,6 +33,10 @@ fn build_permissions_update_item(
     next: &TurnContext,
     exec_policy: &Policy,
 ) -> Option<DeveloperInstructions> {
+    if !next.config.include_permissions_instructions {
+        return None;
+    }
+
     let prev = previous?;
     if prev.sandbox_policy == *next.sandbox_policy.get()
         && prev.approval_policy == next.approval_policy.value()

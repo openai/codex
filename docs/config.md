@@ -28,6 +28,20 @@ Use `$` in the composer to insert a ChatGPT connector; the popover lists accessi
 apps. The `/apps` command lists available and installed apps. Connected apps appear first
 and are labeled as connected; others are marked as can be installed.
 
+To omit the generated connector guidance block from model prompts, set:
+
+```toml
+include_apps_instructions = false
+```
+
+## Prompt Instruction Blocks
+
+To omit the generated permissions block from model prompts, set:
+
+```toml
+include_permissions_instructions = false
+```
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:

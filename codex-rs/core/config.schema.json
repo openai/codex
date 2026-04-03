@@ -521,6 +521,14 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "include_apps_instructions": {
+          "description": "Whether to inject the `<apps_instructions>` developer block.",
+          "type": "boolean"
+        },
+        "include_permissions_instructions": {
+          "description": "Whether to inject the `<permissions instructions>` developer block.",
+          "type": "boolean"
+        },
         "js_repl_node_module_dirs": {
           "description": "Ordered list of directories to search for Node modules in `js_repl`.",
           "items": {
@@ -2267,6 +2275,14 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "include_apps_instructions": {
+      "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_permissions_instructions": {
+      "description": "Whether to inject the `<permissions instructions>` developer block.",
+      "type": "boolean"
     },
     "instructions": {
       "description": "System instructions.",
