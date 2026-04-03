@@ -30,19 +30,30 @@ use tokio::time::sleep;
 
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
+fn find_tool_description(tool: &Value, name: &str) -> Option<String> {
+    if tool.get("name").and_then(Value::as_str) == Some(name) {
+        return tool
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+
+    tool.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find_map(|tool| find_tool_description(tool, name))
+        })
+}
+
 fn spawn_agent_description(body: &Value) -> Option<String> {
     body.get("tools")
         .and_then(Value::as_array)
         .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(Value::as_str) == Some(SPAWN_AGENT_TOOL_NAME) {
-                    tool.get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                } else {
-                    None
-                }
-            })
+            tools
+                .iter()
+                .find_map(|tool| find_tool_description(tool, SPAWN_AGENT_TOOL_NAME))
         })
 }
 

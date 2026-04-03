@@ -243,37 +243,27 @@ impl WatchdogManager {
                 .await
                 .map(|thread| thread.last_completed_turn_used_agent_send_input())
                 .unwrap_or(false);
-            // Every watchdog check-in must wake the owner thread exactly once.
+            // A watchdog helper should wake the owner through `send_input` or a
+            // final assistant report. If neither exists, emit nothing here and
+            // let the next scheduled check-in try again.
             //
             // Preferred path: the helper explicitly calls `send_input`.
-            // Mandatory fallback: if the helper reaches a terminal state without
-            // using `send_input`, forward a conclusory inbox message to the
-            // owner so the owner thread is still resumed.
+            // Fallback: if the helper reaches a terminal state without using
+            // `send_input`, forward only a real final assistant message. If
+            // there is no report body, emit nothing and schedule the next
+            // helper normally.
             if !helper_sent_input {
                 let fallback_message = match &helper_status {
                     AgentStatus::Completed(Some(message)) if !message.trim().is_empty() => {
                         Some(message.clone())
                     }
-                    AgentStatus::Completed(_) => Some(
-                        "Watchdog check-in completed without calling send_input or returning a final message."
-                            .to_string(),
-                    ),
-                    AgentStatus::Errored(message) if !message.trim().is_empty() => Some(
-                        format!("Watchdog check-in failed before calling send_input: {message}"),
-                    ),
-                    AgentStatus::Errored(_) => Some(
-                        "Watchdog check-in failed before calling send_input.".to_string(),
-                    ),
-                    AgentStatus::Interrupted => {
-                        Some("Watchdog check-in was interrupted before calling send_input.".to_string())
-                    }
-                    AgentStatus::Shutdown => {
-                        Some("Watchdog check-in ended before calling send_input.".to_string())
-                    }
-                    AgentStatus::NotFound => Some(
-                        "Watchdog check-in disappeared before calling send_input.".to_string(),
-                    ),
-                    AgentStatus::PendingInit | AgentStatus::Running => None,
+                    AgentStatus::Completed(_)
+                    | AgentStatus::Errored(_)
+                    | AgentStatus::Interrupted
+                    | AgentStatus::Shutdown
+                    | AgentStatus::NotFound
+                    | AgentStatus::PendingInit
+                    | AgentStatus::Running => None,
                 };
 
                 if let Some(message) = fallback_message {
