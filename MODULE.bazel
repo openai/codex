@@ -60,7 +60,7 @@ use_repo(osx, "macos_sdk")
 
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
-bazel_dep(name = "rules_cc", version = "0.2.16")
+bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.43")
 # `rules_rs` 0.0.43 does not model `windows-gnullvm` as a distinct Windows exec
@@ -337,6 +337,16 @@ crate.annotation(
 )
 
 inject_repo(crate, "alsa_lib")
+
+bazel_dep(name = "libgit2", version = "1.9.1")
+
+crate.annotation(
+    crate = "libgit2-sys",
+    gen_build_script = "off",
+    deps = ["@libgit2"],
+)
+
+inject_repo(crate, "libgit2")
 
 bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
