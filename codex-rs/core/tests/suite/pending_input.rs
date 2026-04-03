@@ -19,10 +19,10 @@ use core_test_support::streaming_sse::StreamingSseServer;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
+use serde_json::to_string_pretty;
 use tokio::sync::oneshot;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
@@ -119,42 +119,16 @@ async fn wait_for_turn_complete(codex: &CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }
 
-fn message_input_texts(body: &Value, role: &str) -> Vec<String> {
-    body.get("input")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
-        .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
-        .filter_map(|item| item.get("content").and_then(Value::as_array))
-        .flatten()
-        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
-        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
-        .collect()
-}
-
-fn parse_two_request_bodies(requests: &[Vec<u8>]) -> (Value, Value) {
+fn assert_two_responses_requests_snapshot(snapshot_name: &str, requests: &[Vec<u8>]) {
     assert_eq!(requests.len(), 2);
-    (
-        from_slice(&requests[0]).expect("parse first request"),
-        from_slice(&requests[1]).expect("parse second request"),
-    )
-}
-
-fn assert_message_input_contains(body: &Value, role: &str, text: &str) {
-    assert!(
-        message_input_texts(body, role)
-            .iter()
-            .any(|message_text| message_text == text)
+    let first: Value = from_slice(&requests[0]).expect("parse first request");
+    let second: Value = from_slice(&requests[1]).expect("parse second request");
+    let snapshot = format!(
+        "=== first request ===\n{}\n\n=== second request ===\n{}",
+        to_string_pretty(&first).expect("serialize first body"),
+        to_string_pretty(&second).expect("serialize second body"),
     );
-}
-
-fn assert_message_input_excludes(body: &Value, role: &str, text: &str) {
-    assert!(
-        !message_input_texts(body, role)
-            .iter()
-            .any(|message_text| message_text == text)
-    );
+    insta::assert_snapshot!(snapshot_name, snapshot);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -190,12 +164,10 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    let (first_body, second_body) = parse_two_request_bodies(&requests);
-
-    assert_message_input_contains(&first_body, "user", "first prompt");
-    assert_message_input_excludes(&first_body, "user", "second prompt");
-    assert_message_input_contains(&second_body, "user", "first prompt");
-    assert_message_input_contains(&second_body, "user", "second prompt");
+    assert_two_responses_requests_snapshot(
+        "pending_input_injected_user_input_follow_up",
+        &requests,
+    );
 
     server.shutdown().await;
 }
@@ -235,18 +207,9 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    let (first_body, second_body) = parse_two_request_bodies(&requests);
-
-    assert_message_input_contains(&first_body, "user", "first prompt");
-
-    let second_body_text = second_body.to_string();
-    assert!(
-        second_body_text.contains("queued child update"),
-        "second request should include queued queue-only child mail"
-    );
-    assert!(
-        !second_body_text.contains("stale final"),
-        "second request should not include answer text from the preempted response"
+    assert_two_responses_requests_snapshot(
+        "pending_input_queued_mail_after_reasoning",
+        &requests,
     );
 
     server.shutdown().await;
@@ -306,22 +269,9 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    let (first_body, second_body) = parse_two_request_bodies(&requests);
-
-    assert_message_input_contains(&first_body, "user", "first prompt");
-
-    let second_body_text = second_body.to_string();
-    assert!(
-        second_body_text.contains("queued child update"),
-        "second request should include queued queue-only child mail"
-    );
-    assert!(
-        second_body_text.contains("first answer"),
-        "follow-up request should include the fully consumed first assistant answer"
-    );
-    assert!(
-        !second_body_text.contains("stale final"),
-        "second request should not include answer text after the first completed message item"
+    assert_two_responses_requests_snapshot(
+        "pending_input_queued_mail_after_commentary",
+        &requests,
     );
 
     server.shutdown().await;
@@ -364,17 +314,9 @@ async fn user_input_does_not_preempt_after_reasoning_item() {
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    let (first_body, second_body) = parse_two_request_bodies(&requests);
-
-    assert_message_input_contains(&first_body, "user", "first prompt");
-    assert_message_input_excludes(&first_body, "user", "second prompt");
-    assert_message_input_contains(&second_body, "user", "first prompt");
-    assert_message_input_contains(&second_body, "user", "second prompt");
-
-    let second_body_text = second_body.to_string();
-    assert!(
-        second_body_text.contains("first answer"),
-        "follow-up request should include the fully consumed first assistant answer"
+    assert_two_responses_requests_snapshot(
+        "pending_input_user_input_no_preempt_after_reasoning",
+        &requests,
     );
 
     server.shutdown().await;
