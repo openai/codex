@@ -65,6 +65,11 @@ impl MailboxReceiver {
         self.pending_mails.iter().any(|mail| mail.trigger_turn)
     }
 
+    pub(crate) fn has_pending_queue_only(&mut self) -> bool {
+        self.sync_pending_mails();
+        self.pending_mails.iter().any(|mail| !mail.trigger_turn)
+    }
+
     pub(crate) fn drain(&mut self) -> Vec<InterAgentCommunication> {
         self.sync_pending_mails();
         self.pending_mails.drain(..).collect()
@@ -157,5 +162,26 @@ mod tests {
             /*trigger_turn*/ true,
         ));
         assert!(receiver.has_pending_trigger_turn());
+    }
+
+    #[tokio::test]
+    async fn mailbox_tracks_pending_queue_only_mail() {
+        let (mailbox, mut receiver) = Mailbox::new();
+
+        mailbox.send(make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "wake",
+            /*trigger_turn*/ true,
+        ));
+        assert!(!receiver.has_pending_queue_only());
+
+        mailbox.send(make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "queued",
+            /*trigger_turn*/ false,
+        ));
+        assert!(receiver.has_pending_queue_only());
     }
 }
