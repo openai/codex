@@ -245,13 +245,17 @@ crate.annotation(
 
 inject_repo(crate, "zlib")
 
-# TODO(zbarsky): Enable annotation after fixing windows arm64 builds.
+bazel_dep(name = "xz", version = "5.4.5.bcr.8")
+
 crate.annotation(
     crate = "lzma-sys",
-    gen_build_script = "on",
+    gen_build_script = "off",
+    deps = ["@xz//:lzma"],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
+
+inject_repo(crate, "xz")
 
 crate.annotation(
     build_script_data = [
