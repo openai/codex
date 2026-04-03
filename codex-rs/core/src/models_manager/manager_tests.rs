@@ -112,10 +112,12 @@ impl ProviderAuthScript {
     fn new(tokens: &[&str]) -> std::io::Result<Self> {
         let tempdir = tempfile::tempdir()?;
         let tokens_file = tempdir.path().join("tokens.txt");
+        // `cmd.exe`'s `set /p` treats LF-only input as one line, so use CRLF on Windows.
+        let token_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
         let mut token_file_contents = String::new();
         for token in tokens {
             token_file_contents.push_str(token);
-            token_file_contents.push('\n');
+            token_file_contents.push_str(token_line_ending);
         }
         std::fs::write(&tokens_file, token_file_contents)?;
 
@@ -153,7 +155,7 @@ if not defined first_line exit /b 1
 setlocal EnableDelayedExpansion
 echo(!first_line!
 endlocal
-more +2 tokens.txt > tokens.next
+more +1 tokens.txt > tokens.next
 move /y tokens.next tokens.txt >nul
 "#,
             )?;
