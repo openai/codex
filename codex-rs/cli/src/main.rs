@@ -287,6 +287,8 @@ struct LoginCommand {
 
     #[arg(
         long = "api-key",
+        num_args = 0..=1,
+        default_missing_value = "",
         value_name = "API_KEY",
         help = "(deprecated) Previously accepted the API key directly; now exits with guidance to use --with-api-key",
         hide = true
