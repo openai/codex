@@ -221,7 +221,7 @@ class SessionPopupActivity : Activity() {
         followUpInput.hint = "Follow-up prompt"
         val okButton = findViewById<Button>(R.id.session_popup_secondary_button)
         val sendButton = findViewById<Button>(R.id.session_popup_primary_button)
-        okButton.text = "OK"
+        okButton.text = "Done"
         sendButton.text = "Send"
         okButton.setOnClickListener {
             dismissResultPopup(session, okButton, sendButton)

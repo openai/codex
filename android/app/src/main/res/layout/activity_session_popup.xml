@@ -59,17 +59,13 @@
 
         <Button
             android:id="@+id/session_popup_secondary_button"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
+            style="@style/CodexSessionPopupSecondaryButton"
             android:text="Cancel" />
 
         <Button
             android:id="@+id/session_popup_primary_button"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            style="@style/CodexSessionPopupPrimaryButton"
             android:layout_marginStart="8dp"
-            android:layout_weight="1"
             android:text="Send" />
     </LinearLayout>
 </LinearLayout>

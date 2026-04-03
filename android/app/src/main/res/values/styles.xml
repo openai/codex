@@ -10,4 +10,28 @@
         <item name="android:windowMinWidthMajor">90%</item>
         <item name="android:windowMinWidthMinor">90%</item>
     </style>
+
+    <style name="CodexSessionPopupButton">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:minHeight">40dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">20dp</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
+    <style name="CodexSessionPopupPrimaryButton" parent="@style/CodexSessionPopupButton">
+        <item name="android:background">@drawable/session_popup_primary_button_background</item>
+        <item name="android:textColor">@color/codex_session_popup_primary_button_text</item>
+    </style>
+
+    <style name="CodexSessionPopupSecondaryButton" parent="@style/CodexSessionPopupButton">
+        <item name="android:background">@drawable/session_popup_secondary_button_background</item>
+        <item name="android:textColor">@color/codex_session_popup_secondary_button_text</item>
+    </style>
 </resources>
