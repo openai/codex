@@ -522,11 +522,9 @@
           "type": "boolean"
         },
         "include_apps_instructions": {
-          "description": "Whether to inject the `<apps_instructions>` developer block.",
           "type": "boolean"
         },
         "include_permissions_instructions": {
-          "description": "Whether to inject the `<permissions instructions>` developer block.",
           "type": "boolean"
         },
         "js_repl_node_module_dirs": {
