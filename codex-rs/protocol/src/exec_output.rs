@@ -83,7 +83,16 @@ pub fn bytes_to_string_smart(bytes: &[u8]) -> String {
 // clobbering legitimate Cyrillic text. If another code page has a similar collision, introduce a
 // dedicated allowlist (like this one) plus unit tests that capture the actual shell output we want
 // to preserve. Windows-1252 byte values for smart punctuation.
-const WINDOWS_1252_PUNCT_BYTES: [u8; 8] = [0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x99];
+const WINDOWS_1252_PUNCT_BYTES: [u8; 8] = [
+    0x91, // ‘ (left single quotation mark)
+    0x92, // ’ (right single quotation mark)
+    0x93, // “ (left double quotation mark)
+    0x94, // ” (right double quotation mark)
+    0x95, // • (bullet)
+    0x96, // – (en dash)
+    0x97, // — (em dash)
+    0x99, // ™ (trade mark sign)
+];
 
 fn detect_encoding(bytes: &[u8]) -> &'static Encoding {
     let mut detector = EncodingDetector::new();

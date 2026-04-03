@@ -36,6 +36,9 @@ use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+#[path = "model_info_overrides_tests.rs"]
+mod model_info_overrides_tests;
+
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
     remote_model_with_visibility(slug, display, priority, "list")
 }

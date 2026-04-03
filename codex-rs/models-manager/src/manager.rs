@@ -584,7 +584,3 @@ impl ModelsManager {
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "model_info_overrides_tests.rs"]
-mod model_info_overrides_tests;
