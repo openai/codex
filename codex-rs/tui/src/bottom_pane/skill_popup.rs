@@ -161,11 +161,14 @@ impl SkillPopup {
                     .sort_rank
                     .cmp(&self.mentions[b.0].sort_rank)
             } else {
-                a.2.cmp(&b.2).then_with(|| {
-                    self.mentions[a.0]
-                        .sort_rank
-                        .cmp(&self.mentions[b.0].sort_rank)
-                })
+                a.1.is_none()
+                    .cmp(&b.1.is_none())
+                    .then_with(|| a.2.cmp(&b.2))
+                    .then_with(|| {
+                        self.mentions[a.0]
+                            .sort_rank
+                            .cmp(&self.mentions[b.0].sort_rank)
+                    })
             }
             .then_with(|| {
                 let an = self.mentions[a.0].display_name.as_str();
