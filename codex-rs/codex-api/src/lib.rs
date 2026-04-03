@@ -1,3 +1,4 @@
+pub mod api_bridge;
 pub mod auth;
 pub mod common;
 pub mod endpoint;

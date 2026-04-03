@@ -609,17 +609,7 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models_path = codex_utils_cargo_bin::find_resource!("../../models.json")
-        .context("bundled models.json")?;
-    let bundled_models_contents =
-        std::fs::read_to_string(&bundled_models_path).with_context(|| {
-            format!(
-                "read bundled models.json from {}",
-                bundled_models_path.display()
-            )
-        })?;
-    let bundled_models: ModelsResponse =
-        serde_json::from_str(&bundled_models_contents).context("parse bundled models.json")?;
+    let bundled_models = codex_models_manager::bundled_models_response();
     let mut model = bundled_models
         .models
         .iter()

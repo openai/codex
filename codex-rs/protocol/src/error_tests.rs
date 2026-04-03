@@ -1,10 +1,11 @@
 use super::*;
-use crate::exec::StreamOutput;
+use crate::exec_output::StreamOutput;
+use crate::protocol::RateLimitWindow;
 use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_protocol::protocol::RateLimitWindow;
+use http::Response as HttpResponse;
 use pretty_assertions::assert_eq;
 use reqwest::Response;
 use reqwest::ResponseBuilderExt;
@@ -123,7 +124,7 @@ fn sandbox_denied_reports_stdout_when_no_stderr() {
 
 #[test]
 fn to_error_event_handles_response_stream_failed() {
-    let response = http::Response::builder()
+    let response = HttpResponse::builder()
         .status(StatusCode::TOO_MANY_REQUESTS)
         .url(Url::parse("http://example.com").unwrap())
         .body("")

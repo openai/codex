@@ -10,6 +10,54 @@ use chardetng::EncodingDetector;
 use encoding_rs::Encoding;
 use encoding_rs::IBM866;
 use encoding_rs::WINDOWS_1252;
+use std::time::Duration;
+
+#[derive(Debug, Clone)]
+pub struct StreamOutput<T: Clone> {
+    pub text: T,
+    pub truncated_after_lines: Option<u32>,
+}
+
+impl StreamOutput<String> {
+    pub fn new(text: String) -> Self {
+        Self {
+            text,
+            truncated_after_lines: None,
+        }
+    }
+}
+
+impl StreamOutput<Vec<u8>> {
+    pub fn from_utf8_lossy(&self) -> StreamOutput<String> {
+        StreamOutput {
+            text: bytes_to_string_smart(&self.text),
+            truncated_after_lines: self.truncated_after_lines,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecToolCallOutput {
+    pub exit_code: i32,
+    pub stdout: StreamOutput<String>,
+    pub stderr: StreamOutput<String>,
+    pub aggregated_output: StreamOutput<String>,
+    pub duration: Duration,
+    pub timed_out: bool,
+}
+
+impl Default for ExecToolCallOutput {
+    fn default() -> Self {
+        Self {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::ZERO,
+            timed_out: false,
+        }
+    }
+}
 
 /// Attempts to convert arbitrary bytes to UTF-8 with best-effort encoding detection.
 pub fn bytes_to_string_smart(bytes: &[u8]) -> String {
@@ -35,16 +83,7 @@ pub fn bytes_to_string_smart(bytes: &[u8]) -> String {
 // clobbering legitimate Cyrillic text. If another code page has a similar collision, introduce a
 // dedicated allowlist (like this one) plus unit tests that capture the actual shell output we want
 // to preserve. Windows-1252 byte values for smart punctuation.
-const WINDOWS_1252_PUNCT_BYTES: [u8; 8] = [
-    0x91, // ‘ (left single quotation mark)
-    0x92, // ’ (right single quotation mark)
-    0x93, // “ (left double quotation mark)
-    0x94, // ” (right double quotation mark)
-    0x95, // • (bullet)
-    0x96, // – (en dash)
-    0x97, // — (em dash)
-    0x99, // ™ (trade mark sign)
-];
+const WINDOWS_1252_PUNCT_BYTES: [u8; 8] = [0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x99];
 
 fn detect_encoding(bytes: &[u8]) -> &'static Encoding {
     let mut detector = EncodingDetector::new();
@@ -86,7 +125,7 @@ fn decode_bytes(bytes: &[u8], encoding: &'static Encoding) -> String {
 /// `“test”` into unreadable Cyrillic. To avoid that, we treat inputs comprising a handful of bytes
 /// from the problematic range plus ASCII letters as CP1252 punctuation. We deliberately do *not*
 /// cap how many of those punctuation bytes we accept: VS Code frequently prints several quoted
-/// phrases (e.g., `"foo" – "bar"`), and truncating the count would once again mis-decode those as
+/// phrases (e.g., `"foo" - "bar"`), and truncating the count would once again mis-decode those as
 /// Cyrillic. If we discover additional encodings with overlapping byte ranges, prefer adding
 /// encoding-specific byte allowlists like `WINDOWS_1252_PUNCT` and tests that exercise real-world
 /// shell snippets.
@@ -117,5 +156,5 @@ fn is_windows_1252_punct(byte: u8) -> bool {
 }
 
 #[cfg(test)]
-#[path = "text_encoding_tests.rs"]
+#[path = "exec_output_tests.rs"]
 mod tests;

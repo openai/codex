@@ -1,20 +1,21 @@
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_core::models_manager::manager::ModelsManager;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
+
+use crate::ModelsManagerConfig;
+use crate::collaboration_mode_presets::CollaborationModesConfig;
+use crate::manager::ModelsManager;
 use codex_protocol::openai_models::TruncationPolicyConfig;
-use core_test_support::load_default_config_for_test;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_model_info_without_tool_output_override() {
     let codex_home = TempDir::new().expect("create temp dir");
-    let config = load_default_config_for_test(&codex_home).await;
-    let auth_manager = codex_core::test_support::auth_manager_from_auth(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    );
+    let config = ModelsManagerConfig::default();
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let manager = ModelsManager::new(
-        config.codex_home.clone(),
+        codex_home.path().to_path_buf(),
         auth_manager,
         /*model_catalog*/ None,
         CollaborationModesConfig::default(),
@@ -31,13 +32,12 @@ async fn offline_model_info_without_tool_output_override() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_model_info_with_tool_output_override() {
     let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let mut config = ModelsManagerConfig::default();
     config.tool_output_token_limit = Some(123);
-    let auth_manager = codex_core::test_support::auth_manager_from_auth(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    );
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let manager = ModelsManager::new(
-        config.codex_home.clone(),
+        codex_home.path().to_path_buf(),
         auth_manager,
         /*model_catalog*/ None,
         CollaborationModesConfig::default(),

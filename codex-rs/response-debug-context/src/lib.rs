@@ -9,14 +9,14 @@ const AUTH_ERROR_HEADER: &str = "x-openai-authorization-error";
 const X_ERROR_JSON_HEADER: &str = "x-error-json";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct ResponseDebugContext {
-    pub(crate) request_id: Option<String>,
-    pub(crate) cf_ray: Option<String>,
-    pub(crate) auth_error: Option<String>,
-    pub(crate) auth_error_code: Option<String>,
+pub struct ResponseDebugContext {
+    pub request_id: Option<String>,
+    pub cf_ray: Option<String>,
+    pub auth_error: Option<String>,
+    pub auth_error_code: Option<String>,
 }
 
-pub(crate) fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
+pub fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
     let mut context = ResponseDebugContext::default();
 
     let TransportError::Http {
@@ -53,16 +53,14 @@ pub(crate) fn extract_response_debug_context(transport: &TransportError) -> Resp
     context
 }
 
-pub(crate) fn extract_response_debug_context_from_api_error(
-    error: &ApiError,
-) -> ResponseDebugContext {
+pub fn extract_response_debug_context_from_api_error(error: &ApiError) -> ResponseDebugContext {
     match error {
         ApiError::Transport(transport) => extract_response_debug_context(transport),
         _ => ResponseDebugContext::default(),
     }
 }
 
-pub(crate) fn telemetry_transport_error_message(error: &TransportError) -> String {
+pub fn telemetry_transport_error_message(error: &TransportError) -> String {
     match error {
         TransportError::Http { status, .. } => format!("http {}", status.as_u16()),
         TransportError::RetryLimit => "retry limit reached".to_string(),
@@ -72,7 +70,7 @@ pub(crate) fn telemetry_transport_error_message(error: &TransportError) -> Strin
     }
 }
 
-pub(crate) fn telemetry_api_error_message(error: &ApiError) -> String {
+pub fn telemetry_api_error_message(error: &ApiError) -> String {
     match error {
         ApiError::Transport(transport) => telemetry_transport_error_message(transport),
         ApiError::Api { status, .. } => format!("api error {}", status.as_u16()),

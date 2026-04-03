@@ -133,6 +133,7 @@ arboard = { workspace = true }
 codex-cli = { workspace = true }
 codex-core = { workspace = true }
 codex-mcp = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }

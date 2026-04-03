@@ -4242,8 +4242,7 @@ fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io::Resul
 fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let catalog_path = codex_home.path().join("catalog.json");
-    let mut catalog: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let mut catalog = codex_models_manager::bundled_models_response();
     catalog.models = catalog.models.into_iter().take(1).collect();
     std::fs::write(
         &catalog_path,

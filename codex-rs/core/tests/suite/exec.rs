@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
+use crate::error::Result;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::ExecToolCallOutput;
@@ -16,8 +17,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use tempfile::TempDir;
-
-use codex_core::error::Result;
 
 fn skip_test() -> bool {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {

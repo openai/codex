@@ -139,7 +139,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 .model
                 .as_deref()
                 .expect("test config should have a model"),
-            &config,
+            &config.to_models_manager_config(),
         )
         .await
         .base_instructions;

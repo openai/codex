@@ -1,3 +1,4 @@
+use crate::error::CodexErr;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
@@ -6,7 +7,6 @@ use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
-use codex_core::error::CodexErr;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_features::Feature;
 use codex_login::AuthCredentialsStoreMode;
@@ -34,7 +34,6 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -1636,8 +1635,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
     )
     .await;
 
-    let mut model_catalog: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let mut model_catalog = codex_models_manager::bundled_models_response();
     let model = model_catalog
         .models
         .iter_mut()
@@ -1749,8 +1747,7 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
     )
     .await;
 
-    let mut model_catalog: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let mut model_catalog = codex_models_manager::bundled_models_response();
     let model = model_catalog
         .models
         .iter_mut()

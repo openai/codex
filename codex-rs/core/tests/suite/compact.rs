@@ -103,8 +103,7 @@ fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
 }
 
 fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
-    let models_response: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let models_response = codex_models_manager::bundled_models_response();
     let mut model_info = models_response
         .models
         .into_iter()

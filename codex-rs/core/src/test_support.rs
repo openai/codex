@@ -11,7 +11,6 @@ use codex_exec_server::EnvironmentManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelsResponse;
 use once_cell::sync::Lazy;
 
 use crate::ModelProviderInfo;
@@ -25,9 +24,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 
 static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
-    let file_contents = include_str!("../models.json");
-    let mut response: ModelsResponse = serde_json::from_str(file_contents)
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut response = codex_models_manager::bundled_models_response();
     response.models.sort_by(|a, b| a.priority.cmp(&b.priority));
     let mut presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
     ModelPreset::mark_default_by_picker_visibility(&mut presets);
@@ -75,7 +72,7 @@ pub async fn start_thread_with_user_shell_override(
     thread_manager: &ThreadManager,
     config: Config,
     user_shell_override: crate::shell::Shell,
-) -> crate::error::Result<crate::NewThread> {
+) -> codex_protocol::error::Result<crate::NewThread> {
     thread_manager
         .start_thread_with_user_shell_override_for_tests(config, user_shell_override)
         .await
@@ -87,7 +84,7 @@ pub async fn resume_thread_from_rollout_with_user_shell_override(
     rollout_path: PathBuf,
     auth_manager: Arc<AuthManager>,
     user_shell_override: crate::shell::Shell,
-) -> crate::error::Result<crate::NewThread> {
+) -> codex_protocol::error::Result<crate::NewThread> {
     thread_manager
         .resume_thread_from_rollout_with_user_shell_override_for_tests(
             config,
@@ -111,7 +108,7 @@ pub fn get_model_offline(model: Option<&str>) -> String {
 }
 
 pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
-    ModelsManager::construct_model_info_offline_for_tests(model, config)
+    ModelsManager::construct_model_info_offline_for_tests(model, &config.to_models_manager_config())
 }
 
 pub fn all_model_presets() -> &'static Vec<ModelPreset> {

@@ -1,14 +1,15 @@
 use super::*;
-use crate::config::ConfigBuilder;
-use crate::model_provider_info::WireApi;
+use crate::ModelsManagerConfig;
 use base64::Engine as _;
 use chrono::Utc;
 use codex_api::TransportError;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::mount_models_once;
 use http::HeaderMap;
 use http::StatusCode;
@@ -189,7 +190,7 @@ move /y tokens.next tokens.txt >nul
             args: self.args.clone(),
             timeout_ms: NonZeroU64::new(timeout_ms).unwrap(),
             refresh_interval_ms: 60_000,
-            cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
+            cwd: match AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
                 Err(err) => panic!("tempdir should be absolute: {err}"),
             },
@@ -241,11 +242,7 @@ where
 #[tokio::test]
 async fn get_model_info_tracks_fallback_usage() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let config = ModelsManagerConfig::default();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
@@ -275,11 +272,7 @@ async fn get_model_info_tracks_fallback_usage() {
 #[tokio::test]
 async fn get_model_info_uses_custom_catalog() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let config = ModelsManagerConfig::default();
     let mut overlay = remote_model("gpt-overlay", "Overlay", /*priority*/ 0);
     overlay.supports_image_detail_original = true;
 
@@ -308,11 +301,7 @@ async fn get_model_info_uses_custom_catalog() {
 #[tokio::test]
 async fn get_model_info_matches_namespaced_suffix() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let config = ModelsManagerConfig::default();
     let mut remote = remote_model("gpt-image", "Image", /*priority*/ 0);
     remote.supports_image_detail_original = true;
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -336,11 +325,7 @@ async fn get_model_info_matches_namespaced_suffix() {
 #[tokio::test]
 async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let config = ModelsManagerConfig::default();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
@@ -593,7 +578,7 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
     manager
         .cache_manager
         .mutate_cache_for_test(|cache| {
-            let client_version = crate::models_manager::client_version_to_whole();
+            let client_version = crate::client_version_to_whole();
             cache.client_version = Some(format!("{client_version}-mismatch"));
         })
         .await
@@ -754,7 +739,7 @@ fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
         auth_mode: Some(TelemetryAuthMode::Chatgpt.to_string()),
         auth_header_attached: true,
         auth_header_name: Some("authorization"),
-        auth_env: crate::auth_env_telemetry::AuthEnvTelemetry {
+        auth_env: codex_login::AuthEnvTelemetry {
             openai_api_key_env_present: false,
             codex_api_key_env_present: false,
             codex_api_key_env_enabled: false,
@@ -868,9 +853,7 @@ fn build_available_models_picks_default_after_hiding_hidden_models() {
 
 #[test]
 fn bundled_models_json_roundtrips() {
-    let file_contents = include_str!("../../models.json");
-    let response: ModelsResponse =
-        serde_json::from_str(file_contents).expect("bundled models.json should deserialize");
+    let response = crate::bundled_models_response();
 
     let serialized =
         serde_json::to_string(&response).expect("bundled models.json should serialize");

@@ -1,20 +1,21 @@
-use crate::exec::ExecToolCallOutput;
-use crate::network_policy_decision::NetworkPolicyDecisionPayload;
+use crate::ThreadId;
+use crate::auth::KnownPlan;
+use crate::auth::PlanType;
+pub use crate::auth::RefreshTokenFailedError;
+pub use crate::auth::RefreshTokenFailedReason;
+use crate::exec_output::ExecToolCallOutput;
+use crate::network_policy::NetworkPolicyDecisionPayload;
+use crate::protocol::CodexErrorInfo;
+use crate::protocol::ErrorEvent;
+use crate::protocol::RateLimitSnapshot;
+use crate::protocol::TruncationPolicy;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
-pub use codex_login::auth::RefreshTokenFailedError;
-pub use codex_login::auth::RefreshTokenFailedReason;
-use codex_login::token_data::KnownPlan;
-use codex_login::token_data::PlanType;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ErrorEvent;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::truncate_text;
+use codex_utils_string::truncate_middle_chars;
+use codex_utils_string::truncate_middle_with_token_budget;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
@@ -25,7 +26,7 @@ use tokio::task::JoinError;
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
 /// Limit UI error messages to a reasonable size while keeping useful context.
-const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 2 KiB
+const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024;
 
 #[derive(Error, Debug)]
 pub enum SandboxErr {
@@ -66,7 +67,6 @@ pub enum SandboxErr {
 pub enum CodexErr {
     #[error("turn aborted. Something went wrong? Hit `/feedback` to report the issue.")]
     TurnAborted,
-
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
@@ -75,114 +75,84 @@ pub enum CodexErr {
     /// Optionally includes the requested delay before retrying the turn.
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
-
     #[error(
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
     )]
     ContextWindowExceeded,
-
     #[error("no thread with id: {0}")]
     ThreadNotFound(ThreadId),
-
     #[error("agent thread limit reached (max {max_threads})")]
     AgentLimitReached { max_threads: usize },
-
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,
-
     /// Returned by run_command_stream when the spawned child process timed out (10s).
     #[error("timeout waiting for child process to exit")]
     Timeout,
-
     /// Returned by run_command_stream when the child could not be spawned (its stdout/stderr pipes
     /// could not be captured). Analogous to the previous `CodexError::Spawn` variant.
     #[error("spawn failed: child stdout/stderr not captured")]
     Spawn,
-
-    /// Returned by run_command_stream when the user pressed Ctrl‑C (SIGINT). Session uses this to
+    /// Returned by run_command_stream when the user pressed Ctrl-C (SIGINT). Session uses this to
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
     #[error("interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.")]
     Interrupted,
-
     /// Unexpected HTTP status code.
     #[error("{0}")]
     UnexpectedStatus(UnexpectedResponseError),
-
     /// Invalid request.
     #[error("{0}")]
     InvalidRequest(String),
-
     /// Invalid image.
     #[error("Image poisoning")]
     InvalidImageRequest(),
-
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
-
     #[error("Selected model is at capacity. Please try a different model.")]
     ServerOverloaded,
-
     #[error("{0}")]
     ResponseStreamFailed(ResponseStreamFailed),
-
     #[error("{0}")]
     ConnectionFailed(ConnectionFailedError),
-
     #[error("Quota exceeded. Check your plan and billing details.")]
     QuotaExceeded,
-
     #[error(
         "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus."
     )]
     UsageNotIncluded,
-
     #[error("We're currently experiencing high demand, which may cause temporary errors.")]
     InternalServerError,
-
     /// Retry limit exceeded.
     #[error("{0}")]
     RetryLimit(RetryLimitReachedError),
-
     /// Agent loop died unexpectedly
     #[error("internal error; agent loop died unexpectedly")]
     InternalAgentDied,
-
     /// Sandbox error
     #[error("sandbox error: {0}")]
     Sandbox(#[from] SandboxErr),
-
     #[error("codex-linux-sandbox was required but not provided")]
     LandlockSandboxExecutableNotProvided,
-
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
-
     #[error("{0}")]
     RefreshTokenFailed(RefreshTokenFailedError),
-
     #[error("Fatal error: {0}")]
     Fatal(String),
-
     // -----------------------------------------------------------------
     // Automatic conversions for common external error types
     // -----------------------------------------------------------------
     #[error(transparent)]
     Io(#[from] io::Error),
-
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     LandlockRuleset(#[from] landlock::RulesetError),
-
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     LandlockPathFd(#[from] landlock::PathFdError),
-
     #[error(transparent)]
     TokioJoin(#[from] JoinError),
-
     #[error("{0}")]
     EnvVar(EnvVarError),
 }
@@ -229,6 +199,65 @@ impl CodexErr {
             #[cfg(target_os = "linux")]
             CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => false,
         }
+    }
+
+    /// Minimal shim so that existing `e.downcast_ref::<CodexErr>()` checks continue to compile
+    /// after replacing `anyhow::Error` in the return signature. This mirrors the behavior of
+    /// `anyhow::Error::downcast_ref` but works directly on our concrete enum.
+    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+        (self as &dyn std::any::Any).downcast_ref::<T>()
+    }
+
+    /// Translate core error to client-facing protocol error.
+    pub fn to_codex_protocol_error(&self) -> CodexErrorInfo {
+        match self {
+            CodexErr::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
+            CodexErr::UsageLimitReached(_)
+            | CodexErr::QuotaExceeded
+            | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
+            CodexErr::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
+            CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: self.http_status_code_value(),
+            },
+            CodexErr::ConnectionFailed(_) => CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: self.http_status_code_value(),
+            },
+            CodexErr::ResponseStreamFailed(_) => CodexErrorInfo::ResponseStreamConnectionFailed {
+                http_status_code: self.http_status_code_value(),
+            },
+            CodexErr::RefreshTokenFailed(_) => CodexErrorInfo::Unauthorized,
+            CodexErr::SessionConfiguredNotFirstEvent
+            | CodexErr::InternalServerError
+            | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
+            CodexErr::UnsupportedOperation(_)
+            | CodexErr::ThreadNotFound(_)
+            | CodexErr::AgentLimitReached { .. } => CodexErrorInfo::BadRequest,
+            CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,
+            _ => CodexErrorInfo::Other,
+        }
+    }
+
+    pub fn to_error_event(&self, message_prefix: Option<String>) -> ErrorEvent {
+        let error_message = self.to_string();
+        let message: String = match message_prefix {
+            Some(prefix) => format!("{prefix}: {error_message}"),
+            None => error_message,
+        };
+        ErrorEvent {
+            message,
+            codex_error_info: Some(self.to_codex_protocol_error()),
+        }
+    }
+
+    pub fn http_status_code_value(&self) -> Option<u16> {
+        let http_status_code = match self {
+            CodexErr::RetryLimit(err) => Some(err.status),
+            CodexErr::UnexpectedStatus(err) => Some(err.status),
+            CodexErr::ConnectionFailed(err) => err.source.status(),
+            CodexErr::ResponseStreamFailed(err) => err.source.status(),
+            _ => None,
+        };
+        http_status_code.as_ref().map(StatusCode::as_u16)
     }
 }
 
@@ -381,6 +410,13 @@ fn truncate_with_ellipsis(text: &str, max_bytes: usize) -> String {
     truncated
 }
 
+fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
+    match policy {
+        TruncationPolicy::Bytes(bytes) => truncate_middle_chars(content, bytes),
+        TruncationPolicy::Tokens(tokens) => truncate_middle_with_token_budget(content, tokens).0,
+    }
+}
+
 #[derive(Debug)]
 pub struct RetryLimitReachedError {
     pub status: StatusCode,
@@ -403,10 +439,10 @@ impl std::fmt::Display for RetryLimitReachedError {
 
 #[derive(Debug)]
 pub struct UsageLimitReachedError {
-    pub(crate) plan_type: Option<PlanType>,
-    pub(crate) resets_at: Option<DateTime<Utc>>,
-    pub(crate) rate_limits: Option<Box<RateLimitSnapshot>>,
-    pub(crate) promo_message: Option<String>,
+    pub plan_type: Option<PlanType>,
+    pub resets_at: Option<DateTime<Utc>>,
+    pub rate_limits: Option<Box<RateLimitSnapshot>>,
+    pub promo_message: Option<String>,
 }
 
 impl std::fmt::Display for UsageLimitReachedError {
@@ -538,7 +574,6 @@ fn now_for_retry() -> DateTime<Utc> {
 pub struct EnvVarError {
     /// Name of the environment variable that is missing.
     pub var: String,
-
     /// Optional instructions to help the user get a valid value for the
     /// variable and set it.
     pub instructions: Option<String>,
@@ -551,67 +586,6 @@ impl std::fmt::Display for EnvVarError {
             write!(f, " {instructions}")?;
         }
         Ok(())
-    }
-}
-
-impl CodexErr {
-    /// Minimal shim so that existing `e.downcast_ref::<CodexErr>()` checks continue to compile
-    /// after replacing `anyhow::Error` in the return signature. This mirrors the behavior of
-    /// `anyhow::Error::downcast_ref` but works directly on our concrete enum.
-    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
-        (self as &dyn std::any::Any).downcast_ref::<T>()
-    }
-
-    /// Translate core error to client-facing protocol error.
-    pub fn to_codex_protocol_error(&self) -> CodexErrorInfo {
-        match self {
-            CodexErr::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
-            CodexErr::UsageLimitReached(_)
-            | CodexErr::QuotaExceeded
-            | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
-            CodexErr::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
-            CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
-                http_status_code: self.http_status_code_value(),
-            },
-            CodexErr::ConnectionFailed(_) => CodexErrorInfo::HttpConnectionFailed {
-                http_status_code: self.http_status_code_value(),
-            },
-            CodexErr::ResponseStreamFailed(_) => CodexErrorInfo::ResponseStreamConnectionFailed {
-                http_status_code: self.http_status_code_value(),
-            },
-            CodexErr::RefreshTokenFailed(_) => CodexErrorInfo::Unauthorized,
-            CodexErr::SessionConfiguredNotFirstEvent
-            | CodexErr::InternalServerError
-            | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
-            CodexErr::UnsupportedOperation(_)
-            | CodexErr::ThreadNotFound(_)
-            | CodexErr::AgentLimitReached { .. } => CodexErrorInfo::BadRequest,
-            CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,
-            _ => CodexErrorInfo::Other,
-        }
-    }
-
-    pub fn to_error_event(&self, message_prefix: Option<String>) -> ErrorEvent {
-        let error_message = self.to_string();
-        let message: String = match message_prefix {
-            Some(prefix) => format!("{prefix}: {error_message}"),
-            None => error_message,
-        };
-        ErrorEvent {
-            message,
-            codex_error_info: Some(self.to_codex_protocol_error()),
-        }
-    }
-
-    pub fn http_status_code_value(&self) -> Option<u16> {
-        let http_status_code = match self {
-            CodexErr::RetryLimit(err) => Some(err.status),
-            CodexErr::UnexpectedStatus(err) => Some(err.status),
-            CodexErr::ConnectionFailed(err) => err.source.status(),
-            CodexErr::ResponseStreamFailed(err) => err.source.status(),
-            _ => None,
-        };
-        http_status_code.as_ref().map(StatusCode::as_u16)
     }
 }
 
@@ -635,7 +609,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
                 }
             }
         }
-        // Timeouts are not sandbox errors from a UX perspective; present them plainly
+        // Timeouts are not sandbox errors from a UX perspective; present them plainly.
         CodexErr::Sandbox(SandboxErr::Timeout { output }) => {
             format!(
                 "error: command timed out after {} ms",

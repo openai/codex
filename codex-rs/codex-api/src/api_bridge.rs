@@ -1,24 +1,21 @@
+use crate::AuthProvider as ApiAuthProvider;
+use crate::TransportError;
+use crate::error::ApiError;
+use crate::rate_limits::parse_promo_message;
+use crate::rate_limits::parse_rate_limit_for_limit;
 use base64::Engine;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_api::AuthProvider as ApiAuthProvider;
-use codex_api::TransportError;
-use codex_api::error::ApiError;
-use codex_api::rate_limits::parse_promo_message;
-use codex_api::rate_limits::parse_rate_limit_for_limit;
-use codex_login::token_data::PlanType;
+use codex_protocol::auth::PlanType;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::RetryLimitReachedError;
+use codex_protocol::error::UnexpectedResponseError;
+use codex_protocol::error::UsageLimitReachedError;
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::CodexErr;
-use crate::error::RetryLimitReachedError;
-use crate::error::UnexpectedResponseError;
-use crate::error::UsageLimitReachedError;
-use crate::model_provider_info::ModelProviderInfo;
-use codex_login::CodexAuth;
-
-pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
+pub fn map_api_error(err: ApiError) -> CodexErr {
     match err {
         ApiError::ContextWindowExceeded => CodexErr::ContextWindowExceeded,
         ApiError::QuotaExceeded => CodexErr::QuotaExceeded,
@@ -164,38 +161,6 @@ fn extract_x_error_json_code(headers: Option<&HeaderMap>) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(crate) fn auth_provider_from_auth(
-    auth: Option<CodexAuth>,
-    provider: &ModelProviderInfo,
-) -> crate::error::Result<CoreAuthProvider> {
-    if let Some(api_key) = provider.api_key()? {
-        return Ok(CoreAuthProvider {
-            token: Some(api_key),
-            account_id: None,
-        });
-    }
-
-    if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(CoreAuthProvider {
-            token: Some(token),
-            account_id: None,
-        });
-    }
-
-    if let Some(auth) = auth {
-        let token = auth.get_token()?;
-        Ok(CoreAuthProvider {
-            token: Some(token),
-            account_id: auth.get_account_id(),
-        })
-    } else {
-        Ok(CoreAuthProvider {
-            token: None,
-            account_id: None,
-        })
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct UsageErrorResponse {
     error: UsageErrorBody,
@@ -210,24 +175,23 @@ struct UsageErrorBody {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct CoreAuthProvider {
-    token: Option<String>,
-    account_id: Option<String>,
+pub struct CoreAuthProvider {
+    pub token: Option<String>,
+    pub account_id: Option<String>,
 }
 
 impl CoreAuthProvider {
-    pub(crate) fn auth_header_attached(&self) -> bool {
+    pub fn auth_header_attached(&self) -> bool {
         self.token
             .as_ref()
             .is_some_and(|token| http::HeaderValue::from_str(&format!("Bearer {token}")).is_ok())
     }
 
-    pub(crate) fn auth_header_name(&self) -> Option<&'static str> {
+    pub fn auth_header_name(&self) -> Option<&'static str> {
         self.auth_header_attached().then_some("authorization")
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(token: Option<&str>, account_id: Option<&str>) -> Self {
+    pub fn for_test(token: Option<&str>, account_id: Option<&str>) -> Self {
         Self {
             token: token.map(str::to_string),
             account_id: account_id.map(str::to_string),
