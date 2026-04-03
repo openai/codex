@@ -20,6 +20,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_mcp::mcp_connection_manager::McpConnectionManager;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -756,6 +757,8 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
+            /*inherited_prompt_cache_key*/ None,
+            /*inherited_mcp_connection_manager*/ None,
         ))
         .await
     }
@@ -770,6 +773,8 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_prompt_cache_key: Option<ThreadId>,
+        inherited_mcp_connection_manager: Option<Arc<RwLock<McpConnectionManager>>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -782,6 +787,8 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_prompt_cache_key,
+            inherited_mcp_connection_manager,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -796,6 +803,8 @@ impl ThreadManagerState {
         session_source: SessionSource,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_prompt_cache_key: Option<ThreadId>,
+        inherited_mcp_connection_manager: Option<Arc<RwLock<McpConnectionManager>>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         Box::pin(self.spawn_thread_with_source(
@@ -809,6 +818,8 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_prompt_cache_key,
+            inherited_mcp_connection_manager,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -825,6 +836,8 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_prompt_cache_key: Option<ThreadId>,
+        inherited_mcp_connection_manager: Option<Arc<RwLock<McpConnectionManager>>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -837,6 +850,8 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_prompt_cache_key,
+            inherited_mcp_connection_manager,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -868,6 +883,8 @@ impl ThreadManagerState {
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
+            /*inherited_prompt_cache_key*/ None,
+            /*inherited_mcp_connection_manager*/ None,
             parent_trace,
             user_shell_override,
         ))
@@ -887,6 +904,8 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_prompt_cache_key: Option<ThreadId>,
+        inherited_mcp_connection_manager: Option<Arc<RwLock<McpConnectionManager>>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -914,6 +933,8 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_prompt_cache_key,
+            inherited_mcp_connection_manager,
             user_shell_override,
             parent_trace,
         })

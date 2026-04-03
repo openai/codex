@@ -426,6 +426,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) inherited_prompt_cache_key: Option<ThreadId>,
+    pub(crate) inherited_mcp_connection_manager: Option<Arc<RwLock<McpConnectionManager>>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
 }
@@ -481,6 +483,8 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            inherited_prompt_cache_key,
+            inherited_mcp_connection_manager,
             parent_trace: _,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -646,9 +650,11 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            prompt_cache_key: inherited_prompt_cache_key,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
+            inherited_mcp_connection_manager,
             user_shell_override,
         };
 
@@ -1131,9 +1137,11 @@ pub(crate) struct SessionConfiguration {
     app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    prompt_cache_key: Option<ThreadId>,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    inherited_mcp_connection_manager: Option<Arc<RwLock<McpConnectionManager>>>,
     user_shell_override: Option<shell::Shell>,
 }
 
@@ -1580,6 +1588,11 @@ impl Session {
             .unwrap_or(u64::MAX),
             InitialHistory::New | InitialHistory::Forked(_) => 0,
         };
+        session_configuration.prompt_cache_key = Some(
+            session_configuration
+                .prompt_cache_key
+                .unwrap_or(conversation_id),
+        );
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
                 resumed.history.as_slice(),
@@ -1916,16 +1929,21 @@ impl Session {
 
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let services = SessionServices {
-            // Initialize the MCP connection manager with an uninitialized
-            // instance. It will be replaced with one created via
-            // McpConnectionManager::new() once all its constructor args are
-            // available. This also ensures `SessionConfigured` is emitted
-            // before any MCP-related events. It is reasonable to consider
-            // changing this to use Option or OnceCell, though the current
-            // setup is straightforward enough and performs well.
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
-                &config.permissions.approval_policy,
-            ))),
+            mcp_connection_manager: session_configuration
+                .inherited_mcp_connection_manager
+                .clone()
+                .unwrap_or_else(|| {
+                    // Initialize the MCP connection manager with an uninitialized
+                    // instance. It will be replaced with one created via
+                    // McpConnectionManager::new() once all its constructor args are
+                    // available. This also ensures `SessionConfigured` is emitted
+                    // before any MCP-related events. It is reasonable to consider
+                    // changing this to use Option or OnceCell, though the current
+                    // setup is straightforward enough and performs well.
+                    Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+                        &config.permissions.approval_policy,
+                    )))
+                }),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
@@ -1959,6 +1977,9 @@ impl Session {
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
                 installation_id,
+                session_configuration
+                    .prompt_cache_key
+                    .unwrap_or(conversation_id),
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
@@ -2035,80 +2056,86 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
-        // Construct sandbox_state before MCP startup so it can be sent to each
-        // MCP server immediately after it becomes ready (avoiding blocking).
-        let sandbox_state = SandboxState {
-            sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: session_configuration.cwd.to_path_buf(),
-            use_legacy_landlock: config.features.use_legacy_landlock(),
-        };
-        let mut required_mcp_servers: Vec<String> = mcp_servers
-            .iter()
-            .filter(|(_, server)| server.enabled && server.required)
-            .map(|(name, _)| name.clone())
-            .collect();
-        required_mcp_servers.sort();
-        let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
-        let required_mcp_server_count = required_mcp_servers.len();
-        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
+        if session_configuration
+            .inherited_mcp_connection_manager
+            .is_none()
         {
-            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-            cancel_guard.cancel();
-            *cancel_guard = CancellationToken::new();
-        }
-        let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_statuses.clone(),
-            &session_configuration.approval_policy,
-            INITIAL_SUBMIT_ID.to_owned(),
-            tx_event.clone(),
-            sandbox_state,
-            config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth),
-            tool_plugin_provenance,
-        )
-        .instrument(info_span!(
-            "session_init.mcp_manager_init",
-            otel.name = "session_init.mcp_manager_init",
-            session_init.enabled_mcp_server_count = enabled_mcp_server_count,
-            session_init.required_mcp_server_count = required_mcp_server_count,
-        ))
-        .await;
-        {
-            let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-            *manager_guard = mcp_connection_manager;
-        }
-        {
-            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-            if cancel_guard.is_cancelled() {
-                cancel_token.cancel();
+            // Construct sandbox_state before MCP startup so it can be sent to each
+            // MCP server immediately after it becomes ready (avoiding blocking).
+            let sandbox_state = SandboxState {
+                sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+                codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+                sandbox_cwd: session_configuration.cwd.to_path_buf(),
+                use_legacy_landlock: config.features.use_legacy_landlock(),
+            };
+            let mut required_mcp_servers: Vec<String> = mcp_servers
+                .iter()
+                .filter(|(_, server)| server.enabled && server.required)
+                .map(|(name, _)| name.clone())
+                .collect();
+            required_mcp_servers.sort();
+            let enabled_mcp_server_count =
+                mcp_servers.values().filter(|server| server.enabled).count();
+            let required_mcp_server_count = required_mcp_servers.len();
+            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
+            {
+                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+                cancel_guard.cancel();
+                *cancel_guard = CancellationToken::new();
             }
-            *cancel_guard = cancel_token;
-        }
-        if !required_mcp_servers.is_empty() {
-            let failures = sess
-                .services
-                .mcp_connection_manager
-                .read()
-                .await
-                .required_startup_failures(&required_mcp_servers)
-                .instrument(info_span!(
-                    "session_init.required_mcp_wait",
-                    otel.name = "session_init.required_mcp_wait",
-                    session_init.required_mcp_server_count = required_mcp_server_count,
-                ))
-                .await;
-            if !failures.is_empty() {
-                let details = failures
-                    .iter()
-                    .map(|failure| format!("{}: {}", failure.server, failure.error))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                return Err(anyhow::anyhow!(
-                    "required MCP servers failed to initialize: {details}"
-                ));
+            let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+                &mcp_servers,
+                config.mcp_oauth_credentials_store_mode,
+                auth_statuses.clone(),
+                &session_configuration.approval_policy,
+                INITIAL_SUBMIT_ID.to_owned(),
+                tx_event.clone(),
+                sandbox_state,
+                config.codex_home.clone(),
+                codex_apps_tools_cache_key(auth),
+                tool_plugin_provenance,
+            )
+            .instrument(info_span!(
+                "session_init.mcp_manager_init",
+                otel.name = "session_init.mcp_manager_init",
+                session_init.enabled_mcp_server_count = enabled_mcp_server_count,
+                session_init.required_mcp_server_count = required_mcp_server_count,
+            ))
+            .await;
+            {
+                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
+                *manager_guard = mcp_connection_manager;
+            }
+            {
+                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+                if cancel_guard.is_cancelled() {
+                    cancel_token.cancel();
+                }
+                *cancel_guard = cancel_token;
+            }
+            if !required_mcp_servers.is_empty() {
+                let failures = sess
+                    .services
+                    .mcp_connection_manager
+                    .read()
+                    .await
+                    .required_startup_failures(&required_mcp_servers)
+                    .instrument(info_span!(
+                        "session_init.required_mcp_wait",
+                        otel.name = "session_init.required_mcp_wait",
+                        session_init.required_mcp_server_count = required_mcp_server_count,
+                    ))
+                    .await;
+                if !failures.is_empty() {
+                    let details = failures
+                        .iter()
+                        .map(|failure| format!("{}: {}", failure.server, failure.error))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    return Err(anyhow::anyhow!(
+                        "required MCP servers failed to initialize: {details}"
+                    ));
+                }
             }
         }
         sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
@@ -2142,6 +2169,10 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    pub(crate) fn prompt_cache_key(&self) -> ThreadId {
+        self.services.model_client.prompt_cache_key()
     }
 
     /// Ensure rollout file writes are durably flushed.

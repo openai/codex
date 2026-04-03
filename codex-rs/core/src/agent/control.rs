@@ -15,6 +15,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
+use codex_mcp::mcp_connection_manager::McpConnectionManager;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -36,6 +37,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
+use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tracing::warn;
 
@@ -192,6 +194,12 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
             .await;
+        let inherited_prompt_cache_key = self
+            .inherited_prompt_cache_key_for_source(&state, session_source.as_ref())
+            .await;
+        let inherited_mcp_connection_manager = self
+            .inherited_mcp_connection_manager_for_source(&state, session_source.as_ref())
+            .await;
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -225,6 +233,8 @@ impl AgentControl {
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
+                    inherited_prompt_cache_key,
+                    inherited_mcp_connection_manager,
                 )
                 .await?
             }
@@ -238,6 +248,8 @@ impl AgentControl {
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
                         inherited_exec_policy,
+                        inherited_prompt_cache_key,
+                        inherited_mcp_connection_manager,
                     )
                     .await?
             }
@@ -331,6 +343,8 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_prompt_cache_key: Option<ThreadId>,
+        inherited_mcp_connection_manager: Option<Arc<RwLock<McpConnectionManager>>>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -396,6 +410,8 @@ impl AgentControl {
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                inherited_prompt_cache_key,
+                inherited_mcp_connection_manager,
             )
             .await
     }
@@ -524,6 +540,12 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
+        let inherited_prompt_cache_key = self
+            .inherited_prompt_cache_key_for_source(&state, Some(&session_source))
+            .await;
+        let inherited_mcp_connection_manager = self
+            .inherited_mcp_connection_manager_for_source(&state, Some(&session_source))
+            .await;
         let rollout_path =
             match find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
                 .await?
@@ -545,6 +567,8 @@ impl AgentControl {
                 session_source,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                inherited_prompt_cache_key,
+                inherited_mcp_connection_manager,
             )
             .await?;
         let mut agent_metadata = agent_metadata;
@@ -1052,6 +1076,40 @@ impl AgentControl {
 
         Some(Arc::clone(
             &parent_thread.codex.session.services.exec_policy,
+        ))
+    }
+
+    async fn inherited_prompt_cache_key_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> Option<ThreadId> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+
+        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        Some(parent_thread.codex.session.prompt_cache_key())
+    }
+
+    async fn inherited_mcp_connection_manager_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> Option<Arc<RwLock<McpConnectionManager>>> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+
+        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        Some(Arc::clone(
+            &parent_thread.codex.session.services.mcp_connection_manager,
         ))
     }
 
