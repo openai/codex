@@ -8,7 +8,8 @@ use std::os::unix::ffi::OsStrExt;
 /// various process hardening steps, such as
 /// - disabling core dumps
 /// - disabling ptrace attach on Linux and macOS.
-/// - removing dangerous environment variables such as LD_PRELOAD and DYLD_*
+/// - removing dangerous or noisy environment variables such as LD_PRELOAD,
+///   DYLD_*, and macOS malloc stack-logging controls
 pub fn pre_main_hardening() {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pre_main_hardening_linux();
@@ -57,13 +58,7 @@ pub(crate) fn pre_main_hardening_linux() {
 
     // Official Codex releases are MUSL-linked, which means that variables such
     // as LD_PRELOAD are ignored anyway, but just to be sure, clear them here.
-    let ld_keys = env_keys_with_prefix(std::env::vars_os(), b"LD_");
-
-    for key in ld_keys {
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
+    remove_env_vars_with_prefix(b"LD_");
 }
 
 #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
@@ -71,12 +66,7 @@ pub(crate) fn pre_main_hardening_bsd() {
     // FreeBSD/OpenBSD: set RLIMIT_CORE to 0 and clear LD_* env vars
     set_core_file_size_limit_to_zero();
 
-    let ld_keys = env_keys_with_prefix(std::env::vars_os(), b"LD_");
-    for key in ld_keys {
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
+    remove_env_vars_with_prefix(b"LD_");
 }
 
 #[cfg(target_os = "macos")]
@@ -96,13 +86,12 @@ pub(crate) fn pre_main_hardening_macos() {
 
     // Remove all DYLD_ environment variables, which can be used to subvert
     // library loading.
-    let dyld_keys = env_keys_with_prefix(std::env::vars_os(), b"DYLD_");
+    remove_env_vars_with_prefix(b"DYLD_");
 
-    for key in dyld_keys {
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
+    // Remove macOS malloc stack-logging controls so allocator diagnostics from
+    // Codex or inherited child processes do not get sprayed into the TUI.
+    remove_env_vars_with_prefix(b"MallocStackLogging");
+    remove_env_vars_with_prefix(b"MallocLogFile");
 }
 
 #[cfg(unix)]
@@ -125,6 +114,15 @@ fn set_core_file_size_limit_to_zero() {
 #[cfg(windows)]
 pub(crate) fn pre_main_hardening_windows() {
     // TODO(mbolin): Perform the appropriate configuration for Windows.
+}
+
+#[cfg(unix)]
+fn remove_env_vars_with_prefix(prefix: &[u8]) {
+    for key in env_keys_with_prefix(std::env::vars_os(), prefix) {
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -186,5 +184,33 @@ mod tests {
         let keys = env_keys_with_prefix(vars, b"LD_");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].as_os_str(), ld_test_var);
+    }
+
+    #[test]
+    fn env_keys_with_prefix_matches_malloc_stack_logging_variants() {
+        let vars = vec![
+            (OsString::from("MallocStackLogging"), OsString::from("1")),
+            (
+                OsString::from("MallocStackLoggingNoCompact"),
+                OsString::from("1"),
+            ),
+            (
+                OsString::from("MallocLogFile"),
+                OsString::from("/tmp/malloc.log"),
+            ),
+            (OsString::from("MallocNanoZone"), OsString::from("0")),
+        ];
+
+        let stack_logging_keys = env_keys_with_prefix(vars.clone(), b"MallocStackLogging");
+        assert_eq!(
+            stack_logging_keys,
+            vec![
+                OsString::from("MallocStackLogging"),
+                OsString::from("MallocStackLoggingNoCompact"),
+            ]
+        );
+
+        let log_file_keys = env_keys_with_prefix(vars, b"MallocLogFile");
+        assert_eq!(log_file_keys, vec![OsString::from("MallocLogFile")]);
     }
 }
