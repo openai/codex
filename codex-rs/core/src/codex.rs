@@ -6485,6 +6485,7 @@ pub(crate) fn build_prompt(
         output_schema: turn_context.final_output_json_schema.clone(),
     }
 }
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
