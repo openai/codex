@@ -93,7 +93,8 @@ fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) 
     config.chatgpt_base_url = apps_base_url.to_string();
     config.model = Some("gpt-5-codex".to_string());
 
-    let mut model_catalog = codex_models_manager::bundled_models_response();
+    let mut model_catalog = codex_models_manager::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models
         .iter_mut()

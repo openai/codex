@@ -531,7 +531,8 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 async fn get_base_instructions_no_user_content() {
     let prompt_with_apply_patch_instructions =
         include_str!("../prompt_with_apply_patch_instructions.md");
-    let models_response = codex_models_manager::bundled_models_response();
+    let models_response = codex_models_manager::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model_info_for_slug = |slug: &str, config: &Config| {
         let model = models_response
             .models

@@ -159,7 +159,8 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
 
 fn model_info_from_models_json(slug: &str) -> ModelInfo {
     let config = test_config();
-    let response = codex_models_manager::bundled_models_response();
+    let response = codex_models_manager::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = response
         .models
         .into_iter()

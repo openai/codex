@@ -976,7 +976,8 @@ async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> M
 }
 
 fn bundled_model_slug() -> String {
-    let response = codex_models_manager::bundled_models_response();
+    let response = codex_models_manager::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     response
         .models
         .first()

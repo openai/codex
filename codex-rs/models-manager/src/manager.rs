@@ -223,10 +223,7 @@ impl ModelsManager {
         };
         let remote_models = model_catalog
             .map(|catalog| catalog.models)
-            .unwrap_or_else(|| {
-                Self::load_remote_models_from_file()
-                    .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}"))
-            });
+            .unwrap_or_else(|| Self::load_remote_models_from_file().unwrap_or_default());
         Self {
             remote_models: RwLock::new(remote_models),
             catalog_mode,
@@ -491,7 +488,7 @@ impl ModelsManager {
     }
 
     fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
-        Ok(crate::bundled_models_response().models)
+        Ok(crate::bundled_models_response()?.models)
     }
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.

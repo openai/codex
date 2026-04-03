@@ -20,7 +20,7 @@ async fn resume_startup_does_not_consume_model_availability_nux_count() -> Resul
     let codex_home = tempdir()?;
 
     let mut source_catalog: JsonValue =
-        serde_json::to_value(codex_models_manager::bundled_models_response())?;
+        serde_json::to_value(codex_models_manager::bundled_models_response()?)?;
     let models = source_catalog
         .get_mut("models")
         .and_then(JsonValue::as_array_mut)

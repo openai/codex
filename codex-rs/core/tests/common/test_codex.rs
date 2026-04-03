@@ -609,7 +609,8 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models = codex_models_manager::bundled_models_response();
+    let bundled_models = codex_models_manager::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let mut model = bundled_models
         .models
         .iter()
