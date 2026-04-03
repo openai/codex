@@ -97,31 +97,53 @@ async fn run_cmd_result_with_writable_roots(
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    run_cmd_result_with_policies(
+    let sandbox_cwd =
+        std::env::current_dir().unwrap_or_else(|error| panic!("cwd should exist: {error}"));
+    run_cmd_result_with_policies_and_cwd(
         cmd,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        sandbox_cwd,
         timeout_ms,
         use_legacy_landlock,
     )
     .await
 }
 
-#[expect(clippy::expect_used)]
+async fn run_cmd_result_with_policies_and_cwd(
+    cmd: &[&str],
+    sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_cwd: PathBuf,
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
+    run_cmd_result_with_policies(
+        cmd,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        sandbox_cwd,
+        timeout_ms,
+        use_legacy_landlock,
+    )
+    .await
+}
+
 async fn run_cmd_result_with_policies(
     cmd: &[&str],
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_cwd: PathBuf,
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
-    let cwd = std::env::current_dir().expect("cwd should exist");
-    let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
-        cwd,
+        cwd: sandbox_cwd.clone(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: create_env_from_core_vars(),
@@ -132,8 +154,9 @@ async fn run_cmd_result_with_policies(
         justification: None,
         arg0: None,
     };
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+    let sandbox_program = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    let codex_linux_sandbox_exe =
+        Some(std::fs::canonicalize(&sandbox_program).unwrap_or(sandbox_program));
 
     process_exec_tool_call(
         params,
@@ -342,6 +365,100 @@ async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
 
     assert_eq!(output.exit_code, 0);
     assert_eq!(output.stdout.text, "sandbox-ok");
+}
+
+#[tokio::test]
+async fn bwrap_root_cwd_masks_missing_dot_codex_at_runtime() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+    if !std::path::Path::new("/dev/shm").exists() {
+        eprintln!("skipping bwrap test: /dev/shm is unavailable in this environment");
+        return;
+    }
+
+    let target_file = match NamedTempFile::new_in("/dev/shm") {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("skipping bwrap test: failed to create /dev/shm temp file: {err}");
+            return;
+        }
+    };
+    let target_path = target_file.path().to_path_buf();
+    std::fs::write(&target_path, "host-before").expect("seed /dev/shm file");
+
+    // This complements the argv-shape unit test in `bwrap.rs` by exercising
+    // the runtime `cwd="/"` path with a missing `/.codex`. The precise `/dev`
+    // mount ordering is still asserted at the unit level.
+    let sandbox_program =
+        std::fs::canonicalize(PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox")))
+            .expect("canonicalize sandbox helper path");
+    let sandbox_helper_dir = sandbox_program
+        .parent()
+        .expect("sandbox helper should have a parent")
+        .to_path_buf();
+    let sandbox_policy = SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::FullAccess,
+        network_access: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
+                    .expect("absolute helper dir"),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(std::path::Path::new("/dev"))
+                    .expect("absolute /dev path"),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(std::path::Path::new("/.codex"))
+                    .expect("absolute /.codex path"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let output = run_cmd_result_with_policies_and_cwd(
+        &[
+            "bash",
+            "-lc",
+            &format!(
+                "printf sandbox-after > {target} && if mkdir -p /.codex 2>/dev/null && printf denied > /.codex/canary 2>/dev/null; then exit 17; fi",
+                target = target_path.to_string_lossy()
+            ),
+        ],
+        sandbox_policy,
+        file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
+        PathBuf::from("/"),
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(
+        output.exit_code, 0,
+        "expected runtime masking for missing /.codex under cwd=/; stdout:\n{}\nstderr:\n{}",
+        output.stdout.text, output.stderr.text
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target_path).expect("read /dev/shm file"),
+        "sandbox-after"
+    );
 }
 
 #[tokio::test]
@@ -603,6 +720,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
             sandbox_policy,
             file_system_sandbox_policy,
             NetworkSandboxPolicy::Enabled,
+            std::env::current_dir().expect("cwd should exist"),
             LONG_TIMEOUT_MS,
             /*use_legacy_landlock*/ false,
         )
@@ -685,6 +803,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         sandbox_policy,
         file_system_sandbox_policy,
         NetworkSandboxPolicy::Enabled,
+        std::env::current_dir().expect("cwd should exist"),
         LONG_TIMEOUT_MS,
         /*use_legacy_landlock*/ false,
     )
@@ -736,6 +855,7 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
             sandbox_policy,
             file_system_sandbox_policy,
             NetworkSandboxPolicy::Enabled,
+            std::env::current_dir().expect("cwd should exist"),
             LONG_TIMEOUT_MS,
             /*use_legacy_landlock*/ false,
         )

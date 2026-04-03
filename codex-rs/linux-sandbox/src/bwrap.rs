@@ -767,32 +767,46 @@ mod tests {
             Path::new("/"),
         )
         .expect("bwrap fs args");
-        assert_eq!(
-            args.args,
-            vec![
-                // Start from a read-only view of the full filesystem.
+        // Host filesystem state can add extra protected-root carveouts (for
+        // example `/.git`) when `/` is writable, so avoid full-vector equality.
+        assert!(
+            args.args.starts_with(&[
                 "--ro-bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
-                // Recreate a writable /dev inside the sandbox.
                 "--dev".to_string(),
                 "/dev".to_string(),
-                // Make the writable root itself writable again.
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Mask the default protected .codex subpath under that writable
-                // root. Because the root is `/` in this test, the carveout path
-                // appears as `/.codex`.
-                "--ro-bind".to_string(),
-                "/dev/null".to_string(),
-                "/.codex".to_string(),
-                // Rebind /dev after the root bind so device nodes remain
-                // writable/usable inside the writable root.
-                "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
-            ]
+            ]),
+            "expected read-only root followed by writable /dev setup: {:#?}",
+            args.args
+        );
+
+        let writable_root_bind_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", "/", "/"])
+            .expect("expected writable root bind");
+        let dev_rebind_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", "/dev", "/dev"])
+            .expect("expected /dev rebind");
+        assert!(
+            writable_root_bind_index < dev_rebind_index,
+            "expected /dev rebind after writable root bind: {:#?}",
+            args.args
+        );
+
+        let codex_carveout_index = args
+            .args
+            .windows(3)
+            .position(|window| window[0] == "--ro-bind" && window[2] == "/.codex")
+            .expect("expected read-only /.codex carveout");
+        assert!(
+            writable_root_bind_index < codex_carveout_index
+                && codex_carveout_index < dev_rebind_index,
+            "expected /.codex carveout after writable root bind and before /dev rebind: {:#?}",
+            args.args
         );
     }
 
