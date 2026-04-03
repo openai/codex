@@ -7500,42 +7500,101 @@ impl CodexMessageProcessor {
         }
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
-        let sqlite_feedback_logs = if include_logs {
+        let (feedback_thread_ids, sqlite_feedback_logs, state_db_ctx) = if include_logs {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
             let state_db_ctx = get_state_db(&self.config).await;
-            match (state_db_ctx.as_ref(), conversation_id) {
-                (Some(state_db_ctx), Some(conversation_id)) => {
-                    let thread_id_text = conversation_id.to_string();
-                    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
-                        Ok(logs) if logs.is_empty() => None,
-                        Ok(logs) => Some(logs),
-                        Err(err) => {
-                            warn!(
-                                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
-                            );
-                            None
+            let feedback_thread_ids = match conversation_id {
+                Some(conversation_id) => match self
+                    .thread_manager
+                    .list_agent_subtree_thread_ids(conversation_id)
+                    .await
+                {
+                    Ok(thread_ids) => thread_ids,
+                    Err(err) => {
+                        warn!(
+                            "failed to list feedback subtree for thread_id={conversation_id}: {err}"
+                        );
+                        let mut thread_ids = vec![conversation_id];
+                        if let Some(state_db_ctx) = state_db_ctx.as_ref() {
+                            for status in [
+                                codex_state::DirectionalThreadSpawnEdgeStatus::Open,
+                                codex_state::DirectionalThreadSpawnEdgeStatus::Closed,
+                            ] {
+                                match state_db_ctx
+                                    .list_thread_spawn_descendants_with_status(
+                                        conversation_id,
+                                        status,
+                                    )
+                                    .await
+                                {
+                                    Ok(descendant_ids) => thread_ids.extend(descendant_ids),
+                                    Err(err) => warn!(
+                                        "failed to list persisted feedback subtree for thread_id={conversation_id}: {err}"
+                                    ),
+                                }
+                            }
                         }
+                        thread_ids
+                    }
+                },
+                None => Vec::new(),
+            };
+            let sqlite_feedback_logs = if let Some(state_db_ctx) = state_db_ctx.as_ref()
+                && !feedback_thread_ids.is_empty()
+            {
+                let thread_id_texts = feedback_thread_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let thread_id_refs = thread_id_texts
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                match state_db_ctx
+                    .query_feedback_logs_for_threads(&thread_id_refs)
+                    .await
+                {
+                    Ok(logs) if logs.is_empty() => None,
+                    Ok(logs) => Some(logs),
+                    Err(err) => {
+                        let thread_ids = thread_id_texts.join(", ");
+                        warn!(
+                            "failed to query feedback logs from sqlite for thread_ids=[{thread_ids}]: {err}"
+                        );
+                        None
                     }
                 }
-                _ => None,
-            }
+            } else {
+                None
+            };
+            (feedback_thread_ids, sqlite_feedback_logs, state_db_ctx)
         } else {
-            None
+            (Vec::new(), None, None)
         };
 
-        let validated_rollout_path = if include_logs {
-            match conversation_id {
-                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
-                None => None,
+        let mut attachment_paths = Vec::new();
+        let mut seen_attachment_paths = HashSet::new();
+        if include_logs {
+            for feedback_thread_id in &feedback_thread_ids {
+                let Some(rollout_path) = self
+                    .resolve_rollout_path(*feedback_thread_id, state_db_ctx.as_ref())
+                    .await
+                else {
+                    continue;
+                };
+                if seen_attachment_paths.insert(rollout_path.clone()) {
+                    attachment_paths.push(rollout_path);
+                }
             }
-        } else {
-            None
-        };
-        let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
+        }
         if let Some(extra_log_files) = extra_log_files {
-            attachment_paths.extend(extra_log_files);
+            for extra_log_file in extra_log_files {
+                if seen_attachment_paths.insert(extra_log_file.clone()) {
+                    attachment_paths.push(extra_log_file);
+                }
+            }
         }
 
         let session_source = self.thread_manager.session_source();
@@ -7654,10 +7713,29 @@ impl CodexMessageProcessor {
         });
     }
 
-    async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
-        match self.thread_manager.get_thread(conversation_id).await {
-            Ok(conv) => conv.rollout_path(),
-            Err(_) => None,
+    async fn resolve_rollout_path(
+        &self,
+        conversation_id: ThreadId,
+        state_db_ctx: Option<&StateDbHandle>,
+    ) -> Option<PathBuf> {
+        if let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await
+            && let Some(rollout_path) = conversation.rollout_path()
+        {
+            return Some(rollout_path);
+        }
+
+        let Some(state_db_ctx) = state_db_ctx else {
+            return None;
+        };
+        match state_db_ctx
+            .find_rollout_path_by_id(conversation_id, /*archived_only*/ None)
+            .await
+        {
+            Ok(rollout_path) => rollout_path,
+            Err(err) => {
+                warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
+                None
+            }
         }
     }
 }
