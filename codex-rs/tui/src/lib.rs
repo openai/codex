@@ -586,6 +586,20 @@ fn latest_session_lookup_params(
     }
 }
 
+fn config_cwd_for_app_server_target(
+    cwd: Option<&Path>,
+    app_server_target: &AppServerTarget,
+) -> std::io::Result<AbsolutePathBuf> {
+    if matches!(app_server_target, AppServerTarget::Remote { .. }) {
+        return AbsolutePathBuf::current_dir();
+    }
+
+    match cwd {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?),
+        None => AbsolutePathBuf::current_dir(),
+    }
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -604,6 +618,10 @@ pub async fn run_main(
             auth_token: remote_auth_token.clone(),
         })
         .unwrap_or(AppServerTarget::Embedded);
+    let remote_cwd_override = cli
+        .cwd
+        .clone()
+        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -654,10 +672,7 @@ pub async fn run_main(
     };
 
     let cwd = cli.cwd.clone();
-    let config_cwd = match cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
-        None => AbsolutePathBuf::current_dir()?,
-    };
+    let config_cwd = config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target)?;
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
@@ -745,7 +760,11 @@ pub async fn run_main(
         model,
         approval_policy,
         sandbox_mode,
-        cwd,
+        cwd: if matches!(app_server_target, AppServerTarget::Remote { .. }) {
+            None
+        } else {
+            cwd
+        },
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
@@ -907,6 +926,7 @@ pub async fn run_main(
         arg0_paths,
         loader_overrides,
         app_server_target,
+        remote_cwd_override,
         config,
         overrides,
         cli_kv_overrides,
@@ -925,6 +945,7 @@ async fn run_ratatui_app(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
+    remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -983,18 +1004,21 @@ async fn run_ratatui_app(
     let needs_onboarding_app_server =
         should_show_trust_screen_flag || initial_config.model_provider.requires_openai_auth;
     let mut onboarding_app_server = if needs_onboarding_app_server {
-        Some(AppServerSession::new(
-            start_app_server(
-                &app_server_target,
-                arg0_paths.clone(),
-                initial_config.clone(),
-                cli_kv_overrides.clone(),
-                loader_overrides.clone(),
-                cloud_requirements.clone(),
-                feedback.clone(),
+        Some(
+            AppServerSession::new(
+                start_app_server(
+                    &app_server_target,
+                    arg0_paths.clone(),
+                    initial_config.clone(),
+                    cli_kv_overrides.clone(),
+                    loader_overrides.clone(),
+                    cloud_requirements.clone(),
+                    feedback.clone(),
+                )
+                .await?,
             )
-            .await?,
-        ))
+            .with_remote_cwd_override(remote_cwd_override.clone()),
+        )
     } else {
         None
     };
@@ -1334,7 +1358,7 @@ async fn run_ratatui_app(
 
     let app_result = App::run(
         &mut tui,
-        AppServerSession::new(app_server),
+        AppServerSession::new(app_server).with_remote_cwd_override(remote_cwd_override),
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
@@ -1806,6 +1830,39 @@ mod tests {
 
         assert_eq!(params.model_providers, None);
         assert_eq!(params.cwd, None);
+        Ok(())
+    }
+
+    #[test]
+    fn config_cwd_for_app_server_target_uses_current_dir_for_remote_sessions() -> std::io::Result<()>
+    {
+        let remote_only_cwd = if cfg!(windows) {
+            Path::new(r"C:\definitely\not\local\to\this\test")
+        } else {
+            Path::new("/definitely/not/local/to/this/test")
+        };
+        let target = AppServerTarget::Remote {
+            websocket_url: "ws://127.0.0.1:1234/".to_string(),
+            auth_token: None,
+        };
+
+        let config_cwd = config_cwd_for_app_server_target(Some(remote_only_cwd), &target)?;
+
+        assert_eq!(config_cwd, AbsolutePathBuf::current_dir()?);
+        Ok(())
+    }
+
+    #[test]
+    fn config_cwd_for_app_server_target_canonicalizes_embedded_cli_cwd() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target = AppServerTarget::Embedded;
+
+        let config_cwd = config_cwd_for_app_server_target(Some(temp_dir.path()), &target)?;
+
+        assert_eq!(
+            config_cwd,
+            AbsolutePathBuf::from_absolute_path(temp_dir.path().canonicalize()?)?
+        );
         Ok(())
     }
 
