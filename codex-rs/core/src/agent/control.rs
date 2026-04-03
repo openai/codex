@@ -94,17 +94,10 @@ fn agent_nickname_candidates(
 
 fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
     match item {
-        RolloutItem::ResponseItem(ResponseItem::Message {
-            role,
-            content,
-            phase,
-            ..
-        }) => match role.as_str() {
+        RolloutItem::ResponseItem(ResponseItem::Message { role, phase, .. }) => match role.as_str()
+        {
             "system" | "developer" | "user" => true,
-            "assistant" => {
-                *phase == Some(MessagePhase::FinalAnswer)
-                    && !InterAgentCommunication::is_message_content(content)
-            }
+            "assistant" => *phase == Some(MessagePhase::FinalAnswer),
             _ => false,
         },
         RolloutItem::ResponseItem(_) => false,
