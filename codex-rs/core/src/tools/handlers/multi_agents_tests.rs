@@ -112,6 +112,18 @@ fn history_contains_inter_agent_communication(
     })
 }
 
+fn response_input_items_contain_inter_agent_communication(
+    input_items: &[ResponseInputItem],
+    expected: &InterAgentCommunication,
+) -> bool {
+    let response_items: Vec<ResponseItem> = input_items
+        .iter()
+        .cloned()
+        .map(ResponseItem::from)
+        .collect();
+    history_contains_inter_agent_communication(&response_items, expected)
+}
+
 #[derive(Clone, Copy)]
 struct NeverEndingTask;
 
@@ -1231,6 +1243,13 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         .iter()
         .filter_map(|(id, op)| (*id == agent_id).then_some(op))
         .collect();
+    let expected_communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "continue".to_string(),
+        /*trigger_turn*/ true,
+    );
     assert!(ops_for_agent.iter().any(|op| matches!(op, Op::Interrupt)));
     assert!(ops_for_agent.iter().any(|op| {
         matches!(
@@ -1240,9 +1259,13 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
                     && communication.recipient.as_str() == "/root/worker"
                     && communication.other_recipients.is_empty()
                     && communication.content == "continue"
+                    && communication.trigger_turn
         )
     }));
 
+    // `followup_task` wakes the interrupted child immediately, so the redirected
+    // envelope may still be buffered in turn state before it is materialized
+    // into history on slower runners.
     timeout(Duration::from_secs(5), async {
         loop {
             let history_items = thread
@@ -1252,16 +1275,22 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
                 .await
                 .raw_items()
                 .to_vec();
-            let saw_envelope = history_contains_inter_agent_communication(
-                &history_items,
-                &InterAgentCommunication::new(
-                    AgentPath::root(),
-                    AgentPath::try_from("/root/worker").expect("agent path"),
-                    Vec::new(),
-                    "continue".to_string(),
-                    /*trigger_turn*/ true,
-                ),
-            );
+            let pending_input_items = thread.codex.session.pending_input_snapshot().await;
+            let queued_input_items = thread
+                .codex
+                .session
+                .queued_response_items_for_next_turn_snapshot()
+                .await;
+            let saw_envelope =
+                history_contains_inter_agent_communication(&history_items, &expected_communication)
+                    || response_input_items_contain_inter_agent_communication(
+                        &pending_input_items,
+                        &expected_communication,
+                    )
+                    || response_input_items_contain_inter_agent_communication(
+                        &queued_input_items,
+                        &expected_communication,
+                    );
             let saw_user_message = history_items.iter().any(|item| {
                 matches!(
                     item,
