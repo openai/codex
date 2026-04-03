@@ -239,7 +239,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    if ctx.turn.environment.exec_server_url().is_some() {
+                    if ctx.turn.environment.mode().is_remote() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
                         ));

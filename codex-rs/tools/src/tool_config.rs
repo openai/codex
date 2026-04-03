@@ -43,6 +43,29 @@ pub struct ZshForkConfig {
     pub main_execve_wrapper_exe: AbsolutePathBuf,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ToolEnvironmentCapabilities {
+    exec_enabled: bool,
+    filesystem_enabled: bool,
+}
+
+impl ToolEnvironmentCapabilities {
+    pub fn new(exec_enabled: bool, filesystem_enabled: bool) -> Self {
+        Self {
+            exec_enabled,
+            filesystem_enabled,
+        }
+    }
+
+    pub fn exec_enabled(self) -> bool {
+        self.exec_enabled
+    }
+
+    pub fn filesystem_enabled(self) -> bool {
+        self.filesystem_enabled
+    }
+}
+
 impl UnifiedExecShellMode {
     pub fn for_session(
         shell_command_backend: ShellCommandBackendConfig,
@@ -86,6 +109,7 @@ pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
+    pub environment_capabilities: ToolEnvironmentCapabilities,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -200,6 +224,9 @@ impl ToolsConfig {
             shell_type,
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
+            environment_capabilities: ToolEnvironmentCapabilities::new(
+                /*exec_enabled*/ true, /*filesystem_enabled*/ true,
+            ),
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -233,6 +260,14 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
+        self
+    }
+
+    pub fn with_environment_capabilities(
+        mut self,
+        environment_capabilities: ToolEnvironmentCapabilities,
+    ) -> Self {
+        self.environment_capabilities = environment_capabilities;
         self
     }
 
