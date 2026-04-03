@@ -85,6 +85,7 @@ impl ToolHandler for Handler {
             )
             .await;
         let submission_id = result?;
+        session.mark_turn_used_agent_send_input();
 
         Ok(SendInputResult { submission_id })
     }
