@@ -36,11 +36,14 @@ Precedence is applied in this order (highest first):
 
 ### Presets
 
-- `latest`: moving alias for the newest preset; today `latest -> v1`
-- `v1`: frozen legacy/current defaults
+- `latest`: moving alias for the newest preset; today `latest -> v2`
+- `v2`: current defaults, restoring `alt-d` as a `delete_forward_word` alias
+- `v1`: frozen initial configurable keymap defaults
 
-When defaults change in the future, a new version (for example `v2`) is added and
+When defaults change in the future, a new version (for example `v3`) is added and
 `latest` may move to it. Pin to `v1` if you want stable historical behavior.
+
+TODO(docs): mirror this preset migration note on developers.openai.com.
 
 ### Supported actions
 

@@ -130,7 +130,6 @@ use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
-use crossterm::cursor::SetCursorStyle;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -5569,6 +5568,7 @@ Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.t
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(Paragraph::new(lines).wrap(Wrap { trim: false }))],
                         "P E R M I S S I O N S".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
                 ApprovalRequest::McpElicitation {
@@ -11131,7 +11131,10 @@ guardian_approval = true
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
         }) as Arc<dyn HistoryCell>];
-        app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+        app.overlay = Some(Overlay::new_transcript(
+            app.transcript_cells.clone(),
+            RuntimeKeymap::defaults().pager,
+        ));
         app.deferred_history_lines = vec![Line::from("stale buffered line")];
         app.has_emitted_history_lines = true;
         app.backtrack.primed = true;

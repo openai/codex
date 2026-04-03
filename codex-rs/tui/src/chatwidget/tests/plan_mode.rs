@@ -1278,7 +1278,7 @@ async fn make_startup_chat_with_cli_overrides(
         initial_workspace_role: None,
         initial_is_workspace_owner: None,
         initial_plan_type: None,
-        model: Some(resolved_model.clone()),
+        model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),

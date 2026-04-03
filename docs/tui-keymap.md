@@ -85,8 +85,8 @@ at `https://github.com/openai/codex/blob/main/docs/default-keymap.toml`.
 Preset semantics:
 
 1. `latest` is an alias to the newest shipped preset.
-2. `v1` is the current frozen baseline.
-3. Today, `latest -> v1`.
+2. `v2` is the current baseline; `v1` is frozen for historical behavior.
+3. Today, `latest -> v2`.
 
 User guidance:
 
@@ -96,8 +96,15 @@ User guidance:
 Developer policy:
 
 1. Do not mutate old preset defaults after release.
-2. Add a new version (for example `v2`) for behavior changes.
+2. Add a new version (for example `v3`) for behavior changes.
 3. Update docs and migration notes whenever `latest` changes.
+
+Migration notes:
+
+`v2` restores `alt-d` as a `delete_forward_word` alias while preserving
+`alt-delete` from `v1`.
+
+TODO(docs): mirror this preset migration note on developers.openai.com.
 
 Compatibility detail:
 
