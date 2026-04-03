@@ -14,6 +14,7 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
+use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -978,29 +979,32 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
+    let mut app_server = Some(
+        match start_app_server(
+            &app_server_target,
+            arg0_paths.clone(),
+            initial_config.clone(),
+            cli_kv_overrides.clone(),
+            loader_overrides.clone(),
+            cloud_requirements.clone(),
+            feedback.clone(),
+        )
+        .await
+        {
+            Ok(app_server) => AppServerSession::new(app_server),
+            Err(err) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Err(err);
+            }
+        },
+    );
+
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;
-    let needs_onboarding_app_server =
-        should_show_trust_screen_flag || initial_config.model_provider.requires_openai_auth;
-    let mut onboarding_app_server = if needs_onboarding_app_server {
-        Some(AppServerSession::new(
-            start_app_server(
-                &app_server_target,
-                arg0_paths.clone(),
-                initial_config.clone(),
-                cli_kv_overrides.clone(),
-                loader_overrides.clone(),
-                cloud_requirements.clone(),
-                feedback.clone(),
-            )
-            .await?,
-        ))
-    } else {
-        None
-    };
     let login_status = if initial_config.model_provider.requires_openai_auth {
-        let Some(app_server) = onboarding_app_server.as_mut() else {
-            unreachable!("onboarding app server should exist when auth is required");
+        let Some(app_server) = app_server.as_mut() else {
+            unreachable!("app server should exist when auth is required");
         };
         get_login_status(app_server, &initial_config).await?
     } else {
@@ -1016,13 +1020,13 @@ async fn run_ratatui_app(
                 show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
-                app_server_request_handle: onboarding_app_server
+                app_server_request_handle: app_server
                     .as_ref()
                     .map(AppServerSession::request_handle),
                 config: initial_config.clone(),
             },
             if show_login_screen {
-                onboarding_app_server.take()
+                app_server.as_mut()
             } else {
                 None
             },
@@ -1030,6 +1034,7 @@ async fn run_ratatui_app(
         )
         .await?;
         if onboarding_result.should_exit {
+            shutdown_app_server_if_present(app_server.take()).await;
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
             let _ = tui.terminal.clear();
@@ -1069,10 +1074,8 @@ async fn run_ratatui_app(
             initial_config
         }
     } else {
-        shutdown_app_server_if_present(onboarding_app_server.take()).await;
         initial_config
     };
-    shutdown_app_server_if_present(onboarding_app_server.take()).await;
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
@@ -1090,45 +1093,22 @@ async fn run_ratatui_app(
         })
     };
 
-    let needs_app_server_session_lookup = cli.resume_last
-        || cli.fork_last
-        || cli.resume_session_id.is_some()
-        || cli.fork_session_id.is_some()
-        || cli.resume_picker
-        || cli.fork_picker;
-    let mut session_lookup_app_server = if needs_app_server_session_lookup {
-        Some(AppServerSession::new(
-            start_app_server(
-                &app_server_target,
-                arg0_paths.clone(),
-                config.clone(),
-                cli_kv_overrides.clone(),
-                loader_overrides.clone(),
-                cloud_requirements.clone(),
-                feedback.clone(),
-            )
-            .await?,
-        ))
-    } else {
-        None
-    };
-
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
     let session_selection = if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
-            let Some(app_server) = session_lookup_app_server.as_mut() else {
-                unreachable!("session lookup app server should be initialized for --fork <id>");
+            let Some(startup_app_server) = app_server.as_mut() else {
+                unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(app_server, id_str).await? {
+            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
-                    shutdown_app_server_if_present(session_lookup_app_server.take()).await;
+                    shutdown_app_server_if_present(app_server.take()).await;
                     return missing_session_exit(id_str, "fork");
                 }
             }
         } else if cli.fork_last {
-            let Some(app_server) = session_lookup_app_server.as_mut() else {
-                unreachable!("session lookup app server should be initialized for --fork --last");
+            let Some(app_server) = app_server.as_mut() else {
+                unreachable!("app server should be initialized for --fork --last");
             };
             match lookup_latest_session_target_with_app_server(
                 app_server, &config, /*cwd_filter*/ None,
@@ -1140,8 +1120,8 @@ async fn run_ratatui_app(
                 None => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
-            let Some(app_server) = session_lookup_app_server.take() else {
-                unreachable!("session lookup app server should be initialized for --fork picker");
+            let Some(app_server) = app_server.take() else {
+                unreachable!("app server should be initialized for --fork picker");
             };
             match resume_picker::run_fork_picker_with_app_server(
                 &mut tui,
@@ -1168,13 +1148,13 @@ async fn run_ratatui_app(
             resume_picker::SessionSelection::StartFresh
         }
     } else if let Some(id_str) = cli.resume_session_id.as_deref() {
-        let Some(app_server) = session_lookup_app_server.as_mut() else {
-            unreachable!("session lookup app server should be initialized for --resume <id>");
+        let Some(startup_app_server) = app_server.as_mut() else {
+            unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(app_server, id_str).await? {
+        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
-                shutdown_app_server_if_present(session_lookup_app_server.take()).await;
+                shutdown_app_server_if_present(app_server.take()).await;
                 return missing_session_exit(id_str, "resume");
             }
         }
@@ -1184,8 +1164,8 @@ async fn run_ratatui_app(
         } else {
             Some(config.cwd.as_path())
         };
-        let Some(app_server) = session_lookup_app_server.as_mut() else {
-            unreachable!("session lookup app server should be initialized for --resume --last");
+        let Some(app_server) = app_server.as_mut() else {
+            unreachable!("app server should be initialized for --resume --last");
         };
         match lookup_latest_session_target_with_app_server(
             app_server,
@@ -1199,8 +1179,8 @@ async fn run_ratatui_app(
             None => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        let Some(app_server) = session_lookup_app_server.take() else {
-            unreachable!("session lookup app server should be initialized for --resume picker");
+        let Some(app_server) = app_server.take() else {
+            unreachable!("app server should be initialized for --resume picker");
         };
         match resume_picker::run_resume_picker_with_app_server(
             &mut tui,
@@ -1227,7 +1207,6 @@ async fn run_ratatui_app(
     } else {
         resume_picker::SessionSelection::StartFresh
     };
-    shutdown_app_server_if_present(session_lookup_app_server.take()).await;
 
     let current_cwd = config.cwd.clone();
     let allow_prompt = !remote_mode && cli.cwd.is_none();
@@ -1313,28 +1292,31 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match start_app_server(
-        &app_server_target,
-        arg0_paths,
-        config.clone(),
-        cli_kv_overrides.clone(),
-        loader_overrides,
-        cloud_requirements.clone(),
-        feedback.clone(),
-    )
-    .await
-    {
-        Ok(app_server) => app_server,
-        Err(err) => {
-            terminal_restore_guard.restore_silently();
-            session_log::log_session_end();
-            return Err(err);
-        }
+    let app_server = match app_server {
+        Some(app_server) => app_server,
+        None => match start_app_server(
+            &app_server_target,
+            arg0_paths,
+            config.clone(),
+            cli_kv_overrides.clone(),
+            loader_overrides,
+            cloud_requirements.clone(),
+            feedback.clone(),
+        )
+        .await
+        {
+            Ok(app_server) => AppServerSession::new(app_server),
+            Err(err) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Err(err);
+            }
+        },
     };
 
     let app_result = App::run(
         &mut tui,
-        AppServerSession::new(app_server),
+        app_server,
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
@@ -1569,9 +1551,10 @@ async fn get_login_status(
         return Ok(LoginStatus::NotAuthenticated);
     }
 
-    let bootstrap = app_server.bootstrap(config).await?;
-    Ok(match bootstrap.account_auth_mode {
-        Some(auth_mode) => LoginStatus::AuthMode(auth_mode),
+    let account = app_server.account().await?;
+    Ok(match account.account {
+        Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
+        Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
         None => LoginStatus::NotAuthenticated,
     })
 }

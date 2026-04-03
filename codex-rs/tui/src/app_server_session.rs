@@ -157,10 +157,9 @@ impl AppServerSession {
         matches!(self.client, AppServerClient::Remote(_))
     }
 
-    pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
+    pub(crate) async fn account(&mut self) -> Result<GetAccountResponse> {
         let account_request_id = self.next_request_id();
-        let account: GetAccountResponse = self
-            .client
+        self.client
             .request_typed(ClientRequest::GetAccount {
                 request_id: account_request_id,
                 params: GetAccountParams {
@@ -168,7 +167,11 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("account/read failed during TUI bootstrap")?;
+            .wrap_err("account/read failed during TUI startup")
+    }
+
+    pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
+        let account = self.account().await?;
         let model_request_id = self.next_request_id();
         let models: ModelListResponse = self
             .client
