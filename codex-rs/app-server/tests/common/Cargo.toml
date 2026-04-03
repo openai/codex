@@ -18,6 +18,7 @@ codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 serde = { workspace = true }

@@ -53,7 +53,7 @@ fn env_var_present(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::WireApi;
+    use codex_model_provider_info::WireApi;
     use pretty_assertions::assert_eq;
 
     #[test]

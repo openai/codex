@@ -411,6 +411,7 @@ dependencies = [
  "codex-core",
  "codex-features",
  "codex-login",
+ "codex-models-manager",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "core_test_support",
