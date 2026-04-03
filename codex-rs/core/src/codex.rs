@@ -7386,7 +7386,6 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let completed_reasoning_item = matches!(item, ResponseItem::Reasoning { .. });
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7432,8 +7431,7 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                if completed_reasoning_item && sess.mailbox_rx.lock().await.has_pending_queue_only()
-                {
+                if sess.mailbox_rx.lock().await.has_pending_queue_only() {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
