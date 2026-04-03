@@ -43,6 +43,11 @@ pub struct ZshForkConfig {
     pub main_execve_wrapper_exe: AbsolutePathBuf,
 }
 
+/// Tool-layer capability snapshot derived from the active environment.
+///
+/// This mirrors the environment crate's capability model so tool registration
+/// can suppress environment-backed tools without knowing how the environment
+/// was selected.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ToolEnvironmentCapabilities {
     exec_enabled: bool,
@@ -50,6 +55,7 @@ pub struct ToolEnvironmentCapabilities {
 }
 
 impl ToolEnvironmentCapabilities {
+    /// Creates the capability set that tool planning should use.
     pub fn new(exec_enabled: bool, filesystem_enabled: bool) -> Self {
         Self {
             exec_enabled,
@@ -57,10 +63,12 @@ impl ToolEnvironmentCapabilities {
         }
     }
 
+    /// Returns whether execution tools should be registered.
     pub fn exec_enabled(self) -> bool {
         self.exec_enabled
     }
 
+    /// Returns whether filesystem-backed tools should be registered.
     pub fn filesystem_enabled(self) -> bool {
         self.filesystem_enabled
     }

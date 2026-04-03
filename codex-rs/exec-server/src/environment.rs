@@ -24,13 +24,25 @@ use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
+/// Describes where execution and filesystem operations for a session come from.
+///
+/// `CODEX_EXEC_SERVER_URL=none` maps to [`EnvironmentMode::Disabled`] so callers
+/// can distinguish "intentionally unavailable" from "use the local executor".
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EnvironmentMode {
+    /// Run against the local process and filesystem implementations.
     Local,
+    /// Run against a remote exec-server endpoint.
     Remote { exec_server_url: String },
+    /// Disable executor-backed capabilities for this session entirely.
     Disabled,
 }
 
+/// Feature-style view of what a selected environment supports.
+///
+/// Tool building and runtime guards should prefer these booleans over
+/// re-interpreting environment URLs so future environment modes can evolve
+/// without touching every call site.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct EnvironmentCapabilities {
     exec_enabled: bool,
@@ -38,6 +50,7 @@ pub struct EnvironmentCapabilities {
 }
 
 impl EnvironmentCapabilities {
+    /// Creates a capability set for a concrete environment mode.
     pub fn new(exec_enabled: bool, filesystem_enabled: bool) -> Self {
         Self {
             exec_enabled,
@@ -45,16 +58,19 @@ impl EnvironmentCapabilities {
         }
     }
 
+    /// Returns whether process execution should be exposed.
     pub fn exec_enabled(self) -> bool {
         self.exec_enabled
     }
 
+    /// Returns whether filesystem-backed tools should be exposed.
     pub fn filesystem_enabled(self) -> bool {
         self.filesystem_enabled
     }
 }
 
 impl EnvironmentMode {
+    /// Returns the remote exec-server URL when this mode is remote.
     pub fn exec_server_url(&self) -> Option<&str> {
         match self {
             Self::Local | Self::Disabled => None,
@@ -62,14 +78,17 @@ impl EnvironmentMode {
         }
     }
 
+    /// Returns whether this mode uses a remote exec-server.
     pub fn is_remote(&self) -> bool {
         matches!(self, Self::Remote { .. })
     }
 
+    /// Returns whether this mode disables environment-backed APIs.
     pub fn is_disabled(&self) -> bool {
         matches!(self, Self::Disabled)
     }
 
+    /// Returns the tool/runtime capabilities implied by this mode.
     pub fn capabilities(&self) -> EnvironmentCapabilities {
         match self {
             Self::Local | Self::Remote { .. } => EnvironmentCapabilities::new(
@@ -92,10 +111,18 @@ impl EnvironmentMode {
     }
 }
 
+/// Provides access to the exec backend for a selected environment.
+///
+/// Implementations are expected to return the backend that matches the current
+/// environment mode, including disabled backends that reject execution.
 pub trait ExecutorEnvironment: Send + Sync {
     fn get_exec_backend(&self) -> Arc<dyn ExecBackend>;
 }
 
+/// Lazily creates and caches the active environment for a session.
+///
+/// The manager keeps the session's environment mode stable so subagents and
+/// follow-up turns preserve explicit `Disabled` semantics.
 #[derive(Debug)]
 pub struct EnvironmentManager {
     mode: EnvironmentMode,
@@ -109,10 +136,12 @@ impl Default for EnvironmentManager {
 }
 
 impl EnvironmentManager {
+    /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value.
     pub fn new(exec_server_url: Option<String>) -> Self {
         Self::from_mode(EnvironmentMode::from_exec_server_url(exec_server_url))
     }
 
+    /// Builds a manager from an already-parsed environment mode.
     pub fn from_mode(mode: EnvironmentMode) -> Self {
         Self {
             mode,
@@ -120,18 +149,22 @@ impl EnvironmentManager {
         }
     }
 
+    /// Builds a manager from process environment variables.
     pub fn from_env() -> Self {
         Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
     }
 
+    /// Returns the stable mode for this manager.
     pub fn mode(&self) -> &EnvironmentMode {
         &self.mode
     }
 
+    /// Returns the remote exec-server URL when one is configured.
     pub fn exec_server_url(&self) -> Option<&str> {
         self.mode.exec_server_url()
     }
 
+    /// Returns the cached environment, creating it on first access.
     pub async fn current(&self) -> Result<Arc<Environment>, ExecServerError> {
         self.current_environment
             .get_or_try_init(|| async {
@@ -144,6 +177,10 @@ impl EnvironmentManager {
     }
 }
 
+/// Concrete execution/filesystem environment selected for a session.
+///
+/// This bundles the chosen mode together with the corresponding exec backend
+/// and remote client, if any.
 #[derive(Clone)]
 pub struct Environment {
     mode: EnvironmentMode,
@@ -178,10 +215,12 @@ impl std::fmt::Debug for Environment {
 }
 
 impl Environment {
+    /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value.
     pub async fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
         Self::create_for_mode(EnvironmentMode::from_exec_server_url(exec_server_url)).await
     }
 
+    /// Builds an environment for an explicit mode.
     pub async fn create_for_mode(mode: EnvironmentMode) -> Result<Self, ExecServerError> {
         let remote_exec_server_client = if let EnvironmentMode::Remote { exec_server_url } = &mode {
             Some(
@@ -223,22 +262,27 @@ impl Environment {
         })
     }
 
+    /// Returns the selected mode for this environment.
     pub fn mode(&self) -> &EnvironmentMode {
         &self.mode
     }
 
+    /// Returns the capabilities exposed by this environment.
     pub fn capabilities(&self) -> EnvironmentCapabilities {
         self.mode.capabilities()
     }
 
+    /// Returns whether process execution is available.
     pub fn exec_enabled(&self) -> bool {
         self.capabilities().exec_enabled()
     }
 
+    /// Returns whether filesystem-backed operations are available.
     pub fn filesystem_enabled(&self) -> bool {
         self.capabilities().filesystem_enabled()
     }
 
+    /// Returns the remote exec-server URL when this environment is remote.
     pub fn exec_server_url(&self) -> Option<&str> {
         self.mode.exec_server_url()
     }
