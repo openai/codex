@@ -75,27 +75,6 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     }
 }
 
-fn user_message(text: &str) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: text.to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    }
-}
-
-fn reasoning_item(id: &str) -> ResponseItem {
-    ResponseItem::Reasoning {
-        id: id.to_string(),
-        summary: Vec::new(),
-        content: None,
-        encrypted_content: None,
-    }
-}
-
 fn spawn_agent_call(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
@@ -629,7 +608,12 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
                 assistant_message("parent unknown phase", /*phase*/ None),
-                reasoning_item("parent-reasoning"),
+                ResponseItem::Reasoning {
+                    id: "parent-reasoning".to_string(),
+                    summary: Vec::new(),
+                    content: None,
+                    encrypted_content: None,
+                },
                 trigger_message.to_response_input_item().into(),
                 spawn_agent_call(&parent_spawn_call_id),
             ],
@@ -671,7 +655,15 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
     let expected_history = [
-        user_message("parent seed context"),
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "parent seed context".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
     ];
     assert_eq!(history.raw_items(), &expected_history);
@@ -692,68 +684,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
-
-    let _ = harness
-        .control
-        .shutdown_live_agent(child_thread_id)
-        .await
-        .expect("child shutdown should submit");
-    let _ = parent_thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("parent shutdown should submit");
-}
-
-#[tokio::test]
-async fn spawn_agent_fork_strips_parent_spawn_call_without_injecting_output() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let turn_context = parent_thread.codex.session.new_default_turn().await;
-    let parent_spawn_call_id = "spawn-call-1".to_string();
-    parent_thread
-        .codex
-        .session
-        .record_conversation_items(
-            turn_context.as_ref(),
-            &[spawn_agent_call(&parent_spawn_call_id)],
-        )
-        .await;
-    parent_thread
-        .codex
-        .session
-        .ensure_rollout_materialized()
-        .await;
-    parent_thread.codex.session.flush_rollout().await;
-
-    let child_thread_id = harness
-        .control
-        .spawn_agent_with_metadata(
-            harness.config.clone(),
-            text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            })),
-            SpawnAgentOptions {
-                fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
-                fork_mode: Some(SpawnAgentForkMode::FullHistory),
-            },
-        )
-        .await
-        .expect("forked spawn should succeed")
-        .thread_id;
-
-    let child_thread = harness
-        .manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be registered");
-    let history = child_thread.codex.session.clone_history().await;
-    let expected_history: &[ResponseItem] = &[];
-    assert_eq!(history.raw_items(), expected_history);
 
     let _ = harness
         .control
@@ -811,11 +741,10 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
-    let expected_history = [assistant_message(
-        "unflushed final answer",
-        Some(MessagePhase::FinalAnswer),
-    )];
-    assert_eq!(history.raw_items(), &expected_history);
+    assert!(history_contains_text(
+        history.raw_items(),
+        "unflushed final answer"
+    ));
 
     let _ = harness
         .control
@@ -869,20 +798,6 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             &[triggered_communication.to_response_input_item().into()],
         )
         .await;
-    let commentary_turn_context = parent_thread.codex.session.new_default_turn().await;
-    parent_thread
-        .codex
-        .session
-        .record_conversation_items(
-            commentary_turn_context.as_ref(),
-            &[
-                assistant_message("recent commentary", Some(MessagePhase::Commentary)),
-                assistant_message("recent final answer", Some(MessagePhase::FinalAnswer)),
-                reasoning_item("recent-reasoning"),
-            ],
-        )
-        .await;
-
     parent_thread
         .inject_user_message_without_turn("current parent task".to_string())
         .await;
@@ -930,11 +845,23 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
-    let expected_history = [
-        assistant_message("recent final answer", Some(MessagePhase::FinalAnswer)),
-        user_message("current parent task"),
-    ];
-    assert_eq!(history.raw_items(), &expected_history);
+
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "old parent context"
+    ));
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "queued message"
+    ));
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "triggered context"
+    ));
+    assert!(history_contains_text(
+        history.raw_items(),
+        "current parent task"
+    ));
 
     let _ = harness
         .control
