@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn query_match_score_sorts_before_plugin_rank_bias() {
         let mut popup = SkillPopup::new(vec![
-            plugin_mention_item("GitHub", &["github"]),
+            plugin_mention_item("GitHub", &["github", "pull requests", "pr"]),
             named_mention_item("pr-review-triage", &["pr-review-triage"]),
             named_mention_item("prd", &["prd"]),
             named_mention_item("Plugin Creator", &["plugin-creator", "Plugin Creator"]),
