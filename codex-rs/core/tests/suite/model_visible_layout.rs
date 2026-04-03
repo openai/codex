@@ -106,7 +106,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 .features
                 .enable(Feature::Personality)
                 .expect("test config should allow feature update");
-            config.personality = Some(Personality::Pragmatic);
+            config.personality = Some(Personality::pragmatic());
         });
     let test = builder.build(&server).await?;
     let preturn_context_diff_cwd = test.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
@@ -152,7 +152,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::friendly()),
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -343,7 +343,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             .features
             .enable(Feature::Personality)
             .expect("test config should allow feature update");
-        config.personality = Some(Personality::Pragmatic);
+        config.personality = Some(Personality::pragmatic());
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
@@ -365,7 +365,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::friendly()),
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

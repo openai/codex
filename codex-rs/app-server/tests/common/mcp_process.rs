@@ -491,6 +491,15 @@ impl McpProcess {
         self.send_request("skills/list", params).await
     }
 
+    /// Send a `personalities/list` JSON-RPC request.
+    pub async fn send_personalities_list_request(
+        &mut self,
+        params: codex_app_server_protocol::PersonalitiesListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("personalities/list", params).await
+    }
+
     /// Send a `plugin/install` JSON-RPC request.
     pub async fn send_plugin_install_request(
         &mut self,

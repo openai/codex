@@ -3187,6 +3187,21 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PersonalitiesListParams {
+    #[ts(optional = nullable)]
+    pub cwds: Option<Vec<AbsolutePathBuf>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PersonalitiesListResponse {
+    pub data: Vec<PersonalitiesListEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
     /// only home-scoped marketplaces and the official curated marketplace are considered.
@@ -3327,6 +3342,34 @@ pub struct SkillsListEntry {
     pub cwd: PathBuf,
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum PersonalityScope {
+    Builtin,
+    User,
+    Repo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PersonalityMetadata {
+    pub name: String,
+    pub description: String,
+    pub scope: PersonalityScope,
+    pub is_built_in: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PersonalitiesListEntry {
+    pub cwd: PathBuf,
+    pub personalities: Vec<PersonalityMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

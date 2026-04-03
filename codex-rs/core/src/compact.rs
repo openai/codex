@@ -122,7 +122,7 @@ async fn run_compact_task_inner(
         let prompt = Prompt {
             input: turn_input,
             base_instructions: sess.get_base_instructions().await,
-            personality: turn_context.personality,
+            personality: turn_context.personality.clone(),
             ..Default::default()
         };
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();

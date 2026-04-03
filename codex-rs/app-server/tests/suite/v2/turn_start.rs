@@ -719,7 +719,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::friendly()),
             ..Default::default()
         })
         .await?;
@@ -824,7 +824,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
                 text: "Hello again".to_string(),
                 text_elements: Vec::new(),
             }],
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::friendly()),
             ..Default::default()
         })
         .await?;
@@ -897,7 +897,7 @@ async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() ->
     let persisted_toml: ConfigToml = toml::from_str(&std::fs::read_to_string(
         codex_home.path().join("config.toml"),
     )?)?;
-    assert_eq!(persisted_toml.personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted_toml.personality, Some(Personality::pragmatic()));
     assert!(
         codex_home
             .path()

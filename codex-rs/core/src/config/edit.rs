@@ -384,7 +384,9 @@ impl ConfigDocument {
             )),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
                 &["personality"],
-                personality.map(|personality| value(personality.to_string())),
+                personality
+                    .clone()
+                    .map(|personality| value(personality.to_string())),
             )),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
                 Scope::Global,

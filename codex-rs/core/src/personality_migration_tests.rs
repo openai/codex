@@ -81,7 +81,7 @@ async fn applies_when_sessions_exist_and_no_personality() -> io::Result<()> {
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
 
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted.personality, Some(Personality::pragmatic()));
     Ok(())
 }
 
@@ -102,7 +102,7 @@ async fn skips_when_marker_exists() -> io::Result<()> {
 async fn skips_when_personality_explicit() -> io::Result<()> {
     let temp = TempDir::new()?;
     ConfigEditsBuilder::new(temp.path())
-        .set_personality(Some(Personality::Friendly))
+        .set_personality(Some(Personality::friendly()))
         .apply()
         .await
         .map_err(|err| io::Error::other(format!("failed to write config: {err}")))?;
@@ -117,7 +117,7 @@ async fn skips_when_personality_explicit() -> io::Result<()> {
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
 
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.personality, Some(Personality::Friendly));
+    assert_eq!(persisted.personality, Some(Personality::friendly()));
     Ok(())
 }
 

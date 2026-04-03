@@ -1304,13 +1304,19 @@
       ],
       "type": "string"
     },
-    "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
+    "PersonalitiesListParams": {
+      "properties": {
+        "cwds": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "PluginInstallParams": {
       "properties": {
@@ -2878,13 +2884,9 @@
           ]
         },
         "personality": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Personality"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sandbox": {
@@ -3061,13 +3063,9 @@
           ]
         },
         "personality": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Personality"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sandbox": {
@@ -3202,15 +3200,11 @@
           "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
         },
         "personality": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Personality"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Override the personality for this turn and subsequent turns."
+          "description": "Override the personality for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "sandboxPolicy": {
           "anyOf": [
@@ -3819,6 +3813,30 @@
         "params"
       ],
       "title": "Skills/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "personalities/list"
+          ],
+          "title": "Personalities/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PersonalitiesListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Personalities/listRequest",
       "type": "object"
     },
     {

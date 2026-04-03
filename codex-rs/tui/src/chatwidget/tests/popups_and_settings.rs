@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::PersonalityScope;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -1515,7 +1516,20 @@ async fn model_selection_popup_snapshot() {
 async fn personality_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.open_personality_popup();
+    chat.open_personality_popup_with_items(&[
+        PersonalityMetadata {
+            name: "friendly".to_string(),
+            description: "Warm, collaborative, and helpful.".to_string(),
+            scope: PersonalityScope::Builtin,
+            is_built_in: true,
+        },
+        PersonalityMetadata {
+            name: "pragmatic".to_string(),
+            description: "Concise, task-focused, and direct.".to_string(),
+            scope: PersonalityScope::Builtin,
+            is_built_in: true,
+        },
+    ]);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("personality_selection_popup", popup);

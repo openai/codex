@@ -315,14 +315,6 @@
         }
       ]
     },
-    "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
-    },
     "ReasoningItemContent": {
       "oneOf": [
         {
@@ -1043,13 +1035,9 @@
       ]
     },
     "personality": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "sandbox": {

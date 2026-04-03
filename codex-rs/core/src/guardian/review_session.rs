@@ -522,7 +522,7 @@ async fn run_review_on_session(
                     service_tier: None,
                     final_output_json_schema: Some(params.schema.clone()),
                     collaboration_mode: None,
-                    personality: params.personality,
+                    personality: params.personality.clone(),
                 })
                 .await
         }),

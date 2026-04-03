@@ -48,7 +48,7 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
         .features
         .enable(Feature::Personality)
         .expect("test config should allow feature update");
-    config.personality = Some(Personality::Friendly);
+    config.personality = Some(Personality::friendly());
 
     let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.1", &config);
     assert_eq!(
@@ -65,7 +65,7 @@ async fn base_instructions_override_disables_personality_template() {
         .features
         .enable(Feature::Personality)
         .expect("test config should allow feature update");
-    config.personality = Some(Personality::Friendly);
+    config.personality = Some(Personality::friendly());
     config.base_instructions = Some("override instructions".to_string());
 
     let model_info =
@@ -141,7 +141,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
                 .features
                 .enable(Feature::Personality)
                 .expect("test config should allow feature update");
-            config.personality = Some(Personality::Friendly);
+            config.personality = Some(Personality::friendly());
         });
     let test = builder.build(&server).await?;
 
@@ -199,7 +199,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
                 .features
                 .enable(Feature::Personality)
                 .expect("test config should allow feature update");
-            config.personality = Some(Personality::None);
+            config.personality = Some(Personality::none());
         });
     let test = builder.build(&server).await?;
 
@@ -353,7 +353,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::friendly()),
         })
         .await?;
 
@@ -420,7 +420,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
                 .features
                 .enable(Feature::Personality)
                 .expect("test config should allow feature update");
-            config.personality = Some(Personality::Pragmatic);
+            config.personality = Some(Personality::pragmatic());
         });
     let test = builder.build(&server).await?;
 
@@ -458,7 +458,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::pragmatic()),
         })
         .await?;
 
@@ -510,7 +510,7 @@ async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
         .features
         .disable(Feature::Personality)
         .expect("test config should allow feature update");
-    config.personality = Some(Personality::Friendly);
+    config.personality = Some(Personality::friendly());
 
     let model_info =
         codex_core::test_support::construct_model_info_offline("gpt-5.2-codex", &config);
@@ -576,7 +576,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::pragmatic()),
         })
         .await?;
 
@@ -691,7 +691,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
                 .enable(Feature::Personality)
                 .expect("test config should allow feature update");
             config.model = Some(remote_slug.to_string());
-            config.personality = Some(Personality::Friendly);
+            config.personality = Some(Personality::friendly());
         });
     let test = builder.build(&server).await?;
 
@@ -713,7 +713,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::friendly()),
         })
         .await?;
 
@@ -850,7 +850,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::friendly()),
         })
         .await?;
 

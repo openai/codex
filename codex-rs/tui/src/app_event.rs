@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PersonalitiesListResponse;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
@@ -183,10 +184,21 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
     },
 
+    /// Fetch available personalities for the provided working directory.
+    FetchPersonalitiesList {
+        cwd: PathBuf,
+    },
+
     /// Result of fetching plugin marketplace state.
     PluginsLoaded {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
+    },
+
+    /// Result of fetching available personalities.
+    PersonalitiesLoaded {
+        cwd: PathBuf,
+        result: Result<PersonalitiesListResponse, String>,
     },
 
     /// Replace the plugins popup with a plugin-detail loading state.

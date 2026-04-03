@@ -609,6 +609,30 @@
             },
             "method": {
               "enum": [
+                "personalities/list"
+              ],
+              "title": "Personalities/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PersonalitiesListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Personalities/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/list"
               ],
               "title": "Plugin/listRequestMethod",
@@ -9645,11 +9669,84 @@
           }
         ]
       },
-      "Personality": {
+      "PersonalitiesListEntry": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "personalities": {
+            "items": {
+              "$ref": "#/definitions/v2/PersonalityMetadata"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cwd",
+          "personalities"
+        ],
+        "type": "object"
+      },
+      "PersonalitiesListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "PersonalitiesListParams",
+        "type": "object"
+      },
+      "PersonalitiesListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/PersonalitiesListEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "PersonalitiesListResponse",
+        "type": "object"
+      },
+      "PersonalityMetadata": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "isBuiltIn": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/PersonalityScope"
+          }
+        },
+        "required": [
+          "description",
+          "isBuiltIn",
+          "name",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "PersonalityScope": {
         "enum": [
-          "none",
-          "friendly",
-          "pragmatic"
+          "builtin",
+          "user",
+          "repo"
         ],
         "type": "string"
       },
@@ -13628,13 +13725,9 @@
             ]
           },
           "personality": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Personality"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "sandbox": {
@@ -13909,13 +14002,9 @@
             ]
           },
           "personality": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Personality"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "sandbox": {
@@ -14563,15 +14652,11 @@
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
           },
           "personality": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Personality"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Override the personality for this turn and subsequent turns."
+            "description": "Override the personality for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "sandboxPolicy": {
             "anyOf": [

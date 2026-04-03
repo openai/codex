@@ -59,6 +59,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -1272,7 +1273,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
-        personality: turn_context.personality,
+        personality: turn_context.personality.clone(),
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort,
@@ -1808,11 +1809,11 @@ async fn set_rate_limits_retains_previous_credits() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -1909,11 +1910,11 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2257,11 +2258,11 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2522,11 +2523,11 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2622,11 +2623,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2700,6 +2701,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         auth_manager: auth_manager.clone(),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        personality_catalog: Arc::new(crate::personalities::catalog_for_config(config.as_ref())),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         skills_manager,
         plugins_manager,
@@ -3118,7 +3120,7 @@ async fn user_turn_updates_approvals_reviewer() {
             service_tier: None,
             final_output_json_schema: None,
             collaboration_mode: None,
-            personality: config.personality,
+            personality: config.personality.clone(),
         },
     )
     .await;
@@ -3461,11 +3463,11 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -3539,6 +3541,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         auth_manager: Arc::clone(&auth_manager),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        personality_catalog: Arc::new(crate::personalities::catalog_for_config(config.as_ref())),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         skills_manager,
         plugins_manager,
@@ -3878,6 +3881,102 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
             .iter()
             .any(|text| text.contains("Reason: inactive")),
         "expected a realtime end update, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_reload_custom_personality_catalog_for_running_session() {
+    let (session, previous_context) = make_session_and_context().await;
+    let personality_name = "captain-late";
+    let personality_body = "Ahoy. Keep the answer seaworthy.";
+    let personalities_dir = previous_context.config.codex_home.join("personalities");
+    std::fs::create_dir_all(&personalities_dir).expect("create personalities dir");
+    std::fs::write(
+        personalities_dir.join(format!("{personality_name}.md")),
+        format!(
+            "---\nname: {personality_name}\ndescription: test personality\n---\n\n{personality_body}\n"
+        ),
+    )
+    .expect("write custom personality");
+
+    assert_eq!(
+        session
+            .services
+            .personality_catalog
+            .get(&Personality::from(personality_name)),
+        None
+    );
+
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context.personality = Some(Personality::from(personality_name));
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains(personality_body)),
+        "expected custom personality update, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_reload_custom_personality_catalog_for_cwd_override() {
+    let (session, previous_context) = make_session_and_context().await;
+    let repo = tempfile::tempdir().expect("create repo");
+    let personalities_dir = repo.path().join(".codex/personalities");
+    let personality_name = "repo-captain";
+    let personality_body = "Ahoy from the overridden repo.";
+    std::fs::create_dir_all(&personalities_dir).expect("create repo personalities dir");
+    std::fs::write(
+        personalities_dir.join("repo-captain.md"),
+        format!(
+            "---\nname: {personality_name}\ndescription: repo personality\n---\n\n{personality_body}\n"
+        ),
+    )
+    .expect("write repo personality");
+
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    let overridden_cwd: codex_utils_absolute_path::AbsolutePathBuf = repo
+        .path()
+        .to_path_buf()
+        .try_into()
+        .expect("override cwd should be absolute");
+    let mut overridden_config = (*current_context.config).clone();
+    overridden_config.cwd = overridden_cwd.clone();
+    current_context.cwd = overridden_cwd;
+    current_context.config = Arc::new(overridden_config);
+    current_context.personality = Some(Personality::from(personality_name));
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains(personality_body)),
+        "expected repo personality after cwd override, got {developer_texts:?}"
     );
 }
 
@@ -5165,13 +5264,16 @@ async fn sample_rollout(
             && content.iter().any(|c| {
                 matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
             }))
-    }) && let Some(p) = reconstruction_turn.personality
+    }) && let Some(p) = reconstruction_turn.personality.as_ref()
         && session.features.enabled(Feature::Personality)
         && let Some(personality_message) = reconstruction_turn
             .model_info
             .model_messages
             .as_ref()
-            .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
+            .and_then(|m| {
+                m.get_personality_message(Some(p.clone()))
+                    .filter(|s| !s.is_empty())
+            })
     {
         let msg = DeveloperInstructions::personality_spec_message(personality_message).into();
         let insert_at = initial_context

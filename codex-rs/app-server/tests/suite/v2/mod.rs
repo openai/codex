@@ -18,6 +18,7 @@ mod mcp_server_elicitation;
 mod mcp_server_status;
 mod model_list;
 mod output_schema;
+mod personalities_list;
 mod plan_item;
 mod plugin_install;
 mod plugin_list;

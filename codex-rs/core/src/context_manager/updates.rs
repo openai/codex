@@ -1,6 +1,7 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
+use crate::personalities::PersonalityCatalog;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -107,6 +108,7 @@ pub(crate) fn build_initial_realtime_item(
 fn build_personality_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
+    personality_catalog: &PersonalityCatalog,
     personality_feature_enabled: bool,
 ) -> Option<DeveloperInstructions> {
     if !personality_feature_enabled {
@@ -117,11 +119,12 @@ fn build_personality_update_item(
         return None;
     }
 
-    if let Some(personality) = next.personality
+    if let Some(personality) = next.personality.clone()
         && next.personality != previous.personality
     {
         let model_info = &next.model_info;
-        let personality_message = personality_message_for(model_info, personality);
+        let personality_message =
+            personality_message_for(model_info, personality_catalog, &personality);
         personality_message.map(DeveloperInstructions::personality_spec_message)
     } else {
         None
@@ -130,13 +133,22 @@ fn build_personality_update_item(
 
 pub(crate) fn personality_message_for(
     model_info: &ModelInfo,
-    personality: Personality,
+    personality_catalog: &PersonalityCatalog,
+    personality: &Personality,
 ) -> Option<String> {
-    model_info
+    let builtin_message = model_info
         .model_messages
         .as_ref()
-        .and_then(|spec| spec.get_personality_message(Some(personality)))
-        .filter(|message| !message.is_empty())
+        .and_then(|spec| spec.get_personality_message(Some(personality.clone())))
+        .filter(|message| !message.is_empty());
+    if builtin_message.is_some() {
+        builtin_message
+    } else {
+        personality_catalog
+            .instructions_for(personality)
+            .map(ToOwned::to_owned)
+            .filter(|message| !message.is_empty())
+    }
 }
 
 pub(crate) fn build_model_instructions_update_item(
@@ -148,7 +160,9 @@ pub(crate) fn build_model_instructions_update_item(
         return None;
     }
 
-    let model_instructions = next.model_info.get_model_instructions(next.personality);
+    let model_instructions = next
+        .model_info
+        .get_model_instructions(next.personality.clone());
     if model_instructions.is_empty() {
         return None;
     }
@@ -191,6 +205,7 @@ pub(crate) fn build_settings_update_items(
     next: &TurnContext,
     shell: &Shell,
     exec_policy: &Policy,
+    personality_catalog: &PersonalityCatalog,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
     // TODO(ccunningham): build_settings_update_items still does not cover every
@@ -205,7 +220,12 @@ pub(crate) fn build_settings_update_items(
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
-        build_personality_update_item(previous, next, personality_feature_enabled),
+        build_personality_update_item(
+            previous,
+            next,
+            personality_catalog,
+            personality_feature_enabled,
+        ),
     ]
     .into_iter()
     .flatten()

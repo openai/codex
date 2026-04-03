@@ -176,6 +176,7 @@ Example with notification opt-out:
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `plugins`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `personalities/list` — list built-in and file-backed personalities for one or more `cwd` values.
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names. Returned plugin skills include their current `enabled` state after local config filtering. Plugin app summaries also include `needsAuth` when the server can determine connector accessibility (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
@@ -237,7 +238,7 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
+Built-in `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. Clients may also pass custom personality ids discovered via `personalities/list`. Custom personalities are loaded from Markdown files in `.codex/personalities` for the active repo and `$CODEX_HOME/personalities` for the user; invalid files are logged and ignored. When `"none"` is selected, no personality instructions are injected.
 
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`.
 
@@ -1183,6 +1184,31 @@ The server also emits `skills/changed` notifications when watched local skill fi
   "method": "skills/changed",
   "params": {}
 }
+```
+
+Use `personalities/list` to fetch the available built-in and file-backed personalities for one or more working directories.
+
+```json
+{ "method": "personalities/list", "id": 26, "params": {
+    "cwds": ["/Users/me/project"]
+} }
+{ "id": 26, "result": { "data": [{
+    "cwd": "/Users/me/project",
+    "personalities": [
+      {
+        "name": "friendly",
+        "description": "Warm, collaborative, and helpful.",
+        "scope": "builtin",
+        "isBuiltIn": true
+      },
+      {
+        "name": "night-owl",
+        "description": "Late-night, direct, and fast.",
+        "scope": "repo",
+        "isBuiltIn": false
+      }
+    ]
+}] } }
 ```
 
 To enable or disable a skill by absolute path:

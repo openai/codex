@@ -85,6 +85,8 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::PersonalitiesListParams;
+use codex_app_server_protocol::PersonalitiesListResponse;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -297,6 +299,7 @@ use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
@@ -397,6 +400,65 @@ enum ThreadShutdownResult {
     TimedOut,
 }
 
+const PERSONALITY_CATALOG_CACHE_CAPACITY: usize = 32;
+
+struct PersonalityCatalogCache {
+    catalogs: HashMap<PathBuf, codex_core::personalities::PersonalityCatalog>,
+    lru: VecDeque<PathBuf>,
+}
+
+impl PersonalityCatalogCache {
+    fn new(cwd: PathBuf, catalog: codex_core::personalities::PersonalityCatalog) -> Self {
+        let mut catalogs = HashMap::new();
+        catalogs.insert(cwd.clone(), catalog);
+        Self {
+            catalogs,
+            lru: VecDeque::from([cwd]),
+        }
+    }
+
+    fn get(&mut self, cwd: &Path) -> Option<codex_core::personalities::PersonalityCatalog> {
+        let catalog = self.catalogs.get(cwd).cloned()?;
+        self.touch(cwd);
+        Some(catalog)
+    }
+
+    fn insert(
+        &mut self,
+        cwd: PathBuf,
+        catalog: codex_core::personalities::PersonalityCatalog,
+    ) -> codex_core::personalities::PersonalityCatalog {
+        if let Some(existing) = self.catalogs.get_mut(&cwd) {
+            *existing = catalog.clone();
+            self.touch(&cwd);
+            return catalog;
+        }
+
+        while self.catalogs.len() >= PERSONALITY_CATALOG_CACHE_CAPACITY {
+            let Some(evicted) = self.lru.pop_front() else {
+                break;
+            };
+            self.catalogs.remove(&evicted);
+        }
+
+        self.catalogs.insert(cwd.clone(), catalog.clone());
+        self.touch(&cwd);
+        catalog
+    }
+
+    fn clear(&mut self) {
+        self.catalogs.clear();
+        self.lru.clear();
+    }
+
+    fn touch(&mut self, cwd: &Path) {
+        if let Some(index) = self.lru.iter().position(|entry| entry.as_path() == cwd) {
+            self.lru.remove(index);
+        }
+        self.lru.push_back(cwd.to_path_buf());
+    }
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -421,6 +483,7 @@ pub(crate) struct CodexMessageProcessor {
     command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
+    personality_catalogs: Arc<Mutex<PersonalityCatalogCache>>,
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
@@ -537,6 +600,10 @@ impl CodexMessageProcessor {
             feedback,
             log_db,
         } = args;
+        let personality_catalogs = PersonalityCatalogCache::new(
+            config.cwd.to_path_buf(),
+            codex_core::personalities::catalog_for_config(config.as_ref()),
+        );
         Self {
             auth_manager,
             thread_manager,
@@ -554,6 +621,7 @@ impl CodexMessageProcessor {
             command_exec_manager: CommandExecManager::default(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
+            personality_catalogs: Arc::new(Mutex::new(personality_catalogs)),
             background_tasks: TaskTracker::new(),
             feedback,
             log_db,
@@ -602,6 +670,38 @@ impl CodexMessageProcessor {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    async fn clear_personality_catalog_cache(&self) {
+        self.personality_catalogs.lock().await.clear();
+    }
+
+    async fn personality_catalog_for_cwd(
+        &self,
+        cwd: &AbsolutePathBuf,
+        cli_overrides: &[(String, TomlValue)],
+    ) -> Result<codex_core::personalities::PersonalityCatalog, JSONRPCErrorError> {
+        if let Some(catalog) = self.personality_catalogs.lock().await.get(cwd.as_path()) {
+            return Ok(catalog);
+        }
+
+        let cloud_requirements = self.current_cloud_requirements();
+        let config_layer_stack = load_config_layers_state(
+            &self.config.codex_home,
+            Some(cwd.clone()),
+            cli_overrides,
+            LoaderOverrides::default(),
+            cloud_requirements,
+        )
+        .await
+        .map_err(|err| config_load_error(&err))?;
+        let catalog = codex_core::personalities::catalog_from_layer_stack(&config_layer_stack);
+
+        Ok(self
+            .personality_catalogs
+            .lock()
+            .await
+            .insert(cwd.to_path_buf(), catalog))
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,
@@ -780,6 +880,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PersonalitiesList { request_id, params } => {
+                self.personalities_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginList { request_id, params } => {
@@ -1177,6 +1281,7 @@ impl CodexMessageProcessor {
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
+                    let personality_catalogs = self.personality_catalogs.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.current_cli_overrides();
@@ -1215,6 +1320,7 @@ impl CodexMessageProcessor {
                                 chatgpt_base_url,
                                 codex_home,
                             );
+                            personality_catalogs.lock().await.clear();
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
                                 cloud_requirements.as_ref(),
@@ -1294,6 +1400,7 @@ impl CodexMessageProcessor {
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
+                    let personality_catalogs = self.personality_catalogs.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.current_cli_overrides();
@@ -1329,6 +1436,7 @@ impl CodexMessageProcessor {
                                 chatgpt_base_url,
                                 codex_home,
                             );
+                            personality_catalogs.lock().await.clear();
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
                                 cloud_requirements.as_ref(),
@@ -1469,6 +1577,7 @@ impl CodexMessageProcessor {
             self.config.chatgpt_base_url.clone(),
             self.config.codex_home.clone(),
         );
+        self.clear_personality_catalog_cache().await;
         let cli_overrides = self.current_cli_overrides();
         sync_default_client_residency_requirement(&cli_overrides, self.cloud_requirements.as_ref())
             .await;
@@ -5934,6 +6043,53 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn personalities_list(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PersonalitiesListParams,
+    ) {
+        let cwds = params
+            .cwds
+            .map(|cwds| {
+                cwds.into_iter()
+                    .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|cwds| !cwds.is_empty())
+            .unwrap_or_else(|| vec![self.config.cwd.to_path_buf()]);
+
+        let cli_overrides = self.current_cli_overrides();
+        let mut data = Vec::new();
+        for cwd in cwds {
+            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    self.send_invalid_request_error(request_id, err.to_string())
+                        .await;
+                    return;
+                }
+            };
+            let catalog = match self
+                .personality_catalog_for_cwd(&cwd_abs, &cli_overrides)
+                .await
+            {
+                Ok(catalog) => catalog,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
+            data.push(codex_app_server_protocol::PersonalitiesListEntry {
+                cwd,
+                personalities: personalities_to_info(catalog.personalities()),
+            });
+        }
+
+        self.outgoing
+            .send_response(request_id, PersonalitiesListResponse { data })
+            .await;
+    }
+
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
@@ -6537,7 +6693,7 @@ impl CodexMessageProcessor {
                         summary: params.summary,
                         service_tier: params.service_tier,
                         collaboration_mode,
-                        personality: params.personality,
+                        personality: params.personality.clone(),
                     },
                 )
                 .await;
@@ -8181,6 +8337,32 @@ fn skills_to_info(
                 enabled,
             }
         })
+        .collect()
+}
+
+fn personalities_to_info(
+    personalities: &[codex_core::personalities::PersonalityDefinition],
+) -> Vec<codex_app_server_protocol::PersonalityMetadata> {
+    personalities
+        .iter()
+        .map(
+            |personality| codex_app_server_protocol::PersonalityMetadata {
+                name: personality.name.to_string(),
+                description: personality.description.clone(),
+                scope: match personality.scope {
+                    codex_core::personalities::PersonalityScope::Builtin => {
+                        codex_app_server_protocol::PersonalityScope::Builtin
+                    }
+                    codex_core::personalities::PersonalityScope::User => {
+                        codex_app_server_protocol::PersonalityScope::User
+                    }
+                    codex_core::personalities::PersonalityScope::Repo => {
+                        codex_app_server_protocol::PersonalityScope::Repo
+                    }
+                },
+                is_built_in: personality.is_builtin,
+            },
+        )
         .collect()
 }
 

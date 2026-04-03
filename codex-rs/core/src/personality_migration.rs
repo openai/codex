@@ -52,7 +52,7 @@ pub async fn maybe_migrate_personality(
     }
 
     ConfigEditsBuilder::new(codex_home)
-        .set_personality(Some(Personality::Pragmatic))
+        .set_personality(Some(Personality::pragmatic()))
         .apply()
         .await
         .map_err(|err| {

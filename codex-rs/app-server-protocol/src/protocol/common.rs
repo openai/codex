@@ -321,6 +321,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    PersonalitiesList => "personalities/list" {
+        params: v2::PersonalitiesListParams,
+        response: v2::PersonalitiesListResponse,
+    },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
         response: v2::PluginListResponse,

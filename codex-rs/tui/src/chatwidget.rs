@@ -82,6 +82,7 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+use codex_app_server_protocol::PersonalityMetadata;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -5765,8 +5766,8 @@ impl ChatWidget {
         let personality = self
             .config
             .personality
-            .filter(|_| self.config.features.enabled(Feature::Personality))
-            .filter(|_| self.current_model_supports_personality());
+            .clone()
+            .filter(|_| self.config.features.enabled(Feature::Personality));
         let service_tier = self.config.service_tier.map(Some);
         let op = AppCommand::user_turn(
             items,
@@ -7701,26 +7702,28 @@ impl ChatWidget {
             );
             return;
         }
-        if !self.current_model_supports_personality() {
-            let current_model = self.current_model();
-            self.add_error_message(format!(
-                "Current model ({current_model}) doesn't support personalities. Try /model to pick a different model."
-            ));
-            return;
-        }
-        self.open_personality_popup_for_current_model();
+        self.app_event_tx.send(AppEvent::FetchPersonalitiesList {
+            cwd: self.config.cwd.to_path_buf(),
+        });
     }
 
-    fn open_personality_popup_for_current_model(&mut self) {
-        let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
-        let personalities = [Personality::Friendly, Personality::Pragmatic];
-        let supports_personality = self.current_model_supports_personality();
+    pub(crate) fn open_personality_popup_with_items(
+        &mut self,
+        personalities: &[PersonalityMetadata],
+    ) {
+        let current_personality = self
+            .config
+            .personality
+            .clone()
+            .unwrap_or_else(Personality::pragmatic);
 
         let items: Vec<SelectionItem> = personalities
-            .into_iter()
+            .iter()
             .map(|personality| {
-                let name = Self::personality_label(personality).to_string();
-                let description = Some(Self::personality_description(personality).to_string());
+                let personality_id = Personality::from(personality.name.clone());
+                let name = Self::personality_label(&personality_id);
+                let description = Some(personality.description.clone());
+                let selected_personality = personality_id.clone();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::CodexOp(
                         AppCommand::override_turn_context(
@@ -7734,18 +7737,19 @@ impl ChatWidget {
                             /*summary*/ None,
                             /*service_tier*/ None,
                             /*collaboration_mode*/ None,
-                            Some(personality),
+                            Some(selected_personality.clone()),
                         )
                         .into_core(),
                     ));
-                    tx.send(AppEvent::UpdatePersonality(personality));
-                    tx.send(AppEvent::PersistPersonalitySelection { personality });
+                    tx.send(AppEvent::UpdatePersonality(selected_personality.clone()));
+                    tx.send(AppEvent::PersistPersonalitySelection {
+                        personality: selected_personality.clone(),
+                    });
                 })];
                 SelectionItem {
                     name,
                     description,
-                    is_current: current_personality == personality,
-                    is_disabled: !supports_personality,
+                    is_current: current_personality == personality_id,
                     actions,
                     dismiss_on_select: true,
                     ..Default::default()
@@ -9577,20 +9581,6 @@ impl ChatWidget {
             .set_plugins_command_enabled(self.config.features.enabled(Feature::Plugins));
     }
 
-    fn current_model_supports_personality(&self) -> bool {
-        let model = self.current_model();
-        self.model_catalog
-            .try_list_models()
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_personality)
-            })
-            .unwrap_or(false)
-    }
-
     /// Return whether the effective model currently advertises image-input support.
     ///
     /// We intentionally default to `true` when model metadata cannot be read so transient catalog
@@ -9739,19 +9729,12 @@ impl ChatWidget {
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
     }
 
-    fn personality_label(personality: Personality) -> &'static str {
-        match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
-        }
-    }
-
-    fn personality_description(personality: Personality) -> &'static str {
-        match personality {
-            Personality::None => "No personality instructions.",
-            Personality::Friendly => "Warm, collaborative, and helpful.",
-            Personality::Pragmatic => "Concise, task-focused, and direct.",
+    fn personality_label(personality: &Personality) -> String {
+        match personality.as_str() {
+            "none" => "None".to_string(),
+            "friendly" => "Friendly".to_string(),
+            "pragmatic" => "Pragmatic".to_string(),
+            other => other.to_string(),
         }
     }
 

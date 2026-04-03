@@ -79,14 +79,6 @@
       ],
       "type": "object"
     },
-    "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
-    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -169,13 +161,9 @@
       ]
     },
     "personality": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "sandbox": {

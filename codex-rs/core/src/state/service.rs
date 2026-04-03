@@ -7,6 +7,7 @@ use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp::McpManager;
+use crate::personalities::PersonalityCatalog;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
 use crate::tools::code_mode::CodeModeService;
@@ -44,6 +45,7 @@ pub(crate) struct SessionServices {
     pub(crate) exec_policy: Arc<ExecPolicyManager>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
+    pub(crate) personality_catalog: Arc<PersonalityCatalog>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,

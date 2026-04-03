@@ -113,14 +113,6 @@
       ],
       "type": "string"
     },
-    "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
-    },
     "ReadOnlyAccess": {
       "oneOf": [
         {
@@ -556,15 +548,11 @@
       "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
     },
     "personality": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Override the personality for this turn and subsequent turns."
+      "description": "Override the personality for this turn and subsequent turns.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "sandboxPolicy": {
       "anyOf": [

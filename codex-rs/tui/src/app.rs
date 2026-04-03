@@ -64,6 +64,8 @@ use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PersonalitiesListParams;
+use codex_app_server_protocol::PersonalitiesListResponse;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -1913,6 +1915,17 @@ impl App {
         });
     }
 
+    fn fetch_personalities_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_personalities_list(request_handle, cwd.clone())
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::PersonalitiesLoaded { cwd, result });
+        });
+    }
+
     fn fetch_plugin_detail(
         &mut self,
         app_server: &AppServerSession,
@@ -2312,7 +2325,7 @@ impl App {
                             *summary,
                             *service_tier,
                             collaboration_mode.clone(),
-                            *personality,
+                            personality.clone(),
                             final_output_json_schema.clone(),
                         )
                         .await?;
@@ -4332,6 +4345,9 @@ impl App {
             AppEvent::FetchPluginsList { cwd } => {
                 self.fetch_plugins_list(app_server, cwd);
             }
+            AppEvent::FetchPersonalitiesList { cwd } => {
+                self.fetch_personalities_list(app_server, cwd);
+            }
             AppEvent::OpenPluginDetailLoading {
                 plugin_display_name,
             } => {
@@ -4353,6 +4369,22 @@ impl App {
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
             }
+            AppEvent::PersonalitiesLoaded { cwd, result } => match result {
+                Ok(response) => {
+                    let personalities = response
+                        .data
+                        .into_iter()
+                        .find(|entry| entry.cwd == cwd)
+                        .map(|entry| entry.personalities)
+                        .unwrap_or_default();
+                    self.chat_widget
+                        .open_personality_popup_with_items(&personalities);
+                }
+                Err(err) => {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to load personalities: {err}"));
+                }
+            },
             AppEvent::FetchPluginDetail { cwd, params } => {
                 self.fetch_plugin_detail(app_server, cwd, params);
             }
@@ -4915,12 +4947,12 @@ impl App {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_personality(Some(personality))
+                    .set_personality(Some(personality.clone()))
                     .apply()
                     .await
                 {
                     Ok(()) => {
-                        let label = Self::personality_label(personality);
+                        let label = Self::personality_label(&personality);
                         let mut message = format!("Personality set to {label}");
                         if let Some(profile) = profile {
                             message.push_str(" for ");
@@ -5733,7 +5765,7 @@ impl App {
     }
 
     fn on_update_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
+        self.config.personality = Some(personality.clone());
         self.chat_widget.set_personality(personality);
     }
 
@@ -5760,11 +5792,12 @@ impl App {
         }
     }
 
-    fn personality_label(personality: Personality) -> &'static str {
-        match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
+    fn personality_label(personality: &Personality) -> String {
+        match personality.as_str() {
+            Personality::NONE => "None".to_string(),
+            Personality::FRIENDLY => "Friendly".to_string(),
+            Personality::PRAGMATIC => "Pragmatic".to_string(),
+            _ => personality.as_str().to_string(),
         }
     }
 
@@ -6067,6 +6100,23 @@ async fn fetch_plugins_list(
         })
         .await
         .wrap_err("plugin/list failed in TUI")
+}
+
+async fn fetch_personalities_list(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> Result<PersonalitiesListResponse> {
+    let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("personality list cwd must be absolute")?;
+    let request_id = RequestId::String(format!("personality-list-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PersonalitiesList {
+            request_id,
+            params: PersonalitiesListParams {
+                cwds: Some(vec![cwd]),
+            },
+        })
+        .await
+        .wrap_err("personalities/list failed in TUI")
 }
 
 async fn fetch_plugin_detail(

@@ -56,6 +56,7 @@ pub mod mention_syntax;
 pub mod message_history;
 pub mod utils;
 pub use utils::path_utils;
+pub mod personalities;
 pub mod personality_migration;
 pub mod plugins;
 pub(crate) mod mentions {

@@ -382,10 +382,14 @@ impl ModelInstructionsVariables {
 
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
         if let Some(personality) = personality {
-            match personality {
-                Personality::None => Some(String::new()),
-                Personality::Friendly => self.personality_friendly.clone(),
-                Personality::Pragmatic => self.personality_pragmatic.clone(),
+            if personality.is_none() {
+                Some(String::new())
+            } else if personality.is_friendly() {
+                self.personality_friendly.clone()
+            } else if personality.is_pragmatic() {
+                self.personality_pragmatic.clone()
+            } else {
+                None
             }
         } else {
             self.personality_default.clone()
@@ -579,7 +583,7 @@ mod tests {
             instructions_variables: Some(personality_variables()),
         }));
 
-        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+        let instructions = model.get_model_instructions(Some(Personality::friendly()));
 
         assert_eq!(instructions, "Hello friendly");
     }
@@ -595,15 +599,15 @@ mod tests {
             }),
         }));
         assert_eq!(
-            model.get_model_instructions(Some(Personality::Friendly)),
+            model.get_model_instructions(Some(Personality::friendly())),
             "Hello\nfriendly"
         );
         assert_eq!(
-            model.get_model_instructions(Some(Personality::Pragmatic)),
+            model.get_model_instructions(Some(Personality::pragmatic())),
             "Hello\n"
         );
         assert_eq!(
-            model.get_model_instructions(Some(Personality::None)),
+            model.get_model_instructions(Some(Personality::none())),
             "Hello\n"
         );
         assert_eq!(
@@ -620,15 +624,15 @@ mod tests {
             }),
         }));
         assert_eq!(
-            model_no_personality.get_model_instructions(Some(Personality::Friendly)),
+            model_no_personality.get_model_instructions(Some(Personality::friendly())),
             "Hello\n"
         );
         assert_eq!(
-            model_no_personality.get_model_instructions(Some(Personality::Pragmatic)),
+            model_no_personality.get_model_instructions(Some(Personality::pragmatic())),
             "Hello\n"
         );
         assert_eq!(
-            model_no_personality.get_model_instructions(Some(Personality::None)),
+            model_no_personality.get_model_instructions(Some(Personality::none())),
             "Hello\n"
         );
         assert_eq!(
@@ -648,7 +652,7 @@ mod tests {
             }),
         }));
 
-        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+        let instructions = model.get_model_instructions(Some(Personality::friendly()));
 
         assert_eq!(instructions, "base");
     }
@@ -666,15 +670,15 @@ mod tests {
     fn get_personality_message() {
         let personality_variables = personality_variables();
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::Friendly)),
+            personality_variables.get_personality_message(Some(Personality::friendly())),
             Some("friendly".to_string())
         );
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::Pragmatic)),
+            personality_variables.get_personality_message(Some(Personality::pragmatic())),
             Some("pragmatic".to_string())
         );
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::None)),
+            personality_variables.get_personality_message(Some(Personality::none())),
             Some(String::new())
         );
         assert_eq!(
@@ -688,15 +692,15 @@ mod tests {
             personality_pragmatic: None,
         };
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::Friendly)),
+            personality_variables.get_personality_message(Some(Personality::friendly())),
             None
         );
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::Pragmatic)),
+            personality_variables.get_personality_message(Some(Personality::pragmatic())),
             None
         );
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::None)),
+            personality_variables.get_personality_message(Some(Personality::none())),
             Some(String::new())
         );
         assert_eq!(
@@ -710,15 +714,15 @@ mod tests {
             personality_pragmatic: Some("pragmatic".to_string()),
         };
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::Friendly)),
+            personality_variables.get_personality_message(Some(Personality::friendly())),
             Some("friendly".to_string())
         );
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::Pragmatic)),
+            personality_variables.get_personality_message(Some(Personality::pragmatic())),
             Some("pragmatic".to_string())
         );
         assert_eq!(
-            personality_variables.get_personality_message(Some(Personality::None)),
+            personality_variables.get_personality_message(Some(Personality::none())),
             Some(String::new())
         );
         assert_eq!(

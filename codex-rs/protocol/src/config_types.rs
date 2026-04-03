@@ -2,10 +2,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::fmt;
 use std::num::NonZeroU64;
 use std::time::Duration;
 use strum_macros::Display;
-use strum_macros::EnumIter;
 use ts_rs::TS;
 
 use crate::openai_models::ReasoningEffort;
@@ -98,26 +98,80 @@ pub enum WindowsSandboxLevel {
 }
 
 #[derive(
-    Debug,
-    Serialize,
-    Deserialize,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Display,
-    JsonSchema,
-    TS,
-    PartialOrd,
-    Ord,
-    EnumIter,
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS, PartialOrd, Ord, Hash,
 )]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum Personality {
-    None,
-    Friendly,
-    Pragmatic,
+#[serde(transparent)]
+#[ts(type = "string")]
+pub struct Personality(String);
+
+impl Personality {
+    pub const NONE: &str = "none";
+    pub const FRIENDLY: &str = "friendly";
+    pub const PRAGMATIC: &str = "pragmatic";
+
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        self.is_none() || self.is_friendly() || self.is_pragmatic()
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.as_str() == Self::NONE
+    }
+
+    pub fn is_friendly(&self) -> bool {
+        self.as_str() == Self::FRIENDLY
+    }
+
+    pub fn is_pragmatic(&self) -> bool {
+        self.as_str() == Self::PRAGMATIC
+    }
+
+    pub fn builtin_names() -> [&'static str; 3] {
+        [Self::NONE, Self::FRIENDLY, Self::PRAGMATIC]
+    }
+
+    pub fn none() -> Self {
+        Self::new(Self::NONE)
+    }
+
+    pub fn friendly() -> Self {
+        Self::new(Self::FRIENDLY)
+    }
+
+    pub fn pragmatic() -> Self {
+        Self::new(Self::PRAGMATIC)
+    }
+}
+
+impl From<&str> for Personality {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Personality {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Personality> for String {
+    fn from(value: Personality) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for Personality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(

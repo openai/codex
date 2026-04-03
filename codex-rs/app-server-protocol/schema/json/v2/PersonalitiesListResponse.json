@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PersonalitiesListEntry": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "personalities": {
+          "items": {
+            "$ref": "#/definitions/PersonalityMetadata"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd",
+        "personalities"
+      ],
+      "type": "object"
+    },
+    "PersonalityMetadata": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "isBuiltIn": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/PersonalityScope"
+        }
+      },
+      "required": [
+        "description",
+        "isBuiltIn",
+        "name",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "PersonalityScope": {
+      "enum": [
+        "builtin",
+        "user",
+        "repo"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/PersonalitiesListEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "PersonalitiesListResponse",
+  "type": "object"
+}

@@ -183,7 +183,7 @@ async fn no_marker_sessions_sets_personality() -> io::Result<()> {
     );
 
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted.personality, Some(Personality::pragmatic()));
     Ok(())
 }
 
@@ -199,7 +199,7 @@ async fn no_marker_sessions_preserves_existing_config_fields() -> io::Result<()>
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     let persisted = read_config_toml(temp.path()).await?;
     assert_eq!(persisted.model, Some("gpt-5-codex".to_string()));
-    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted.personality, Some(Personality::pragmatic()));
     Ok(())
 }
 
@@ -315,7 +315,7 @@ async fn applied_migration_is_idempotent_on_second_run() -> io::Result<()> {
     assert_eq!(first_status, PersonalityMigrationStatus::Applied);
     assert_eq!(second_status, PersonalityMigrationStatus::SkippedMarker);
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted.personality, Some(Personality::pragmatic()));
     Ok(())
 }
 
@@ -333,6 +333,6 @@ async fn no_marker_archived_sessions_sets_personality() -> io::Result<()> {
     );
 
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted.personality, Some(Personality::pragmatic()));
     Ok(())
 }

@@ -567,7 +567,7 @@
           "type": "string"
         },
         "personality": {
-          "$ref": "#/definitions/Personality"
+          "type": "string"
         },
         "plan_mode_reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
@@ -1289,14 +1289,6 @@
     },
     "PermissionsToml": {
       "type": "object"
-    },
-    "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
     },
     "PluginConfig": {
       "additionalProperties": false,
@@ -2432,12 +2424,8 @@
       "description": "Named permissions profiles."
     },
     "personality": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        }
-      ],
-      "description": "Optionally specify a personality for the model"
+      "description": "Optionally specify a personality for the model",
+      "type": "string"
     },
     "plan_mode_reasoning_effort": {
       "$ref": "#/definitions/ReasoningEffort"
