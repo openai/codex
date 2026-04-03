@@ -7,6 +7,8 @@ use tracing::warn;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::protocol::INITIALIZE_METHOD;
+use crate::protocol::InitializeParams;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
@@ -14,14 +16,18 @@ use crate::rpc::invalid_request;
 use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
+use crate::server::session_registry::SessionRegistry;
 
-pub(crate) async fn run_connection(connection: JsonRpcConnection) {
+pub(crate) async fn run_connection(
+    connection: JsonRpcConnection,
+    session_registry: SessionRegistry,
+) {
     let router = Arc::new(build_router());
     let (json_outgoing_tx, mut incoming_rx, connection_tasks) = connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
-    let handler = Arc::new(ExecServerHandler::new(notifications));
+    let mut handler: Option<Arc<ExecServerHandler>> = None;
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
@@ -40,6 +46,12 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
 
     // Process inbound events sequentially to preserve initialize/initialized ordering.
     while let Some(event) = incoming_rx.recv().await {
+        if let Some(current_handler) = handler.as_ref()
+            && !current_handler.is_current_attachment()
+        {
+            debug!("exec-server connection evicted after session resume");
+            break;
+        }
         match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
                 warn!("ignoring malformed exec-server message: {reason}");
@@ -56,8 +68,88 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_app_server_protocol::JSONRPCMessage::Request(request) => {
-                    if let Some(route) = router.request_route(request.method.as_str()) {
-                        let message = route(handler.clone(), request).await;
+                    if request.method == INITIALIZE_METHOD {
+                        let params = request.params.unwrap_or(serde_json::Value::Null);
+                        let params: InitializeParams = match serde_json::from_value(params) {
+                            Ok(params) => params,
+                            Err(err) => {
+                                if outgoing_tx
+                                    .send(RpcServerOutboundMessage::Error {
+                                        request_id: request.id,
+                                        error: invalid_request(err.to_string()),
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+
+                        if handler.is_none() {
+                            let session = match session_registry
+                                .attach(params.resume_session_id.clone(), notifications.clone())
+                                .await
+                            {
+                                Ok(session) => session,
+                                Err(error) => {
+                                    if outgoing_tx
+                                        .send(RpcServerOutboundMessage::Error {
+                                            request_id: request.id,
+                                            error,
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            };
+                            handler = Some(Arc::new(ExecServerHandler::new(session)));
+                        }
+
+                        let Some(current_handler) = handler.as_ref() else {
+                            break;
+                        };
+                        let message = match current_handler.initialize(params) {
+                            Ok(result) => match serde_json::to_value(result) {
+                                Ok(result) => RpcServerOutboundMessage::Response {
+                                    request_id: request.id,
+                                    result,
+                                },
+                                Err(err) => RpcServerOutboundMessage::Error {
+                                    request_id: request.id,
+                                    error: invalid_request(err.to_string()),
+                                },
+                            },
+                            Err(error) => RpcServerOutboundMessage::Error {
+                                request_id: request.id,
+                                error,
+                            },
+                        };
+                        if outgoing_tx.send(message).await.is_err() {
+                            break;
+                        }
+                    } else if let Some(route) = router.request_route(request.method.as_str()) {
+                        let Some(current_handler) = handler.as_ref() else {
+                            if outgoing_tx
+                                .send(RpcServerOutboundMessage::Error {
+                                    request_id: request.id,
+                                    error: invalid_request(
+                                        "client must call initialize before using methods"
+                                            .to_string(),
+                                    ),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        };
+                        let message = route(Arc::clone(current_handler), request).await;
                         if outgoing_tx.send(message).await.is_err() {
                             break;
                         }
@@ -76,6 +168,13 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
                     }
                 }
                 codex_app_server_protocol::JSONRPCMessage::Notification(notification) => {
+                    let Some(current_handler) = handler.as_ref() else {
+                        warn!(
+                            "closing exec-server connection after notification before initialize: {}",
+                            notification.method
+                        );
+                        break;
+                    };
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
                         warn!(
@@ -84,7 +183,7 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
                         );
                         break;
                     };
-                    if let Err(err) = route(handler.clone(), notification).await {
+                    if let Err(err) = route(Arc::clone(current_handler), notification).await {
                         warn!("closing exec-server connection after protocol error: {err}");
                         break;
                     }
@@ -113,7 +212,9 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
         }
     }
 
-    handler.shutdown().await;
+    if let Some(handler) = handler {
+        handler.shutdown().await;
+    }
     drop(outgoing_tx);
     for task in connection_tasks {
         task.abort();

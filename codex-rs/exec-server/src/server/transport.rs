@@ -6,6 +6,7 @@ use tracing::warn;
 
 use crate::connection::JsonRpcConnection;
 use crate::server::processor::run_connection;
+use crate::server::session_registry::SessionRegistry;
 
 pub const DEFAULT_LISTEN_URL: &str = "ws://127.0.0.1:0";
 
@@ -58,18 +59,23 @@ async fn run_websocket_listener(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
+    let session_registry = SessionRegistry::default();
     tracing::info!("codex-exec-server listening on ws://{local_addr}");
     println!("ws://{local_addr}");
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
+        let session_registry = session_registry.clone();
         tokio::spawn(async move {
             match accept_async(stream).await {
                 Ok(websocket) => {
-                    run_connection(JsonRpcConnection::from_websocket(
-                        websocket,
-                        format!("exec-server websocket {peer_addr}"),
-                    ))
+                    run_connection(
+                        JsonRpcConnection::from_websocket(
+                            websocket,
+                            format!("exec-server websocket {peer_addr}"),
+                        ),
+                        session_registry,
+                    )
                     .await;
                 }
                 Err(err) => {

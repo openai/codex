@@ -12,9 +12,7 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
-use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
-use crate::protocol::InitializeParams;
 use crate::protocol::ReadParams;
 use crate::protocol::TerminateParams;
 use crate::protocol::WriteParams;
@@ -30,12 +28,6 @@ use codex_app_server_protocol::FsWriteFileParams;
 
 pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     let mut router = RpcRouter::new();
-    router.request(
-        INITIALIZE_METHOD,
-        |handler: Arc<ExecServerHandler>, _params: InitializeParams| async move {
-            handler.initialize()
-        },
-    );
     router.notification(
         INITIALIZED_METHOD,
         |handler: Arc<ExecServerHandler>, _params: serde_json::Value| async move {
