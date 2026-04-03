@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
 pub const FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME: &str = "codex-connectivity-diagnostics.txt";
 const PROXY_ENV_VARS: &[&str] = &[
     "HTTP_PROXY",
@@ -58,13 +57,6 @@ impl FeedbackDiagnostics {
             });
         }
 
-        if let Some(value) = env.get(OPENAI_BASE_URL_ENV_VAR).map(String::as_str) {
-            diagnostics.push(FeedbackDiagnostic {
-                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                details: vec![format!("{OPENAI_BASE_URL_ENV_VAR} = {value}")],
-            });
-        }
-
         Self { diagnostics }
     }
 
@@ -112,37 +104,28 @@ mod tests {
             ),
             ("http_proxy", "proxy.example.com:8080"),
             ("all_proxy", "socks5h://all-proxy.example.com:1080"),
-            ("OPENAI_BASE_URL", "https://example.com/v1?token=secret"),
         ]);
 
         assert_eq!(
             diagnostics,
             FeedbackDiagnostics {
-                diagnostics: vec![
-                    FeedbackDiagnostic {
-                        headline:
-                            "Proxy environment variables are set and may affect connectivity."
-                                .to_string(),
-                        details: vec![
-                            "http_proxy = proxy.example.com:8080".to_string(),
-                            "HTTPS_PROXY = https://user:password@secure-proxy.example.com:443?secret=1".to_string(),
-                            "all_proxy = socks5h://all-proxy.example.com:1080".to_string(),
-                        ],
-                    },
-                    FeedbackDiagnostic {
-                        headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                        details: vec![
-                            "OPENAI_BASE_URL = https://example.com/v1?token=secret".to_string(),
-                        ],
-                    },
-                ],
+                diagnostics: vec![FeedbackDiagnostic {
+                    headline: "Proxy environment variables are set and may affect connectivity."
+                        .to_string(),
+                    details: vec![
+                        "http_proxy = proxy.example.com:8080".to_string(),
+                        "HTTPS_PROXY = https://user:password@secure-proxy.example.com:443?secret=1"
+                            .to_string(),
+                        "all_proxy = socks5h://all-proxy.example.com:1080".to_string(),
+                    ],
+                },],
             }
         );
 
         assert_eq!(
             diagnostics.attachment_text(),
             Some(
-            "Connectivity diagnostics\n\n- Proxy environment variables are set and may affect connectivity.\n  - http_proxy = proxy.example.com:8080\n  - HTTPS_PROXY = https://user:password@secure-proxy.example.com:443?secret=1\n  - all_proxy = socks5h://all-proxy.example.com:1080\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1?token=secret"
+            "Connectivity diagnostics\n\n- Proxy environment variables are set and may affect connectivity.\n  - http_proxy = proxy.example.com:8080\n  - HTTPS_PROXY = https://user:password@secure-proxy.example.com:443?secret=1\n  - all_proxy = socks5h://all-proxy.example.com:1080"
                 .to_string()
             )
         );
@@ -156,45 +139,18 @@ mod tests {
     }
 
     #[test]
-    fn collect_from_pairs_preserves_openai_base_url_literal_value() {
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
-            "OPENAI_BASE_URL",
-            "https://api.openai.com/v1/",
-        )]);
+    fn collect_from_pairs_preserves_whitespace_and_empty_values() {
+        let diagnostics =
+            FeedbackDiagnostics::collect_from_pairs([("HTTP_PROXY", "  proxy with spaces  ")]);
 
         assert_eq!(
             diagnostics,
             FeedbackDiagnostics {
                 diagnostics: vec![FeedbackDiagnostic {
-                    headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                    details: vec!["OPENAI_BASE_URL = https://api.openai.com/v1/".to_string()],
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn collect_from_pairs_preserves_whitespace_and_empty_values() {
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([
-            ("HTTP_PROXY", "  proxy with spaces  "),
-            ("OPENAI_BASE_URL", ""),
-        ]);
-
-        assert_eq!(
-            diagnostics,
-            FeedbackDiagnostics {
-                diagnostics: vec![
-                    FeedbackDiagnostic {
-                        headline:
-                            "Proxy environment variables are set and may affect connectivity."
-                                .to_string(),
-                        details: vec!["HTTP_PROXY =   proxy with spaces  ".to_string()],
-                    },
-                    FeedbackDiagnostic {
-                        headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                        details: vec!["OPENAI_BASE_URL = ".to_string()],
-                    },
-                ],
+                    headline: "Proxy environment variables are set and may affect connectivity."
+                        .to_string(),
+                    details: vec!["HTTP_PROXY =   proxy with spaces  ".to_string()],
+                },],
             }
         );
     }
@@ -202,27 +158,16 @@ mod tests {
     #[test]
     fn collect_from_pairs_reports_values_verbatim() {
         let proxy_value = "not a valid proxy";
-        let base_url_value = "hello";
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([
-            ("HTTP_PROXY", proxy_value),
-            ("OPENAI_BASE_URL", base_url_value),
-        ]);
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs([("HTTP_PROXY", proxy_value)]);
 
         assert_eq!(
             diagnostics,
             FeedbackDiagnostics {
-                diagnostics: vec![
-                    FeedbackDiagnostic {
-                        headline:
-                            "Proxy environment variables are set and may affect connectivity."
-                                .to_string(),
-                        details: vec!["HTTP_PROXY = not a valid proxy".to_string()],
-                    },
-                    FeedbackDiagnostic {
-                        headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                        details: vec!["OPENAI_BASE_URL = hello".to_string()],
-                    },
-                ],
+                diagnostics: vec![FeedbackDiagnostic {
+                    headline: "Proxy environment variables are set and may affect connectivity."
+                        .to_string(),
+                    details: vec!["HTTP_PROXY = not a valid proxy".to_string()],
+                },],
             }
         );
     }
