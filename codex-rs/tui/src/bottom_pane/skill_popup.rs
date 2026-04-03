@@ -246,6 +246,7 @@ mod tests {
     fn ranked_mention_item(
         display_name: &str,
         search_terms: &[&str],
+        category_tag: &str,
         sort_rank: u8,
     ) -> MentionItem {
         MentionItem {
@@ -257,13 +258,17 @@ mod tests {
                 .map(|term| (*term).to_string())
                 .collect(),
             path: None,
-            category_tag: Some("[Skill]".to_string()),
+            category_tag: Some(category_tag.to_string()),
             sort_rank,
         }
     }
 
     fn named_mention_item(display_name: &str, search_terms: &[&str]) -> MentionItem {
-        ranked_mention_item(display_name, search_terms, 1)
+        ranked_mention_item(display_name, search_terms, "[Skill]", /*sort_rank*/ 1)
+    }
+
+    fn plugin_mention_item(display_name: &str, search_terms: &[&str]) -> MentionItem {
+        ranked_mention_item(display_name, search_terms, "[Plugin]", /*sort_rank*/ 0)
     }
 
     #[test]
@@ -341,20 +346,42 @@ mod tests {
     #[test]
     fn query_match_score_sorts_before_plugin_rank_bias() {
         let mut popup = SkillPopup::new(vec![
-            ranked_mention_item("Copilot PR", &["copilot-pr", "Copilot PR"], 0),
-            ranked_mention_item("PR Babysitter", &["babysit-pr", "PR Babysitter"], 1),
+            plugin_mention_item("GitHub", &["github"]),
+            named_mention_item("pr-review-triage", &["pr-review-triage"]),
+            named_mention_item("prd", &["prd"]),
+            named_mention_item("Plugin Creator", &["plugin-creator", "Plugin Creator"]),
+            named_mention_item(
+                "Logging Best Practices",
+                &["logging-best-practices", "Logging Best Practices"],
+            ),
+            named_mention_item("PR Babysitter", &["babysit-pr", "PR Babysitter"]),
         ]);
         popup.set_query("pr");
 
-        let filtered_names: Vec<String> = popup
+        let filtered_items: Vec<(String, Option<String>)> = popup
             .filtered_items()
             .into_iter()
-            .map(|idx| popup.mentions[idx].display_name.clone())
+            .map(|idx| {
+                (
+                    popup.mentions[idx].display_name.clone(),
+                    popup.mentions[idx].category_tag.clone(),
+                )
+            })
             .collect();
 
         assert_eq!(
-            filtered_names,
-            vec!["PR Babysitter".to_string(), "Copilot PR".to_string()]
+            filtered_items,
+            vec![
+                ("PR Babysitter".to_string(), Some("[Skill]".to_string())),
+                ("pr-review-triage".to_string(), Some("[Skill]".to_string())),
+                ("prd".to_string(), Some("[Skill]".to_string())),
+                ("Plugin Creator".to_string(), Some("[Skill]".to_string())),
+                (
+                    "Logging Best Practices".to_string(),
+                    Some("[Skill]".to_string())
+                ),
+                ("GitHub".to_string(), Some("[Plugin]".to_string())),
+            ]
         );
     }
 }
