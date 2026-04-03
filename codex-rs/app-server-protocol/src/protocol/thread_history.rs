@@ -76,6 +76,11 @@ pub struct ThreadHistoryBuilder {
     next_item_index: i64,
     current_rollout_index: usize,
     next_rollout_index: usize,
+    // Current streams emit per-attempt spawn ids (`call_id`, `call_id#2`, ...); legacy rollouts
+    // reused the raw tool call_id for each retry, so replay still synthesizes stable per-attempt
+    // item ids when needed to preserve each attempt row.
+    current_spawn_attempt_ids: HashMap<String, String>,
+    spawn_attempt_counts: HashMap<String, usize>,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -92,6 +97,8 @@ impl ThreadHistoryBuilder {
             next_item_index: 1,
             current_rollout_index: 0,
             next_rollout_index: 0,
+            current_spawn_attempt_ids: HashMap::new(),
+            spawn_attempt_counts: HashMap::new(),
         }
     }
 
@@ -608,8 +615,9 @@ impl ThreadHistoryBuilder {
         &mut self,
         payload: &codex_protocol::protocol::CollabAgentSpawnBeginEvent,
     ) {
+        let item_id = self.next_collab_spawn_attempt_item_id(&payload.call_id);
         let item = ThreadItem::CollabAgentToolCall {
-            id: payload.call_id.clone(),
+            id: item_id,
             tool: CollabAgentTool::SpawnAgent,
             status: CollabAgentToolCallStatus::InProgress,
             sender_thread_id: payload.sender_thread_id.to_string(),
@@ -626,6 +634,10 @@ impl ThreadHistoryBuilder {
         &mut self,
         payload: &codex_protocol::protocol::CollabAgentSpawnEndEvent,
     ) {
+        let item_id = self
+            .current_spawn_attempt_ids
+            .remove(&payload.call_id)
+            .unwrap_or_else(|| payload.call_id.clone());
         let has_receiver = payload.new_thread_id.is_some();
         let status = match &payload.status {
             AgentStatus::Errored(_) | AgentStatus::NotFound => CollabAgentToolCallStatus::Failed,
@@ -644,7 +656,7 @@ impl ThreadHistoryBuilder {
             None => (Vec::new(), HashMap::new()),
         };
         self.upsert_item_in_current_turn(ThreadItem::CollabAgentToolCall {
-            id: payload.call_id.clone(),
+            id: item_id,
             tool: CollabAgentTool::SpawnAgent,
             status,
             sender_thread_id: payload.sender_thread_id.to_string(),
@@ -977,6 +989,8 @@ impl ThreadHistoryBuilder {
     }
 
     fn finish_current_turn(&mut self) {
+        self.current_spawn_attempt_ids.clear();
+        self.spawn_attempt_counts.clear();
         if let Some(turn) = self.current_turn.take() {
             if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
                 return;
@@ -1038,6 +1052,22 @@ impl ThreadHistoryBuilder {
         let id = format!("item-{}", self.next_item_index);
         self.next_item_index += 1;
         id
+    }
+
+    fn next_collab_spawn_attempt_item_id(&mut self, call_id: &str) -> String {
+        let attempt_number = self
+            .spawn_attempt_counts
+            .entry(call_id.to_string())
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+        let item_id = if *attempt_number == 1 {
+            call_id.to_string()
+        } else {
+            format!("{call_id}#{attempt_number}")
+        };
+        self.current_spawn_attempt_ids
+            .insert(call_id.to_string(), item_id.clone());
+        item_id
     }
 
     fn build_user_inputs(&self, payload: &UserMessageEvent) -> Vec<UserInput> {
@@ -2548,6 +2578,157 @@ mod tests {
                 receiver_thread_ids: vec!["00000000-0000-0000-0000-000000000002".into()],
                 prompt: Some("inspect the repo".into()),
                 model: Some("gpt-5.4-mini".into()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
+                agents_states: [(
+                    "00000000-0000-0000-0000-000000000002".into(),
+                    CollabAgentState {
+                        status: crate::protocol::v2::CollabAgentStatus::Running,
+                        message: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_collab_spawn_end_without_receiver_as_failed_spawn_attempt() {
+        let sender_thread_id = ThreadId::try_from("00000000-0000-0000-0000-000000000001")
+            .expect("valid sender thread id");
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "spawn agent".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::CollabAgentSpawnBegin(codex_protocol::protocol::CollabAgentSpawnBeginEvent {
+                call_id: "spawn-1".into(),
+                sender_thread_id,
+                prompt: "inspect the repo".into(),
+                model: "gpt-5.4-mini".into(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+            }),
+            EventMsg::CollabAgentSpawnEnd(codex_protocol::protocol::CollabAgentSpawnEndEvent {
+                call_id: "spawn-1".into(),
+                sender_thread_id,
+                new_thread_id: None,
+                new_agent_nickname: None,
+                new_agent_role: None,
+                prompt: "inspect the repo".into(),
+                model: "gpt-5.4-mini".into(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+                status: AgentStatus::PendingInit,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 2);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CollabAgentToolCall {
+                id: "spawn-1".into(),
+                tool: CollabAgentTool::SpawnAgent,
+                status: CollabAgentToolCallStatus::Failed,
+                sender_thread_id: "00000000-0000-0000-0000-000000000001".into(),
+                receiver_thread_ids: Vec::new(),
+                prompt: Some("inspect the repo".into()),
+                model: Some("gpt-5.4-mini".into()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
+                agents_states: HashMap::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_collab_spawn_retries_as_distinct_attempt_items() {
+        let sender_thread_id = ThreadId::try_from("00000000-0000-0000-0000-000000000001")
+            .expect("valid sender thread id");
+        let spawned_thread_id = ThreadId::try_from("00000000-0000-0000-0000-000000000002")
+            .expect("valid receiver thread id");
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "spawn agent".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::CollabAgentSpawnBegin(codex_protocol::protocol::CollabAgentSpawnBeginEvent {
+                call_id: "spawn-1".into(),
+                sender_thread_id,
+                prompt: "inspect the repo".into(),
+                model: "gpt-5.4-mini".into(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Low,
+            }),
+            EventMsg::CollabAgentSpawnEnd(codex_protocol::protocol::CollabAgentSpawnEndEvent {
+                call_id: "spawn-1".into(),
+                sender_thread_id,
+                new_thread_id: None,
+                new_agent_nickname: None,
+                new_agent_role: None,
+                prompt: "inspect the repo".into(),
+                model: "gpt-5.4-mini".into(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Low,
+                status: AgentStatus::Errored("insufficient_quota".into()),
+            }),
+            EventMsg::CollabAgentSpawnBegin(codex_protocol::protocol::CollabAgentSpawnBeginEvent {
+                call_id: "spawn-1".into(),
+                sender_thread_id,
+                prompt: "inspect the repo".into(),
+                model: "gpt-5".into(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+            }),
+            EventMsg::CollabAgentSpawnEnd(codex_protocol::protocol::CollabAgentSpawnEndEvent {
+                call_id: "spawn-1".into(),
+                sender_thread_id,
+                new_thread_id: Some(spawned_thread_id),
+                new_agent_nickname: Some("Scout".into()),
+                new_agent_role: Some("explorer".into()),
+                prompt: "inspect the repo".into(),
+                model: "gpt-5".into(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+                status: AgentStatus::Running,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 3);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CollabAgentToolCall {
+                id: "spawn-1".into(),
+                tool: CollabAgentTool::SpawnAgent,
+                status: CollabAgentToolCallStatus::Failed,
+                sender_thread_id: "00000000-0000-0000-0000-000000000001".into(),
+                receiver_thread_ids: Vec::new(),
+                prompt: Some("inspect the repo".into()),
+                model: Some("gpt-5.4-mini".into()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Low),
+                agents_states: HashMap::new(),
+            }
+        );
+        assert_eq!(
+            turns[0].items[2],
+            ThreadItem::CollabAgentToolCall {
+                id: "spawn-1#2".into(),
+                tool: CollabAgentTool::SpawnAgent,
+                status: CollabAgentToolCallStatus::Completed,
+                sender_thread_id: "00000000-0000-0000-0000-000000000001".into(),
+                receiver_thread_ids: vec!["00000000-0000-0000-0000-000000000002".into()],
+                prompt: Some("inspect the repo".into()),
+                model: Some("gpt-5".into()),
                 reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
                 agents_states: [(
                     "00000000-0000-0000-0000-000000000002".into(),

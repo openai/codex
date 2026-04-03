@@ -545,6 +545,41 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
+fn spawn_agent_model_fallback_list_schema() -> JsonSchema {
+    let model_fallback_item_properties = BTreeMap::from([
+        (
+            "model".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Model to try. Must be a model slug from the current model picker list."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "reasoning_effort".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional reasoning effort override for this candidate. Replaces the inherited reasoning effort."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    JsonSchema::Array {
+        items: Box::new(JsonSchema::Object {
+            properties: model_fallback_item_properties,
+            required: Some(vec!["model".to_string()]),
+            additional_properties: Some(false.into()),
+        }),
+        description: Some(
+            "Ordered model candidates for fallback retries. Each entry may include an optional reasoning effort."
+                .to_string(),
+        ),
+    }
+}
+
 fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
     BTreeMap::from([
         (
@@ -590,6 +625,10 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                 ),
             },
         ),
+        (
+            "model_fallback_list".to_string(),
+            spawn_agent_model_fallback_list_schema(),
+        ),
     ])
 }
 
@@ -633,6 +672,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
                         .to_string(),
                 ),
             },
+        ),
+        (
+            "model_fallback_list".to_string(),
+            spawn_agent_model_fallback_list_schema(),
         ),
     ])
 }

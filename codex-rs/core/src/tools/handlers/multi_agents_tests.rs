@@ -2,6 +2,7 @@ use super::*;
 use crate::ThreadManager;
 use crate::built_in_model_providers;
 use crate::codex::make_session_and_context;
+use crate::codex::make_session_and_context_with_rx;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::session_prefix::format_subagent_notification_message;
@@ -27,8 +28,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::InitialHistory;
@@ -159,6 +163,20 @@ where
             (content, output.success)
         }
         other => panic!("expected function output, got {other:?}"),
+    }
+}
+
+async fn wait_for_collab_spawn_end_event(
+    rx: &async_channel::Receiver<Event>,
+) -> CollabAgentSpawnEndEvent {
+    loop {
+        let event = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("collab spawn-end event timed out")
+            .expect("collab spawn-end event missing");
+        if let EventMsg::CollabAgentSpawnEnd(event) = event.msg {
+            return event;
+        }
     }
 }
 
@@ -396,20 +414,173 @@ async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
 
 #[tokio::test]
 async fn spawn_agent_errors_when_manager_dropped() {
-    let (session, turn) = make_session_and_context().await;
+    let (session, turn, rx) = make_session_and_context_with_rx().await;
     let invocation = invocation(
-        Arc::new(session),
-        Arc::new(turn),
+        session.clone(),
+        turn.clone(),
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
     let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("spawn should fail without a manager");
     };
+    let spawn_end_event = wait_for_collab_spawn_end_event(&rx).await;
+    assert_eq!(spawn_end_event.call_id, "call-1");
+    assert_eq!(spawn_end_event.sender_thread_id, session.conversation_id);
+    assert_eq!(spawn_end_event.new_thread_id, None);
+    assert_eq!(spawn_end_event.new_agent_nickname, None);
+    assert_eq!(spawn_end_event.new_agent_role, None);
+    assert_eq!(spawn_end_event.prompt, "hello");
+    assert_eq!(spawn_end_event.model, "");
+    assert_eq!(spawn_end_event.reasoning_effort, ReasoningEffort::default());
+    assert!(matches!(
+        spawn_end_event.status,
+        AgentStatus::Errored(ref message) if message.contains("thread manager dropped")
+    ));
     assert_eq!(
         err,
         FunctionCallError::RespondToModel("collab manager unavailable".to_string())
     );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_agent_errors_when_manager_dropped() {
+    let (session, mut turn, rx) = make_session_and_context_with_rx().await;
+    let turn_context = Arc::get_mut(&mut turn).expect("single turn context ref");
+    let mut config = (*turn_context.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn_context.config = Arc::new(config);
+
+    let invocation = invocation(
+        session.clone(),
+        turn.clone(),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "task_name": "worker"
+        })),
+    );
+    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+        panic!("spawn should fail without a manager");
+    };
+    let spawn_end_event = wait_for_collab_spawn_end_event(&rx).await;
+    assert_eq!(spawn_end_event.call_id, "call-1");
+    assert_eq!(spawn_end_event.sender_thread_id, session.conversation_id);
+    assert_eq!(spawn_end_event.new_thread_id, None);
+    assert_eq!(spawn_end_event.new_agent_nickname, None);
+    assert_eq!(spawn_end_event.new_agent_role, None);
+    assert_eq!(spawn_end_event.prompt, "inspect this repo");
+    assert_eq!(spawn_end_event.model, "");
+    assert_eq!(spawn_end_event.reasoning_effort, ReasoningEffort::default());
+    assert!(matches!(
+        spawn_end_event.status,
+        AgentStatus::Errored(ref message) if message.contains("thread manager dropped")
+    ));
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+    );
+}
+
+#[tokio::test]
+async fn spawn_retry_preempted_event_omits_thread_identity() {
+    let (session, turn, rx) = make_session_and_context_with_rx().await;
+
+    send_collab_agent_spawn_retry_preempted_event(
+        session.as_ref(),
+        turn.as_ref(),
+        "call-1".to_string(),
+        "inspect this repo".to_string(),
+        "gpt-5.4-mini".to_string(),
+        ReasoningEffort::Medium,
+        AgentStatus::PendingInit,
+    )
+    .await;
+
+    let spawn_end_event = wait_for_collab_spawn_end_event(&rx).await;
+    assert_eq!(spawn_end_event.call_id, "call-1");
+    assert_eq!(spawn_end_event.sender_thread_id, session.conversation_id);
+    assert_eq!(spawn_end_event.new_thread_id, None);
+    assert_eq!(spawn_end_event.new_agent_nickname, None);
+    assert_eq!(spawn_end_event.new_agent_role, None);
+    assert_eq!(spawn_end_event.prompt, "inspect this repo");
+    assert_eq!(spawn_end_event.model, "gpt-5.4-mini");
+    assert_eq!(spawn_end_event.reasoning_effort, ReasoningEffort::Medium);
+    assert_eq!(spawn_end_event.status, AgentStatus::PendingInit);
+}
+
+#[tokio::test]
+async fn spawn_async_quota_probe_accepts_running_child() {
+    let decision = probe_spawn_attempt_for_async_quota_exhaustion(
+        AgentStatus::Running,
+        ThreadId::default(),
+        &crate::agent::control::AgentControl::default(),
+    )
+    .await;
+
+    assert!(matches!(
+        decision,
+        SpawnAttemptRetryDecision::Accept(AgentStatus::Running)
+    ));
+}
+
+#[tokio::test]
+async fn close_quota_exhausted_spawn_attempt_accepts_child_that_started_running() {
+    let (_session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let thread = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("child thread should start");
+    let active_turn = thread.thread.codex.session.new_default_turn().await;
+    thread
+        .thread
+        .codex
+        .session
+        .spawn_task(
+            Arc::clone(&active_turn),
+            vec![UserInput::Text {
+                text: "working".to_string(),
+                text_elements: Vec::new(),
+            }],
+            NeverEndingTask,
+        )
+        .await;
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.agent_control().get_status(thread.thread_id).await == AgentStatus::Running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("child should reach running");
+
+    let decision = close_quota_exhausted_spawn_attempt(
+        &manager.agent_control(),
+        thread.thread_id,
+        AgentStatus::PendingInit,
+    )
+    .await;
+
+    assert!(matches!(
+        decision,
+        SpawnAttemptRetryDecision::Accept(AgentStatus::Running)
+    ));
+    assert_eq!(
+        manager.agent_control().get_status(thread.thread_id).await,
+        AgentStatus::Running
+    );
+
+    let _ = thread
+        .thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should submit");
 }
 
 #[tokio::test]
