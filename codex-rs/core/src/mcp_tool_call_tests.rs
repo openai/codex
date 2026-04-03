@@ -1658,6 +1658,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
                 &serde_json::json!({
                     "risk_level": "low",
                     "risk_score": 12,
+                    "user_authorization_confidence": 58,
                     "rationale": "The user already configured guardian to review escalated approvals for this session.",
                     "evidence": [{
                         "message": "ARC requested escalation instead of blocking outright.",
