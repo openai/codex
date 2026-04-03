@@ -75,6 +75,18 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     }
 }
 
+fn user_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 fn reasoning_item(id: &str) -> ResponseItem {
     ResponseItem::Reasoning {
         id: id.to_string(),
@@ -183,42 +195,6 @@ fn history_contains_assistant_inter_agent_communication(
             }
             ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
         })
-    })
-}
-
-fn history_contains_function_call(history_items: &[ResponseItem], call_id: &str) -> bool {
-    history_items.iter().any(|item| {
-        matches!(
-            item,
-            ResponseItem::FunctionCall {
-                call_id: item_call_id,
-                ..
-            } if item_call_id == call_id
-        )
-    })
-}
-
-fn history_contains_function_call_output(history_items: &[ResponseItem], call_id: &str) -> bool {
-    history_items.iter().any(|item| {
-        matches!(
-            item,
-            ResponseItem::FunctionCallOutput {
-                call_id: item_call_id,
-                ..
-            } if item_call_id == call_id
-        )
-    })
-}
-
-fn history_contains_reasoning_item(history_items: &[ResponseItem], id: &str) -> bool {
-    history_items.iter().any(|item| {
-        matches!(
-            item,
-            ResponseItem::Reasoning {
-                id: item_id,
-                ..
-            } if item_id == id
-        )
     })
 }
 
@@ -694,38 +670,11 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child thread should be registered");
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
-    assert!(history_contains_text(
-        history.raw_items(),
-        "parent seed context"
-    ));
-    assert!(history_contains_text(
-        history.raw_items(),
-        "parent final answer"
-    ));
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "parent commentary"
-    ));
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "parent unknown phase"
-    ));
-    assert!(!history_contains_reasoning_item(
-        history.raw_items(),
-        "parent-reasoning"
-    ));
-    assert!(!history_contains_assistant_inter_agent_communication(
-        history.raw_items(),
-        &trigger_message
-    ));
-    assert!(!history_contains_function_call(
-        history.raw_items(),
-        &parent_spawn_call_id
-    ));
-    assert!(!history_contains_function_call_output(
-        history.raw_items(),
-        &parent_spawn_call_id
-    ));
+    let expected_history = [
+        user_message("parent seed context"),
+        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+    ];
+    assert_eq!(history.raw_items(), &expected_history);
 
     let expected = (
         child_thread_id,
@@ -803,14 +752,8 @@ async fn spawn_agent_fork_strips_parent_spawn_call_without_injecting_output() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
-    assert!(!history_contains_function_call(
-        history.raw_items(),
-        &parent_spawn_call_id
-    ));
-    assert!(!history_contains_function_call_output(
-        history.raw_items(),
-        &parent_spawn_call_id
-    ));
+    let expected_history: &[ResponseItem] = &[];
+    assert_eq!(history.raw_items(), expected_history);
 
     let _ = harness
         .control
@@ -868,19 +811,11 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
-
-    assert!(history_contains_text(
-        history.raw_items(),
-        "unflushed final answer"
-    ));
-    assert!(!history_contains_function_call(
-        history.raw_items(),
-        &parent_spawn_call_id
-    ));
-    assert!(!history_contains_function_call_output(
-        history.raw_items(),
-        &parent_spawn_call_id
-    ));
+    let expected_history = [assistant_message(
+        "unflushed final answer",
+        Some(MessagePhase::FinalAnswer),
+    )];
+    assert_eq!(history.raw_items(), &expected_history);
 
     let _ = harness
         .control
@@ -995,39 +930,11 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
-
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "old parent context"
-    ));
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "queued message"
-    ));
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "triggered context"
-    ));
-    assert!(history_contains_text(
-        history.raw_items(),
-        "current parent task"
-    ));
-    assert!(history_contains_text(
-        history.raw_items(),
-        "recent final answer"
-    ));
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "recent commentary"
-    ));
-    assert!(!history_contains_reasoning_item(
-        history.raw_items(),
-        "recent-reasoning"
-    ));
-    assert!(!history_contains_function_call(
-        history.raw_items(),
-        &parent_spawn_call_id
-    ));
+    let expected_history = [
+        assistant_message("recent final answer", Some(MessagePhase::FinalAnswer)),
+        user_message("current parent task"),
+    ];
+    assert_eq!(history.raw_items(), &expected_history);
 
     let _ = harness
         .control
