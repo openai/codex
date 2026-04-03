@@ -666,7 +666,11 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         },
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
     ];
-    assert_eq!(history.raw_items(), &expected_history);
+    assert_eq!(
+        history.raw_items(),
+        &expected_history,
+        "forked child history should keep only parent user messages and assistant final answers"
+    );
 
     let expected = (
         child_thread_id,
@@ -741,10 +745,10 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
-    assert!(history_contains_text(
-        history.raw_items(),
-        "unflushed final answer"
-    ));
+    assert!(
+        history_contains_text(history.raw_items(), "unflushed final answer"),
+        "forked child history should include unflushed assistant final answers after flushing the parent rollout"
+    );
 
     let _ = harness
         .control
@@ -846,22 +850,22 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
 
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "old parent context"
-    ));
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "queued message"
-    ));
-    assert!(!history_contains_text(
-        history.raw_items(),
-        "triggered context"
-    ));
-    assert!(history_contains_text(
-        history.raw_items(),
-        "current parent task"
-    ));
+    assert!(
+        !history_contains_text(history.raw_items(), "old parent context"),
+        "forked child history should drop parent context outside the requested last-N turn window"
+    );
+    assert!(
+        !history_contains_text(history.raw_items(), "queued message"),
+        "forked child history should drop queued inter-agent messages outside the requested last-N turn window"
+    );
+    assert!(
+        !history_contains_text(history.raw_items(), "triggered context"),
+        "forked child history should filter assistant inter-agent messages even when they fall inside the requested last-N turn window"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "current parent task"),
+        "forked child history should keep the parent user message from the requested last-N turn window"
+    );
 
     let _ = harness
         .control
