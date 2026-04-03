@@ -7451,6 +7451,7 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                // todo: remove before stabilizing multi-agent v2
                 if preempt_for_queue_only_mail
                     && sess.mailbox_rx.lock().await.has_pending_queue_only()
                 {

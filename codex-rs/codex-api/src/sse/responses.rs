@@ -23,6 +23,7 @@ use tokio::time::Instant;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
+use tracing::error;
 use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
@@ -236,6 +237,7 @@ impl ResponsesEventError {
 pub fn process_responses_event(
     event: ResponsesStreamEvent,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
+    error!("process_responses_event: {event:?}");
     match event.kind.as_str() {
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
