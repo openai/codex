@@ -7422,7 +7422,7 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
-                let preempt_for_queue_only_mail = match &item {
+                let preempt_for_mailbox_mail = match &item {
                     ResponseItem::Message { role, phase, .. } => {
                         role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
                     }
@@ -7452,9 +7452,7 @@ async fn try_run_sampling_request(
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 // todo: remove before stabilizing multi-agent v2
-                if preempt_for_queue_only_mail
-                    && sess.mailbox_rx.lock().await.has_pending_queue_only()
-                {
+                if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,

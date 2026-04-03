@@ -207,10 +207,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    assert_two_responses_requests_snapshot(
-        "pending_input_queued_mail_after_reasoning",
-        &requests,
-    );
+    assert_two_responses_requests_snapshot("pending_input_queued_mail_after_reasoning", &requests);
 
     server.shutdown().await;
 }
@@ -269,10 +266,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    assert_two_responses_requests_snapshot(
-        "pending_input_queued_mail_after_commentary",
-        &requests,
-    );
+    assert_two_responses_requests_snapshot("pending_input_queued_mail_after_commentary", &requests);
 
     server.shutdown().await;
 }
