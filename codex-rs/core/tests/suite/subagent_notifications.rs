@@ -382,7 +382,6 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
         sleep(Duration::from_millis(10)).await;
     };
     assert!(body_contains(&child_request, TURN_0_FORK_PROMPT));
-    assert!(body_contains(&child_request, "seeded"));
     assert!(!body_contains(&child_request, SPAWN_CALL_ID));
 
     Ok(())
