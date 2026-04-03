@@ -38,6 +38,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxLaunchConfig;
+use codex_sandboxing::SandboxLaunchMode;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
@@ -80,6 +82,24 @@ pub struct UnifiedExecApprovalKey {
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
+}
+
+fn build_remote_exec_sandbox_config(attempt: &SandboxAttempt<'_>) -> SandboxLaunchConfig {
+    SandboxLaunchConfig {
+        mode: if matches!(attempt.sandbox, codex_sandboxing::SandboxType::None) {
+            SandboxLaunchMode::Disabled
+        } else {
+            SandboxLaunchMode::Auto
+        },
+        policy: attempt.policy.clone(),
+        file_system_policy: attempt.file_system_policy.clone(),
+        network_policy: attempt.network_policy,
+        sandbox_policy_cwd: attempt.sandbox_cwd.to_path_buf(),
+        enforce_managed_network: attempt.enforce_managed_network,
+        windows_sandbox_level: attempt.windows_sandbox_level,
+        windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
+        use_legacy_landlock: attempt.use_legacy_landlock,
+    }
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -218,6 +238,31 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
+        // Remote exec-server now owns sandbox argv construction, so this branch
+        // keeps sending raw command data until we collapse the launch APIs.
+        if ctx.turn.environment.exec_server_url().is_some() {
+            return self
+                .manager
+                .open_session_with_remote_exec(
+                    req.process_id,
+                    command,
+                    req.cwd.clone(),
+                    env,
+                    req.tty,
+                    Some(build_remote_exec_sandbox_config(attempt)),
+                    ctx.turn.environment.as_ref(),
+                )
+                .await
+                .map_err(|err| match err {
+                    UnifiedExecError::SandboxDenied { output, .. } => {
+                        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                            output: Box::new(output),
+                            network_policy_decision: None,
+                        }))
+                    }
+                    other => ToolError::Rejected(other.to_string()),
+                });
+        }
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
@@ -239,6 +284,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
+                    // TODO: Move unified-exec zsh-fork into exec-server once
+                    // remote launch can participate in the existing approval
+                    // and escalation flow.
                     if ctx.turn.environment.exec_server_url().is_some() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_sandboxing::SandboxType;
 use tokio::sync::watch;
 
 use crate::ExecServerError;
@@ -11,6 +12,7 @@ use crate::protocol::WriteResponse;
 
 pub struct StartedExecProcess {
     pub process: Arc<dyn ExecProcess>,
+    pub sandbox_type: SandboxType,
 }
 
 #[async_trait]

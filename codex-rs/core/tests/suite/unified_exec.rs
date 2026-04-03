@@ -947,13 +947,15 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 
     let open_call_id = "uexec-delayed-open";
     let open_args = json!({
-        "cmd": "sleep 3 && echo MARKER1 && sleep 3 && echo MARKER2",
+        "cmd": "sleep 2 && echo MARKER1 && sleep 5 && echo MARKER2",
         "yield_time_ms": 10,
         "tty": true,
     });
 
     // Poll stdin three times: first for no output, second after the first marker,
-    // and a final long poll to capture the second marker.
+    // and a final long poll to capture the second marker. Keep a wider buffer
+    // between MARKER1 and process exit so slower environments still reach the
+    // third write while the session is live.
     let first_poll_call_id = "uexec-delayed-poll-1";
     let first_poll_args = json!({
         "chars": "x",
@@ -965,7 +967,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     let second_poll_args = json!({
         "chars": "x",
         "session_id": 1000,
-        "yield_time_ms": 4000,
+        "yield_time_ms": 3500,
     });
 
     let third_poll_call_id = "uexec-delayed-poll-3";
