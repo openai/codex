@@ -30,6 +30,7 @@ codex_rust_crate(
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
     ],
+    integration_test_timeout = "long",
     test_data_extra = [
         "config.schema.json",
     ] + glob([
@@ -46,6 +47,7 @@ codex_rust_crate(
         "//:AGENTS.md",
     ],
     test_tags = ["no-sandbox"],
+    unit_test_timeout = "long",
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",

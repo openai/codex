@@ -1,0 +1,41 @@
+diff --git a/build.rs b/build.rs
+index 912a3bf..e078f0e 100644
+--- a/build.rs
++++ b/build.rs
+@@ -85,6 +85,7 @@ fn flag_if_supported_with_fallbacks(config: &mut cc::Build, flags: &[&str]) {
+ }
+ 
+ fn compile_zstd() {
++    let target = env::var("TARGET").unwrap_or_default();
+     let mut config = cc::Build::new();
+ 
+     // Search the following directories for C files to add to the compilation.
+@@ -164,6 +165,16 @@ fn compile_zstd() {
+     // Some extra parameters
+     config.include("zstd/lib/");
+     config.include("zstd/lib/common");
++    if target.contains("msvc") {
++        config.include("zstd/lib/compress");
++        config.include("zstd/lib/decompress");
++        #[cfg(feature = "zdict_builder")]
++        config.include("zstd/lib/dictBuilder");
++        #[cfg(feature = "legacy")]
++        config.include("zstd/lib/legacy");
++        #[cfg(feature = "seekable")]
++        config.include("zstd/contrib/seekable_format");
++    }
+     config.warnings(false);
+ 
+     config.define("ZSTD_LIB_DEPRECATED", Some("0"));
+@@ -210,7 +221,9 @@ fn compile_zstd() {
+ 
+     // Hide symbols from resulting library,
+     // so we can be used with another zstd-linking lib.
+-    // See https://github.com/gyscos/zstd-rs/issues/58
+-    config.flag("-fvisibility=hidden");
++    // See https://github.com/gyscos/zstd-rs/issues/58.
++    if !target.contains("msvc") {
++        config.flag("-fvisibility=hidden");
++    }
+     config.define("XXH_PRIVATE_API", Some(""));
+     config.define("ZSTDLIB_VISIBILITY", Some(""));

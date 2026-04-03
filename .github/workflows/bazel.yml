@@ -82,9 +82,16 @@ jobs:
             -//third_party/v8:all
           )
 
+          bazel_wrapper_args=(
+            --print-failed-test-logs
+            --use-node-test-env
+          )
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            bazel_wrapper_args+=(--windows-msvc-host-platform)
+          fi
+
           ./.github/scripts/run-bazel-ci.sh \
-            --print-failed-test-logs \
-            --use-node-test-env \
+            "${bazel_wrapper_args[@]}" \
             -- \
             test \
             --test_tag_filters=-argument-comment-lint \

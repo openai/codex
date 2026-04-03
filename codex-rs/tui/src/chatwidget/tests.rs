@@ -210,7 +210,14 @@ pub(super) use tokio::sync::mpsc::unbounded_channel;
 pub(super) use toml::Value as TomlValue;
 
 pub(super) fn chatwidget_snapshot_dir() -> PathBuf {
-    codex_utils_cargo_bin::find_resource!("src/chatwidget/snapshots").expect("snapshot dir")
+    let snapshot_file = codex_utils_cargo_bin::find_resource!(
+        "src/chatwidget/snapshots/codex_tui__chatwidget__tests__chatwidget_tall.snap"
+    )
+    .expect("snapshot file");
+    snapshot_file
+        .parent()
+        .unwrap_or_else(|| panic!("snapshot file has no parent: {}", snapshot_file.display()))
+        .to_path_buf()
 }
 
 macro_rules! assert_chatwidget_snapshot {
