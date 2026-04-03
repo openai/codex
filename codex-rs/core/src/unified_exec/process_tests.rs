@@ -74,6 +74,7 @@ async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
             read_responses: Mutex::new(VecDeque::new()),
             wake_tx,
         }),
+        sandbox_type: SandboxType::None,
     };
 
     UnifiedExecProcess::from_remote_started(started, SandboxType::None)
@@ -126,6 +127,7 @@ async fn remote_process_waits_for_early_exit_event() {
             }])),
             wake_tx: wake_tx.clone(),
         }),
+        sandbox_type: SandboxType::None,
     };
 
     tokio::spawn(async move {

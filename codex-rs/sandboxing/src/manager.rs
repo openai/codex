@@ -16,11 +16,15 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
+use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SandboxType {
     None,
     MacosSeatbelt,
@@ -44,6 +48,68 @@ pub enum SandboxablePreference {
     Auto,
     Require,
     Forbid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxLaunchMode {
+    Disabled,
+    Auto,
+    Require,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxLaunchConfig {
+    pub mode: SandboxLaunchMode,
+    pub policy: SandboxPolicy,
+    pub file_system_policy: FileSystemSandboxPolicy,
+    pub network_policy: NetworkSandboxPolicy,
+    pub sandbox_policy_cwd: PathBuf,
+    pub enforce_managed_network: bool,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
+    pub use_legacy_landlock: bool,
+}
+
+impl SandboxLaunchConfig {
+    pub fn sandbox_type(&self) -> SandboxType {
+        let preference = match self.mode {
+            SandboxLaunchMode::Disabled => return SandboxType::None,
+            SandboxLaunchMode::Auto => SandboxablePreference::Auto,
+            SandboxLaunchMode::Require => SandboxablePreference::Require,
+        };
+
+        SandboxManager::new().select_initial(
+            &self.file_system_policy,
+            self.network_policy,
+            preference,
+            self.windows_sandbox_level,
+            self.enforce_managed_network,
+        )
+    }
+
+    pub fn transform(
+        &self,
+        command: SandboxCommand,
+        network: Option<&NetworkProxy>,
+        codex_linux_sandbox_exe: Option<&PathBuf>,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        SandboxManager::new().transform(SandboxTransformRequest {
+            command,
+            policy: &self.policy,
+            file_system_policy: &self.file_system_policy,
+            network_policy: self.network_policy,
+            sandbox: self.sandbox_type(),
+            enforce_managed_network: self.enforce_managed_network,
+            network,
+            sandbox_policy_cwd: self.sandbox_policy_cwd.as_path(),
+            codex_linux_sandbox_exe,
+            use_legacy_landlock: self.use_legacy_landlock,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+        })
+    }
 }
 
 pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
