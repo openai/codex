@@ -604,14 +604,8 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
         },
     ]);
 
-    #[cfg(windows)]
-    let expected_deny_write_paths = vec![
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd.join(".codex"))
-            .expect("absolute .codex"),
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-            .expect("absolute docs"),
-    ];
-    #[cfg(not(windows))]
+    // The legacy workspace-write root already protects top-level `.codex`, so
+    // the restricted-token overlay only needs the extra read-only docs carveout.
     let expected_deny_write_paths = vec![
         codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
             .expect("absolute docs"),

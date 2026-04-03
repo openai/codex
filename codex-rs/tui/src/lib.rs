@@ -51,6 +51,7 @@ use codex_rollout::state_db::get_state_db;
 use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
@@ -655,7 +656,7 @@ pub async fn run_main(
 
     let cwd = cli.cwd.clone();
     let config_cwd = match cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+        Some(path) => AbsolutePathBuf::from_absolute_path(canonicalize_preserving_symlinks(path)?)?,
         None => AbsolutePathBuf::current_dir()?,
     };
 
