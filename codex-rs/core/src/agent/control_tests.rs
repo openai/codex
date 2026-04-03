@@ -14,6 +14,7 @@ use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -60,6 +61,37 @@ fn text_input(text: &str) -> Op {
         text_elements: Vec::new(),
     }]
     .into()
+}
+
+fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase,
+    }
+}
+
+fn reasoning_item(id: &str) -> ResponseItem {
+    ResponseItem::Reasoning {
+        id: id.to_string(),
+        summary: Vec::new(),
+        content: None,
+        encrypted_content: None,
+    }
+}
+
+fn spawn_agent_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
 }
 
 struct AgentControlHarness {
@@ -151,6 +183,42 @@ fn history_contains_assistant_inter_agent_communication(
             }
             ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
         })
+    })
+}
+
+fn history_contains_function_call(history_items: &[ResponseItem], call_id: &str) -> bool {
+    history_items.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::FunctionCall {
+                call_id: item_call_id,
+                ..
+            } if item_call_id == call_id
+        )
+    })
+}
+
+fn history_contains_function_call_output(history_items: &[ResponseItem], call_id: &str) -> bool {
+    history_items.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::FunctionCallOutput {
+                call_id: item_call_id,
+                ..
+            } if item_call_id == call_id
+        )
+    })
+}
+
+fn history_contains_reasoning_item(history_items: &[ResponseItem], id: &str) -> bool {
+    history_items.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::Reasoning {
+                id: item_id,
+                ..
+            } if item_id == id
+        )
     })
 }
 
@@ -561,7 +629,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
-async fn spawn_agent_can_fork_parent_thread_history() {
+async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     parent_thread
@@ -569,17 +637,27 @@ async fn spawn_agent_can_fork_parent_thread_history() {
         .await;
     let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-history".to_string();
-    let parent_spawn_call = ResponseItem::FunctionCall {
-        id: None,
-        name: "spawn_agent".to_string(),
-        namespace: None,
-        arguments: "{}".to_string(),
-        call_id: parent_spawn_call_id.clone(),
-    };
+    let trigger_message = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "parent trigger message".to_string(),
+        /*trigger_turn*/ true,
+    );
     parent_thread
         .codex
         .session
-        .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[
+                assistant_message("parent commentary", Some(MessagePhase::Commentary)),
+                assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+                assistant_message("parent unknown phase", /*phase*/ None),
+                reasoning_item("parent-reasoning"),
+                trigger_message.to_response_input_item().into(),
+                spawn_agent_call(&parent_spawn_call_id),
+            ],
+        )
         .await;
     parent_thread
         .codex
@@ -620,6 +698,34 @@ async fn spawn_agent_can_fork_parent_thread_history() {
         history.raw_items(),
         "parent seed context"
     ));
+    assert!(history_contains_text(
+        history.raw_items(),
+        "parent final answer"
+    ));
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "parent commentary"
+    ));
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "parent unknown phase"
+    ));
+    assert!(!history_contains_reasoning_item(
+        history.raw_items(),
+        "parent-reasoning"
+    ));
+    assert!(!history_contains_assistant_inter_agent_communication(
+        history.raw_items(),
+        &trigger_message
+    ));
+    assert!(!history_contains_function_call(
+        history.raw_items(),
+        &parent_spawn_call_id
+    ));
+    assert!(!history_contains_function_call_output(
+        history.raw_items(),
+        &parent_spawn_call_id
+    ));
 
     let expected = (
         child_thread_id,
@@ -650,22 +756,18 @@ async fn spawn_agent_can_fork_parent_thread_history() {
 }
 
 #[tokio::test]
-async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
+async fn spawn_agent_fork_strips_parent_spawn_call_without_injecting_output() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-1".to_string();
-    let parent_spawn_call = ResponseItem::FunctionCall {
-        id: None,
-        name: "spawn_agent".to_string(),
-        namespace: None,
-        arguments: "{}".to_string(),
-        call_id: parent_spawn_call_id.clone(),
-    };
     parent_thread
         .codex
         .session
-        .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[spawn_agent_call(&parent_spawn_call_id)],
+        )
         .await;
     parent_thread
         .codex
@@ -701,21 +803,14 @@ async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
         .await
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
-    let injected_output = history.raw_items().iter().find_map(|item| match item {
-        ResponseItem::FunctionCallOutput { call_id, output }
-            if call_id == &parent_spawn_call_id =>
-        {
-            Some(output)
-        }
-        _ => None,
-    });
-    let injected_output =
-        injected_output.expect("forked child should contain synthetic tool output");
-    assert_eq!(
-        injected_output.text_content(),
-        Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)
-    );
-    assert_eq!(injected_output.success, Some(true));
+    assert!(!history_contains_function_call(
+        history.raw_items(),
+        &parent_spawn_call_id
+    ));
+    assert!(!history_contains_function_call_output(
+        history.raw_items(),
+        &parent_spawn_call_id
+    ));
 
     let _ = harness
         .control
@@ -734,17 +829,16 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-unflushed".to_string();
-    let parent_spawn_call = ResponseItem::FunctionCall {
-        id: None,
-        name: "spawn_agent".to_string(),
-        namespace: None,
-        arguments: "{}".to_string(),
-        call_id: parent_spawn_call_id.clone(),
-    };
     parent_thread
         .codex
         .session
-        .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[
+                assistant_message("unflushed final answer", Some(MessagePhase::FinalAnswer)),
+                spawn_agent_call(&parent_spawn_call_id),
+            ],
+        )
         .await;
 
     let child_thread_id = harness
@@ -775,27 +869,18 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
 
-    let mut parent_call_index = None;
-    let mut injected_output_index = None;
-    for (idx, item) in history.raw_items().iter().enumerate() {
-        match item {
-            ResponseItem::FunctionCall { call_id, .. } if call_id == &parent_spawn_call_id => {
-                parent_call_index = Some(idx);
-            }
-            ResponseItem::FunctionCallOutput { call_id, .. }
-                if call_id == &parent_spawn_call_id =>
-            {
-                injected_output_index = Some(idx);
-            }
-            _ => {}
-        }
-    }
-
-    let parent_call_index =
-        parent_call_index.expect("forked child should include the parent spawn_agent call");
-    let injected_output_index = injected_output_index
-        .expect("forked child should include synthetic output for the parent spawn_agent call");
-    assert!(parent_call_index < injected_output_index);
+    assert!(history_contains_text(
+        history.raw_items(),
+        "unflushed final answer"
+    ));
+    assert!(!history_contains_function_call(
+        history.raw_items(),
+        &parent_spawn_call_id
+    ));
+    assert!(!history_contains_function_call_output(
+        history.raw_items(),
+        &parent_spawn_call_id
+    ));
 
     let _ = harness
         .control
@@ -849,23 +934,32 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             &[triggered_communication.to_response_input_item().into()],
         )
         .await;
+    let commentary_turn_context = parent_thread.codex.session.new_default_turn().await;
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(
+            commentary_turn_context.as_ref(),
+            &[
+                assistant_message("recent commentary", Some(MessagePhase::Commentary)),
+                assistant_message("recent final answer", Some(MessagePhase::FinalAnswer)),
+                reasoning_item("recent-reasoning"),
+            ],
+        )
+        .await;
 
     parent_thread
         .inject_user_message_without_turn("current parent task".to_string())
         .await;
     let spawn_turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-last-n".to_string();
-    let parent_spawn_call = ResponseItem::FunctionCall {
-        id: None,
-        name: "spawn_agent".to_string(),
-        namespace: None,
-        arguments: "{}".to_string(),
-        call_id: parent_spawn_call_id.clone(),
-    };
     parent_thread
         .codex
         .session
-        .record_conversation_items(spawn_turn_context.as_ref(), &[parent_spawn_call])
+        .record_conversation_items(
+            spawn_turn_context.as_ref(),
+            &[spawn_agent_call(&parent_spawn_call_id)],
+        )
         .await;
     parent_thread
         .codex
@@ -910,13 +1004,29 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         history.raw_items(),
         "queued message"
     ));
-    assert!(history_contains_text(
+    assert!(!history_contains_text(
         history.raw_items(),
         "triggered context"
     ));
     assert!(history_contains_text(
         history.raw_items(),
         "current parent task"
+    ));
+    assert!(history_contains_text(
+        history.raw_items(),
+        "recent final answer"
+    ));
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "recent commentary"
+    ));
+    assert!(!history_contains_reasoning_item(
+        history.raw_items(),
+        "recent-reasoning"
+    ));
+    assert!(!history_contains_function_call(
+        history.raw_items(),
+        &parent_spawn_call_id
     ));
 
     let _ = harness

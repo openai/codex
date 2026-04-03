@@ -18,7 +18,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -39,7 +39,6 @@ use tokio::sync::watch;
 use tracing::warn;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
-const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +90,29 @@ fn agent_nickname_candidates(
         .into_iter()
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(ResponseItem::Message {
+            role,
+            content,
+            phase,
+            ..
+        }) => match role.as_str() {
+            "system" | "developer" | "user" => true,
+            "assistant" => {
+                *phase == Some(MessagePhase::FinalAnswer)
+                    && !InterAgentCommunication::is_message_content(content)
+            }
+            _ => false,
+        },
+        RolloutItem::ResponseItem(_) => false,
+        RolloutItem::Compacted(_)
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::SessionMeta(_)
+        | RolloutItem::TurnContext(_) => true,
+    }
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -260,11 +282,11 @@ impl AgentControl {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
-        let Some(call_id) = options.fork_parent_spawn_call_id.as_deref() else {
+        if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a parent spawn call id".to_string(),
             ));
-        };
+        }
         let Some(fork_mode) = options.fork_mode.as_ref() else {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a fork mode".to_string(),
@@ -313,16 +335,7 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-
-        let mut output =
-            FunctionCallOutputPayload::from_text(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string());
-        output.success = Some(true);
-        forked_rollout_items.push(RolloutItem::ResponseItem(
-            ResponseItem::FunctionCallOutput {
-                call_id: call_id.to_string(),
-                output,
-            },
-        ));
+        forked_rollout_items.retain(keep_forked_rollout_item);
 
         state
             .fork_thread_with_source(
