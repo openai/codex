@@ -2,6 +2,8 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use std::sync::Arc;
 
 /// Resolves a single tool-facing agent target to a thread id.
@@ -13,6 +15,13 @@ pub(crate) async fn resolve_agent_target(
     register_session_root(session, turn);
     if let Ok(thread_id) = ThreadId::from_string(target) {
         return Ok(thread_id);
+    }
+    if matches!(target, "parent" | "root")
+        && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = &turn.session_source
+    {
+        return Ok(*parent_thread_id);
     }
 
     session

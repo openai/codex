@@ -5,6 +5,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::REQUEST_USER_INPUT_TOOL_NAME;
 use codex_tools::normalize_request_user_input_args;
@@ -38,6 +39,12 @@ impl ToolHandler for RequestUserInputHandler {
                 )));
             }
         };
+
+        if matches!(turn.session_source, SessionSource::SubAgent(_)) {
+            return Err(FunctionCallError::RespondToModel(
+                "request_user_input can only be used by the root thread".to_string(),
+            ));
+        }
 
         let mode = session.collaboration_mode().await.mode;
         if let Some(message) =
