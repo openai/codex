@@ -125,8 +125,13 @@ mod tests {
         assert_eq!(
             diagnostics.attachment_text(),
             Some(
-            "Connectivity diagnostics\n\n- Proxy environment variables are set and may affect connectivity.\n  - http_proxy = proxy.example.com:8080\n  - HTTPS_PROXY = https://user:password@secure-proxy.example.com:443?secret=1\n  - all_proxy = socks5h://all-proxy.example.com:1080"
-                .to_string()
+                r#"Connectivity diagnostics
+
+- Proxy environment variables are set and may affect connectivity.
+  - http_proxy = proxy.example.com:8080
+  - HTTPS_PROXY = https://user:password@secure-proxy.example.com:443?secret=1
+  - all_proxy = socks5h://all-proxy.example.com:1080"#
+                    .to_string()
             )
         );
     }
