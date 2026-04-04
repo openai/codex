@@ -154,17 +154,13 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/bazel-execution-logs"
           echo "CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR=${RUNNER_TEMP}/bazel-execution-logs" >> "${GITHUB_ENV}"
 
-      - name: bazel build --config=clippy lint targets
+      - name: bazel build --config=clippy //codex-rs/...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          bazel_target_lines="$(./scripts/list-bazel-clippy-targets.sh)"
-          bazel_targets=()
-          while IFS= read -r target; do
-            bazel_targets+=("${target}")
-          done <<< "${bazel_target_lines}"
-
+          # Keep the initial Bazel clippy scope on codex-rs and out of the
+          # V8 proof-of-concept target for now.
           ./.github/scripts/run-bazel-ci.sh \
             -- \
             build \
@@ -172,7 +168,8 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
             --build_metadata=TAG_job=clippy \
             -- \
-            "${bazel_targets[@]}"
+            //codex-rs/... \
+            -//codex-rs/v8-poc:all
 
       - name: Upload Bazel execution logs
         if: always() && !cancelled()

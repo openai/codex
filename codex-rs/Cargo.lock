@@ -2552,6 +2552,7 @@ dependencies = [
  "codex-process-hardening",
  "ctor 0.6.3",
  "libc",
+ "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
