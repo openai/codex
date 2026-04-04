@@ -7,15 +7,15 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 /**
  * Request metadata for an absolute path.
  */
-export type FsGetMetadataParams = {
+export type FsGetMetadataParams = { 
 /**
  * Absolute path to inspect.
  */
-path: AbsolutePathBuf,
+path: AbsolutePathBuf, 
 /**
  * Optional sandbox policy for this filesystem metadata lookup.
  */
-sandboxPolicy?: SandboxPolicy | null,
+sandboxPolicy?: SandboxPolicy | null, 
 /**
  * Optional cwd to resolve legacy sandbox workspace roots against.
  */

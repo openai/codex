@@ -7,19 +7,19 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 /**
  * Create a directory on the host filesystem.
  */
-export type FsCreateDirectoryParams = {
+export type FsCreateDirectoryParams = { 
 /**
  * Absolute directory path to create.
  */
-path: AbsolutePathBuf,
+path: AbsolutePathBuf, 
 /**
  * Whether parent directories should also be created. Defaults to `true`.
  */
-recursive?: boolean | null,
+recursive?: boolean | null, 
 /**
  * Optional sandbox policy for this filesystem mutation.
  */
-sandboxPolicy?: SandboxPolicy | null,
+sandboxPolicy?: SandboxPolicy | null, 
 /**
  * Optional cwd to resolve legacy sandbox workspace roots against.
  */

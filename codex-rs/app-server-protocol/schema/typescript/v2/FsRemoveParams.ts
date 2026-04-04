@@ -7,23 +7,23 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 /**
  * Remove a file or directory tree from the host filesystem.
  */
-export type FsRemoveParams = {
+export type FsRemoveParams = { 
 /**
  * Absolute path to remove.
  */
-path: AbsolutePathBuf,
+path: AbsolutePathBuf, 
 /**
  * Whether directory removal should recurse. Defaults to `true`.
  */
-recursive?: boolean | null,
+recursive?: boolean | null, 
 /**
  * Whether missing paths should be ignored. Defaults to `true`.
  */
-force?: boolean | null,
+force?: boolean | null, 
 /**
  * Optional sandbox policy for this filesystem mutation.
  */
-sandboxPolicy?: SandboxPolicy | null,
+sandboxPolicy?: SandboxPolicy | null, 
 /**
  * Optional cwd to resolve legacy sandbox workspace roots against.
  */

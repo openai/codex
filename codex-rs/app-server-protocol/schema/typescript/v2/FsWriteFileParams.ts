@@ -7,19 +7,19 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 /**
  * Write a file on the host filesystem.
  */
-export type FsWriteFileParams = {
+export type FsWriteFileParams = { 
 /**
  * Absolute path to write.
  */
-path: AbsolutePathBuf,
+path: AbsolutePathBuf, 
 /**
  * File contents encoded as base64.
  */
-dataBase64: string,
+dataBase64: string, 
 /**
  * Optional sandbox policy for this filesystem write.
  */
-sandboxPolicy?: SandboxPolicy | null,
+sandboxPolicy?: SandboxPolicy | null, 
 /**
  * Optional cwd to resolve legacy sandbox workspace roots against.
  */

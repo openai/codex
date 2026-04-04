@@ -7,23 +7,23 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 /**
  * Copy a file or directory tree on the host filesystem.
  */
-export type FsCopyParams = {
+export type FsCopyParams = { 
 /**
  * Absolute source path.
  */
-sourcePath: AbsolutePathBuf,
+sourcePath: AbsolutePathBuf, 
 /**
  * Absolute destination path.
  */
-destinationPath: AbsolutePathBuf,
+destinationPath: AbsolutePathBuf, 
 /**
  * Required for directory copies; ignored for file copies.
  */
-recursive?: boolean,
+recursive?: boolean, 
 /**
  * Optional sandbox policy for this filesystem copy.
  */
-sandboxPolicy?: SandboxPolicy | null,
+sandboxPolicy?: SandboxPolicy | null, 
 /**
  * Optional cwd to resolve legacy sandbox workspace roots against.
  */

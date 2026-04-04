@@ -7,15 +7,15 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 /**
  * List direct child names for a directory.
  */
-export type FsReadDirectoryParams = {
+export type FsReadDirectoryParams = { 
 /**
  * Absolute directory path to read.
  */
-path: AbsolutePathBuf,
+path: AbsolutePathBuf, 
 /**
  * Optional sandbox policy for this directory read.
  */
-sandboxPolicy?: SandboxPolicy | null,
+sandboxPolicy?: SandboxPolicy | null, 
 /**
  * Optional cwd to resolve legacy sandbox workspace roots against.
  */
