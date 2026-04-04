@@ -22,7 +22,11 @@ use ts_rs::TS;
 pub struct AbsolutePathBuf(PathBuf);
 
 impl AbsolutePathBuf {
-    fn maybe_expand_home_directory(path: &Path) -> PathBuf {
+    /// Expand a leading `~` (or `~\` on Windows) to the current user's home directory.
+    /// Does not expand `~otheruser` — only bare `~` is recognized. Paths without a leading
+    /// tilde are returned unchanged.
+    fn maybe_expand_home_directory<P: AsRef<Path>>(path: P) -> PathBuf {
+        let path = path.as_ref();
         if let Some(path_str) = path.to_str()
             && let Some(home) = home_dir()
             && let Some(rest) = path_str.strip_prefix('~')
@@ -44,13 +48,13 @@ impl AbsolutePathBuf {
         path: P,
         base_path: B,
     ) -> std::io::Result<Self> {
-        let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        let expanded = Self::maybe_expand_home_directory(path);
         let absolute_path = expanded.absolutize_from(base_path.as_ref())?;
         Ok(Self(absolute_path.into_owned()))
     }
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        let expanded = Self::maybe_expand_home_directory(path);
         let absolute_path = expanded.absolutize()?;
         Ok(Self(absolute_path.into_owned()))
     }
@@ -265,6 +269,25 @@ mod tests {
             serde_json::from_str::<AbsolutePathBuf>("\"~\"").expect("failed to deserialize")
         };
         assert_eq!(abs_path_buf.as_path(), home.as_path());
+    }
+
+    #[test]
+    fn maybe_expand_home_directory_expands_root() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        assert_eq!(AbsolutePathBuf::maybe_expand_home_directory("~"), home);
+    }
+
+    #[test]
+    fn maybe_expand_home_directory_expands_subpath() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        assert_eq!(
+            AbsolutePathBuf::maybe_expand_home_directory("~/code"),
+            home.join("code")
+        );
     }
 
     #[test]

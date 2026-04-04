@@ -2382,35 +2382,94 @@ impl Session {
         );
     }
 
+    /// Re-derives cwd-dependent fields in `session_configuration` when the working directory
+    /// has changed. This reloads project-level instructions (e.g. AGENTS.md, CLAUDE.md) from
+    /// the new directory and invalidates cached skills and plugins so they are rediscovered on
+    /// the next turn.
+    ///
+    /// No-ops when the cwd has not actually changed.
+    ///
+    /// Callers must persist the updated `session_configuration` back into `self.state` after
+    /// this returns — this method intentionally does not acquire the state lock so that the
+    /// caller can batch multiple mutations before committing.
+    async fn refresh_session_configuration_for_cwd(
+        &self,
+        previous_cwd: &AbsolutePathBuf,
+        session_configuration: &mut SessionConfiguration,
+    ) {
+        if previous_cwd.as_path() == session_configuration.cwd.as_path() {
+            return;
+        }
+
+        let mut config = (*session_configuration.original_config_do_not_use).clone();
+        config.cwd = session_configuration.cwd.clone();
+        session_configuration.user_instructions = get_user_instructions(&config).await;
+        session_configuration.original_config_do_not_use = Arc::new(config);
+        self.services.skills_manager.clear_cache();
+        self.services.plugins_manager.clear_cache();
+    }
+
+    /// Persists the updated session context baseline after a mid-session configuration change
+    /// (for example a cwd override) without emitting model-visible diff items immediately.
+    ///
+    /// The next real user turn is still responsible for diffing against the prior in-memory
+    /// reference context item and emitting any resulting settings updates into history.
+    async fn materialize_session_configuration_override(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) {
+        let turn_context = self
+            .new_turn_from_configuration(
+                self.next_internal_sub_id(),
+                session_configuration.clone(),
+                /*final_output_json_schema*/ None,
+                /*sandbox_policy_changed*/ false,
+            )
+            .await;
+
+        self.persist_rollout_items(&[RolloutItem::TurnContext(
+            turn_context.to_turn_context_item(),
+        )])
+        .await;
+    }
+
     pub(crate) async fn update_settings(
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
-
-        match state.session_configuration.apply(&updates) {
-            Ok(updated) => {
-                let previous_cwd = state.session_configuration.cwd.clone();
-                let next_cwd = updated.cwd.clone();
-                let codex_home = updated.codex_home.clone();
-                let session_source = updated.session_source.clone();
-                state.session_configuration = updated;
-                drop(state);
-
-                self.maybe_refresh_shell_snapshot_for_cwd(
-                    &previous_cwd,
-                    &next_cwd,
-                    &codex_home,
-                    &session_source,
-                );
-
-                Ok(())
+        let (mut session_configuration, previous_cwd, codex_home, session_source) = {
+            let state = self.state.lock().await;
+            match state.session_configuration.apply(&updates) {
+                Ok(updated) => (
+                    updated,
+                    state.session_configuration.cwd.clone(),
+                    state.session_configuration.codex_home.clone(),
+                    state.session_configuration.session_source.clone(),
+                ),
+                Err(err) => {
+                    warn!("rejected session settings update: {err}");
+                    return Err(err);
+                }
             }
-            Err(err) => {
-                warn!("rejected session settings update: {err}");
-                Err(err)
-            }
+        };
+
+        self.refresh_session_configuration_for_cwd(&previous_cwd, &mut session_configuration)
+            .await;
+        {
+            let mut state = self.state.lock().await;
+            state.session_configuration = session_configuration.clone();
         }
+
+        self.maybe_refresh_shell_snapshot_for_cwd(
+            &previous_cwd,
+            &session_configuration.cwd,
+            &codex_home,
+            &session_source,
+        );
+        self.materialize_session_configuration_override(&session_configuration)
+            .await;
+
+        Ok(())
     }
 
     pub(crate) async fn new_turn_with_sub_id(
@@ -2419,7 +2478,7 @@ impl Session {
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
         let (
-            session_configuration,
+            mut session_configuration,
             sandbox_policy_changed,
             previous_cwd,
             codex_home,
@@ -2456,6 +2515,13 @@ impl Session {
                 }
             }
         };
+
+        self.refresh_session_configuration_for_cwd(&previous_cwd, &mut session_configuration)
+            .await;
+        {
+            let mut state = self.state.lock().await;
+            state.session_configuration = session_configuration.clone();
+        }
 
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,

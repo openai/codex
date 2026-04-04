@@ -1,6 +1,7 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
+use crate::instructions::UserInstructions;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -30,6 +31,24 @@ fn build_environment_update_item(
     Some(ResponseItem::from(
         EnvironmentContext::diff_from_turn_context_item(prev, next, shell),
     ))
+}
+
+/// Produces a user-visible `UserInstructions` item when project-level instructions (AGENTS.md,
+/// CLAUDE.md) differ between the previous turn context and the current one — typically after
+/// a cwd change that lands in a directory with different project docs.
+fn build_user_instructions_update_item(
+    previous: Option<&TurnContextItem>,
+    next: &TurnContext,
+) -> Option<ResponseItem> {
+    let prev = previous?;
+    if prev.user_instructions == next.user_instructions {
+        return None;
+    }
+
+    Some(ResponseItem::from(UserInstructions {
+        directory: next.cwd.to_string_lossy().into_owned(),
+        text: next.user_instructions.clone().unwrap_or_default(),
+    }))
 }
 
 fn build_permissions_update_item(
@@ -73,6 +92,24 @@ fn build_collaboration_mode_update_item(
     } else {
         None
     }
+}
+
+/// Produces a developer-role instructions item when the base developer instructions have
+/// changed between turns — for example because the new cwd's config layers specify different
+/// model-level system instructions.
+fn build_developer_instructions_update_item(
+    previous: Option<&TurnContextItem>,
+    next: &TurnContext,
+) -> Option<DeveloperInstructions> {
+    let prev = previous?;
+    if prev.developer_instructions == next.developer_instructions {
+        return None;
+    }
+
+    next.developer_instructions
+        .as_ref()
+        .cloned()
+        .map(DeveloperInstructions::new)
 }
 
 pub(crate) fn build_realtime_update_item(
@@ -205,11 +242,15 @@ pub(crate) fn build_settings_update_items(
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let contextual_user_sections = [
+        build_user_instructions_update_item(previous, next),
+        build_environment_update_item(previous, next, shell),
+    ];
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
         build_model_instructions_update_item(previous_turn_settings, next),
+        build_developer_instructions_update_item(previous, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
@@ -224,8 +265,6 @@ pub(crate) fn build_settings_update_items(
     if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
         items.push(developer_message);
     }
-    if let Some(contextual_user_message) = contextual_user_message {
-        items.push(contextual_user_message);
-    }
+    items.extend(contextual_user_sections.into_iter().flatten());
     items
 }

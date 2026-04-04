@@ -5063,6 +5063,9 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::Cwd => {
+                self.add_error_message("Usage: /cwd <directory>".to_string());
+            }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
                     None
@@ -5408,6 +5411,18 @@ impl ChatWidget {
                 self.add_boxed_history(Box::new(cell));
                 self.request_redraw();
                 self.app_event_tx.set_thread_name(name);
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Cwd if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::ChangeCwd {
+                    path: prepared_args,
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
@@ -9512,6 +9527,25 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_dependent_surfaces();
+    }
+
+    /// Reset all cwd-dependent widget state after the working directory has changed.
+    /// This invalidates the git branch cache, project root name, and plugin/skill caches
+    /// so they are lazily re-derived on the next render cycle.
+    pub(crate) fn set_cwd(&mut self, config: &Config) {
+        self.config = config.clone();
+        self.current_cwd = Some(config.cwd.to_path_buf());
+        self.status_line_project_root_name_cache = None;
+        self.status_line_branch = None;
+        self.status_line_branch_cwd = None;
+        self.status_line_branch_pending = false;
+        self.status_line_branch_lookup_complete = false;
+        self.refresh_model_dependent_surfaces();
+        self.sync_fast_command_enabled();
+        self.sync_personality_command_enabled();
+        self.sync_plugins_command_enabled();
+        self.refresh_plugin_mentions();
+        self.request_redraw();
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {

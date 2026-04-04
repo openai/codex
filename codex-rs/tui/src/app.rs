@@ -1028,6 +1028,13 @@ fn normalize_harness_overrides_for_cwd(
     Ok(overrides)
 }
 
+/// Resolve a user-supplied path argument against the current working directory, expanding
+/// `~` to the user's home directory. The result is an absolute path suitable for
+/// `std::fs::canonicalize`.
+fn resolve_cwd_change_path(path: &str, current_cwd: &Path) -> std::io::Result<PathBuf> {
+    Ok(AbsolutePathBuf::resolve_path_against_base(path.trim(), current_cwd)?.into_path_buf())
+}
+
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
     let TypedRequestError::Server { source, .. } = error else {
         return None;
@@ -3435,8 +3442,17 @@ impl App {
 
     fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
-        config.service_tier = self.chat_widget.current_service_tier();
+        self.apply_runtime_thread_selections(&mut config);
         config
+    }
+
+    /// Stamp the user's current UI-level selections (model, reasoning effort, personality,
+    /// service tier) onto a `Config` so it matches what the user sees in the TUI.
+    fn apply_runtime_thread_selections(&self, config: &mut Config) {
+        config.model = Some(self.chat_widget.current_model().to_string());
+        config.model_reasoning_effort = self.chat_widget.current_reasoning_effort();
+        config.personality = self.chat_widget.config_ref().personality;
+        config.service_tier = self.chat_widget.current_service_tier();
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -4266,6 +4282,76 @@ impl App {
             }
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op.into()).await?;
+            }
+            AppEvent::ChangeCwd { path } => {
+                let current_cwd = self.config.cwd.to_path_buf();
+                let resolved = match resolve_cwd_change_path(&path, current_cwd.as_path()) {
+                    Ok(resolved) => resolved,
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to change directory: {err}"));
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                let resolved = match std::fs::canonicalize(&resolved) {
+                    Ok(resolved) => resolved,
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to change directory: {err}"));
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                if !resolved.is_dir() {
+                    self.chat_widget.add_error_message(format!(
+                        "Path is not a directory: {}",
+                        resolved.display()
+                    ));
+                    return Ok(AppRunControl::Continue);
+                }
+                if resolved == current_cwd {
+                    self.chat_widget.add_info_message(
+                        format!("Already in {}", resolved.display()),
+                        /*hint*/ None,
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
+
+                let mut config = match self.rebuild_config_for_cwd(resolved.clone()).await {
+                    Ok(config) => config,
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to rebuild config: {err}"));
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                self.apply_runtime_policy_overrides(&mut config);
+                self.apply_runtime_thread_selections(&mut config);
+                self.config = config.clone();
+                self.file_search.update_search_dir(resolved.clone());
+                self.chat_widget.set_cwd(&config);
+                self.chat_widget.add_info_message(
+                    format!("Changed working directory to {}", resolved.display()),
+                    /*hint*/ None,
+                );
+                self.app_event_tx.send(AppEvent::CodexOp(
+                    AppCommand::override_turn_context(
+                        Some(resolved),
+                        /*approval_policy*/ None,
+                        /*approvals_reviewer*/ None,
+                        /*sandbox_policy*/ None,
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
+                    )
+                    .into_core(),
+                ));
+                self.app_event_tx.send(AppEvent::CodexOp(
+                    AppCommand::list_skills(Vec::new(), /*force_reload*/ true).into_core(),
+                ));
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
@@ -6314,6 +6400,16 @@ mod tests {
             normalized.additional_writable_roots,
             vec![base_cwd.join("rel")]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_cwd_change_path_expands_home_directory() -> Result<()> {
+        let Some(home) = dirs::home_dir() else {
+            return Ok(());
+        };
+        let resolved = resolve_cwd_change_path("~/code", Path::new("/tmp"))?;
+        assert_eq!(resolved, home.join("code"));
         Ok(())
     }
 
