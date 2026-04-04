@@ -41,16 +41,51 @@ pub use codex_core_skills::render;
 pub use codex_core_skills::render_skills_section;
 pub use codex_core_skills::system;
 
+const CODEX_EXEC_SERVER_SKILLS_BUNDLE_ROOTS: &str = "CODEX_EXEC_SERVER_SKILLS_BUNDLE_ROOTS";
+const CODEX_EXEC_SERVER_SKILLS_BUNDLE_SCOPE: &str = "CODEX_EXEC_SERVER_SKILLS_BUNDLE_SCOPE";
+
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
     effective_skill_roots: Vec<PathBuf>,
 ) -> SkillsLoadInput {
-    SkillsLoadInput::new(
+    let input = SkillsLoadInput::new(
         config.cwd.clone().to_path_buf(),
         effective_skill_roots,
         config.config_layer_stack.clone(),
         config.bundled_skills_enabled(),
-    )
+    );
+    input.with_materialized_skill_bundles(materialized_skill_bundles_from_env())
+}
+
+fn materialized_skill_bundles_from_env() -> Vec<loader::MaterializedSkillBundle> {
+    let scope = env::var(CODEX_EXEC_SERVER_SKILLS_BUNDLE_SCOPE)
+        .ok()
+        .and_then(|raw| parse_skill_scope(&raw))
+        .unwrap_or(SkillScope::User);
+
+    env::var_os(CODEX_EXEC_SERVER_SKILLS_BUNDLE_ROOTS)
+        .into_iter()
+        .flat_map(|raw| env::split_paths(&raw).collect::<Vec<_>>())
+        .map(|root| loader::MaterializedSkillBundle { root, scope })
+        .collect()
+}
+
+fn parse_skill_scope(raw: &str) -> Option<SkillScope> {
+    let normalized = raw.trim();
+    if normalized.eq_ignore_ascii_case("repo") {
+        Some(SkillScope::Repo)
+    } else if normalized.eq_ignore_ascii_case("user") {
+        Some(SkillScope::User)
+    } else if normalized.eq_ignore_ascii_case("system") {
+        Some(SkillScope::System)
+    } else if normalized.eq_ignore_ascii_case("admin") {
+        Some(SkillScope::Admin)
+    } else {
+        warn!(
+            "{CODEX_EXEC_SERVER_SKILLS_BUNDLE_SCOPE}={raw} is invalid; defaulting staged skills to user scope"
+        );
+        None
+    }
 }
 
 pub(crate) async fn resolve_skill_dependencies_for_turn(

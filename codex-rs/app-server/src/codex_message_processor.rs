@@ -117,6 +117,7 @@ use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadBundleStartup;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
@@ -337,6 +338,7 @@ use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
+const THREAD_BUNDLE_STARTUP_CONFIG_KEY: &str = "execServer.bundleStartup";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -444,6 +446,34 @@ struct ListenerTaskContext {
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
+}
+
+/// Phase-1 exec-server sketch: keep cwd + approval + sandbox grouped as one
+/// session contract so thread bootstrap, config derivation, and later
+/// propagation points all share the same normalization seam.
+struct ExecServerSessionContract {
+    cwd: Option<PathBuf>,
+    approval_policy: Option<codex_protocol::protocol::AskForApproval>,
+    approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
+    sandbox_mode: Option<codex_protocol::config_types::SandboxMode>,
+}
+
+impl ExecServerSessionContract {
+    fn new(
+        cwd: Option<String>,
+        approval_policy: Option<codex_app_server_protocol::AskForApproval>,
+        approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
+        sandbox: Option<SandboxMode>,
+    ) -> Self {
+        Self {
+            cwd: cwd.map(PathBuf::from),
+            approval_policy: approval_policy
+                .map(codex_app_server_protocol::AskForApproval::to_core),
+            approvals_reviewer: approvals_reviewer
+                .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
+            sandbox_mode: sandbox.map(SandboxMode::to_core),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2074,6 +2104,7 @@ impl CodexMessageProcessor {
             approvals_reviewer,
             sandbox,
             config,
+            bundle_startup,
             service_name,
             base_instructions,
             developer_instructions,
@@ -2084,19 +2115,19 @@ impl CodexMessageProcessor {
             ephemeral,
             persist_extended_history,
         } = params;
+        let session_contract =
+            ExecServerSessionContract::new(cwd, approval_policy, approvals_reviewer, sandbox);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
+            session_contract,
             base_instructions,
             developer_instructions,
             personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
+        let config = Self::merge_thread_start_config_with_bundle_startup(config, bundle_startup);
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
         let listener_task_context = ListenerTaskContext {
@@ -2132,6 +2163,18 @@ impl CodexMessageProcessor {
         };
         self.background_tasks
             .spawn(thread_start_task.instrument(request_context.span()));
+    }
+
+    fn merge_thread_start_config_with_bundle_startup(
+        config_overrides: Option<HashMap<String, serde_json::Value>>,
+        bundle_startup: Option<ThreadBundleStartup>,
+    ) -> Option<HashMap<String, serde_json::Value>> {
+        let bundle_startup = bundle_startup?;
+        let mut config_overrides = config_overrides.unwrap_or_default();
+        let bundle_json = serde_json::to_value(bundle_startup)
+            .expect("ThreadBundleStartup must always serialize for config plumbing");
+        config_overrides.insert(THREAD_BUNDLE_STARTUP_CONFIG_KEY.to_string(), bundle_json);
+        Some(config_overrides)
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
@@ -2470,10 +2513,7 @@ impl CodexMessageProcessor {
         model: Option<String>,
         model_provider: Option<String>,
         service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
-        cwd: Option<String>,
-        approval_policy: Option<codex_app_server_protocol::AskForApproval>,
-        approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
-        sandbox: Option<SandboxMode>,
+        session_contract: ExecServerSessionContract,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -2482,12 +2522,10 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             service_tier,
-            cwd: cwd.map(PathBuf::from),
-            approval_policy: approval_policy
-                .map(codex_app_server_protocol::AskForApproval::to_core),
-            approvals_reviewer: approvals_reviewer
-                .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
-            sandbox_mode: sandbox.map(SandboxMode::to_core),
+            cwd: session_contract.cwd,
+            approval_policy: session_contract.approval_policy,
+            approvals_reviewer: session_contract.approvals_reviewer,
+            sandbox_mode: session_contract.sandbox_mode,
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
@@ -3795,10 +3833,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             service_tier,
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
+            ExecServerSessionContract::new(cwd, approval_policy, approvals_reviewer, sandbox),
             base_instructions,
             developer_instructions,
             personality,
@@ -4356,10 +4391,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             service_tier,
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
+            ExecServerSessionContract::new(cwd, approval_policy, approvals_reviewer, sandbox),
             base_instructions,
             developer_instructions,
             /*personality*/ None,

@@ -16,8 +16,10 @@ use crate::build_implicit_skill_path_indexes;
 use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
 use crate::config_rules::skill_config_rules_from_stack;
+use crate::loader::MaterializedSkillBundle;
 use crate::loader::SkillRoot;
 use crate::loader::load_skills_from_roots;
+use crate::loader::materialized_skill_bundle_roots;
 use crate::loader::skill_roots;
 use crate::system::install_system_skills;
 use crate::system::uninstall_system_skills;
@@ -27,6 +29,7 @@ use codex_config::SkillsConfig;
 pub struct SkillsLoadInput {
     pub cwd: PathBuf,
     pub effective_skill_roots: Vec<PathBuf>,
+    pub materialized_skill_bundles: Vec<MaterializedSkillBundle>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
 }
@@ -41,9 +44,19 @@ impl SkillsLoadInput {
         Self {
             cwd,
             effective_skill_roots,
+            materialized_skill_bundles: Vec::new(),
             config_layer_stack,
             bundled_skills_enabled,
         }
+    }
+
+    pub fn with_materialized_skill_bundles(
+        mut self,
+        materialized_skill_bundles: Vec<MaterializedSkillBundle>,
+    ) -> Self {
+        self.materialized_skill_bundles =
+            normalize_materialized_skill_bundles(&materialized_skill_bundles);
+        self
     }
 }
 
@@ -104,15 +117,7 @@ impl SkillsManager {
     }
 
     pub fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
-        let mut roots = skill_roots(
-            &input.config_layer_stack,
-            input.cwd.as_path(),
-            input.effective_skill_roots.clone(),
-        );
-        if !input.bundled_skills_enabled {
-            roots.retain(|root| root.scope != SkillScope::System);
-        }
-        roots
+        self.resolve_roots(input, &[])
     }
 
     pub async fn skills_for_cwd(
@@ -139,23 +144,7 @@ impl SkillsManager {
         }
         let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
 
-        let mut roots = skill_roots(
-            &input.config_layer_stack,
-            input.cwd.as_path(),
-            input.effective_skill_roots.clone(),
-        );
-        if !bundled_skills_enabled_from_stack(&input.config_layer_stack) {
-            roots.retain(|root| root.scope != SkillScope::System);
-        }
-        roots.extend(
-            normalized_extra_user_roots
-                .iter()
-                .cloned()
-                .map(|path| SkillRoot {
-                    path,
-                    scope: SkillScope::User,
-                }),
-        );
+        let roots = self.resolve_roots(input, &normalized_extra_user_roots);
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules);
         let mut cache = self
@@ -200,6 +189,34 @@ impl SkillsManager {
         };
         let cleared = cleared_cwd + cleared_config;
         info!("skills cache cleared ({cleared} entries)");
+    }
+
+    fn resolve_roots(
+        &self,
+        input: &SkillsLoadInput,
+        normalized_extra_user_roots: &[PathBuf],
+    ) -> Vec<SkillRoot> {
+        let mut roots = skill_roots(
+            &input.config_layer_stack,
+            input.cwd.as_path(),
+            input.effective_skill_roots.clone(),
+        );
+        if !bundled_skills_enabled_from_stack(&input.config_layer_stack) {
+            roots.retain(|root| root.scope != SkillScope::System);
+        }
+        roots.extend(materialized_skill_bundle_roots(
+            &input.materialized_skill_bundles,
+        ));
+        roots.extend(
+            normalized_extra_user_roots
+                .iter()
+                .cloned()
+                .map(|path| SkillRoot {
+                    path,
+                    scope: SkillScope::User,
+                }),
+        );
+        roots
     }
 
     fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<SkillLoadOutcome> {
@@ -289,6 +306,34 @@ fn normalize_extra_user_roots(extra_user_roots: &[PathBuf]) -> Vec<PathBuf> {
     normalized.sort_unstable();
     normalized.dedup();
     normalized
+}
+
+fn normalize_materialized_skill_bundles(
+    materialized_skill_bundles: &[MaterializedSkillBundle],
+) -> Vec<MaterializedSkillBundle> {
+    let mut normalized: Vec<MaterializedSkillBundle> = materialized_skill_bundles
+        .iter()
+        .map(|bundle| MaterializedSkillBundle {
+            root: dunce::canonicalize(&bundle.root).unwrap_or_else(|_| bundle.root.clone()),
+            scope: bundle.scope,
+        })
+        .collect();
+    normalized.sort_by(|left, right| {
+        skill_scope_rank(left.scope)
+            .cmp(&skill_scope_rank(right.scope))
+            .then_with(|| left.root.cmp(&right.root))
+    });
+    normalized.dedup();
+    normalized
+}
+
+fn skill_scope_rank(scope: SkillScope) -> u8 {
+    match scope {
+        SkillScope::Repo => 0,
+        SkillScope::User => 1,
+        SkillScope::System => 2,
+        SkillScope::Admin => 3,
+    }
 }
 
 #[cfg(test)]

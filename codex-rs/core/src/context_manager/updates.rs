@@ -205,6 +205,13 @@ pub(crate) fn build_settings_update_items(
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
+    //
+    // TODO(exec-server-prompt-surface): Before adding thread-start or
+    // exec-server bootstrap coverage for AGENTS/project-doc, skills/apps,
+    // plugins, or other persistent bundles that currently only exist in the
+    // initial context, extend `TurnContext::exec_server_prompt_surface_proposal()`
+    // and then promote the missing entries into explicit update items here.
+    let _prompt_surface_proposal = next.exec_server_prompt_surface_proposal();
     let contextual_user_message = build_environment_update_item(previous, next, shell);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before

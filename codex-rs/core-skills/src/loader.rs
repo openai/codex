@@ -149,6 +149,26 @@ pub struct SkillRoot {
     pub scope: SkillScope,
 }
 
+/// Exec-server can stage a versioned materialized skill bundle before app-server startup.
+///
+/// The staged root is intentionally modeled as "just another skill root" so the existing
+/// discovery/injection pipeline can stay mostly unchanged while remote bundle delivery is wired up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterializedSkillBundle {
+    pub root: PathBuf,
+    pub scope: SkillScope,
+}
+
+pub fn materialized_skill_bundle_roots(bundles: &[MaterializedSkillBundle]) -> Vec<SkillRoot> {
+    bundles
+        .iter()
+        .map(|bundle| SkillRoot {
+            path: bundle.root.clone(),
+            scope: bundle.scope,
+        })
+        .collect()
+}
+
 pub fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot>,

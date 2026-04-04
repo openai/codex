@@ -860,6 +860,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
+        bundle_startup: thread_bundle_startup_from_config(config),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
     }
@@ -884,6 +885,15 @@ fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<Strin
         .active_profile
         .as_ref()
         .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
+}
+
+fn thread_bundle_startup_from_config(
+    _config: &Config,
+) -> Option<codex_app_server_protocol::ThreadBundleStartup> {
+    // Phase-1 sketch only: once exec-server startup learns bundle selection,
+    // this helper is the CLI-side seam that can source a per-thread bundle
+    // payload and forward it through `thread/start`.
+    None
 }
 
 fn approvals_reviewer_override_from_config(

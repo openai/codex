@@ -31,6 +31,22 @@ pub struct ExternalAgentConfigMigrationItem {
     pub cwd: Option<PathBuf>,
 }
 
+/// Phase-1 sketch for the exec-server materialized-bundle path.
+///
+/// The current import flow writes directly into the user's repo/home targets.
+/// For the planned exec-server startup flow, we likely need to stage the same
+/// imported assets into a deterministic bundle root before thread start, then
+/// point the downstream startup/config/discovery paths at that staged tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalAgentBundleStagePlan {
+    pub repo_root: Option<PathBuf>,
+    pub bundle_root: PathBuf,
+    pub config_target: PathBuf,
+    pub skills_target: PathBuf,
+    pub agents_target: PathBuf,
+    pub mcp_config_target: PathBuf,
+}
+
 #[derive(Clone)]
 pub struct ExternalAgentConfigService {
     codex_home: PathBuf,
@@ -105,6 +121,51 @@ impl ExternalAgentConfigService {
         }
 
         Ok(())
+    }
+
+    /// Sketch the deterministic bundle layout needed by the planned
+    /// materialized-bundle/thread-start flow.
+    ///
+    /// This does not change runtime behavior yet. It exists so the next phase
+    /// can wire a bundle root through `thread/start` and then reuse the normal
+    /// AGENTS/skills/MCP discovery paths against those staged locations.
+    pub fn materialized_bundle_stage_plan(
+        &self,
+        cwd: Option<&Path>,
+        bundle_root: &Path,
+    ) -> io::Result<ExternalAgentBundleStagePlan> {
+        let repo_root = find_repo_root(cwd)?;
+        Ok(self.default_bundle_stage_plan(repo_root.as_deref(), bundle_root))
+    }
+
+    fn default_bundle_stage_plan(
+        &self,
+        repo_root: Option<&Path>,
+        bundle_root: &Path,
+    ) -> ExternalAgentBundleStagePlan {
+        let bundle_root = bundle_root.to_path_buf();
+        let repo_prefix = bundle_root.join("repo");
+        let home_prefix = bundle_root.join("home");
+
+        if let Some(repo_root) = repo_root {
+            return ExternalAgentBundleStagePlan {
+                repo_root: Some(repo_root.to_path_buf()),
+                bundle_root: bundle_root.clone(),
+                config_target: repo_prefix.join(".codex").join("config.toml"),
+                skills_target: repo_prefix.join(".agents").join("skills"),
+                agents_target: repo_prefix.join("AGENTS.md"),
+                mcp_config_target: repo_prefix.join(".codex").join("config.toml"),
+            };
+        }
+
+        ExternalAgentBundleStagePlan {
+            repo_root: None,
+            bundle_root: bundle_root.clone(),
+            config_target: home_prefix.join(".codex").join("config.toml"),
+            skills_target: home_prefix.join(".agents").join("skills"),
+            agents_target: home_prefix.join("AGENTS.md"),
+            mcp_config_target: home_prefix.join(".codex").join("config.toml"),
+        }
     }
 
     fn detect_migrations(

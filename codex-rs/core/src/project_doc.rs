@@ -23,6 +23,7 @@ use crate::config_loader::project_root_markers_from_config;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_features::Feature;
 use dunce::canonicalize as normalize_path;
+use std::path::Path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use toml::Value as TomlValue;
@@ -35,6 +36,13 @@ pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for project-level docs.
 pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
+/// Optional exec-server/materialized-bundle root for project-doc discovery.
+///
+/// Phase-1 sketch: exec-server can set this to the root of the materialized
+/// bundle that mirrors project docs such as `AGENTS.md`. When present, we scan
+/// that tree before the live workspace tree using the same hierarchical search
+/// rules as `cwd`.
+const PROJECT_DOC_BUNDLE_ROOT_ENV: &str = "CODEX_PROJECT_DOC_BUNDLE_ROOT";
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -228,24 +236,20 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         }
     }
 
-    let search_dirs: Vec<PathBuf> = if let Some(root) = project_root {
-        let mut dirs = Vec::new();
-        let mut cursor = dir.as_path();
-        loop {
-            dirs.push(cursor.to_path_buf());
-            if cursor == root {
-                break;
+    let mut search_dirs = search_dirs_from_rooted_cwd(project_root.as_deref(), &dir);
+    if let Some(bundle_dirs) = discover_materialized_bundle_search_dirs(
+        project_root.as_deref(),
+        &dir,
+        std::env::var_os(PROJECT_DOC_BUNDLE_ROOT_ENV)
+            .map(PathBuf::from)
+            .as_deref(),
+    ) {
+        bundle_dirs.into_iter().rev().for_each(|bundle_dir| {
+            if !search_dirs.contains(&bundle_dir) {
+                search_dirs.insert(0, bundle_dir);
             }
-            let Some(parent) = cursor.parent() else {
-                break;
-            };
-            cursor = parent;
-        }
-        dirs.reverse();
-        dirs
-    } else {
-        vec![dir]
-    };
+        });
+    }
 
     let mut found: Vec<PathBuf> = Vec::new();
     let candidate_filenames = candidate_filenames(config);
@@ -268,6 +272,53 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
     }
 
     Ok(found)
+}
+
+fn search_dirs_from_rooted_cwd(project_root: Option<&Path>, cwd: &Path) -> Vec<PathBuf> {
+    if let Some(root) = project_root {
+        let mut dirs = Vec::new();
+        let mut cursor = cwd;
+        loop {
+            dirs.push(cursor.to_path_buf());
+            if cursor == root {
+                break;
+            }
+            let Some(parent) = cursor.parent() else {
+                break;
+            };
+            cursor = parent;
+        }
+        dirs.reverse();
+        dirs
+    } else {
+        vec![cwd.to_path_buf()]
+    }
+}
+
+fn discover_materialized_bundle_search_dirs(
+    project_root: Option<&Path>,
+    cwd: &Path,
+    bundle_root: Option<&Path>,
+) -> Option<Vec<PathBuf>> {
+    let bundle_root = bundle_root
+        .map(Path::to_path_buf)
+        .and_then(|path| normalize_path(&path).ok().or(Some(path)))?;
+
+    // The materialized bundle is expected to mirror the project-root-relative
+    // layout of the live workspace. This gives exec-server a concrete hook to
+    // surface AGENTS.md / project-doc files from outside `config.cwd` without
+    // teaching project-doc discovery about every bundle detail.
+    let bundle_cwd = match project_root.and_then(|root| cwd.strip_prefix(root).ok()) {
+        Some(relative_cwd) if !relative_cwd.as_os_str().is_empty() => {
+            bundle_root.join(relative_cwd)
+        }
+        _ => bundle_root.clone(),
+    };
+
+    Some(search_dirs_from_rooted_cwd(
+        Some(bundle_root.as_path()),
+        &bundle_cwd,
+    ))
 }
 
 fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {

@@ -2538,6 +2538,35 @@ pub enum CommandExecOutputStream {
 
 // === Threads, Turns, and Items ===
 // Thread APIs
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadBundleMountMode {
+    MaterializedSnapshot,
+    HostedReference,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadBundleStartup {
+    /// Stable control-plane identifier for the bundle/version the thread should
+    /// use when exec-server prepares its startup view.
+    pub bundle_id: String,
+    /// Optional bundle version or revision for auditability/debugging.
+    #[ts(optional = nullable)]
+    pub bundle_version: Option<String>,
+    /// Optional materialization root to use before session startup.
+    #[ts(optional = nullable)]
+    pub install_root: Option<String>,
+    /// How downstream startup code should interpret the bundle input.
+    #[ts(optional = nullable)]
+    pub mount_mode: Option<ThreadBundleMountMode>,
+    /// Optional manifest blob to preserve for later startup plumbing.
+    #[ts(optional = nullable)]
+    pub manifest: Option<JsonValue>,
+}
+
 #[derive(
     Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS, ExperimentalApi,
 )]
@@ -2556,19 +2585,35 @@ pub struct ThreadStartParams {
     )]
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<ServiceTier>>,
+    /// Session working directory. This is the cwd contract for project config
+    /// resolution, trust checks, and the initial exec-server workspace. Under
+    /// a materialized-bundle model, this should point at the materialized
+    /// workspace root rather than bundle metadata storage.
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[experimental(nested)]
+    /// Default approval policy for this thread and subsequent turns unless a
+    /// later `turn/start` override is applied.
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
     /// Override where approval requests are routed for review on this thread
     /// and subsequent turns.
     #[ts(optional = nullable)]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Default sandbox mode for this thread and subsequent turns. Exec-server
+    /// should treat this as part of the session contract, not as a one-off
+    /// tool-call preference.
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Free-form request config overrides layered after CLI/project config and
+    /// before explicit typed overrides such as `cwd`, approval, and sandbox.
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
+    /// Optional bundle-aware exec-server startup payload that should travel
+    /// with this thread and be available during config derivation/startup.
+    #[experimental("thread/start.bundleStartup")]
+    #[ts(optional = nullable)]
+    pub bundle_startup: Option<ThreadBundleStartup>,
     #[ts(optional = nullable)]
     pub service_name: Option<String>,
     #[ts(optional = nullable)]
@@ -3941,7 +3986,8 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Override the working directory for this turn and subsequent turns.
+    /// Override the working directory for this turn and subsequent turns. This
+    /// mutates the same logical session cwd established by `thread/start`.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
     /// Override the approval policy for this turn and subsequent turns.
@@ -3952,7 +3998,9 @@ pub struct TurnStartParams {
     /// subsequent turns.
     #[ts(optional = nullable)]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    /// Override the sandbox policy for this turn and subsequent turns.
+    /// Override the sandbox policy for this turn and subsequent turns. This is
+    /// expected to stay aligned with approval/cwd overrides when exec-server
+    /// changes session execution context.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
     /// Override the model for this turn and subsequent turns.

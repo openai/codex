@@ -1,3 +1,4 @@
+use crate::BuiltinToolCoverage;
 use crate::ConfiguredToolSpec;
 use crate::DiscoverableTool;
 use crate::ToolSpec;
@@ -53,6 +54,9 @@ pub struct ToolHandlerSpec {
 pub struct ToolRegistryPlan {
     pub specs: Vec<ConfiguredToolSpec>,
     pub handlers: Vec<ToolHandlerSpec>,
+    /// Phase-1 exec-server seam: a typed builtin coverage summary that can be
+    /// inspected alongside the registry plan before transport/runtime changes.
+    pub builtin_tool_coverage: Vec<BuiltinToolCoverage>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +84,7 @@ impl ToolRegistryPlan {
         Self {
             specs: Vec::new(),
             handlers: Vec::new(),
+            builtin_tool_coverage: Vec::new(),
         }
     }
 
@@ -103,6 +108,13 @@ impl ToolRegistryPlan {
             name: name.into(),
             kind,
         });
+    }
+
+    pub(crate) fn set_builtin_tool_coverage(
+        &mut self,
+        builtin_tool_coverage: Vec<BuiltinToolCoverage>,
+    ) {
+        self.builtin_tool_coverage = builtin_tool_coverage;
     }
 }
 

@@ -69,6 +69,11 @@ pub fn build_tool_registry_plan(
     let mut plan = ToolRegistryPlan::new();
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
+    // Phase-1 exec-server seam: keep a typed builtin surface summary next to
+    // tool registration so later hosted/exec-server work can reason about the
+    // same builtin set without changing handler wiring in this slice.
+    plan.set_builtin_tool_coverage(config.builtin_tool_coverage());
+
     if config.code_mode_enabled {
         let nested_config = config.for_code_mode_nested_tools();
         let nested_plan = build_tool_registry_plan(

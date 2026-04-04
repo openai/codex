@@ -37,6 +37,52 @@ pub enum UnifiedExecShellMode {
     ZshFork(ZshForkConfig),
 }
 
+/// Phase-1 exec-server seam: a small typed summary of where a builtin tool
+/// logically executes today. This is descriptive only and does not change tool
+/// routing yet.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum BuiltinToolSurface {
+    RemoteExecution,
+    LocalExecution,
+    WorkspaceFileAccess,
+    UserInteraction,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum BuiltinToolName {
+    ApplyPatch,
+    ExecCommand,
+    RequestUserInput,
+    ShellCommand,
+    ViewImage,
+    WriteStdin,
+}
+
+impl BuiltinToolName {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ApplyPatch => "apply_patch",
+            Self::ExecCommand => "exec_command",
+            Self::RequestUserInput => "request_user_input",
+            Self::ShellCommand => "shell_command",
+            Self::ViewImage => "view_image",
+            Self::WriteStdin => "write_stdin",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct BuiltinToolCoverage {
+    pub tool: BuiltinToolName,
+    pub surface: BuiltinToolSurface,
+}
+
+impl BuiltinToolCoverage {
+    pub const fn new(tool: BuiltinToolName, surface: BuiltinToolSurface) -> Self {
+        Self { tool, surface }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ZshForkConfig {
     pub shell_zsh_path: AbsolutePathBuf,
@@ -262,6 +308,55 @@ impl ToolsConfig {
     pub fn with_web_search_config(mut self, web_search_config: Option<WebSearchConfig>) -> Self {
         self.web_search_config = web_search_config;
         self
+    }
+
+    /// Descriptive coverage that future exec-server negotiation can inspect
+    /// without coupling to the concrete handler map.
+    pub fn builtin_tool_coverage(&self) -> Vec<BuiltinToolCoverage> {
+        let mut coverage = Vec::with_capacity(5);
+
+        match self.shell_type {
+            ConfigShellToolType::UnifiedExec => {
+                coverage.push(BuiltinToolCoverage::new(
+                    BuiltinToolName::ExecCommand,
+                    BuiltinToolSurface::RemoteExecution,
+                ));
+                coverage.push(BuiltinToolCoverage::new(
+                    BuiltinToolName::WriteStdin,
+                    BuiltinToolSurface::RemoteExecution,
+                ));
+            }
+            ConfigShellToolType::ShellCommand => {
+                coverage.push(BuiltinToolCoverage::new(
+                    BuiltinToolName::ShellCommand,
+                    BuiltinToolSurface::LocalExecution,
+                ));
+            }
+            ConfigShellToolType::Default
+            | ConfigShellToolType::Disabled
+            | ConfigShellToolType::Local => {}
+        }
+
+        if self.apply_patch_tool_type.is_some() {
+            coverage.push(BuiltinToolCoverage::new(
+                BuiltinToolName::ApplyPatch,
+                BuiltinToolSurface::WorkspaceFileAccess,
+            ));
+        }
+
+        coverage.push(BuiltinToolCoverage::new(
+            BuiltinToolName::ViewImage,
+            BuiltinToolSurface::WorkspaceFileAccess,
+        ));
+
+        if self.request_user_input {
+            coverage.push(BuiltinToolCoverage::new(
+                BuiltinToolName::RequestUserInput,
+                BuiltinToolSurface::UserInteraction,
+            ));
+        }
+
+        coverage
     }
 
     pub fn for_code_mode_nested_tools(&self) -> Self {

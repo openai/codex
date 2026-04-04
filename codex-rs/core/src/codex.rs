@@ -896,7 +896,123 @@ pub(crate) struct TurnContext {
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PersistentPromptSurfaceRole {
+    Developer,
+    User,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PersistentPromptSurfaceEntry {
+    pub(crate) key: &'static str,
+    pub(crate) role: PersistentPromptSurfaceRole,
+    pub(crate) covered_by_initial_context: bool,
+    pub(crate) covered_by_context_updates: bool,
+}
+
+impl PersistentPromptSurfaceEntry {
+    fn new(
+        key: &'static str,
+        role: PersistentPromptSurfaceRole,
+        covered_by_initial_context: bool,
+        covered_by_context_updates: bool,
+    ) -> Self {
+        Self {
+            key,
+            role,
+            covered_by_initial_context,
+            covered_by_context_updates,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExecServerPromptSurfaceProposal {
+    /// TODO(exec-server-prompt-surface): If thread-start or exec-server setup
+    /// ever needs to bootstrap prompt bundles out-of-process, treat this
+    /// inventory as the single typed planning seam before adding transport- or
+    /// session-specific behavior.
+    pub(crate) entries: Vec<PersistentPromptSurfaceEntry>,
+}
+
 impl TurnContext {
+    pub(crate) fn exec_server_prompt_surface_proposal(&self) -> ExecServerPromptSurfaceProposal {
+        let mut entries = Vec::with_capacity(11);
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "project_doc_user_instructions",
+            PersistentPromptSurfaceRole::User,
+            self.user_instructions.is_some(),
+            false,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "environment_context",
+            PersistentPromptSurfaceRole::User,
+            self.config.include_environment_context,
+            self.config.include_environment_context,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "permissions_instructions",
+            PersistentPromptSurfaceRole::Developer,
+            self.config.include_permissions_instructions,
+            self.config.include_permissions_instructions,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "developer_instructions",
+            PersistentPromptSurfaceRole::Developer,
+            self.developer_instructions.is_some(),
+            false,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "memory_tool_instructions",
+            PersistentPromptSurfaceRole::Developer,
+            self.features.enabled(Feature::MemoryTool) && self.config.memories.use_memories,
+            false,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "collaboration_mode_instructions",
+            PersistentPromptSurfaceRole::Developer,
+            DeveloperInstructions::from_collaboration_mode(&self.collaboration_mode).is_some(),
+            true,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "realtime_instructions",
+            PersistentPromptSurfaceRole::Developer,
+            self.realtime_active,
+            true,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "personality_instructions",
+            PersistentPromptSurfaceRole::Developer,
+            self.personality.is_some(),
+            true,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "apps_section",
+            PersistentPromptSurfaceRole::Developer,
+            self.config.include_apps_instructions && self.apps_enabled(),
+            false,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "skills_section",
+            PersistentPromptSurfaceRole::Developer,
+            !self
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation()
+                .is_empty(),
+            false,
+        ));
+        entries.push(PersistentPromptSurfaceEntry::new(
+            "plugins_and_commit_helpers",
+            PersistentPromptSurfaceRole::Developer,
+            true,
+            false,
+        ));
+
+        ExecServerPromptSurfaceProposal { entries }
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info.context_window.map(|context_window| {
@@ -3594,6 +3710,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        let _prompt_surface_proposal = turn_context.exec_server_prompt_surface_proposal();
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
