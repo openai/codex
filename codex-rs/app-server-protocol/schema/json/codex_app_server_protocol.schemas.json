@@ -7502,6 +7502,17 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Copy a file or directory tree on the host filesystem.",
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+          },
           "destinationPath": {
             "allOf": [
               {
@@ -7513,6 +7524,17 @@
           "recursive": {
             "description": "Required for directory copies; ignored for file copies.",
             "type": "boolean"
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sandbox policy for this filesystem copy."
           },
           "sourcePath": {
             "allOf": [
@@ -7540,6 +7562,17 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Create a directory on the host filesystem.",
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+          },
           "path": {
             "allOf": [
               {
@@ -7554,6 +7587,17 @@
               "boolean",
               "null"
             ]
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sandbox policy for this filesystem mutation."
           }
         },
         "required": [
@@ -7572,6 +7616,17 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Request metadata for an absolute path.",
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+          },
           "path": {
             "allOf": [
               {
@@ -7579,6 +7634,17 @@
               }
             ],
             "description": "Absolute path to inspect."
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sandbox policy for this filesystem metadata lookup."
           }
         },
         "required": [
@@ -7646,6 +7712,17 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "List direct child names for a directory.",
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+          },
           "path": {
             "allOf": [
               {
@@ -7653,6 +7730,17 @@
               }
             ],
             "description": "Absolute directory path to read."
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sandbox policy for this directory read."
           }
         },
         "required": [
@@ -7683,6 +7771,17 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Read a file from the host filesystem.",
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+          },
           "path": {
             "allOf": [
               {
@@ -7690,6 +7789,17 @@
               }
             ],
             "description": "Absolute path to read."
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sandbox policy for this filesystem read."
           }
         },
         "required": [
@@ -7717,6 +7827,17 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Remove a file or directory tree from the host filesystem.",
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+          },
           "force": {
             "description": "Whether missing paths should be ignored. Defaults to `true`.",
             "type": [
@@ -7738,6 +7859,17 @@
               "boolean",
               "null"
             ]
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sandbox policy for this filesystem mutation."
           }
         },
         "required": [
@@ -7820,6 +7952,17 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Write a file on the host filesystem.",
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+          },
           "dataBase64": {
             "description": "File contents encoded as base64.",
             "type": "string"
@@ -7831,6 +7974,17 @@
               }
             ],
             "description": "Absolute path to write."
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sandbox policy for this filesystem write."
           }
         },
         "required": [

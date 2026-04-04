@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::apply_patch;
+use crate::apply_patch::EnvironmentApplyPatchFileSystem;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::Session;
@@ -25,6 +26,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_sandboxing::policy_transforms::EffectiveSandboxPermissions;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
@@ -167,7 +169,7 @@ impl ToolHandler for ApplyPatchHandler {
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
+        match parse_apply_patch_verified(turn.as_ref(), &command, &cwd).await {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
                     effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
@@ -178,7 +180,7 @@ impl ToolHandler for ApplyPatchHandler {
                         let content = item?;
                         Ok(ApplyPatchToolOutput::from_text(content))
                     }
-                    InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                    InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
@@ -194,12 +196,16 @@ impl ToolHandler for ApplyPatchHandler {
                             action: apply.action,
                             file_paths,
                             changes,
+                            sandbox_policy: EffectiveSandboxPermissions::new(
+                                turn.sandbox_policy.get(),
+                                effective_additional_permissions
+                                    .additional_permissions
+                                    .as_ref(),
+                            )
+                            .sandbox_policy,
                             exec_approval_requirement: apply.exec_approval_requirement,
-                            additional_permissions: effective_additional_permissions
-                                .additional_permissions,
                             permissions_preapproved: effective_additional_permissions
                                 .permissions_preapproved,
-                            timeout_ms: None,
                         };
 
                         let mut orchestrator = ToolOrchestrator::new();
@@ -255,14 +261,14 @@ impl ToolHandler for ApplyPatchHandler {
 pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &Path,
-    timeout_ms: Option<u64>,
+    _timeout_ms: Option<u64>,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
+    match parse_apply_patch_verified(turn.as_ref(), command, cwd).await {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
@@ -281,7 +287,7 @@ pub(crate) async fn intercept_apply_patch(
                     let content = item?;
                     Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
-                InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(
@@ -296,12 +302,16 @@ pub(crate) async fn intercept_apply_patch(
                         action: apply.action,
                         file_paths: approval_keys,
                         changes,
+                        sandbox_policy: EffectiveSandboxPermissions::new(
+                            turn.sandbox_policy.get(),
+                            effective_additional_permissions
+                                .additional_permissions
+                                .as_ref(),
+                        )
+                        .sandbox_policy,
                         exec_approval_requirement: apply.exec_approval_requirement,
-                        additional_permissions: effective_additional_permissions
-                            .additional_permissions,
                         permissions_preapproved: effective_additional_permissions
                             .permissions_preapproved,
-                        timeout_ms,
                     };
 
                     let mut orchestrator = ToolOrchestrator::new();
@@ -344,6 +354,18 @@ pub(crate) async fn intercept_apply_patch(
         }
         codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => Ok(None),
     }
+}
+
+async fn parse_apply_patch_verified(
+    turn: &TurnContext,
+    command: &[String],
+    cwd: &Path,
+) -> codex_apply_patch::MaybeApplyPatchVerified {
+    let fs = EnvironmentApplyPatchFileSystem::for_verification(
+        turn.environment.get_filesystem(),
+        turn.cwd.to_path_buf(),
+    );
+    codex_apply_patch::maybe_parse_apply_patch_verified_with_fs(command, cwd, &fs).await
 }
 
 #[cfg(test)]

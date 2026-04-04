@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use similar::TextDiff;
 use tree_sitter::Parser;
 use tree_sitter::Query;
 use tree_sitter::QueryCursor;
@@ -12,9 +14,11 @@ use crate::ApplyPatchAction;
 use crate::ApplyPatchArgs;
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileChange;
+use crate::ApplyPatchFileSystem;
 use crate::ApplyPatchFileUpdate;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
+use crate::derive_new_contents_from_chunks_with_fs;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
@@ -149,17 +153,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
             hunks,
             workdir,
         }) => {
-            let effective_cwd = workdir
-                .as_ref()
-                .map(|dir| {
-                    let path = Path::new(dir);
-                    if path.is_absolute() {
-                        path.to_path_buf()
-                    } else {
-                        cwd.join(path)
-                    }
-                })
-                .unwrap_or_else(|| cwd.to_path_buf());
+            let effective_cwd = resolve_effective_cwd(cwd, workdir.as_deref());
             let mut changes = HashMap::new();
             for hunk in hunks {
                 let path = hunk.resolve_path(&effective_cwd);
@@ -214,6 +208,101 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
         MaybeApplyPatch::NotApplyPatch => MaybeApplyPatchVerified::NotApplyPatch,
     }
+}
+
+/// Async variant of [`maybe_parse_apply_patch_verified`] that reads file
+/// contents through an abstract filesystem instead of directly from `std::fs`.
+pub async fn maybe_parse_apply_patch_verified_with_fs(
+    argv: &[String],
+    cwd: &Path,
+    fs: &dyn ApplyPatchFileSystem,
+) -> MaybeApplyPatchVerified {
+    if let [body] = argv
+        && parse_patch(body).is_ok()
+    {
+        return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
+    }
+    if let Some((_, script)) = parse_shell_script(argv)
+        && parse_patch(script).is_ok()
+    {
+        return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
+    }
+
+    match maybe_parse_apply_patch(argv) {
+        MaybeApplyPatch::Body(ApplyPatchArgs {
+            patch,
+            hunks,
+            workdir,
+        }) => {
+            let effective_cwd = resolve_effective_cwd(cwd, workdir.as_deref());
+            let mut changes = HashMap::new();
+            for hunk in hunks {
+                let path = hunk.resolve_path(&effective_cwd);
+                match hunk {
+                    Hunk::AddFile { contents, .. } => {
+                        changes.insert(path, ApplyPatchFileChange::Add { content: contents });
+                    }
+                    Hunk::DeleteFile { .. } => {
+                        let content = match fs.read_text(&path).await {
+                            Ok(content) => content,
+                            Err(err) => {
+                                return MaybeApplyPatchVerified::CorrectnessError(err);
+                            }
+                        };
+                        changes.insert(path, ApplyPatchFileChange::Delete { content });
+                    }
+                    Hunk::UpdateFile {
+                        move_path, chunks, ..
+                    } => {
+                        let applied =
+                            match derive_new_contents_from_chunks_with_fs(&path, &chunks, fs).await
+                            {
+                                Ok(applied) => applied,
+                                Err(err) => {
+                                    return MaybeApplyPatchVerified::CorrectnessError(err);
+                                }
+                            };
+                        let unified_diff =
+                            TextDiff::from_lines(&applied.original_contents, &applied.new_contents)
+                                .unified_diff()
+                                .context_radius(1)
+                                .to_string();
+                        changes.insert(
+                            path,
+                            ApplyPatchFileChange::Update {
+                                unified_diff,
+                                move_path: move_path.map(|p| effective_cwd.join(p)),
+                                new_content: applied.new_contents,
+                            },
+                        );
+                    }
+                }
+            }
+            MaybeApplyPatchVerified::Body(ApplyPatchAction {
+                changes,
+                patch,
+                cwd: effective_cwd,
+            })
+        }
+        MaybeApplyPatch::ShellParseError(err) => MaybeApplyPatchVerified::ShellParseError(err),
+        MaybeApplyPatch::PatchParseError(err) => {
+            MaybeApplyPatchVerified::CorrectnessError(err.into())
+        }
+        MaybeApplyPatch::NotApplyPatch => MaybeApplyPatchVerified::NotApplyPatch,
+    }
+}
+
+fn resolve_effective_cwd(cwd: &Path, workdir: Option<&str>) -> PathBuf {
+    workdir
+        .map(Path::new)
+        .map(|path| {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd.join(path)
+            }
+        })
+        .unwrap_or_else(|| cwd.to_path_buf())
 }
 
 /// Extract the heredoc body (and optional `cd` workdir) from a `bash -lc` script

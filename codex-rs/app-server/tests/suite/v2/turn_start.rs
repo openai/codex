@@ -11,6 +11,7 @@ use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CollabAgentStatus;
@@ -1527,6 +1528,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
             ..Default::default()
         })
         .await?;

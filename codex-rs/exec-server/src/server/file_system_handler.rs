@@ -22,6 +22,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
+use crate::FileSystemOperationOptions;
 use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
 use crate::rpc::internal_error;
@@ -39,7 +40,10 @@ impl FileSystemHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file(&params.path)
+            .read_file_with_options(
+                &params.path,
+                &fs_operation_options(params.sandbox_policy, params.cwd),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -57,7 +61,11 @@ impl FileSystemHandler {
             ))
         })?;
         self.file_system
-            .write_file(&params.path, bytes)
+            .write_file_with_options(
+                &params.path,
+                bytes,
+                &fs_operation_options(params.sandbox_policy, params.cwd),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -68,11 +76,12 @@ impl FileSystemHandler {
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         self.file_system
-            .create_directory(
+            .create_directory_with_options(
                 &params.path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
+                &fs_operation_options(params.sandbox_policy, params.cwd),
             )
             .await
             .map_err(map_fs_error)?;
@@ -85,7 +94,10 @@ impl FileSystemHandler {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata(&params.path)
+            .get_metadata_with_options(
+                &params.path,
+                &fs_operation_options(params.sandbox_policy, params.cwd),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -102,7 +114,10 @@ impl FileSystemHandler {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory(&params.path)
+            .read_directory_with_options(
+                &params.path,
+                &fs_operation_options(params.sandbox_policy, params.cwd),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -122,12 +137,13 @@ impl FileSystemHandler {
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
         self.file_system
-            .remove(
+            .remove_with_options(
                 &params.path,
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
                 },
+                &fs_operation_options(params.sandbox_policy, params.cwd),
             )
             .await
             .map_err(map_fs_error)?;
@@ -139,16 +155,27 @@ impl FileSystemHandler {
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.file_system
-            .copy(
+            .copy_with_options(
                 &params.source_path,
                 &params.destination_path,
                 CopyOptions {
                     recursive: params.recursive,
                 },
+                &fs_operation_options(params.sandbox_policy, params.cwd),
             )
             .await
             .map_err(map_fs_error)?;
         Ok(FsCopyResponse {})
+    }
+}
+
+fn fs_operation_options(
+    sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
+    cwd: Option<codex_utils_absolute_path::AbsolutePathBuf>,
+) -> FileSystemOperationOptions {
+    FileSystemOperationOptions {
+        sandbox_policy: sandbox_policy.map(|policy| policy.to_core()),
+        cwd,
     }
 }
 

@@ -129,6 +129,7 @@ def codex_rust_crate(
         integration_test_timeout = None,
         test_data_extra = [],
         test_tags = [],
+        unit_test_target_compatible_with = None,
         unit_test_timeout = None,
         extra_binaries = []):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
@@ -164,6 +165,8 @@ def codex_rust_crate(
         test_data_extra: Extra runtime data for tests.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
+        unit_test_target_compatible_with: Optional target compatibility
+            constraints for the generated unit-test binary and wrapper.
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
@@ -235,6 +238,7 @@ def codex_rust_crate(
         )
 
         unit_test_binary = name + "-unit-tests-bin"
+        unit_test_target_compatible_with = unit_test_target_compatible_with or []
         rust_test(
             name = unit_test_binary,
             crate = name,
@@ -253,6 +257,7 @@ def codex_rust_crate(
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags + ["manual"],
+            target_compatible_with = unit_test_target_compatible_with,
         )
 
         unit_test_kwargs = {}
@@ -265,6 +270,7 @@ def codex_rust_crate(
             test_bin = ":" + unit_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             tags = test_tags,
+            target_compatible_with = unit_test_target_compatible_with,
             **unit_test_kwargs
         )
 
