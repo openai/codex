@@ -220,6 +220,7 @@ async fn run_compact_task_inner(
     };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
+    client_session.reset_websocket_session();
     sess.recompute_token_usage(&turn_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)

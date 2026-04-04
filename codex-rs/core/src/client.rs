@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_api::CompactClient as ApiCompactClient;
@@ -119,6 +120,9 @@ use codex_response_debug_context::telemetry_transport_error_message;
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+pub const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
+pub const X_CODEX_WINDOW_ID_HEADER: &str = "x-codex-window-id";
+pub const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -137,6 +141,7 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     conversation_id: ThreadId,
+    window_generation: AtomicU64,
     provider: ModelProviderInfo,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
@@ -274,6 +279,7 @@ impl ModelClient {
             state: Arc::new(ModelClientState {
                 auth_manager,
                 conversation_id,
+                window_generation: AtomicU64::new(0),
                 provider,
                 auth_env_telemetry,
                 session_source,
@@ -301,6 +307,24 @@ impl ModelClient {
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.state.auth_manager.clone()
+    }
+
+    pub(crate) fn set_window_generation(&self, window_generation: u64) {
+        self.state
+            .window_generation
+            .store(window_generation, Ordering::Relaxed);
+        self.store_cached_websocket_session(WebsocketSession::default());
+    }
+
+    pub(crate) fn advance_window_generation(&self) {
+        self.state.window_generation.fetch_add(1, Ordering::Relaxed);
+        self.store_cached_websocket_session(WebsocketSession::default());
+    }
+
+    fn current_window_id(&self) -> String {
+        let conversation_id = self.state.conversation_id;
+        let window_generation = self.state.window_generation.load(Ordering::Relaxed);
+        format!("{conversation_id}:{window_generation}")
     }
 
     fn take_cached_websocket_session(&self) -> WebsocketSession {
@@ -401,7 +425,7 @@ impl ModelClient {
             text,
         };
 
-        let mut extra_headers = self.build_subagent_headers();
+        let mut extra_headers = self.build_responses_identity_headers();
         extra_headers.extend(build_conversation_headers(Some(
             self.state.conversation_id.to_string(),
         )));
@@ -461,19 +485,54 @@ impl ModelClient {
 
     fn build_subagent_headers(&self) -> ApiHeaderMap {
         let mut extra_headers = ApiHeaderMap::new();
-        if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = match sub {
-                SubAgentSource::Review => "review".to_string(),
-                SubAgentSource::Compact => "compact".to_string(),
-                SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-                SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
-                SubAgentSource::Other(label) => label.clone(),
-            };
-            if let Ok(val) = HeaderValue::from_str(&subagent) {
-                extra_headers.insert("x-openai-subagent", val);
-            }
+        if let Some(subagent) = subagent_header_value(&self.state.session_source)
+            && let Ok(val) = HeaderValue::from_str(&subagent)
+        {
+            extra_headers.insert(X_OPENAI_SUBAGENT_HEADER, val);
         }
         extra_headers
+    }
+
+    fn build_responses_identity_headers(&self) -> ApiHeaderMap {
+        let mut extra_headers = self.build_subagent_headers();
+        if let Some(parent_thread_id) = parent_thread_id_header_value(&self.state.session_source)
+            && let Ok(val) = HeaderValue::from_str(&parent_thread_id)
+        {
+            extra_headers.insert(X_CODEX_PARENT_THREAD_ID_HEADER, val);
+        }
+        if let Ok(val) = HeaderValue::from_str(&self.current_window_id()) {
+            extra_headers.insert(X_CODEX_WINDOW_ID_HEADER, val);
+        }
+        extra_headers
+    }
+
+    fn build_ws_client_metadata(
+        &self,
+        turn_metadata_header: Option<&str>,
+    ) -> HashMap<String, String> {
+        let mut client_metadata = HashMap::new();
+        client_metadata.insert(
+            X_CODEX_WINDOW_ID_HEADER.to_string(),
+            self.current_window_id(),
+        );
+        if let Some(subagent) = subagent_header_value(&self.state.session_source) {
+            client_metadata.insert(X_OPENAI_SUBAGENT_HEADER.to_string(), subagent);
+        }
+        if let Some(parent_thread_id) = parent_thread_id_header_value(&self.state.session_source) {
+            client_metadata.insert(
+                X_CODEX_PARENT_THREAD_ID_HEADER.to_string(),
+                parent_thread_id,
+            );
+        }
+        if let Some(turn_metadata_header) = parse_turn_metadata_header(turn_metadata_header)
+            && let Ok(turn_metadata) = turn_metadata_header.to_str()
+        {
+            client_metadata.insert(
+                X_CODEX_TURN_METADATA_HEADER.to_string(),
+                turn_metadata.to_string(),
+            );
+        }
+        client_metadata
     }
 
     /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
@@ -655,6 +714,7 @@ impl ModelClient {
             headers.insert("x-client-request-id", header_value);
         }
         headers.extend(build_conversation_headers(Some(conversation_id)));
+        headers.extend(self.build_responses_identity_headers());
         headers.insert(
             OPENAI_BETA_HEADER,
             HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
@@ -678,7 +738,7 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-    fn reset_websocket_session(&mut self) {
+    pub(crate) fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
@@ -769,11 +829,15 @@ impl ModelClientSession {
         ApiResponsesOptions {
             conversation_id: Some(conversation_id),
             session_source: Some(self.client.state.session_source.clone()),
-            extra_headers: build_responses_headers(
-                self.client.state.beta_features_header.as_deref(),
-                Some(&self.turn_state),
-                turn_metadata_header.as_ref(),
-            ),
+            extra_headers: {
+                let mut headers = build_responses_headers(
+                    self.client.state.beta_features_header.as_deref(),
+                    Some(&self.turn_state),
+                    turn_metadata_header.as_ref(),
+                );
+                headers.extend(self.client.build_responses_identity_headers());
+                headers
+            },
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
         }
@@ -1137,7 +1201,7 @@ impl ModelClientSession {
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
-                    build_ws_client_metadata(turn_metadata_header),
+                    Some(self.client.build_ws_client_metadata(turn_metadata_header)),
                     request_trace.as_ref(),
                 ),
                 ..ResponseCreateWsRequest::from(&request)
@@ -1370,14 +1434,6 @@ fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<Head
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
 }
 
-fn build_ws_client_metadata(turn_metadata_header: Option<&str>) -> Option<HashMap<String, String>> {
-    let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header)?;
-    let turn_metadata = turn_metadata_header.to_str().ok()?.to_string();
-    let mut client_metadata = HashMap::new();
-    client_metadata.insert(X_CODEX_TURN_METADATA_HEADER.to_string(), turn_metadata);
-    Some(client_metadata)
-}
-
 /// Builds the extra headers attached to Responses API requests.
 ///
 /// These headers implement Codex-specific conventions:
@@ -1407,6 +1463,34 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
     }
     headers
+}
+
+fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
+    let SessionSource::SubAgent(subagent_source) = session_source else {
+        return None;
+    };
+    match subagent_source {
+        SubAgentSource::Review => Some("review".to_string()),
+        SubAgentSource::Compact => Some("compact".to_string()),
+        SubAgentSource::MemoryConsolidation => Some("memory_consolidation".to_string()),
+        SubAgentSource::ThreadSpawn { .. } => Some("collab_spawn".to_string()),
+        SubAgentSource::Other(label) => Some(label.clone()),
+    }
+}
+
+fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<String> {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) => Some(parent_thread_id.to_string()),
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::SubAgent(_)
+        | SessionSource::Unknown => None,
+    }
 }
 
 fn map_response_stream<S>(

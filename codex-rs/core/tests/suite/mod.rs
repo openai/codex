@@ -154,3 +154,4 @@ mod user_shell_cmd;
 mod view_image;
 mod web_search;
 mod websocket_fallback;
+mod window_headers;

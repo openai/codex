@@ -1531,6 +1531,17 @@ impl Session {
                 ),
             ),
         };
+        let window_generation = match &initial_history {
+            InitialHistory::Resumed(resumed_history) => u64::try_from(
+                resumed_history
+                    .history
+                    .iter()
+                    .filter(|item| matches!(item, RolloutItem::Compacted(_)))
+                    .count(),
+            )
+            .unwrap_or(u64::MAX),
+            InitialHistory::New | InitialHistory::Forked(_) => 0,
+        };
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
                 resumed.history.as_slice(),
@@ -1920,6 +1931,9 @@ impl Session {
             ),
             environment: environment_manager.current().await?,
         };
+        services
+            .model_client
+            .set_window_generation(window_generation);
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
             config.js_repl_node_module_dirs.clone(),
@@ -3514,6 +3528,7 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
         }
+        self.services.model_client.advance_window_generation();
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -5733,16 +5748,20 @@ pub(crate) async fn run_turn(
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
+    let mut prewarmed_client_session = prewarmed_client_session;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if run_pre_sampling_compact(&sess, &turn_context)
-        .await
-        .is_err()
-    {
-        error!("Failed to run pre-sampling compact");
-        return None;
+    let pre_sampling_compacted = match run_pre_sampling_compact(&sess, &turn_context).await {
+        Ok(pre_sampling_compacted) => pre_sampling_compacted,
+        Err(_) => {
+            error!("Failed to run pre-sampling compact");
+            return None;
+        }
+    };
+    if pre_sampling_compacted && let Some(mut client_session) = prewarmed_client_session.take() {
+        client_session.reset_websocket_session();
     }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
@@ -6055,6 +6074,7 @@ pub(crate) async fn run_turn(
                     {
                         return None;
                     }
+                    client_session.reset_websocket_session();
                     continue;
                 }
 
@@ -6215,9 +6235,9 @@ pub(crate) async fn run_turn(
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    maybe_run_previous_model_inline_compact(
+    let mut pre_sampling_compacted = maybe_run_previous_model_inline_compact(
         sess,
         turn_context,
         total_usage_tokens_before_compaction,
@@ -6231,8 +6251,9 @@ async fn run_pre_sampling_compact(
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
+        pre_sampling_compacted = true;
     }
-    Ok(())
+    Ok(pre_sampling_compacted)
 }
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
