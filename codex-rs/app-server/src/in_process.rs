@@ -50,6 +50,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::auth_manager::auth_manager_from_config;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
@@ -379,6 +380,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         });
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
+        let auth_manager = auth_manager_from_config(&args.config, args.enable_codex_api_key_env);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
             let mut processor = MessageProcessor::new(MessageProcessorArgs {
@@ -393,7 +395,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 log_db: None,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
-                enable_codex_api_key_env: args.enable_codex_api_key_env,
+                auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
             });
             let mut thread_created_rx = processor.thread_created_receiver();

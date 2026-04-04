@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::auth_manager::auth_manager_from_config;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -42,7 +43,6 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
-use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
@@ -61,6 +61,7 @@ use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod app_server_tracing;
+mod auth_manager;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;
@@ -396,11 +397,8 @@ pub async fn run_main_with_transport(
                 }
             }
 
-            let auth_manager = AuthManager::shared(
-                config.codex_home.clone(),
-                /*enable_codex_api_key_env*/ false,
-                config.cli_auth_credentials_store_mode,
-            );
+            let auth_manager =
+                auth_manager_from_config(&config, /*enable_codex_api_key_env*/ false);
             cloud_requirements_loader(
                 auth_manager,
                 config.chatgpt_base_url,
@@ -611,6 +609,8 @@ pub async fn run_main_with_transport(
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let outbound_control_tx = outbound_control_tx;
+        let auth_manager =
+            auth_manager_from_config(&config, /*enable_codex_api_key_env*/ false);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
@@ -625,7 +625,7 @@ pub async fn run_main_with_transport(
             log_db,
             config_warnings,
             session_source,
-            enable_codex_api_key_env: false,
+            auth_manager,
             rpc_transport: analytics_rpc_transport(transport),
         });
         let mut thread_created_rx = processor.thread_created_receiver();

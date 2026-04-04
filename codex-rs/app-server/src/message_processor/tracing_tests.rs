@@ -1,6 +1,7 @@
 use super::ConnectionSessionState;
 use super::MessageProcessor;
 use super::MessageProcessorArgs;
+use crate::auth_manager::auth_manager_from_config;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::transport::AppServerTransport;
@@ -234,6 +235,7 @@ fn build_test_processor(
 ) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+    let auth_manager = auth_manager_from_config(&config, /*enable_codex_api_key_env*/ false);
     let processor = MessageProcessor::new(MessageProcessorArgs {
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
@@ -246,7 +248,7 @@ fn build_test_processor(
         log_db: None,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
-        enable_codex_api_key_env: false,
+        auth_manager,
         rpc_transport: AppServerRpcTransport::Stdio,
     });
     (processor, outgoing_rx)
