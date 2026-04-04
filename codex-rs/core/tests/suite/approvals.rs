@@ -14,6 +14,7 @@ use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -589,7 +590,7 @@ async fn submit_turn(
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy,
-            approvals_reviewer: None,
+            approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy,
             model: session_model,
             effort: None,
