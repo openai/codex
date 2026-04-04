@@ -13,10 +13,10 @@ use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
-use codex_api::RealtimeWebsocketClient;
+use codex_api::RealtimeWebRtcClient;
 use codex_api::api_bridge::map_api_error;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
+use codex_api::endpoint::realtime_websocket::RealtimeWebRtcEvents;
+use codex_api::endpoint::realtime_websocket::RealtimeWebRtcWriter;
 use codex_app_server_protocol::AuthMode;
 use codex_login::CodexAuth;
 use codex_login::default_client::default_headers;
@@ -107,8 +107,8 @@ struct OutputAudioState {
 }
 
 struct RealtimeInputTask {
-    writer: RealtimeWebsocketWriter,
-    events: RealtimeWebsocketEvents,
+    writer: RealtimeWebRtcWriter,
+    events: RealtimeWebRtcEvents,
     user_text_rx: Receiver<String>,
     handoff_output_rx: Receiver<HandoffOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
@@ -132,7 +132,7 @@ impl RealtimeHandoffState {
 struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     user_text_tx: Sender<String>,
-    writer: RealtimeWebsocketWriter,
+    writer: RealtimeWebRtcWriter,
     handoff: RealtimeHandoffState,
     input_task: JoinHandle<()>,
     fanout_task: Option<JoinHandle<()>>,
@@ -172,7 +172,7 @@ impl RealtimeConversationManager {
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
 
-        let client = RealtimeWebsocketClient::new(api_provider);
+        let client = RealtimeWebRtcClient::new(api_provider);
         let connection = client
             .connect(
                 session_config,
@@ -392,6 +392,7 @@ async fn stop_conversation_state(
     fanout_task_stop: RealtimeFanoutTaskStop,
 ) {
     state.realtime_active.store(false, Ordering::Relaxed);
+    let _ = state.writer.close().await;
     state.input_task.abort();
     let _ = state.input_task.await;
 

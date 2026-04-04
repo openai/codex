@@ -29,6 +29,7 @@ futures = { workspace = true }
 notify = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+opus = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -38,6 +39,7 @@ tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 walkdir = { workspace = true }
+webrtc = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }
 zstd = { workspace = true }

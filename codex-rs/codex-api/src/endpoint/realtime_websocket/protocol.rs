@@ -32,8 +32,6 @@ pub struct RealtimeSessionConfig {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub(super) enum RealtimeOutboundMessage {
-    #[serde(rename = "input_audio_buffer.append")]
-    InputAudioBufferAppend { audio: String },
     #[serde(rename = "conversation.handoff.append")]
     ConversationHandoffAppend {
         handoff_id: String,

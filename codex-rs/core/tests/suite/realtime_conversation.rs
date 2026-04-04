@@ -256,7 +256,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     );
     assert_eq!(
         server.handshakes()[1].uri(),
-        "/v1/realtime?intent=quicksilver&model=realtime-test-model"
+        "/v1/realtime/calls?intent=quicksilver&model=realtime-test-model"
     );
     let mut request_types = [
         connection[1].body_json()["type"]

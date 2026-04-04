@@ -37,6 +37,8 @@ use wiremock::matchers::path_regex;
 
 use crate::test_codex::ApplyPatchModelOutput;
 
+mod realtime_webrtc_server;
+
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
     requests: Arc<Mutex<Vec<ResponsesRequest>>>,
@@ -1236,6 +1238,28 @@ pub async fn start_websocket_server_with_headers(
 
             if let Some(delay) = connection.accept_delay {
                 tokio::time::sleep(delay).await;
+            }
+
+            if realtime_webrtc_server::accept_is_http_post(&stream).await {
+                let connection_index = {
+                    let mut log = requests.lock().unwrap();
+                    log.push(Vec::new());
+                    log.len() - 1
+                };
+                realtime_webrtc_server::serve_connection(
+                    stream,
+                    connection,
+                    connection_index,
+                    Arc::clone(&requests),
+                    Arc::clone(&handshakes),
+                    Arc::clone(&request_log),
+                )
+                .await;
+
+                if connections.lock().unwrap().is_empty() {
+                    return;
+                }
+                continue;
             }
 
             let response_headers = connection.response_headers.clone();
