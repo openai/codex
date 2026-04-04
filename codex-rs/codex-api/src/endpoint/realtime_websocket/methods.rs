@@ -1,7 +1,10 @@
+use crate::api_bridge::CoreAuthProvider;
+use crate::auth::add_auth_headers_to_header_map;
 use crate::endpoint::realtime_websocket::methods_common::conversation_handoff_append_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
 use crate::endpoint::realtime_websocket::methods_common::session_update_session;
+use crate::endpoint::realtime_websocket::methods_common::webrtc_intent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
@@ -24,6 +27,9 @@ use interceptor::registry::Registry;
 use opus_rs::Application;
 use opus_rs::OpusDecoder;
 use opus_rs::OpusEncoder;
+use reqwest::multipart::Form;
+use reqwest::multipart::Part;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -362,12 +368,13 @@ fn append_transcript_delta(entries: &mut Vec<RealtimeTranscriptEntry>, role: &st
 }
 
 pub struct RealtimeWebRtcClient {
+    auth: CoreAuthProvider,
     provider: Provider,
 }
 
 impl RealtimeWebRtcClient {
-    pub fn new(provider: Provider) -> Self {
-        Self { provider }
+    pub fn new(provider: Provider, auth: CoreAuthProvider) -> Self {
+        Self { auth, provider }
     }
 
     pub async fn connect(
@@ -380,9 +387,12 @@ impl RealtimeWebRtcClient {
         let calls_url = calls_url_from_api_url(
             self.provider.base_url.as_str(),
             self.provider.query_params.as_ref(),
+            config.model.as_deref(),
+            config.event_parser,
         )?;
 
         let headers = merge_request_headers(
+            &self.auth,
             &self.provider.headers,
             with_session_id_header(extra_headers, config.session_id.as_deref())?,
             default_headers,
@@ -412,12 +422,14 @@ impl RealtimeWebRtcClient {
 }
 
 fn merge_request_headers(
+    auth: &CoreAuthProvider,
     provider_headers: &HeaderMap,
     extra_headers: HeaderMap,
     default_headers: HeaderMap,
 ) -> HeaderMap {
     let mut headers = provider_headers.clone();
     headers.extend(extra_headers);
+    add_auth_headers_to_header_map(auth, &mut headers);
     for (name, value) in &default_headers {
         if let http::header::Entry::Vacant(entry) = headers.entry(name) {
             entry.insert(value.clone());
@@ -445,6 +457,8 @@ fn with_session_id_header(
 fn calls_url_from_api_url(
     api_url: &str,
     query_params: Option<&HashMap<String, String>>,
+    model: Option<&str>,
+    event_parser: RealtimeEventParser,
 ) -> Result<Url, ApiError> {
     let mut url = Url::parse(api_url)
         .map_err(|err| ApiError::Stream(format!("failed to parse realtime api_url: {err}")))?;
@@ -466,10 +480,27 @@ fn calls_url_from_api_url(
         }
     }
 
-    if let Some(query_params) = query_params {
+    let intent = webrtc_intent(event_parser);
+    let has_extra_query_params = query_params.is_some_and(|query_params| {
+        query_params
+            .iter()
+            .any(|(key, _)| key != "intent" && !(key == "model" && model.is_some()))
+    });
+    if intent.is_some() || model.is_some() || has_extra_query_params {
         let mut query = url.query_pairs_mut();
-        for (key, value) in query_params {
-            query.append_pair(key, value);
+        if let Some(intent) = intent {
+            query.append_pair("intent", intent);
+        }
+        if let Some(model) = model {
+            query.append_pair("model", model);
+        }
+        if let Some(query_params) = query_params {
+            for (key, value) in query_params {
+                if key == "intent" || (key == "model" && model.is_some()) {
+                    continue;
+                }
+                query.append_pair(key, value);
+            }
         }
     }
 
@@ -509,7 +540,10 @@ fn normalize_realtime_calls_path(url: &mut Url) {
 
     if path.ends_with("/v1/") {
         url.set_path(&format!("{path}realtime/calls"));
+        return;
     }
+
+    url.set_path(&format!("{}/realtime/calls", path.trim_end_matches('/')));
 }
 
 async fn connect_webrtc_transport(
@@ -825,18 +859,44 @@ async fn fetch_realtime_answer(
     {
         session_json.insert("model".to_string(), serde_json::Value::String(model));
     }
-    let session_payload = serde_json::to_string(&session_json)
-        .map_err(|err| ApiError::Stream(format!("failed to encode realtime session: {err}")))?;
-    let form = reqwest::multipart::Form::new()
-        .text("sdp", offer_sdp)
-        .text("session", session_payload);
-    let response = client
-        .post(calls_url)
-        .headers(headers)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|err| ApiError::Stream(format!("failed to create realtime WebRTC call: {err}")))?;
+    let response = if calls_url.path().ends_with("/v1/realtime/calls") {
+        let session_payload = serde_json::to_string(&session_json)
+            .map_err(|err| ApiError::Stream(format!("failed to encode realtime session: {err}")))?;
+        let form = Form::new()
+            .part(
+                "sdp",
+                Part::text(offer_sdp)
+                    .mime_str("application/sdp")
+                    .map_err(|err| {
+                        ApiError::Stream(format!("failed to encode realtime SDP part: {err}"))
+                    })?,
+            )
+            .part(
+                "session",
+                Part::text(session_payload)
+                    .mime_str("application/json")
+                    .map_err(|err| {
+                        ApiError::Stream(format!("failed to encode realtime session part: {err}"))
+                    })?,
+            );
+        client
+            .post(calls_url)
+            .headers(headers)
+            .multipart(form)
+            .send()
+            .await
+    } else {
+        client
+            .post(calls_url)
+            .headers(headers)
+            .json(&json!({
+                "sdp": offer_sdp,
+                "session": session_json,
+            }))
+            .send()
+            .await
+    }
+    .map_err(|err| ApiError::Stream(format!("failed to create realtime WebRTC call: {err}")))?;
     let status = response.status();
     let body = response.text().await.map_err(|err| {
         ApiError::Stream(format!("failed to read realtime WebRTC answer SDP: {err}"))
@@ -961,8 +1021,13 @@ mod tests {
     #[test]
     fn calls_url_from_api_url_normalizes_http_root() {
         let query_params = HashMap::from([("model".to_string(), "gpt-realtime".to_string())]);
-        let calls_url =
-            calls_url_from_api_url("http://example.com", Some(&query_params)).expect("calls url");
+        let calls_url = calls_url_from_api_url(
+            "http://example.com",
+            Some(&query_params),
+            Some("gpt-realtime"),
+            RealtimeEventParser::RealtimeV2,
+        )
+        .expect("calls url");
 
         assert_eq!(
             calls_url.as_str(),
@@ -973,13 +1038,65 @@ mod tests {
     #[test]
     fn calls_url_from_api_url_preserves_v1_realtime_path_and_query() {
         let query_params = HashMap::from([("model".to_string(), "gpt-realtime".to_string())]);
-        let calls_url =
-            calls_url_from_api_url("wss://example.com/v1/realtime?foo=bar", Some(&query_params))
-                .expect("calls url");
+        let calls_url = calls_url_from_api_url(
+            "wss://example.com/v1/realtime?foo=bar",
+            Some(&query_params),
+            Some("gpt-realtime"),
+            RealtimeEventParser::RealtimeV2,
+        )
+        .expect("calls url");
 
         assert_eq!(
             calls_url.as_str(),
             "https://example.com/v1/realtime/calls?foo=bar&model=gpt-realtime"
+        );
+    }
+
+    #[test]
+    fn calls_url_from_api_url_appends_quicksilver_intent_for_v1() {
+        let calls_url = calls_url_from_api_url(
+            "wss://example.com/v1/realtime",
+            None,
+            Some("quicksilver-test-model"),
+            RealtimeEventParser::V1,
+        )
+        .expect("calls url");
+
+        assert_eq!(
+            calls_url.as_str(),
+            "https://example.com/v1/realtime/calls?intent=quicksilver&model=quicksilver-test-model"
+        );
+    }
+
+    #[test]
+    fn calls_url_from_api_url_omits_intent_for_v2() {
+        let calls_url = calls_url_from_api_url(
+            "wss://example.com/v1/realtime",
+            None,
+            Some("gpt-realtime"),
+            RealtimeEventParser::RealtimeV2,
+        )
+        .expect("calls url");
+
+        assert_eq!(
+            calls_url.as_str(),
+            "https://example.com/v1/realtime/calls?model=gpt-realtime"
+        );
+    }
+
+    #[test]
+    fn calls_url_from_api_url_appends_calls_path_to_chatgpt_base_url() {
+        let calls_url = calls_url_from_api_url(
+            "https://chatgpt.com/backend-api/codex",
+            None,
+            Some("gpt-realtime"),
+            RealtimeEventParser::RealtimeV2,
+        )
+        .expect("calls url");
+
+        assert_eq!(
+            calls_url.as_str(),
+            "https://chatgpt.com/backend-api/codex/realtime/calls?model=gpt-realtime"
         );
     }
 
