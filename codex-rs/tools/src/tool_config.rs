@@ -31,6 +31,21 @@ pub enum ToolUserShellType {
     Cmd,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ToolEnvironmentCapabilities {
+    pub exec_enabled: bool,
+    pub filesystem_enabled: bool,
+}
+
+impl ToolEnvironmentCapabilities {
+    pub const fn new(exec_enabled: bool, filesystem_enabled: bool) -> Self {
+        Self {
+            exec_enabled,
+            filesystem_enabled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UnifiedExecShellMode {
     Direct,
@@ -109,6 +124,7 @@ pub struct ToolsConfig {
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
     pub agent_type_description: String,
+    pub environment_capabilities: ToolEnvironmentCapabilities,
 }
 
 pub struct ToolsConfigParams<'a> {
@@ -154,6 +170,9 @@ impl ToolsConfig {
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
         let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
+        let environment_capabilities = ToolEnvironmentCapabilities::new(
+            /*exec_enabled*/ true, /*filesystem_enabled*/ true,
+        );
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
                 ShellCommandBackendConfig::ZshFork
@@ -165,7 +184,9 @@ impl ToolsConfig {
             sandbox_policy,
             *windows_sandbox_level,
         );
-        let shell_type = if !features.enabled(Feature::ShellTool) {
+        let shell_type = if !environment_capabilities.exec_enabled
+            || !features.enabled(Feature::ShellTool)
+        {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::ShellZshFork) {
             ConfigShellToolType::ShellCommand
@@ -186,7 +207,8 @@ impl ToolsConfig {
             Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
             Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
             None => include_apply_patch_tool.then_some(ApplyPatchToolType::Freeform),
-        };
+        }
+        .filter(|_| environment_capabilities.exec_enabled);
 
         let agent_jobs_worker_tools = include_agent_jobs
             && matches!(
@@ -223,6 +245,7 @@ impl ToolsConfig {
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
             agent_type_description: String::new(),
+            environment_capabilities,
         }
     }
 
@@ -269,6 +292,22 @@ impl ToolsConfig {
         nested.code_mode_enabled = false;
         nested.code_mode_only_enabled = false;
         nested
+    }
+
+    pub fn with_environment_capabilities(
+        mut self,
+        environment_capabilities: ToolEnvironmentCapabilities,
+    ) -> Self {
+        self.environment_capabilities = environment_capabilities;
+
+        if !environment_capabilities.exec_enabled {
+            self.shell_type = ConfigShellToolType::Disabled;
+            self.apply_patch_tool_type = None;
+            self.js_repl_enabled = false;
+            self.js_repl_tools_only = false;
+        }
+
+        self
     }
 }
 

@@ -189,7 +189,7 @@ pub fn build_tool_registry_plan(
     );
     plan.register_handler("update_plan", ToolHandlerKind::Plan);
 
-    if config.js_repl_enabled {
+    if config.js_repl_enabled && config.environment_capabilities.exec_enabled {
         plan.push_spec(
             create_js_repl_tool(),
             /*supports_parallel_tool_calls*/ false,
@@ -265,7 +265,9 @@ pub fn build_tool_registry_plan(
         plan.register_handler(TOOL_SUGGEST_TOOL_NAME, ToolHandlerKind::ToolSuggest);
     }
 
-    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
+    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
+        && config.environment_capabilities.exec_enabled
+    {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
                 plan.push_spec(
@@ -285,10 +287,11 @@ pub fn build_tool_registry_plan(
         plan.register_handler("apply_patch", ToolHandlerKind::ApplyPatch);
     }
 
-    if config
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "list_dir")
+    if config.environment_capabilities.filesystem_enabled
+        && config
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == "list_dir")
     {
         plan.push_spec(
             create_list_dir_tool(),
@@ -331,14 +334,16 @@ pub fn build_tool_registry_plan(
         );
     }
 
-    plan.push_spec(
-        create_view_image_tool(ViewImageToolOptions {
-            can_request_original_image_detail: config.can_request_original_image_detail,
-        }),
-        /*supports_parallel_tool_calls*/ true,
-        config.code_mode_enabled,
-    );
-    plan.register_handler("view_image", ToolHandlerKind::ViewImage);
+    if config.environment_capabilities.filesystem_enabled {
+        plan.push_spec(
+            create_view_image_tool(ViewImageToolOptions {
+                can_request_original_image_detail: config.can_request_original_image_detail,
+            }),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("view_image", ToolHandlerKind::ViewImage);
+    }
 
     if config.collab_tools {
         if config.multi_agent_v2 {

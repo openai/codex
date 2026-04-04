@@ -18,6 +18,9 @@ use crate::tools::registry::ToolKind;
 
 pub struct ListDirHandler;
 
+const LIST_DIR_DISABLED_MESSAGE: &str =
+    "list_dir is unavailable because the environment is disabled";
+
 const MAX_ENTRY_LENGTH: usize = 500;
 const INDENTATION_SPACES: usize = 2;
 
@@ -52,6 +55,12 @@ impl ToolHandler for ListDirHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        if !invocation.turn.environment.filesystem_enabled() {
+            return Err(FunctionCallError::RespondToModel(
+                LIST_DIR_DISABLED_MESSAGE.to_string(),
+            ));
+        }
+
         let ToolInvocation { payload, .. } = invocation;
 
         let arguments = match payload {

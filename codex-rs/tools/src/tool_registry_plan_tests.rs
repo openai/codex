@@ -8,6 +8,7 @@ use crate::JsonSchema;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
+use crate::ToolEnvironmentCapabilities;
 use crate::ToolHandlerSpec;
 use crate::ToolRegistryPlanAppTool;
 use crate::ToolsConfigParams;
@@ -670,6 +671,47 @@ fn js_repl_enabled_adds_tools() {
     );
 
     assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+}
+
+#[test]
+fn disabled_environment_omits_environment_backed_tools() {
+    let mut model_info = model_info();
+    model_info.experimental_supported_tools = vec!["list_dir".to_string()];
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ApplyPatchFreeform);
+    features.enable(Feature::JsRepl);
+
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_environment_capabilities(ToolEnvironmentCapabilities::new(
+        /*exec_enabled*/ false, /*filesystem_enabled*/ false,
+    ));
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    for tool_name in [
+        "exec_command",
+        "write_stdin",
+        "apply_patch",
+        "js_repl",
+        "js_repl_reset",
+        "list_dir",
+        "view_image",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
 }
 
 #[test]

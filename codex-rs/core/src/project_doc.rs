@@ -77,6 +77,7 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
+    let skip_project_docs = codex_exec_server::ExecServerMode::from_env().skips_project_docs();
     let project_docs = read_project_docs(config).await;
 
     let mut output = String::new();
@@ -105,7 +106,7 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
         output.push_str(&js_repl_section);
     }
 
-    if config.features.enabled(Feature::ChildAgentsMd) {
+    if config.features.enabled(Feature::ChildAgentsMd) && !skip_project_docs {
         if !output.is_empty() {
             output.push_str("\n\n");
         }
@@ -128,7 +129,7 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String>> {
     let max_total = config.project_doc_max_bytes;
 
-    if max_total == 0 {
+    if max_total == 0 || codex_exec_server::ExecServerMode::from_env().skips_project_docs() {
         return Ok(None);
     }
 

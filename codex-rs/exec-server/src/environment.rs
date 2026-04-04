@@ -14,37 +14,95 @@ use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
+const CODEX_EXEC_SERVER_URL_NONE: &str = "none";
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ExecServerMode {
+    #[default]
+    Local,
+    Disabled,
+    Remote(String),
+}
+
+impl ExecServerMode {
+    pub fn from_env() -> Self {
+        Self::from_env_value(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
+    }
+
+    pub fn from_env_value(exec_server_url: Option<String>) -> Self {
+        match exec_server_url.as_deref().map(str::trim) {
+            None | Some("") => Self::Local,
+            Some(url) if url.eq_ignore_ascii_case(CODEX_EXEC_SERVER_URL_NONE) => Self::Disabled,
+            Some(url) => Self::Remote(url.to_string()),
+        }
+    }
+
+    pub fn exec_server_url(&self) -> Option<&str> {
+        match self {
+            Self::Local | Self::Disabled => None,
+            Self::Remote(url) => Some(url.as_str()),
+        }
+    }
+
+    pub fn skips_project_docs(&self) -> bool {
+        matches!(self, Self::Disabled)
+    }
+
+    pub fn exec_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    pub fn filesystem_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
 pub trait ExecutorEnvironment: Send + Sync {
     fn get_exec_backend(&self) -> Arc<dyn ExecBackend>;
 }
 
 #[derive(Debug, Default)]
 pub struct EnvironmentManager {
-    exec_server_url: Option<String>,
+    exec_server_mode: ExecServerMode,
     current_environment: OnceCell<Arc<Environment>>,
 }
 
 impl EnvironmentManager {
     pub fn new(exec_server_url: Option<String>) -> Self {
         Self {
-            exec_server_url: normalize_exec_server_url(exec_server_url),
+            exec_server_mode: ExecServerMode::from_env_value(exec_server_url),
             current_environment: OnceCell::new(),
         }
     }
 
     pub fn from_env() -> Self {
-        Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
+        Self {
+            exec_server_mode: ExecServerMode::from_env(),
+            current_environment: OnceCell::new(),
+        }
     }
 
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
+        self.exec_server_mode.exec_server_url()
+    }
+
+    pub fn skips_project_docs(&self) -> bool {
+        self.exec_server_mode.skips_project_docs()
+    }
+
+    pub fn exec_enabled(&self) -> bool {
+        self.exec_server_mode.exec_enabled()
+    }
+
+    pub fn filesystem_enabled(&self) -> bool {
+        self.exec_server_mode.filesystem_enabled()
     }
 
     pub async fn current(&self) -> Result<Arc<Environment>, ExecServerError> {
         self.current_environment
             .get_or_try_init(|| async {
                 Ok(Arc::new(
-                    Environment::create(self.exec_server_url.clone()).await?,
+                    Environment::create_from_mode(self.exec_server_mode.clone()).await?,
                 ))
             })
             .await
@@ -54,7 +112,7 @@ impl EnvironmentManager {
 
 #[derive(Clone)]
 pub struct Environment {
-    exec_server_url: Option<String>,
+    exec_server_mode: ExecServerMode,
     remote_exec_server_client: Option<ExecServerClient>,
     exec_backend: Arc<dyn ExecBackend>,
 }
@@ -70,7 +128,7 @@ impl Default for Environment {
         }
 
         Self {
-            exec_server_url: None,
+            exec_server_mode: ExecServerMode::Local,
             remote_exec_server_client: None,
             exec_backend: Arc::new(local_process),
         }
@@ -80,18 +138,21 @@ impl Default for Environment {
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
-            .field("exec_server_url", &self.exec_server_url)
+            .field("exec_server_mode", &self.exec_server_mode)
             .finish_non_exhaustive()
     }
 }
 
 impl Environment {
     pub async fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
-        let exec_server_url = normalize_exec_server_url(exec_server_url);
-        let remote_exec_server_client = if let Some(url) = &exec_server_url {
+        Self::create_from_mode(ExecServerMode::from_env_value(exec_server_url)).await
+    }
+
+    async fn create_from_mode(exec_server_mode: ExecServerMode) -> Result<Self, ExecServerError> {
+        let remote_exec_server_client = if let Some(url) = exec_server_mode.exec_server_url() {
             Some(
                 ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
-                    websocket_url: url.clone(),
+                    websocket_url: url.to_string(),
                     client_name: "codex-environment".to_string(),
                     connect_timeout: std::time::Duration::from_secs(5),
                     initialize_timeout: std::time::Duration::from_secs(5),
@@ -117,14 +178,26 @@ impl Environment {
             };
 
         Ok(Self {
-            exec_server_url,
+            exec_server_mode,
             remote_exec_server_client,
             exec_backend,
         })
     }
 
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
+        self.exec_server_mode.exec_server_url()
+    }
+
+    pub fn skips_project_docs(&self) -> bool {
+        self.exec_server_mode.skips_project_docs()
+    }
+
+    pub fn exec_enabled(&self) -> bool {
+        self.exec_server_mode.exec_enabled()
+    }
+
+    pub fn filesystem_enabled(&self) -> bool {
+        self.exec_server_mode.filesystem_enabled()
     }
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
@@ -140,13 +213,6 @@ impl Environment {
     }
 }
 
-fn normalize_exec_server_url(exec_server_url: Option<String>) -> Option<String> {
-    exec_server_url.and_then(|url| {
-        let url = url.trim();
-        (!url.is_empty()).then(|| url.to_string())
-    })
-}
-
 impl ExecutorEnvironment for Environment {
     fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
@@ -159,6 +225,7 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
+    use super::ExecServerMode;
     use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
@@ -177,6 +244,25 @@ mod tests {
         let manager = EnvironmentManager::new(Some(String::new()));
 
         assert_eq!(manager.exec_server_url(), None);
+        assert!(!manager.skips_project_docs());
+    }
+
+    #[test]
+    fn exec_server_mode_from_env_value_parses_disabled_mode() {
+        assert_eq!(
+            ExecServerMode::from_env_value(Some("none".to_string())),
+            ExecServerMode::Disabled
+        );
+        assert_eq!(
+            ExecServerMode::from_env_value(Some(" NONE ".to_string())),
+            ExecServerMode::Disabled
+        );
+        assert_eq!(
+            ExecServerMode::from_env_value(Some("ws://localhost:1234".to_string())),
+            ExecServerMode::Remote("ws://localhost:1234".to_string())
+        );
+        assert!(!ExecServerMode::Disabled.exec_enabled());
+        assert!(!ExecServerMode::Disabled.filesystem_enabled());
     }
 
     #[tokio::test]

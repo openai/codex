@@ -36,6 +36,9 @@ use std::sync::Arc;
 
 pub struct UnifiedExecHandler;
 
+const UNIFIED_EXEC_DISABLED_MESSAGE: &str =
+    "exec_command is unavailable because the environment is disabled";
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
     cmd: String,
@@ -178,6 +181,12 @@ impl ToolHandler for UnifiedExecHandler {
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+
+        if !turn.environment.exec_enabled() {
+            return Err(FunctionCallError::RespondToModel(
+                UNIFIED_EXEC_DISABLED_MESSAGE.to_string(),
+            ));
+        }
 
         let response = match tool_name.as_str() {
             "exec_command" => {

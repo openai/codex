@@ -2069,7 +2069,12 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let user_instructions =
+            if codex_exec_server::ExecServerMode::from_env().skips_project_docs() {
+                None
+            } else {
+                Self::load_instructions(Some(&codex_home))
+            };
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.

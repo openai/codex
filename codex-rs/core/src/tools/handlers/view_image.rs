@@ -24,6 +24,8 @@ pub struct ViewImageHandler;
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
+const VIEW_IMAGE_DISABLED_MESSAGE: &str =
+    "view_image is unavailable because the environment is disabled";
 
 #[derive(Deserialize)]
 struct ViewImageArgs {
@@ -44,6 +46,12 @@ impl ToolHandler for ViewImageHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        if !invocation.turn.environment.filesystem_enabled() {
+            return Err(FunctionCallError::RespondToModel(
+                VIEW_IMAGE_DISABLED_MESSAGE.to_string(),
+            ));
+        }
+
         if !invocation
             .turn
             .model_info

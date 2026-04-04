@@ -25,6 +25,8 @@ use codex_protocol::protocol::ExecCommandSource;
 pub struct JsReplHandler;
 pub struct JsReplResetHandler;
 
+const JS_REPL_DISABLED_MESSAGE: &str = "js_repl is unavailable because the environment is disabled";
+
 fn join_outputs(stdout: &str, stderr: &str) -> String {
     if stdout.is_empty() {
         stderr.to_string()
@@ -115,6 +117,12 @@ impl ToolHandler for JsReplHandler {
             ..
         } = invocation;
 
+        if !turn.environment.exec_enabled() {
+            return Err(FunctionCallError::RespondToModel(
+                JS_REPL_DISABLED_MESSAGE.to_string(),
+            ));
+        }
+
         if !session.features().enabled(Feature::JsRepl) {
             return Err(FunctionCallError::RespondToModel(
                 "js_repl is disabled by feature flag".to_string(),
@@ -188,6 +196,11 @@ impl ToolHandler for JsReplResetHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        if !invocation.turn.environment.exec_enabled() {
+            return Err(FunctionCallError::RespondToModel(
+                JS_REPL_DISABLED_MESSAGE.to_string(),
+            ));
+        }
         if !invocation.session.features().enabled(Feature::JsRepl) {
             return Err(FunctionCallError::RespondToModel(
                 "js_repl is disabled by feature flag".to_string(),

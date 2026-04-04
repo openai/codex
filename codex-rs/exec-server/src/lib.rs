@@ -34,6 +34,7 @@ pub use codex_app_server_protocol::FsWriteFileResponse;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 pub use environment::Environment;
 pub use environment::EnvironmentManager;
+pub use environment::ExecServerMode;
 pub use environment::ExecutorEnvironment;
 pub use file_system::CopyOptions;
 pub use file_system::CreateDirectoryOptions;

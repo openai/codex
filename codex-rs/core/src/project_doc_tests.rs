@@ -5,7 +5,11 @@ use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
+
+const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
 /// the maximum number of bytes to embed from AGENTS.md. The caller can
@@ -68,6 +72,32 @@ async fn make_config_with_project_root_markers(
     config.project_doc_max_bytes = limit;
     config.user_instructions = instructions.map(ToOwned::to_owned);
     config
+}
+
+fn exec_server_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+async fn with_exec_server_url_env<T>(
+    exec_server_url: Option<&str>,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    let _guard = exec_server_env_lock().lock().await;
+    let previous = std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok();
+    match exec_server_url {
+        Some(value) => unsafe { std::env::set_var(CODEX_EXEC_SERVER_URL_ENV_VAR, value) },
+        None => unsafe { std::env::remove_var(CODEX_EXEC_SERVER_URL_ENV_VAR) },
+    }
+
+    let result = future.await;
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var(CODEX_EXEC_SERVER_URL_ENV_VAR, value) },
+        None => unsafe { std::env::remove_var(CODEX_EXEC_SERVER_URL_ENV_VAR) },
+    }
+
+    result
 }
 
 /// AGENTS.md missing – should yield `None`.
@@ -159,6 +189,21 @@ async fn zero_byte_limit_disables_docs() {
         res.is_none(),
         "With limit 0 the function should return None"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disabled_exec_server_mode_skips_project_docs() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
+
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("base instructions")).await;
+    cfg.features
+        .enable(Feature::ChildAgentsMd)
+        .expect("test config should allow hierarchical AGENTS instructions");
+
+    let res = with_exec_server_url_env(Some("none"), get_user_instructions(&cfg)).await;
+
+    assert_eq!(res, Some("base instructions".to_string()));
 }
 
 #[tokio::test]

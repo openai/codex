@@ -3,6 +3,7 @@ use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -71,6 +72,53 @@ fn unified_exec_is_blocked_for_windows_sandboxed_policies_only() {
         &SandboxPolicy::DangerFullAccess,
         WindowsSandboxLevel::Disabled,
     ));
+}
+
+#[test]
+fn disabled_environment_capabilities_turn_off_exec_backed_tools() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ApplyPatchFreeform);
+    features.enable(Feature::JsRepl);
+
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_environment_capabilities(ToolEnvironmentCapabilities::new(
+        /*exec_enabled*/ false, /*filesystem_enabled*/ false,
+    ));
+
+    assert_eq!(tools_config.shell_type, ConfigShellToolType::Disabled);
+    assert_eq!(tools_config.apply_patch_tool_type, None);
+    assert!(!tools_config.js_repl_enabled);
+    assert!(!tools_config.js_repl_tools_only);
+    assert_eq!(
+        tools_config.environment_capabilities,
+        ToolEnvironmentCapabilities::new(
+            /*exec_enabled*/ false, /*filesystem_enabled*/ false,
+        )
+    );
+
+    let enabled_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    assert_eq!(
+        enabled_tools_config.apply_patch_tool_type,
+        Some(ApplyPatchToolType::Freeform)
+    );
 }
 
 #[test]

@@ -1412,6 +1412,10 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
+        .with_environment_capabilities(codex_tools::ToolEnvironmentCapabilities::new(
+            environment.exec_enabled(),
+            environment.filesystem_enabled(),
+        ))
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -5540,6 +5544,10 @@ async fn spawn_review_thread(
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
+    .with_environment_capabilities(codex_tools::ToolEnvironmentCapabilities::new(
+        parent_turn_context.environment.exec_enabled(),
+        parent_turn_context.environment.filesystem_enabled(),
+    ))
     .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         &config.agent_roles,
     ));

@@ -35,6 +35,9 @@ use std::sync::Arc;
 
 pub struct ApplyPatchHandler;
 
+const APPLY_PATCH_DISABLED_MESSAGE: &str =
+    "apply_patch is unavailable because the environment is disabled";
+
 fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     let mut keys = Vec::new();
     let cwd = action.cwd.as_path();
@@ -149,6 +152,12 @@ impl ToolHandler for ApplyPatchHandler {
             payload,
             ..
         } = invocation;
+
+        if !turn.environment.exec_enabled() {
+            return Err(FunctionCallError::RespondToModel(
+                APPLY_PATCH_DISABLED_MESSAGE.to_string(),
+            ));
+        }
 
         let patch_input = match payload {
             ToolPayload::Function { arguments } => {

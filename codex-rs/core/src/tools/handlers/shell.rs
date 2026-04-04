@@ -42,6 +42,8 @@ use codex_tools::ShellCommandBackendConfig;
 
 pub struct ShellHandler;
 
+const SHELL_DISABLED_MESSAGE: &str = "shell is unavailable because the environment is disabled";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellCommandBackend {
     Classic,
@@ -393,6 +395,12 @@ impl ShellHandler {
             freeform,
             shell_runtime_backend,
         } = args;
+
+        if !turn.environment.exec_enabled() {
+            return Err(FunctionCallError::RespondToModel(
+                SHELL_DISABLED_MESSAGE.to_string(),
+            ));
+        }
 
         let mut exec_params = exec_params;
         let dependency_env = session.dependency_env().await;
