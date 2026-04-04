@@ -11,6 +11,7 @@ The workflows in this directory are split so that pull requests get fast, review
 - `rust-ci.yml` keeps the Cargo-native PR checks intentionally small:
   - `cargo fmt --check`
   - `cargo shear`
+  - Linux remote-env tests
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
 
