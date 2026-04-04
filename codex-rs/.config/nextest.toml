@@ -27,3 +27,9 @@ test-group = 'app_server_protocol_codegen'
 # Keep the library unit tests parallel.
 filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration'
+
+[[profile.default.overrides]]
+# Schema fixture generation can take longer than the default timeout on slower
+# Windows runners when app-server protocol fixture sets grow.
+filter = 'test(schema_fixtures_match_generated)'
+slow-timeout = { period = "1m", terminate-after = 2 }

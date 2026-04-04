@@ -938,8 +938,10 @@ impl SubagentRegistry {
     #[cfg_attr(not(test), allow(dead_code))]
     fn on_close_end(&mut self, event: &CollabCloseEndEvent) -> Option<Box<dyn HistoryCell>> {
         let receiver_id = event.receiver_thread_id;
-        let info = self.agents.get_mut(&receiver_id)?;
-        info.status = event.status.clone();
+        let mut info = self.agents.remove(&receiver_id)?;
+        self.order.retain(|thread_id| *thread_id != receiver_id);
+        self.pending_events.remove(&receiver_id);
+        info.status = AgentStatus::Shutdown;
         info.latest_update_at = Instant::now();
 
         if is_terminal_status(&info.status) && !info.notified_terminal {
@@ -2237,9 +2239,18 @@ impl App {
                 _ => {}
             }
         } else {
-            let updates = self.subagents.on_agent_event(thread_id, &event.msg);
-            for cell in updates {
-                self.emit_or_queue_subagent_history(cell);
+            match &event.msg {
+                EventMsg::CollabCloseEnd(ev) => {
+                    if let Some(cell) = self.subagents.on_close_end(ev) {
+                        self.emit_or_queue_subagent_history(cell);
+                    }
+                }
+                _ => {
+                    let updates = self.subagents.on_agent_event(thread_id, &event.msg);
+                    for cell in updates {
+                        self.emit_or_queue_subagent_history(cell);
+                    }
+                }
             }
         }
 
@@ -2270,7 +2281,7 @@ impl App {
 
         let ThreadItem::CollabAgentToolCall {
             id,
-            tool: CollabAgentTool::SpawnAgent,
+            tool,
             sender_thread_id,
             receiver_thread_ids,
             prompt,
@@ -2303,18 +2314,38 @@ impl App {
             .map(app_server_collab_state_to_agent_status)
             .unwrap_or(AgentStatus::PendingInit);
 
-        let _ = self.subagents.on_spawn_end(&CollabAgentSpawnEndEvent {
-            call_id: id.clone(),
-            sender_thread_id,
-            new_thread_id: Some(new_thread_id),
-            new_agent_nickname: entry.and_then(|entry| entry.agent_nickname.clone()),
-            new_agent_role: entry.and_then(|entry| entry.agent_role.clone()),
-            prompt: prompt.clone().unwrap_or_default(),
-            model: String::new(),
-            reasoning_effort: ReasoningEffortConfig::Medium,
-            spawn_mode,
-            status,
-        });
+        match tool {
+            CollabAgentTool::SpawnAgent => {
+                let _ = self.subagents.on_spawn_end(&CollabAgentSpawnEndEvent {
+                    call_id: id.clone(),
+                    sender_thread_id,
+                    new_thread_id: Some(new_thread_id),
+                    new_agent_nickname: entry.and_then(|entry| entry.agent_nickname.clone()),
+                    new_agent_role: entry.and_then(|entry| entry.agent_role.clone()),
+                    prompt: prompt.clone().unwrap_or_default(),
+                    model: String::new(),
+                    reasoning_effort: ReasoningEffortConfig::Medium,
+                    spawn_mode,
+                    status,
+                });
+            }
+            CollabAgentTool::CloseAgent => {
+                if let ServerNotification::ItemCompleted(_) = notification
+                    && let Some(cell) = self.subagents.on_close_end(&CollabCloseEndEvent {
+                        call_id: id.clone(),
+                        sender_thread_id,
+                        receiver_thread_id: new_thread_id,
+                        receiver_agent_nickname: entry
+                            .and_then(|entry| entry.agent_nickname.clone()),
+                        receiver_agent_role: entry.and_then(|entry| entry.agent_role.clone()),
+                        status,
+                    })
+                {
+                    self.emit_or_queue_subagent_history(cell);
+                }
+            }
+            CollabAgentTool::SendInput | CollabAgentTool::ResumeAgent | CollabAgentTool::Wait => {}
+        }
 
         self.sync_subagent_panel_state();
     }
@@ -7911,6 +7942,69 @@ mod tests {
             "queued subagent panel update should mount on the fresh widget"
         );
         assert!(screen.contains("watchdog-agent"));
+    }
+
+    #[tokio::test]
+    async fn process_subagent_side_effects_handles_non_root_watchdog_close_end() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let root_thread_id = ThreadId::new();
+        let watchdog_thread_id = ThreadId::new();
+        let helper_thread_id = ThreadId::new();
+
+        app.primary_thread_id = Some(root_thread_id);
+        app.active_thread_id = Some(root_thread_id);
+
+        app.process_subagent_side_effects(
+            root_thread_id,
+            &Event {
+                id: "spawn-watchdog".to_string(),
+                msg: EventMsg::CollabAgentSpawnEnd(CollabAgentSpawnEndEvent {
+                    call_id: "spawn-watchdog".to_string(),
+                    sender_thread_id: root_thread_id,
+                    new_thread_id: Some(watchdog_thread_id),
+                    new_agent_nickname: Some("Hume".to_string()),
+                    new_agent_role: Some("watchdog".to_string()),
+                    prompt: "watchdog prompt".to_string(),
+                    model: "gpt-test".to_string(),
+                    reasoning_effort: ReasoningEffortConfig::Low,
+                    spawn_mode: CollabAgentSpawnMode::Watchdog,
+                    status: AgentStatus::PendingInit,
+                }),
+            },
+        );
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.process_subagent_side_effects(
+            helper_thread_id,
+            &Event {
+                id: "close-watchdog".to_string(),
+                msg: EventMsg::CollabCloseEnd(CollabCloseEndEvent {
+                    call_id: "close-watchdog".to_string(),
+                    sender_thread_id: helper_thread_id,
+                    receiver_thread_id: watchdog_thread_id,
+                    receiver_agent_nickname: Some("Hume".to_string()),
+                    receiver_agent_role: Some("watchdog".to_string()),
+                    status: AgentStatus::Shutdown,
+                }),
+            },
+        );
+
+        let mut saw_shutdown_update = false;
+        let mut saw_clear_panel = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
+                    saw_shutdown_update |= transcript.contains("shutdown");
+                }
+                AppEvent::ClearSubagentPanel => saw_clear_panel = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_shutdown_update);
+        assert!(saw_clear_panel);
+        assert!(app.subagents.panel_cell().is_none());
     }
 
     #[tokio::test]

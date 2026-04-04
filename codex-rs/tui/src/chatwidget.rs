@@ -195,7 +195,6 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
-#[cfg(test)]
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -994,7 +993,6 @@ pub(crate) struct ChatWidget {
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
-    #[cfg(test)]
     last_replayed_agent_inbox_message: Option<(Option<String>, String)>,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
     last_non_retry_error: Option<(String, String)>,
@@ -3743,7 +3741,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(test)]
     fn on_raw_response_item(&mut self, event: RawResponseItemEvent, from_replay: bool) {
         let Some((sender, message)) = agent_inbox_message_from_item(&event.item) else {
             if from_replay {
@@ -3831,6 +3828,9 @@ impl ChatWidget {
                             prompt: prompt.unwrap_or_default(),
                             model: String::new(),
                             reasoning_effort: ReasoningEffortConfig::Medium,
+                            // Thread history items do not carry spawn_mode yet, so the
+                            // replay path must choose an explicit fallback for reconstructed
+                            // spawn rows. Plain spawn is the least surprising default.
                             spawn_mode: AgentSpawnMode::Spawn,
                             status: first_receiver
                                 .as_ref()
@@ -4814,7 +4814,6 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
-            #[cfg(test)]
             last_replayed_agent_inbox_message: None,
             last_rendered_user_message_event: None,
             last_non_retry_error: None,
@@ -6631,6 +6630,7 @@ impl ChatWidget {
                         format!("Agent message: {message}"),
                         hint,
                     ));
+                    self.request_redraw();
                 }
             }
         }
