@@ -165,10 +165,11 @@ impl ProviderAuthCommandFixture {
     fn new(tokens: &[&str]) -> std::io::Result<Self> {
         let tempdir = tempfile::tempdir()?;
         let tokens_file = tempdir.path().join("tokens.txt");
+        let token_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
         let mut token_file_contents = String::new();
         for token in tokens {
             token_file_contents.push_str(token);
-            token_file_contents.push('\n');
+            token_file_contents.push_str(token_line_ending);
         }
         std::fs::write(&tokens_file, token_file_contents)?;
 
@@ -200,12 +201,12 @@ mv tokens.next tokens.txt
                 &script_path,
                 r#"@echo off
 setlocal EnableExtensions DisableDelayedExpansion
-
 set "first_line="
-<tokens.txt set /p first_line=
+<tokens.txt set /p "first_line="
 if not defined first_line exit /b 1
-
-echo(%first_line%
+setlocal EnableDelayedExpansion
+echo(!first_line!
+endlocal
 more +1 tokens.txt > tokens.next
 move /y tokens.next tokens.txt >nul
 "#,
@@ -213,9 +214,9 @@ move /y tokens.next tokens.txt >nul
             (
                 "cmd.exe".to_string(),
                 vec![
-                    "/D".to_string(),
-                    "/Q".to_string(),
-                    "/C".to_string(),
+                    "/d".to_string(),
+                    "/s".to_string(),
+                    "/c".to_string(),
                     ".\\print-token.cmd".to_string(),
                 ],
             )
@@ -232,8 +233,7 @@ move /y tokens.next tokens.txt >nul
         ModelProviderAuthInfo {
             command: self.command.clone(),
             args: self.args.clone(),
-            // Match the provider-auth default to avoid brittle shell-startup timing in CI.
-            timeout_ms: non_zero_u64(/*value*/ 5_000),
+            timeout_ms: non_zero_u64(/*value*/ 10_000),
             refresh_interval_ms: 60_000,
             cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
