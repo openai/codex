@@ -143,7 +143,7 @@ async fn wait_for_turn_complete(codex: &CodexThread) {
 
 fn assert_two_responses_input_snapshot(snapshot_name: &str, requests: &[Vec<u8>]) {
     assert_eq!(requests.len(), 2);
-    let options = ContextSnapshotOptions::default();
+    let options = ContextSnapshotOptions::default().strip_capability_instructions();
     let first: Value =
         from_slice(&requests[0]).unwrap_or_else(|err| panic!("parse first request: {err}"));
     let second: Value =
