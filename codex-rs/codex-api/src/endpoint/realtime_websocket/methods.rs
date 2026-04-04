@@ -1056,7 +1056,7 @@ mod tests {
     fn calls_url_from_api_url_appends_quicksilver_intent_for_v1() {
         let calls_url = calls_url_from_api_url(
             "wss://example.com/v1/realtime",
-            None,
+            /*query_params*/ None,
             Some("quicksilver-test-model"),
             RealtimeEventParser::V1,
         )
@@ -1072,7 +1072,7 @@ mod tests {
     fn calls_url_from_api_url_omits_intent_for_v2() {
         let calls_url = calls_url_from_api_url(
             "wss://example.com/v1/realtime",
-            None,
+            /*query_params*/ None,
             Some("gpt-realtime"),
             RealtimeEventParser::RealtimeV2,
         )
@@ -1088,7 +1088,7 @@ mod tests {
     fn calls_url_from_api_url_appends_calls_path_to_chatgpt_base_url() {
         let calls_url = calls_url_from_api_url(
             "https://chatgpt.com/backend-api/codex",
-            None,
+            /*query_params*/ None,
             Some("gpt-realtime"),
             RealtimeEventParser::RealtimeV2,
         )
