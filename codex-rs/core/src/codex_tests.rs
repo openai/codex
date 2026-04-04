@@ -5358,12 +5358,14 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let session = Arc::new(session);
     let mut turn_context = Arc::new(turn_context_raw);
 
-    let timeout_ms = 1000;
+    let timeout_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };
     let sandbox_permissions = SandboxPermissions::RequireEscalated;
     let params = ExecParams {
         command: if cfg!(windows) {
             vec![
                 "cmd.exe".to_string(),
+                "/Q".to_string(),
+                "/D".to_string(),
                 "/C".to_string(),
                 "echo hi".to_string(),
             ]
