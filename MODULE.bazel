@@ -73,6 +73,7 @@ single_version_override(
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_delete_git_worktree_pointer.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
+        "//patches:rules_rs_build_script_triples.patch",
     ],
     version = "0.0.43",
 )
@@ -258,17 +259,11 @@ single_version_override(
 crate.annotation(
     crate = "lzma-sys",
     gen_build_script = "off",
-    deps = ["@xz//:lzma"],
-)
-
-crate.annotation_select(
-    crate = "lzma-sys",
-    deps = [],
-    gen_build_script = "on",
-    triples = [
+    build_script_triples = [
         "aarch64-pc-windows-gnullvm",
         "aarch64-pc-windows-msvc",
     ],
+    deps = ["@xz//:lzma"],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")

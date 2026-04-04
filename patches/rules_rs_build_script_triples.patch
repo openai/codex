@@ -1,0 +1,141 @@
+# What: teach the pinned `rules_rs` crate generator to keep a crate build
+# script enabled only for selected target triples.
+# Scope: crate annotations plus generated crate BUILD wiring.
+
+diff --git a/rs/extensions.bzl b/rs/extensions.bzl
+--- a/rs/extensions.bzl	2026-04-03 18:10:22.284530883 -0700
++++ b/rs/extensions.bzl	2026-04-03 18:10:26.999371728 -0700
+@@ -735,6 +735,7 @@
+             gen_build_script = annotation.gen_build_script,
+             build_script_deps = [],
+             build_script_deps_select = _select(feature_resolutions.build_deps),
++            build_script_triples = annotation.build_script_triples,
+             build_script_data = annotation.build_script_data,
+             build_script_data_select = _select(feature_resolutions.build_data),
+             build_script_env = annotation.build_script_env,
+@@ -1329,6 +1330,10 @@
+         "build_script_tools_select": attr.string_list_dict(
+             doc = "A list of labels to add to a crate's `cargo_build_script::tools` attribute. Keys should be the platform triplet. Value should be a list of labels.",
+         ),
++        "build_script_triples": attr.string_list(
++            doc = "A list of platform triples where a crate's Cargo build script should still be generated. Defaults to all resolved triples when omitted.",
++            default = [],
++        ),
+         # "compile_data": _relative_label_list(
+         # doc = "A list of labels to add to a crate's `rust_library::compile_data` attribute.",
+         # ),
+diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
+--- a/rs/private/annotations.bzl	2026-04-03 18:10:23.821723790 -0700
++++ b/rs/private/annotations.bzl	2026-04-03 18:10:26.999582562 -0700
+@@ -9,6 +9,7 @@
+         build_script_tools = [],
+         build_script_tools_select = {},
+         build_script_toolchains = [],
++        build_script_triples = [],
+         build_script_tags = [],
+         data = [],
+         deps = [],
+@@ -34,6 +35,7 @@
+         build_script_tools = build_script_tools,
+         build_script_tools_select = build_script_tools_select,
+         build_script_toolchains = build_script_toolchains,
++        build_script_triples = build_script_triples,
+         build_script_tags = build_script_tags,
+         data = data,
+         deps = deps,
+diff --git a/rs/private/repository_utils.bzl b/rs/private/repository_utils.bzl
+--- a/rs/private/repository_utils.bzl	2026-04-03 18:10:25.443816868 -0700
++++ b/rs/private/repository_utils.bzl	2026-04-03 18:10:26.999812812 -0700
+@@ -76,7 +76,8 @@
+ 
+     bazel_metadata = package.get("metadata", {}).get("bazel", {})
+ 
+-    if attr.gen_build_script == "off" or bazel_metadata.get("gen_build_script") == False:
++    build_script_triples = attr.build_script_triples
++    if (attr.gen_build_script == "off" and not build_script_triples) or bazel_metadata.get("gen_build_script") == False:
+         build_script = None
+     else:
+         # What does `gen_build_script="on"` do? Fail the build if we don't detect one?
+@@ -122,6 +123,7 @@
+     target_compatible_with = RESOLVED_PLATFORMS,
+     links = {links},
+     build_script = {build_script},
++    build_script_triples = {build_script_triples},
+     build_script_data = {build_script_data},
+     build_deps = [
+         {build_deps}
+@@ -175,6 +177,7 @@
+         rustc_flags = repr(rustc_flags),
+         conditional_rustc_flags = " + " + conditional_rustc_flags if conditional_rustc_flags else "",
+         tags = repr(attr.crate_tags),
++        build_script_triples = repr(build_script_triples),
+         links = repr(links),
+         build_script = repr(build_script),
+         build_script_data = repr([str(t) for t in build_script_data]),
+@@ -212,6 +215,7 @@
+     "crate_tags": attr.string_list(),
+     "data": attr.label_list(default = []),
+     "deps": attr.string_list(default = []),
++    "build_script_triples": attr.string_list(),
+     "deps_select": attr.string_list_dict(),
+     "aliases": attr.string_dict(),
+     "crate_features": attr.string_list(),
+diff --git a/rs/rust_crate.bzl b/rs/rust_crate.bzl
+--- a/rs/rust_crate.bzl	2026-04-03 18:10:26.998745810 -0700
++++ b/rs/rust_crate.bzl	2026-04-03 18:10:27.000112354 -0700
+@@ -26,6 +26,7 @@
+         target_compatible_with,
+         links,
+         build_script,
++        build_script_triples,
+         build_script_data,
+         build_deps,
+         build_script_env,
+@@ -70,6 +71,7 @@
+     ]
+     crate_tags = default_tags + tags
+     build_script_target_tags = crate_tags + build_script_tags
++    selected_build_script_triples = build_script_triples or triples
+ 
+     if build_script:
+         build_script_kwargs = dict(
+@@ -95,14 +97,14 @@
+             version = version,
+         )
+ 
+-        if conditional_crate_features:
++        if conditional_crate_features or len(selected_build_script_triples) != len(triples):
+             branches = {}
+ 
+             # The build script is cfg-exec, but the features must be selected according to the target.
+             # Only stamp out one target per triple when there are per-platform feature deltas.
+-            for triple in triples:
++            for triple in selected_build_script_triples:
+                 build_script_name = "_bs_" + triple
+-                branches[_platform(triple, use_experimental_platforms)] = build_script_name
++                branches[_platform(triple, use_experimental_platforms)] = [build_script_name]
+ 
+                 cargo_build_script(
+                     name = build_script_name,
+@@ -110,11 +112,8 @@
+                     **build_script_kwargs
+                 )
+ 
+-            native.alias(
+-                name = "_bs",
+-                actual = select(branches),
+-                tags = build_script_target_tags,
+-            )
++            branches["//conditions:default"] = []
++            maybe_build_script = select(branches)
+ 
+         else:
+             cargo_build_script(
+@@ -123,7 +122,7 @@
+                 **build_script_kwargs
+             )
+ 
+-        maybe_build_script = ["_bs"]
++            maybe_build_script = ["_bs"]
+     else:
+         maybe_build_script = []
