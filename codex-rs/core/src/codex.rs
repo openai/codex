@@ -4389,7 +4389,7 @@ impl Session {
 }
 
 pub(crate) fn emit_subagent_session_started(
-    analytics_events_client: &crate::AnalyticsEventsClient,
+    analytics_events_client: &AnalyticsEventsClient,
     client_metadata: AppServerClientMetadata,
     thread_id: ThreadId,
     thread_config: ThreadConfigSnapshot,
