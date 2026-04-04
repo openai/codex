@@ -352,8 +352,12 @@ async fn parse_apply_patch_verified(
     command: &[String],
     cwd: &Path,
 ) -> codex_apply_patch::MaybeApplyPatchVerified {
-    let fs = EnvironmentApplyPatchFileSystem::new(turn.environment.get_filesystem());
-    codex_apply_patch::maybe_parse_apply_patch_verified_with_fs(command, cwd, &fs).await
+    if turn.environment.exec_server_url().is_some() {
+        let fs = EnvironmentApplyPatchFileSystem::new(turn.environment.get_filesystem());
+        codex_apply_patch::maybe_parse_apply_patch_verified_with_fs(command, cwd, &fs).await
+    } else {
+        codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd)
+    }
 }
 
 #[cfg(test)]
