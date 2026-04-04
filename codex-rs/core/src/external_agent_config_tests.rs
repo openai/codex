@@ -69,6 +69,37 @@ fn detect_home_lists_config_skills_and_agents_md() {
 }
 
 #[test]
+fn detect_home_lists_mcp_server_config() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{"mcpServers":{"docs":{"command":"docs-server","args":["--stdio"]}}}"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(claude_home.clone(), codex_home.clone())
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: format!(
+                "Migrate MCP servers from {} into {}",
+                claude_home.join("settings.json").display(),
+                codex_home.join("config.toml").display(),
+            ),
+            cwd: None,
+        }]
+    );
+}
+
+#[test]
 fn detect_repo_lists_agents_md_for_each_cwd() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
@@ -161,6 +192,72 @@ fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
         fs::read_to_string(agents_skills.join("skill-a").join("SKILL.md"))
             .expect("read copied skill"),
         "Use Codex and Codex utilities."
+    );
+}
+
+#[test]
+fn import_home_migrates_mcp_server_config() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+            "mcpServers": {
+                "docs": {
+                    "command": "docs-server",
+                    "args": ["--stdio"],
+                    "env": { "DOCS_TOKEN": "abc" },
+                    "startupTimeoutMs": 1500,
+                    "toolTimeoutSec": 2.5,
+                    "enabledTools": ["search"],
+                    "required": true
+                },
+                "linear": {
+                    "url": "https://linear.example/mcp",
+                    "bearerTokenEnvVar": "LINEAR_TOKEN",
+                    "httpHeaders": { "X-Client": "Codex" },
+                    "envHttpHeaders": { "X-Auth": "LINEAR_HEADER_TOKEN" },
+                    "disabledTools": ["mutate"],
+                    "oauthResource": "linear-resource"
+                }
+            }
+        }"#,
+    )
+    .expect("write settings");
+
+    service_for_paths(claude_home, codex_home.clone())
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: String::new(),
+            cwd: None,
+        }])
+        .expect("import");
+
+    assert_eq!(
+        fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
+        r#"[mcp_servers.docs]
+command = "docs-server"
+args = ["--stdio"]
+required = true
+startup_timeout_sec = 1.5
+tool_timeout_sec = 2.5
+enabled_tools = ["search"]
+
+[mcp_servers.docs.env]
+DOCS_TOKEN = "abc"
+
+[mcp_servers.linear]
+url = "https://linear.example/mcp"
+bearer_token_env_var = "LINEAR_TOKEN"
+disabled_tools = ["mutate"]
+oauth_resource = "linear-resource"
+
+[mcp_servers.linear.http_headers]
+X-Client = "Codex"
+
+[mcp_servers.linear.env_http_headers]
+X-Auth = "LINEAR_HEADER_TOKEN"
+"#
     );
 }
 

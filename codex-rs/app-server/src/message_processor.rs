@@ -1020,10 +1020,11 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
     ) {
-        match self.external_agent_config_api.import(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+        self.handle_config_mutation_result(
+            request_id,
+            self.external_agent_config_api.import(params).await,
+        )
+        .await;
     }
 
     async fn handle_fs_read_file(&self, request_id: ConnectionRequestId, params: FsReadFileParams) {

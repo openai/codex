@@ -1,4 +1,6 @@
+use codex_config::types::McpServerConfig;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
@@ -9,6 +11,7 @@ use toml::Value as TomlValue;
 
 const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
+const MCP_SERVERS_CONFIG_KEY: &str = "mcp_servers";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
@@ -100,7 +103,14 @@ impl ExternalAgentConfigService {
                         /*skills_count*/ None,
                     );
                 }
-                ExternalAgentConfigMigrationItemType::McpServerConfig => {}
+                ExternalAgentConfigMigrationItemType::McpServerConfig => {
+                    self.import_mcp_server_config(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::McpServerConfig,
+                        /*skills_count*/ None,
+                    );
+                }
             }
         }
 
@@ -122,9 +132,7 @@ impl ExternalAgentConfigService {
             |repo_root| repo_root.join(".codex").join("config.toml"),
         );
         if source_settings.is_file() {
-            let raw_settings = fs::read_to_string(&source_settings)?;
-            let settings: JsonValue = serde_json::from_str(&raw_settings)
-                .map_err(|err| invalid_data_error(err.to_string()))?;
+            let settings = read_external_settings(&source_settings)?;
             let migrated = build_config_from_external(&settings)?;
             if !is_empty_toml_table(&migrated) {
                 let mut should_include = true;
@@ -153,6 +161,39 @@ impl ExternalAgentConfigService {
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
                         ExternalAgentConfigMigrationItemType::Config,
+                        /*skills_count*/ None,
+                    );
+                }
+            }
+
+            let migrated_mcp = build_mcp_server_config_from_external(&settings)?;
+            if !is_empty_toml_table(&migrated_mcp) {
+                let mut should_include = true;
+                if target_config.exists() {
+                    let existing_raw = fs::read_to_string(&target_config)?;
+                    let mut existing = if existing_raw.trim().is_empty() {
+                        TomlValue::Table(Default::default())
+                    } else {
+                        toml::from_str::<TomlValue>(&existing_raw).map_err(|err| {
+                            invalid_data_error(format!("invalid existing config.toml: {err}"))
+                        })?
+                    };
+                    should_include = merge_missing_toml_values(&mut existing, &migrated_mcp)?;
+                }
+
+                if should_include {
+                    items.push(ExternalAgentConfigMigrationItem {
+                        item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+                        description: format!(
+                            "Migrate MCP servers from {} into {}",
+                            source_settings.display(),
+                            target_config.display()
+                        ),
+                        cwd: cwd.clone(),
+                    });
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                        ExternalAgentConfigMigrationItemType::McpServerConfig,
                         /*skills_count*/ None,
                     );
                 }
@@ -242,10 +283,58 @@ impl ExternalAgentConfigService {
             return Ok(());
         }
 
-        let raw_settings = fs::read_to_string(&source_settings)?;
-        let settings: JsonValue = serde_json::from_str(&raw_settings)
-            .map_err(|err| invalid_data_error(err.to_string()))?;
+        let settings = read_external_settings(&source_settings)?;
         let migrated = build_config_from_external(&settings)?;
+        if is_empty_toml_table(&migrated) {
+            return Ok(());
+        }
+
+        let Some(target_parent) = target_config.parent() else {
+            return Err(invalid_data_error("config target path has no parent"));
+        };
+        fs::create_dir_all(target_parent)?;
+        if !target_config.exists() {
+            write_toml_file(&target_config, &migrated)?;
+            return Ok(());
+        }
+
+        let existing_raw = fs::read_to_string(&target_config)?;
+        let mut existing = if existing_raw.trim().is_empty() {
+            TomlValue::Table(Default::default())
+        } else {
+            toml::from_str::<TomlValue>(&existing_raw)
+                .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
+        };
+
+        let changed = merge_missing_toml_values(&mut existing, &migrated)?;
+        if !changed {
+            return Ok(());
+        }
+
+        write_toml_file(&target_config, &existing)?;
+        Ok(())
+    }
+
+    fn import_mcp_server_config(&self, cwd: Option<&Path>) -> io::Result<()> {
+        let (source_settings, target_config) = if let Some(repo_root) = find_repo_root(cwd)? {
+            (
+                repo_root.join(".claude").join("settings.json"),
+                repo_root.join(".codex").join("config.toml"),
+            )
+        } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
+            return Ok(());
+        } else {
+            (
+                self.claude_home.join("settings.json"),
+                self.codex_home.join("config.toml"),
+            )
+        };
+        if !source_settings.is_file() {
+            return Ok(());
+        }
+
+        let settings = read_external_settings(&source_settings)?;
+        let migrated = build_mcp_server_config_from_external(&settings)?;
         if is_empty_toml_table(&migrated) {
             return Ok(());
         }
@@ -351,6 +440,11 @@ fn default_claude_home() -> PathBuf {
     }
 
     PathBuf::from(".claude")
+}
+
+fn read_external_settings(source_settings: &Path) -> io::Result<JsonValue> {
+    let raw_settings = fs::read_to_string(source_settings)?;
+    serde_json::from_str(&raw_settings).map_err(|err| invalid_data_error(err.to_string()))
 }
 
 fn find_repo_root(cwd: Option<&Path>) -> io::Result<Option<PathBuf>> {
@@ -579,6 +673,76 @@ fn build_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
     }
 
     Ok(TomlValue::Table(root))
+}
+
+fn build_mcp_server_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
+    let Some(settings_obj) = settings.as_object() else {
+        return Err(invalid_data_error(
+            "external agent settings root must be an object",
+        ));
+    };
+    let Some(mcp_servers) = settings_obj.get("mcpServers") else {
+        return Ok(TomlValue::Table(Default::default()));
+    };
+    let Some(mcp_servers) = mcp_servers.as_object() else {
+        return Err(invalid_data_error("external mcpServers must be an object"));
+    };
+
+    let mut parsed_servers: BTreeMap<String, McpServerConfig> = BTreeMap::new();
+    for (server_name, raw_config) in mcp_servers {
+        let raw_config = normalize_external_mcp_server_config(raw_config).map_err(|err| {
+            invalid_data_error(format!("invalid external mcpServers.{server_name}: {err}"))
+        })?;
+        let server_config =
+            serde_json::from_value::<McpServerConfig>(raw_config).map_err(|err| {
+                invalid_data_error(format!("invalid external mcpServers.{server_name}: {err}"))
+            })?;
+        parsed_servers.insert(server_name.clone(), server_config);
+    }
+
+    if parsed_servers.is_empty() {
+        return Ok(TomlValue::Table(Default::default()));
+    }
+
+    let mcp_servers = TomlValue::try_from(parsed_servers)
+        .map_err(|err| invalid_data_error(format!("failed to serialize mcp_servers: {err}")))?;
+    Ok(TomlValue::Table(toml::map::Map::from_iter([(
+        MCP_SERVERS_CONFIG_KEY.to_string(),
+        mcp_servers,
+    )])))
+}
+
+fn normalize_external_mcp_server_config(raw_config: &JsonValue) -> io::Result<JsonValue> {
+    let Some(raw_object) = raw_config.as_object() else {
+        return Err(invalid_data_error("MCP server config must be an object"));
+    };
+
+    let mut normalized = serde_json::Map::new();
+    for (key, value) in raw_object {
+        if key == "type" {
+            continue;
+        }
+        normalized.insert(
+            normalize_external_mcp_server_key(key).to_string(),
+            value.clone(),
+        );
+    }
+    Ok(JsonValue::Object(normalized))
+}
+
+fn normalize_external_mcp_server_key(key: &str) -> &str {
+    match key {
+        "bearerTokenEnvVar" => "bearer_token_env_var",
+        "disabledTools" => "disabled_tools",
+        "enabledTools" => "enabled_tools",
+        "envHttpHeaders" => "env_http_headers",
+        "httpHeaders" => "http_headers",
+        "oauthResource" => "oauth_resource",
+        "startupTimeoutMs" => "startup_timeout_ms",
+        "startupTimeoutSec" => "startup_timeout_sec",
+        "toolTimeoutSec" => "tool_timeout_sec",
+        _ => key,
+    }
 }
 
 fn json_object_to_env_toml_table(
