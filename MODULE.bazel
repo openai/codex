@@ -73,6 +73,7 @@ single_version_override(
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_delete_git_worktree_pointer.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
+        "//patches:rules_rs_build_script_triples.patch",
     ],
     version = "0.0.43",
 )
@@ -249,28 +250,12 @@ bazel_dep(name = "xz", version = "5.4.5.bcr.8")
 
 crate.annotation(
     crate = "lzma-sys",
-    gen_build_script = crate.select(
-        common = "on",
-        selects = {
-            "aarch64-apple-darwin": "off",
-            "aarch64-unknown-linux-gnu": "off",
-            "aarch64-unknown-linux-musl": "off",
-            "x86_64-apple-darwin": "off",
-            "x86_64-unknown-linux-gnu": "off",
-            "x86_64-unknown-linux-musl": "off",
-        },
-    ),
-    deps = crate.select(
-        common = [],
-        selects = {
-            "aarch64-apple-darwin": ["@xz//:lzma"],
-            "aarch64-unknown-linux-gnu": ["@xz//:lzma"],
-            "aarch64-unknown-linux-musl": ["@xz//:lzma"],
-            "x86_64-apple-darwin": ["@xz//:lzma"],
-            "x86_64-unknown-linux-gnu": ["@xz//:lzma"],
-            "x86_64-unknown-linux-musl": ["@xz//:lzma"],
-        },
-    ),
+    gen_build_script = "off",
+    build_script_triples = [
+        "aarch64-pc-windows-gnullvm",
+        "x86_64-pc-windows-gnullvm",
+    ],
+    deps = ["@xz//:lzma"],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
