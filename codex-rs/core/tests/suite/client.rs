@@ -53,6 +53,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -771,15 +772,20 @@ async fn provider_auth_command_supplies_bearer_token() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    mount_sse_once_match(
+    let response_mock = mount_sse_once(
         &server,
-        header("authorization", "Bearer command-token"),
         sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
     )
     .await;
     let auth_fixture = ProviderAuthCommandFixture::new(&["command-token"]).unwrap();
 
     send_provider_auth_request(&server, auth_fixture.auth()).await;
+
+    let request = response_mock.single_request();
+    assert_eq!(
+        request.header("authorization").as_deref(),
+        Some("Bearer command-token")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -789,29 +795,32 @@ async fn provider_auth_command_refreshes_after_401() {
     let server = MockServer::start().await;
     let auth_fixture = ProviderAuthCommandFixture::new(&["first-token", "second-token"]).unwrap();
 
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(header_regex("Authorization", "Bearer first-token"))
-        .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(header_regex("Authorization", "Bearer second-token"))
-        .respond_with(
+    let response_mock = mount_response_sequence(
+        &server,
+        vec![
+            ResponseTemplate::new(401).set_body_string("unauthorized"),
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
                 .set_body_raw(
                     sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
                     "text/event-stream",
                 ),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+        ],
+    )
+    .await;
 
     send_provider_auth_request(&server, auth_fixture.auth()).await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].header("authorization").as_deref(),
+        Some("Bearer first-token")
+    );
+    assert_eq!(
+        requests[1].header("authorization").as_deref(),
+        Some("Bearer second-token")
+    );
 }
 
 /// Issues one streamed Responses request through a provider configured with command-backed auth.
