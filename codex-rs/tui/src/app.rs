@@ -4455,6 +4455,13 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
             }
+            AppEvent::UpdateDefaultModel(model) => {
+                self.chat_widget.set_default_mode_model(&model);
+            }
+            AppEvent::UpdatePlanModeModel(model) => {
+                self.config.plan_mode_model = Some(model.clone());
+                self.chat_widget.set_plan_mode_model(&model);
+            }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
             }
@@ -4464,15 +4471,15 @@ impl App {
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::OpenReasoningPopup { model, target } => {
+                self.chat_widget.open_reasoning_popup(model, target);
             }
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
                     .open_plan_reasoning_scope_prompt(model, effort);
             }
-            AppEvent::OpenAllModelsPopup { models } => {
-                self.chat_widget.open_all_models_popup(models);
+            AppEvent::OpenAllModelsPopup { models, target } => {
+                self.chat_widget.open_all_models_popup(models, target);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
@@ -4883,6 +4890,63 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistPlanModeModelSelection { model, effort } => {
+                let profile = self.active_profile.as_deref();
+                let persist_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_plan_mode_model(Some(model.as_str()))
+                    .with_edits([{
+                        let segments = if let Some(profile) = profile {
+                            vec![
+                                "profiles".to_string(),
+                                profile.to_string(),
+                                "plan_mode_reasoning_effort".to_string(),
+                            ]
+                        } else {
+                            vec!["plan_mode_reasoning_effort".to_string()]
+                        };
+                        if let Some(effort) = effort {
+                            ConfigEdit::SetPath {
+                                segments,
+                                value: effort.to_string().into(),
+                            }
+                        } else {
+                            ConfigEdit::ClearPath { segments }
+                        }
+                    }])
+                    .apply()
+                    .await;
+                match persist_result {
+                    Ok(()) => {
+                        let mut message = format!("Plan mode model changed to {model}");
+                        if let Some(label) = Self::reasoning_label_for(&model, effort) {
+                            message.push(' ');
+                            message.push_str(label);
+                        }
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist Plan mode model selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save Plan mode model for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save Plan mode model: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
             AppEvent::PluginUninstallLoaded {
                 cwd,
                 plugin_id: _plugin_id,
@@ -5196,45 +5260,6 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to save rate limit reminder preference: {err}"
                     ));
-                }
-            }
-            AppEvent::PersistPlanModeReasoningEffort(effort) => {
-                let profile = self.active_profile.as_deref();
-                let segments = if let Some(profile) = profile {
-                    vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "plan_mode_reasoning_effort".to_string(),
-                    ]
-                } else {
-                    vec!["plan_mode_reasoning_effort".to_string()]
-                };
-                let edit = if let Some(effort) = effort {
-                    ConfigEdit::SetPath {
-                        segments,
-                        value: effort.to_string().into(),
-                    }
-                } else {
-                    ConfigEdit::ClearPath { segments }
-                };
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([edit])
-                    .apply()
-                    .await
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to persist plan mode reasoning effort"
-                    );
-                    if let Some(profile) = profile {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save Plan mode reasoning effort for profile `{profile}`: {err}"
-                        ));
-                    } else {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save Plan mode reasoning effort: {err}"
-                        ));
-                    }
                 }
             }
             AppEvent::PersistModelMigrationPromptAcknowledged {

@@ -74,6 +74,9 @@ Codex stores "do not show again" flags for some UI prompts under the `[notice]` 
 
 ## Plan mode defaults
 
+`plan_mode_model` lets you set a Plan-mode-specific model override. When unset,
+Plan mode inherits the global `model` default.
+
 `plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
 effort override. When unset, Plan mode uses the built-in Plan preset default
 (currently `medium`). When explicitly set (including `none`), it overrides the

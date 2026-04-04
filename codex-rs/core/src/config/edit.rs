@@ -868,6 +868,31 @@ impl ConfigEditsBuilder {
         self
     }
 
+    /// Set or clear the Plan-mode-specific model override in `config.toml`.
+    ///
+    /// When `model` is `Some`, the `plan_mode_model` key is written (or
+    /// scoped under the active profile). When `None`, the key is removed so
+    /// Plan mode falls back to the global `model` default.
+    pub fn set_plan_mode_model(mut self, model: Option<&str>) -> Self {
+        let segments = if let Some(profile) = self.profile.as_ref() {
+            vec![
+                "profiles".to_string(),
+                profile.clone(),
+                "plan_mode_model".to_string(),
+            ]
+        } else {
+            vec!["plan_mode_model".to_string()]
+        };
+        match model {
+            Some(model) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(model),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
     pub fn set_service_tier(mut self, service_tier: Option<ServiceTier>) -> Self {
         self.edits.push(ConfigEdit::SetServiceTier { service_tier });
         self

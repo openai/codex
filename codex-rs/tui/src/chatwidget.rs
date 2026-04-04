@@ -255,6 +255,23 @@ const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and P
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
+/// The outcome of resolving a [`ModelSelectionTarget`] against the current
+/// widget state.
+///
+/// This sits between the user-facing target (which mode they *want* to
+/// change) and the event dispatch (which `AppEvent`s to send). The
+/// `PromptPlanScope` variant triggers the existing "apply to plan only vs.
+/// all modes" confirmation dialog before committing the selection.
+#[derive(Clone, Copy)]
+enum ModelSelectionResolution {
+    /// Persist as the Default-mode model and reasoning effort.
+    UpdateDefault,
+    /// Persist as the Plan-mode model override and reasoning effort.
+    UpdatePlan,
+    /// Show the Plan-mode scope prompt before persisting.
+    PromptPlanScope,
+}
+
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
 /// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
@@ -293,6 +310,7 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
+use crate::app_event::ModelSelectionTarget;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -5366,6 +5384,20 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Model => match trimmed.to_ascii_lowercase().as_str() {
+                "" => self.open_model_popup(),
+                "plan" => {
+                    self.open_model_popup_for_target(ModelSelectionTarget::Plan);
+                    self.consume_accepted_inline_args_command();
+                }
+                "default" => {
+                    self.open_model_popup_for_target(ModelSelectionTarget::Default);
+                    self.consume_accepted_inline_args_command();
+                }
+                _ => {
+                    self.add_error_message("Usage: /model [plan|default]".to_string());
+                }
+            },
             SlashCommand::Fast => {
                 if trimmed.is_empty() {
                     self.dispatch_command(cmd);
@@ -5471,6 +5503,21 @@ impl ChatWidget {
             }
             _ => self.dispatch_command(cmd),
         }
+    }
+
+    /// Drain the composer's pending submission state after a slash command
+    /// with inline args has been accepted and the popup opened.
+    ///
+    /// Without this, the composer would still hold the `/model plan` text and
+    /// treat the next Enter as a duplicate submission.
+    fn consume_accepted_inline_args_command(&mut self) {
+        let Some((_prepared_args, _prepared_elements)) = self
+            .bottom_pane
+            .prepare_inline_args_submission(/*record_history*/ false)
+        else {
+            return;
+        };
+        self.bottom_pane.drain_pending_submission_state();
     }
 
     fn show_rename_prompt(&mut self) {
@@ -7672,6 +7719,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        self.open_model_popup_for_target(ModelSelectionTarget::Active);
+    }
+
+    /// Open the model picker popup scoped to a specific selection target.
+    ///
+    /// The target determines which mode's current model is highlighted and
+    /// which persistence path is used when the user confirms a selection.
+    pub(crate) fn open_model_popup_for_target(&mut self, target: ModelSelectionTarget) {
         if !self.is_session_configured() {
             self.add_info_message(
                 "Model selection is disabled until startup completes.".to_string(),
@@ -7690,7 +7745,7 @@ impl ChatWidget {
                 return;
             }
         };
-        self.open_model_popup_with_presets(presets);
+        self.open_model_popup_with_presets(presets, target);
     }
 
     pub(crate) fn open_personality_popup(&mut self) {
@@ -7932,6 +7987,29 @@ impl ChatWidget {
         Box::new(header)
     }
 
+    /// Append a mode-scope suffix to the popup title when the selection targets
+    /// a specific mode (e.g. "Select Model for Plan Mode").
+    fn model_menu_title(&self, target: ModelSelectionTarget, base_title: &str) -> String {
+        match target {
+            ModelSelectionTarget::Active => base_title.to_string(),
+            ModelSelectionTarget::Default => format!("{base_title} for Default Mode"),
+            ModelSelectionTarget::Plan => format!("{base_title} for Plan Mode"),
+        }
+    }
+
+    /// Append a mode-scope clarification to the popup subtitle.
+    fn model_menu_subtitle(&self, target: ModelSelectionTarget, base_subtitle: &str) -> String {
+        match target {
+            ModelSelectionTarget::Active => base_subtitle.to_string(),
+            ModelSelectionTarget::Default => {
+                format!("{base_subtitle} Selection applies to Default mode.")
+            }
+            ModelSelectionTarget::Plan => {
+                format!("{base_subtitle} Selection applies to Plan mode.")
+            }
+        }
+    }
+
     fn model_menu_warning_line(&self) -> Option<Line<'static>> {
         let base_url = self.custom_openai_base_url()?;
         let warning = format!(
@@ -7959,25 +8037,29 @@ impl ChatWidget {
         Some(trimmed.to_string())
     }
 
-    pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+    pub(crate) fn open_model_popup_with_presets(
+        &mut self,
+        presets: Vec<ModelPreset>,
+        target: ModelSelectionTarget,
+    ) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
             .collect();
 
-        let current_model = self.current_model();
+        let current_model = self.model_for_selection_target(target);
         let current_label = presets
             .iter()
             .find(|preset| preset.model.as_str() == current_model)
             .map(|preset| preset.model.to_string())
-            .unwrap_or_else(|| self.model_display_name().to_string());
+            .unwrap_or_else(|| self.model_display_name_for_selection_target(target));
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
             .into_iter()
             .partition(|preset| Self::is_auto_model(&preset.model));
 
         if auto_presets.is_empty() {
-            self.open_all_models_popup(other_presets);
+            self.open_all_models_popup(other_presets, target);
             return;
         }
 
@@ -7988,14 +8070,15 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
-                let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
+                let resolution = self.model_selection_resolution(
+                    target,
                     model.as_str(),
                     Some(preset.default_reasoning_effort),
                 );
                 let actions = Self::model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort),
-                    should_prompt_plan_mode_scope,
+                    resolution,
                 );
                 SelectionItem {
                     name: model.clone(),
@@ -8014,6 +8097,7 @@ impl ChatWidget {
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenAllModelsPopup {
                     models: all_models.clone(),
+                    target,
                 });
             })];
 
@@ -8033,8 +8117,8 @@ impl ChatWidget {
         }
 
         let header = self.model_menu_header(
-            "Select Model",
-            "Pick a quick auto mode or browse all models.",
+            &self.model_menu_title(target, "Select Model"),
+            &self.model_menu_subtitle(target, "Pick a quick auto mode or browse all models."),
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(standard_popup_hint_line()),
@@ -8057,7 +8141,11 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
+    pub(crate) fn open_all_models_popup(
+        &mut self,
+        presets: Vec<ModelPreset>,
+        target: ModelSelectionTarget,
+    ) {
         if presets.is_empty() {
             self.add_info_message(
                 "No additional models are available right now.".to_string(),
@@ -8070,13 +8158,14 @@ impl ChatWidget {
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model.as_str() == self.current_model();
+            let is_current = preset.model.as_str() == self.model_for_selection_target(target);
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
+                    target,
                 });
             })];
             items.push(SelectionItem {
@@ -8091,8 +8180,11 @@ impl ChatWidget {
         }
 
         let header = self.model_menu_header(
-            "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
+            &self.model_menu_title(target, "Select Model and Effort"),
+            &self.model_menu_subtitle(
+                target,
+                "Access legacy models by running codex -m <model_name> or in your config.toml",
+            ),
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
@@ -8147,27 +8239,69 @@ impl ChatWidget {
         });
     }
 
+    /// Build the closure(s) that fire when the user confirms a model selection.
+    ///
+    /// The returned actions send the appropriate `AppEvent` sequence for the
+    /// given [`ModelSelectionResolution`]. This is a pure factory — it captures
+    /// the resolution at popup-creation time so the popup callback doesn't need
+    /// access to widget state.
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
-        should_prompt_plan_mode_scope: bool,
+        resolution: ModelSelectionResolution,
     ) -> Vec<SelectionAction> {
-        vec![Box::new(move |tx| {
-            if should_prompt_plan_mode_scope {
+        vec![Box::new(move |tx| match resolution {
+            ModelSelectionResolution::PromptPlanScope => {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
                     effort: effort_for_action,
                 });
-                return;
             }
-
-            tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
-            tx.send(AppEvent::PersistModelSelection {
-                model: model_for_action.clone(),
-                effort: effort_for_action,
-            });
+            ModelSelectionResolution::UpdateDefault => {
+                tx.send(AppEvent::UpdateDefaultModel(model_for_action.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
+                tx.send(AppEvent::PersistModelSelection {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action,
+                });
+            }
+            ModelSelectionResolution::UpdatePlan => {
+                tx.send(AppEvent::UpdatePlanModeModel(model_for_action.clone()));
+                tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort_for_action));
+                tx.send(AppEvent::PersistPlanModeModelSelection {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action,
+                });
+            }
         })]
+    }
+
+    /// Decide how a model selection should be applied given the target and the
+    /// current widget state.
+    ///
+    /// For explicit `Default`/`Plan` targets the mapping is trivial. For
+    /// `Active`, the function consults `should_prompt_plan_mode_reasoning_scope`
+    /// (which checks whether the effort differs from the Plan preset default)
+    /// and falls back to whichever mode is currently active.
+    fn model_selection_resolution(
+        &self,
+        target: ModelSelectionTarget,
+        selected_model: &str,
+        selected_effort: Option<ReasoningEffortConfig>,
+    ) -> ModelSelectionResolution {
+        match target {
+            ModelSelectionTarget::Active => {
+                if self.should_prompt_plan_mode_reasoning_scope(selected_model, selected_effort) {
+                    ModelSelectionResolution::PromptPlanScope
+                } else if self.active_mode_kind() == ModeKind::Plan {
+                    ModelSelectionResolution::UpdatePlan
+                } else {
+                    ModelSelectionResolution::UpdateDefault
+                }
+            }
+            ModelSelectionTarget::Default => ModelSelectionResolution::UpdateDefault,
+            ModelSelectionTarget::Plan => ModelSelectionResolution::UpdatePlan,
+        }
     }
 
     fn should_prompt_plan_mode_reasoning_scope(
@@ -8233,16 +8367,23 @@ impl ChatWidget {
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             move |tx| {
-                tx.send(AppEvent::UpdateModel(model.clone()));
+                tx.send(AppEvent::UpdatePlanModeModel(model.clone()));
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
-                tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+                tx.send(AppEvent::PersistPlanModeModelSelection {
+                    model: model.clone(),
+                    effort,
+                });
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::UpdateModel(model.clone()));
+            tx.send(AppEvent::UpdateDefaultModel(model.clone()));
+            tx.send(AppEvent::UpdatePlanModeModel(model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort));
             tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
-            tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+            tx.send(AppEvent::PersistPlanModeModelSelection {
+                model: model.clone(),
+                effort,
+            });
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
@@ -8277,11 +8418,15 @@ impl ChatWidget {
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
-    pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+    pub(crate) fn open_reasoning_popup(
+        &mut self,
+        preset: ModelPreset,
+        target: ModelSelectionTarget,
+    ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
-        let in_plan_mode =
-            self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
+        let target_mode = target.mode_kind(self.active_mode_kind());
+        let in_plan_mode = self.collaboration_modes_enabled() && target_mode == ModeKind::Plan;
 
         let warn_effort = if supported
             .iter()
@@ -8327,15 +8472,12 @@ impl ChatWidget {
         if choices.len() == 1 {
             let selected_effort = choices.first().and_then(|c| c.stored);
             let selected_model = preset.model;
-            if self.should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort) {
-                self.app_event_tx
-                    .send(AppEvent::OpenPlanReasoningScopePrompt {
-                        model: selected_model,
-                        effort: selected_effort,
-                    });
-            } else {
-                self.apply_model_and_effort(selected_model, selected_effort);
-            }
+            self.apply_model_selection(
+                target,
+                selected_model.clone().as_str(),
+                selected_model,
+                selected_effort,
+            );
             return;
         }
 
@@ -8348,14 +8490,14 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.current_model() == preset.model.as_str();
+        let is_current_model = self.model_for_selection_target(target) == preset.model.as_str();
         let highlight_choice = if is_current_model {
             if in_plan_mode {
                 self.config
                     .plan_mode_reasoning_effort
-                    .or(self.effective_reasoning_effort())
+                    .or(self.plan_mode_reasoning_effort_for_picker())
             } else {
-                self.effective_reasoning_effort()
+                self.current_collaboration_mode.reasoning_effort()
             }
         } else {
             default_choice
@@ -8400,23 +8542,10 @@ impl ChatWidget {
 
             let model_for_action = model_slug.clone();
             let choice_effort = choice.stored;
-            let should_prompt_plan_mode_scope =
-                self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                if should_prompt_plan_mode_scope {
-                    tx.send(AppEvent::OpenPlanReasoningScopePrompt {
-                        model: model_for_action.clone(),
-                        effort: choice_effort,
-                    });
-                } else {
-                    tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-                    tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
-                    tx.send(AppEvent::PersistModelSelection {
-                        model: model_for_action.clone(),
-                        effort: choice_effort,
-                    });
-                }
-            })];
+            let resolution =
+                self.model_selection_resolution(target, model_slug.as_str(), choice_effort);
+            let actions =
+                Self::model_selection_actions(model_for_action, choice_effort, resolution);
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -8431,7 +8560,8 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(Line::from(
-            format!("Select Reasoning Level for {model_slug}").bold(),
+            self.model_menu_title(target, &format!("Select Reasoning Level for {model_slug}"))
+                .bold(),
         ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -8454,20 +8584,41 @@ impl ChatWidget {
         }
     }
 
-    fn apply_model_and_effort_without_persist(
+    /// Dispatch the appropriate update + persist events for a confirmed model
+    /// selection.
+    ///
+    /// This is the non-closure counterpart of [`model_selection_actions`] —
+    /// used when the widget can send events directly (e.g. single-effort
+    /// models that skip the reasoning popup).
+    fn apply_model_selection(
         &self,
+        target: ModelSelectionTarget,
+        selected_model: &str,
         model: String,
         effort: Option<ReasoningEffortConfig>,
     ) {
-        self.app_event_tx.send(AppEvent::UpdateModel(model));
-        self.app_event_tx
-            .send(AppEvent::UpdateReasoningEffort(effort));
-    }
-
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
-        self.apply_model_and_effort_without_persist(model.clone(), effort);
-        self.app_event_tx
-            .send(AppEvent::PersistModelSelection { model, effort });
+        match self.model_selection_resolution(target, selected_model, effort) {
+            ModelSelectionResolution::PromptPlanScope => {
+                self.app_event_tx
+                    .send(AppEvent::OpenPlanReasoningScopePrompt { model, effort });
+            }
+            ModelSelectionResolution::UpdateDefault => {
+                self.app_event_tx
+                    .send(AppEvent::UpdateDefaultModel(model.clone()));
+                self.app_event_tx
+                    .send(AppEvent::UpdateReasoningEffort(effort));
+                self.app_event_tx
+                    .send(AppEvent::PersistModelSelection { model, effort });
+            }
+            ModelSelectionResolution::UpdatePlan => {
+                self.app_event_tx
+                    .send(AppEvent::UpdatePlanModeModel(model.clone()));
+                self.app_event_tx
+                    .send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                self.app_event_tx
+                    .send(AppEvent::PersistPlanModeModelSelection { model, effort });
+            }
+        }
     }
 
     /// Open the permissions popup (alias for /permissions).
@@ -9404,6 +9555,23 @@ impl ChatWidget {
         self.refresh_model_dependent_surfaces();
     }
 
+    /// Override the model used when Plan mode is active.
+    ///
+    /// When unset, Plan mode inherits the Default mode model. Since the
+    /// current config schema persists a concrete Plan model value rather than a
+    /// clearable sentinel through the picker UI, this setter only applies a
+    /// concrete model override.
+    pub(crate) fn set_plan_mode_model(&mut self, model: &str) {
+        self.config.plan_mode_model = Some(model.to_string());
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+            && mask.mode == Some(ModeKind::Plan)
+        {
+            mask.model = Some(model.to_string());
+        }
+        self.refresh_model_dependent_surfaces();
+    }
+
     /// Set the reasoning effort for the non-Plan collaboration mode.
     ///
     /// Does not touch the active Plan mask — Plan reasoning is controlled
@@ -9500,7 +9668,7 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
-    pub(crate) fn set_model(&mut self, model: &str) {
+    pub(crate) fn set_default_mode_model(&mut self, model: &str) {
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model.to_string()),
             /*effort*/ None,
@@ -9508,10 +9676,20 @@ impl ChatWidget {
         );
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
+            && mask.mode != Some(ModeKind::Plan)
         {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_dependent_surfaces();
+    }
+
+    /// Set the model for whichever collaboration mode is active.
+    pub(crate) fn set_model(&mut self, model: &str) {
+        if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
+            self.set_plan_mode_model(model);
+        } else {
+            self.set_default_mode_model(model);
+        }
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
@@ -9537,13 +9715,42 @@ impl ChatWidget {
     }
 
     pub(crate) fn current_model(&self) -> &str {
+        self.model_for_selection_target(ModelSelectionTarget::Active)
+    }
+
+    /// Resolve the "current" model for the given selection target.
+    ///
+    /// For Plan mode the precedence is:
+    /// 1. `config.plan_mode_model` (explicit user override),
+    /// 2. the active collaboration mask's model (only when the mask is
+    ///    currently Plan — ignored if the user targeted Plan from Default
+    ///    mode, since the mask belongs to Default in that case),
+    /// 3. the global default model.
+    ///
+    /// For all other modes the global default model is used directly.
+    fn model_for_selection_target(&self, target: ModelSelectionTarget) -> &str {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.model();
         }
-        self.active_collaboration_mask
-            .as_ref()
-            .and_then(|mask| mask.model.as_deref())
-            .unwrap_or_else(|| self.current_collaboration_mode.model())
+        match target.mode_kind(self.active_mode_kind()) {
+            ModeKind::Plan => self
+                .config
+                .plan_mode_model
+                .as_deref()
+                .or_else(|| {
+                    // Only consult the active mask when it *is* Plan mode.
+                    // If the target is Plan but the active mask is Default,
+                    // the mask's model belongs to Default, not Plan.
+                    self.active_collaboration_mask
+                        .as_ref()
+                        .filter(|mask| mask.mode == Some(ModeKind::Plan))
+                        .and_then(|mask| mask.model.as_deref())
+                })
+                .unwrap_or_else(|| self.current_collaboration_mode.model()),
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => {
+                self.current_collaboration_mode.model()
+            }
+        }
     }
 
     pub(crate) fn realtime_conversation_is_live(&self) -> bool {
@@ -9644,12 +9851,18 @@ impl ChatWidget {
     }
 
     fn initial_collaboration_mask(
-        _config: &Config,
+        config: &Config,
         model_catalog: &ModelCatalog,
         model_override: Option<&str>,
     ) -> Option<CollaborationModeMask> {
         let mut mask = collaboration_modes::default_mask(model_catalog)?;
-        if let Some(model_override) = model_override {
+        if mask.mode == Some(ModeKind::Plan) {
+            if let Some(plan_mode_model) = config.plan_mode_model.as_ref() {
+                mask.model = Some(plan_mode_model.clone());
+            } else if let Some(model_override) = model_override {
+                mask.model = Some(model_override.to_string());
+            }
+        } else if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
         Some(mask)
@@ -9663,14 +9876,35 @@ impl ChatWidget {
     }
 
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        match self.active_mode_kind() {
+            ModeKind::Plan => self.plan_mode_reasoning_effort_for_picker(),
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => {
+                self.current_collaboration_mode.reasoning_effort()
+            }
+        }
+    }
+
+    /// Resolve the Plan-mode reasoning effort that the picker should treat as
+    /// "current."
+    ///
+    /// Precedence: active Plan mask effort > `config.plan_mode_reasoning_effort`
+    /// > catalog Plan preset default.
+    fn plan_mode_reasoning_effort_for_picker(&self) -> Option<ReasoningEffortConfig> {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();
         }
-        let current_effort = self.current_collaboration_mode.reasoning_effort();
-        self.active_collaboration_mask
+        if let Some(mask) = self
+            .active_collaboration_mask
             .as_ref()
-            .and_then(|mask| mask.reasoning_effort)
-            .unwrap_or(current_effort)
+            .filter(|mask| mask.mode == Some(ModeKind::Plan))
+            && let Some(effort) = mask.reasoning_effort
+        {
+            return effort;
+        }
+        self.config.plan_mode_reasoning_effort.or_else(|| {
+            collaboration_modes::plan_mask(self.model_catalog.as_ref())
+                .and_then(|mask| mask.reasoning_effort.flatten())
+        })
     }
 
     fn effective_collaboration_mode(&self) -> CollaborationMode {
@@ -9702,6 +9936,15 @@ impl ChatWidget {
     fn refresh_model_dependent_surfaces(&mut self) {
         self.refresh_model_display();
         self.refresh_status_line();
+    }
+
+    fn model_display_name_for_selection_target(&self, target: ModelSelectionTarget) -> String {
+        let model = self.model_for_selection_target(target);
+        if model.is_empty() {
+            DEFAULT_MODEL_DISPLAY_NAME.to_string()
+        } else {
+            model.to_string()
+        }
     }
 
     fn model_display_name(&self) -> &str {
@@ -9780,10 +10023,13 @@ impl ChatWidget {
         let previous_mode = self.active_mode_kind();
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
-        if mask.mode == Some(ModeKind::Plan)
-            && let Some(effort) = self.config.plan_mode_reasoning_effort
-        {
-            mask.reasoning_effort = Some(Some(effort));
+        if mask.mode == Some(ModeKind::Plan) {
+            if let Some(model) = self.config.plan_mode_model.as_ref() {
+                mask.model = Some(model.clone());
+            }
+            if let Some(effort) = self.config.plan_mode_reasoning_effort {
+                mask.reasoning_effort = Some(Some(effort));
+            }
         }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();

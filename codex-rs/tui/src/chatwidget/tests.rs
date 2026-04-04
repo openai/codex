@@ -7,6 +7,7 @@
 pub(super) use super::*;
 pub(super) use crate::app_event::AppEvent;
 pub(super) use crate::app_event::ExitMode;
+pub(super) use crate::app_event::ModelSelectionTarget;
 #[cfg(not(target_os = "linux"))]
 pub(super) use crate::app_event::RealtimeAudioDeviceKind;
 pub(super) use crate::app_event_sender::AppEventSender;
