@@ -12,8 +12,11 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemOperationOptions;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -53,6 +56,18 @@ fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
     match AbsolutePathBuf::try_from(path) {
         Ok(path) => path,
         Err(err) => panic!("path should be absolute: {err}"),
+    }
+}
+
+fn read_only_options(readable_root: std::path::PathBuf) -> FileSystemOperationOptions {
+    FileSystemOperationOptions {
+        sandbox_policy: Some(SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![absolute_path(readable_root)],
+            },
+            network_access: false,
+        }),
     }
 }
 
@@ -208,6 +223,66 @@ async fn file_system_copy_rejects_directory_without_recursive(use_remote: bool) 
         error.to_string(),
         "fs/copy requires recursive: true when sourcePath is a directory"
     );
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let file_path = allowed_dir.join("note.txt");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::write(&file_path, "sandboxed hello")?;
+
+    let contents = file_system
+        .read_file_with_options(&absolute_path(file_path), &read_only_options(allowed_dir))
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(contents, b"sandboxed hello");
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let blocked_path = tmp.path().join("blocked.txt");
+    std::fs::create_dir_all(&allowed_dir)?;
+
+    let error = match file_system
+        .write_file_with_options(
+            &absolute_path(blocked_path.clone()),
+            b"nope".to_vec(),
+            &read_only_options(allowed_dir),
+        )
+        .await
+    {
+        Ok(()) => anyhow::bail!("write should be blocked"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "fs/write is not permitted by sandbox policy for path {}",
+            blocked_path.display()
+        )
+    );
+    assert!(!blocked_path.exists());
 
     Ok(())
 }
