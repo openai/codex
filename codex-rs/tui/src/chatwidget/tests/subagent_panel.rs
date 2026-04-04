@@ -6,6 +6,7 @@ use crate::history_cell::SubagentStatusCell;
 use ratatui::layout::Rect;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 use std::time::Instant;
 
 #[tokio::test]
@@ -21,6 +22,7 @@ async fn subagent_panel_is_not_flushed_into_transcript_history() {
             name: "user-request-derisk-implement".to_string(),
             status: AgentStatus::PendingInit,
             is_watchdog: true,
+            watchdog_countdown_duration: Duration::from_secs(60),
             watchdog_countdown_started_at: Some(Instant::now()),
             preview: "watchdog idle".to_string(),
             latest_update_at: Instant::now(),
@@ -71,6 +73,7 @@ async fn subagent_panel_mounts_while_placeholder_active_cell_exists_snapshot() {
             name: "watchdog-agent".to_string(),
             status: AgentStatus::PendingInit,
             is_watchdog: true,
+            watchdog_countdown_duration: Duration::from_secs(60),
             watchdog_countdown_started_at: Some(Instant::now()),
             preview: "watchdog idle".to_string(),
             latest_update_at: Instant::now(),
