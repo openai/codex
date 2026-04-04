@@ -78,7 +78,7 @@ async fn read_process_until_change(
         return Ok(response);
     }
 
-    timeout(Duration::from_secs(2), wake_rx.changed()).await??;
+    timeout(Duration::from_secs(5), wake_rx.changed()).await??;
     session
         .read(after_seq, /*max_bytes*/ None, /*wait_ms*/ Some(0))
         .await
@@ -163,10 +163,15 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    session.process.write(b"hello\n".to_vec()).await?;
     let StartedExecProcess { process } = session;
     let wake_rx = process.subscribe_wake();
+    let startup_delay = if use_remote {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_millis(200)
+    };
+    tokio::time::sleep(startup_delay).await;
+    process.write(b"hello\n".to_vec()).await?;
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
     assert!(

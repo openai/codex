@@ -14,13 +14,63 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
+use tokio::sync::Mutex;
 
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
+
+static SANDBOX_HELPER_ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+struct SandboxHelperEnvGuard {
+    previous_exec_server_self_exe: Option<std::ffi::OsString>,
+    previous_linux_sandbox_exe: Option<std::ffi::OsString>,
+}
+
+impl SandboxHelperEnvGuard {
+    fn install() -> Result<Self> {
+        let exec_server_binary = cargo_bin("codex-exec-server")?;
+        let linux_sandbox_binary = cargo_bin("codex-linux-sandbox").ok();
+        let previous_exec_server_self_exe = std::env::var_os("CODEX_EXEC_SERVER_SELF_EXE");
+        let previous_linux_sandbox_exe = std::env::var_os("CODEX_LINUX_SANDBOX_EXE");
+        unsafe {
+            std::env::set_var("CODEX_EXEC_SERVER_SELF_EXE", &exec_server_binary);
+            if let Some(linux_sandbox_binary) = linux_sandbox_binary.as_ref() {
+                std::env::set_var("CODEX_LINUX_SANDBOX_EXE", linux_sandbox_binary);
+            }
+        }
+        Ok(Self {
+            previous_exec_server_self_exe,
+            previous_linux_sandbox_exe,
+        })
+    }
+}
+
+impl Drop for SandboxHelperEnvGuard {
+    fn drop(&mut self) {
+        match self.previous_exec_server_self_exe.as_ref() {
+            Some(previous) => unsafe {
+                std::env::set_var("CODEX_EXEC_SERVER_SELF_EXE", previous);
+            },
+            None => unsafe {
+                std::env::remove_var("CODEX_EXEC_SERVER_SELF_EXE");
+            },
+        }
+        match self.previous_linux_sandbox_exe.as_ref() {
+            Some(previous) => unsafe {
+                std::env::set_var("CODEX_LINUX_SANDBOX_EXE", previous);
+            },
+            None => unsafe {
+                std::env::remove_var("CODEX_LINUX_SANDBOX_EXE");
+            },
+        }
+    }
+}
 
 struct FileSystemContext {
     file_system: Arc<dyn ExecutorFileSystem>,
@@ -42,6 +92,10 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
             _server: None,
         })
     }
+}
+
+fn unrestricted_sandbox_policy() -> FileSystemSandboxPolicy {
+    FileSystemSandboxPolicy::unrestricted()
 }
 
 fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
@@ -355,6 +409,53 @@ async fn file_system_copy_rejects_standalone_fifo_source(use_remote: bool) -> Re
     assert_eq!(
         error.to_string(),
         "fs/copy only supports regular files, directories, and symlinks"
+    );
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_methods_support_sandbox_policy_helper(use_remote: bool) -> Result<()> {
+    let _lock = SANDBOX_HELPER_ENV_LOCK.lock().await;
+    let _env_guard = SandboxHelperEnvGuard::install()?;
+
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let policy = unrestricted_sandbox_policy();
+    let file_path = tmp.path().join("sandboxed.txt");
+    let copied_path = tmp.path().join("copied.txt");
+
+    file_system
+        .write_file_with_sandbox_policy(
+            &absolute_path(file_path.clone()),
+            b"hello from sandbox helper".to_vec(),
+            Some(&policy),
+        )
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+
+    let bytes = file_system
+        .read_file_with_sandbox_policy(&absolute_path(file_path), Some(&policy))
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(bytes, b"hello from sandbox helper");
+
+    file_system
+        .copy_with_sandbox_policy(
+            &absolute_path(tmp.path().join("sandboxed.txt")),
+            &absolute_path(copied_path.clone()),
+            CopyOptions { recursive: false },
+            Some(&policy),
+        )
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(
+        std::fs::read_to_string(copied_path)?,
+        "hello from sandbox helper"
     );
 
     Ok(())

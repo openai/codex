@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Component;
 use std::path::Path;
@@ -14,6 +15,7 @@ use crate::FileMetadata;
 use crate::FileSystemResult;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::sandboxed_file_system::SandboxedFileSystem;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -33,8 +35,35 @@ impl ExecutorFileSystem for LocalFileSystem {
         tokio::fs::read(path.as_path()).await
     }
 
+    async fn read_file_with_sandbox_policy(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> FileSystemResult<Vec<u8>> {
+        if let Some(sandbox_policy) = sandbox_policy {
+            return SandboxedFileSystem::new(sandbox_policy.clone())
+                .read_file(path)
+                .await;
+        }
+        self.read_file(path).await
+    }
+
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
         tokio::fs::write(path.as_path(), contents).await
+    }
+
+    async fn write_file_with_sandbox_policy(
+        &self,
+        path: &AbsolutePathBuf,
+        contents: Vec<u8>,
+        sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> FileSystemResult<()> {
+        if let Some(sandbox_policy) = sandbox_policy {
+            return SandboxedFileSystem::new(sandbox_policy.clone())
+                .write_file(path, contents)
+                .await;
+        }
+        self.write_file(path, contents).await
     }
 
     async fn create_directory(
@@ -50,6 +79,20 @@ impl ExecutorFileSystem for LocalFileSystem {
         Ok(())
     }
 
+    async fn create_directory_with_sandbox_policy(
+        &self,
+        path: &AbsolutePathBuf,
+        options: CreateDirectoryOptions,
+        sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> FileSystemResult<()> {
+        if let Some(sandbox_policy) = sandbox_policy {
+            return SandboxedFileSystem::new(sandbox_policy.clone())
+                .create_directory(path, options)
+                .await;
+        }
+        self.create_directory(path, options).await
+    }
+
     async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         Ok(FileMetadata {
@@ -58,6 +101,19 @@ impl ExecutorFileSystem for LocalFileSystem {
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
         })
+    }
+
+    async fn get_metadata_with_sandbox_policy(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> FileSystemResult<FileMetadata> {
+        if let Some(sandbox_policy) = sandbox_policy {
+            return SandboxedFileSystem::new(sandbox_policy.clone())
+                .get_metadata(path)
+                .await;
+        }
+        self.get_metadata(path).await
     }
 
     async fn read_directory(
@@ -75,6 +131,19 @@ impl ExecutorFileSystem for LocalFileSystem {
             });
         }
         Ok(entries)
+    }
+
+    async fn read_directory_with_sandbox_policy(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        if let Some(sandbox_policy) = sandbox_policy {
+            return SandboxedFileSystem::new(sandbox_policy.clone())
+                .read_directory(path)
+                .await;
+        }
+        self.read_directory(path).await
     }
 
     async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
@@ -95,6 +164,20 @@ impl ExecutorFileSystem for LocalFileSystem {
             Err(err) if err.kind() == io::ErrorKind::NotFound && options.force => Ok(()),
             Err(err) => Err(err),
         }
+    }
+
+    async fn remove_with_sandbox_policy(
+        &self,
+        path: &AbsolutePathBuf,
+        options: RemoveOptions,
+        sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> FileSystemResult<()> {
+        if let Some(sandbox_policy) = sandbox_policy {
+            return SandboxedFileSystem::new(sandbox_policy.clone())
+                .remove(path, options)
+                .await;
+        }
+        self.remove(path, options).await
     }
 
     async fn copy(
@@ -146,6 +229,21 @@ impl ExecutorFileSystem for LocalFileSystem {
         })
         .await
         .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
+    }
+
+    async fn copy_with_sandbox_policy(
+        &self,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
+        options: CopyOptions,
+        sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> FileSystemResult<()> {
+        if let Some(sandbox_policy) = sandbox_policy {
+            return SandboxedFileSystem::new(sandbox_policy.clone())
+                .copy(source_path, destination_path, options)
+                .await;
+        }
+        self.copy(source_path, destination_path, options).await
     }
 }
 

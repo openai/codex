@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use ts_rs::TS;
 use ts_rs::TypeVisitor;
 
@@ -52,6 +53,17 @@ pub fn read_schema_fixture_subtree(
 #[doc(hidden)]
 pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap<PathBuf, Vec<u8>>>
 {
+    let files = generate_typescript_schema_fixture_subtree(SchemaFixtureOptions::default())?;
+
+    Ok(files
+        .into_iter()
+        .map(|(path, content)| (path, content.into_bytes()))
+        .collect())
+}
+
+fn generate_typescript_schema_fixture_subtree(
+    options: SchemaFixtureOptions,
+) -> Result<BTreeMap<PathBuf, String>> {
     let mut files = BTreeMap::new();
     let mut seen = HashSet::new();
 
@@ -66,13 +78,12 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
     })?;
     collect_typescript_fixture_file::<ServerNotification>(&mut files, &mut seen)?;
 
-    filter_experimental_ts_tree(&mut files)?;
+    if !options.experimental_api {
+        filter_experimental_ts_tree(&mut files)?;
+    }
     generate_index_ts_tree(&mut files);
 
-    Ok(files
-        .into_iter()
-        .map(|(path, content)| (path, content.into_bytes()))
-        .collect())
+    Ok(files)
 }
 
 /// Regenerates `schema/typescript/` and `schema/json/`.
@@ -95,15 +106,48 @@ pub fn write_schema_fixtures_with_options(
     ensure_empty_dir(&typescript_out_dir)?;
     ensure_empty_dir(&json_out_dir)?;
 
-    crate::generate_ts_with_options(
+    write_typescript_schema_fixture_subtree(
         &typescript_out_dir,
+        &generate_typescript_schema_fixture_subtree(options)?,
         prettier,
-        crate::GenerateTsOptions {
-            experimental_api: options.experimental_api,
-            ..crate::GenerateTsOptions::default()
-        },
     )?;
     crate::generate_json_with_experimental(&json_out_dir, options.experimental_api)?;
+
+    Ok(())
+}
+
+fn write_typescript_schema_fixture_subtree(
+    output_dir: &Path,
+    files: &BTreeMap<PathBuf, String>,
+    prettier: Option<&Path>,
+) -> Result<()> {
+    let mut ts_files = Vec::with_capacity(files.len());
+    for (relative_path, content) in files {
+        let output_path = output_dir.join(relative_path);
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let output = format!("{GENERATED_TS_HEADER}{content}");
+        std::fs::write(&output_path, output)
+            .with_context(|| format!("failed to write {}", output_path.display()))?;
+        ts_files.push(output_path);
+    }
+
+    if let Some(prettier_bin) = prettier
+        && !ts_files.is_empty()
+    {
+        let status = Command::new(prettier_bin)
+            .arg("--write")
+            .arg("--log-level")
+            .arg("warn")
+            .args(ts_files.iter().map(|path| path.as_os_str()))
+            .status()
+            .with_context(|| format!("failed to invoke Prettier at {}", prettier_bin.display()))?;
+        if !status.success() {
+            anyhow::bail!("Prettier failed with status {status}");
+        }
+    }
 
     Ok(())
 }

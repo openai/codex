@@ -11,6 +11,7 @@ mod protocol;
 mod remote_file_system;
 mod remote_process;
 mod rpc;
+mod sandboxed_file_system;
 mod server;
 
 pub use client::ExecServerClient;
@@ -61,6 +62,7 @@ pub use protocol::TerminateResponse;
 pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
+pub use sandboxed_file_system::run_internal_fs_op;
 pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
 pub use server::run_main;

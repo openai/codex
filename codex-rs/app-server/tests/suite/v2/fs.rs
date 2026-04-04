@@ -14,11 +14,14 @@ use codex_app_server_protocol::FsWatchResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -30,6 +33,52 @@ use std::os::unix::fs::symlink;
 use std::process::Command;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+static EXEC_SERVER_SELF_EXE_ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+struct SandboxHelperEnvGuard {
+    previous_exec_server_self_exe: Option<std::ffi::OsString>,
+    previous_linux_sandbox_exe: Option<std::ffi::OsString>,
+}
+
+impl SandboxHelperEnvGuard {
+    fn install() -> Result<Self> {
+        let exec_server_binary = cargo_bin("codex-exec-server")?;
+        let linux_sandbox_binary = cargo_bin("codex-linux-sandbox").ok();
+        let previous_exec_server_self_exe = std::env::var_os("CODEX_EXEC_SERVER_SELF_EXE");
+        let previous_linux_sandbox_exe = std::env::var_os("CODEX_LINUX_SANDBOX_EXE");
+        unsafe {
+            std::env::set_var("CODEX_EXEC_SERVER_SELF_EXE", &exec_server_binary);
+            if let Some(linux_sandbox_binary) = linux_sandbox_binary.as_ref() {
+                std::env::set_var("CODEX_LINUX_SANDBOX_EXE", linux_sandbox_binary);
+            }
+        }
+        Ok(Self {
+            previous_exec_server_self_exe,
+            previous_linux_sandbox_exe,
+        })
+    }
+}
+
+impl Drop for SandboxHelperEnvGuard {
+    fn drop(&mut self) {
+        match self.previous_exec_server_self_exe.as_ref() {
+            Some(previous) => unsafe {
+                std::env::set_var("CODEX_EXEC_SERVER_SELF_EXE", previous);
+            },
+            None => unsafe {
+                std::env::remove_var("CODEX_EXEC_SERVER_SELF_EXE");
+            },
+        }
+        match self.previous_linux_sandbox_exe.as_ref() {
+            Some(previous) => unsafe {
+                std::env::set_var("CODEX_LINUX_SANDBOX_EXE", previous);
+            },
+            None => unsafe {
+                std::env::remove_var("CODEX_LINUX_SANDBOX_EXE");
+            },
+        }
+    }
+}
 
 async fn initialized_mcp(codex_home: &TempDir) -> Result<McpProcess> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -61,6 +110,10 @@ fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(path).expect("path should be absolute")
 }
 
+fn unrestricted_sandbox_policy() -> FileSystemSandboxPolicy {
+    FileSystemSandboxPolicy::unrestricted()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -71,6 +124,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
     let request_id = mcp
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
             path: absolute_path(file_path.clone()),
+            sandbox_policy: None,
         })
         .await?;
     let response = timeout(
@@ -129,6 +183,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_create_directory_request(codex_app_server_protocol::FsCreateDirectoryParams {
             path: absolute_path(nested_dir.clone()),
             recursive: None,
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -141,6 +196,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(nested_file.clone()),
             data_base64: STANDARD.encode("hello from app-server"),
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -153,6 +209,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(source_file.clone()),
             data_base64: STANDARD.encode("hello from source root"),
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -164,6 +221,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(nested_file.clone()),
+            sandbox_policy: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -185,6 +243,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(nested_file.clone()),
             destination_path: absolute_path(copy_file_path.clone()),
             recursive: false,
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -202,6 +261,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -217,6 +277,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let read_directory_request_id = mcp
         .send_fs_read_directory_request(codex_app_server_protocol::FsReadDirectoryParams {
             path: absolute_path(source_dir.clone()),
+            sandbox_policy: None,
         })
         .await?;
     let readdir_response = timeout(
@@ -249,6 +310,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             path: absolute_path(copied_dir.clone()),
             recursive: None,
             force: None,
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -275,6 +337,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(file_path.clone()),
             data_base64: STANDARD.encode(bytes),
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -287,6 +350,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(file_path),
+            sandbox_policy: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -307,6 +371,74 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_methods_support_sandbox_policy() -> Result<()> {
+    let _lock = EXEC_SERVER_SELF_EXE_ENV_LOCK.lock().await;
+    let _env_guard = SandboxHelperEnvGuard::install()?;
+
+    let codex_home = TempDir::new()?;
+    let file_path = codex_home.path().join("sandboxed.txt");
+    let copied_path = codex_home.path().join("sandboxed-copy.txt");
+    let policy = unrestricted_sandbox_policy();
+
+    async {
+        let mut mcp = initialized_mcp(&codex_home).await?;
+        let write_request_id = mcp
+            .send_fs_write_file_request(FsWriteFileParams {
+                path: absolute_path(file_path.clone()),
+                data_base64: STANDARD.encode("hello from sandbox policy"),
+                sandbox_policy: Some(policy.clone()),
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(write_request_id)),
+        )
+        .await??;
+
+        let read_request_id = mcp
+            .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+                path: absolute_path(file_path.clone()),
+                sandbox_policy: Some(policy.clone()),
+            })
+            .await?;
+        let read_response: FsReadFileResponse = to_response(
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+            )
+            .await??,
+        )?;
+        assert_eq!(
+            read_response,
+            FsReadFileResponse {
+                data_base64: STANDARD.encode("hello from sandbox policy"),
+            }
+        );
+
+        let copy_request_id = mcp
+            .send_fs_copy_request(FsCopyParams {
+                source_path: absolute_path(file_path),
+                destination_path: absolute_path(copied_path.clone()),
+                recursive: false,
+                sandbox_policy: Some(policy),
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(copy_request_id)),
+        )
+        .await??;
+        assert_eq!(
+            std::fs::read_to_string(copied_path)?,
+            "hello from sandbox policy"
+        );
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
     let codex_home = TempDir::new()?;
     let file_path = codex_home.path().join("blob.bin");
@@ -316,6 +448,7 @@ async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(file_path),
             data_base64: "%%%".to_string(),
+            sandbox_policy: None,
         })
         .await?;
     let error = timeout(
@@ -471,6 +604,7 @@ async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(codex_home.path().join("dest")),
             recursive: false,
+            sandbox_policy: None,
         })
         .await?;
     let error = timeout(
@@ -498,6 +632,7 @@ async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(source_dir.join("nested").join("copy")),
             recursive: true,
+            sandbox_policy: None,
         })
         .await?;
     let error = timeout(
@@ -529,6 +664,7 @@ async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -569,6 +705,7 @@ async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()>
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            sandbox_policy: None,
         })
         .await?;
     timeout(
@@ -606,6 +743,7 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
             source_path: absolute_path(fifo_path),
             destination_path: absolute_path(codex_home.path().join("copied")),
             recursive: false,
+            sandbox_policy: None,
         })
         .await?;
     expect_error_message(

@@ -43,6 +43,7 @@ use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailability
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
@@ -2168,6 +2169,9 @@ pub struct FeedbackUploadResponse {
 pub struct FsReadFileParams {
     /// Absolute path to read.
     pub path: AbsolutePathBuf,
+    /// Optional sandbox policy for re-invoking this filesystem operation under a sandbox.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<FileSystemSandboxPolicy>,
 }
 
 /// Base64-encoded file contents returned by `fs/readFile`.
@@ -2188,6 +2192,9 @@ pub struct FsWriteFileParams {
     pub path: AbsolutePathBuf,
     /// File contents encoded as base64.
     pub data_base64: String,
+    /// Optional sandbox policy for re-invoking this filesystem operation under a sandbox.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<FileSystemSandboxPolicy>,
 }
 
 /// Successful response for `fs/writeFile`.
@@ -2206,6 +2213,9 @@ pub struct FsCreateDirectoryParams {
     /// Whether parent directories should also be created. Defaults to `true`.
     #[ts(optional = nullable)]
     pub recursive: Option<bool>,
+    /// Optional sandbox policy for re-invoking this filesystem operation under a sandbox.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<FileSystemSandboxPolicy>,
 }
 
 /// Successful response for `fs/createDirectory`.
@@ -2221,6 +2231,9 @@ pub struct FsCreateDirectoryResponse {}
 pub struct FsGetMetadataParams {
     /// Absolute path to inspect.
     pub path: AbsolutePathBuf,
+    /// Optional sandbox policy for re-invoking this filesystem operation under a sandbox.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<FileSystemSandboxPolicy>,
 }
 
 /// Metadata returned by `fs/getMetadata`.
@@ -2247,6 +2260,9 @@ pub struct FsGetMetadataResponse {
 pub struct FsReadDirectoryParams {
     /// Absolute directory path to read.
     pub path: AbsolutePathBuf,
+    /// Optional sandbox policy for re-invoking this filesystem operation under a sandbox.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<FileSystemSandboxPolicy>,
 }
 
 /// A directory entry returned by `fs/readDirectory`.
@@ -2284,6 +2300,9 @@ pub struct FsRemoveParams {
     /// Whether missing paths should be ignored. Defaults to `true`.
     #[ts(optional = nullable)]
     pub force: Option<bool>,
+    /// Optional sandbox policy for re-invoking this filesystem operation under a sandbox.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<FileSystemSandboxPolicy>,
 }
 
 /// Successful response for `fs/remove`.
@@ -2304,6 +2323,9 @@ pub struct FsCopyParams {
     /// Required for directory copies; ignored for file copies.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recursive: bool,
+    /// Optional sandbox policy for re-invoking this filesystem operation under a sandbox.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<FileSystemSandboxPolicy>,
 }
 
 /// Successful response for `fs/copy`.
@@ -6526,6 +6548,7 @@ mod tests {
     fn fs_read_file_params_round_trip() {
         let params = FsReadFileParams {
             path: absolute_path("tmp/example.txt"),
+            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
@@ -6533,6 +6556,7 @@ mod tests {
             value,
             json!({
                 "path": absolute_path_string("tmp/example.txt"),
+                "sandboxPolicy": null,
             })
         );
 
@@ -6546,6 +6570,7 @@ mod tests {
         let params = FsCreateDirectoryParams {
             path: absolute_path("tmp/example"),
             recursive: None,
+            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/createDirectory params");
@@ -6554,6 +6579,7 @@ mod tests {
             json!({
                 "path": absolute_path_string("tmp/example"),
                 "recursive": null,
+                "sandboxPolicy": null,
             })
         );
 
@@ -6567,6 +6593,7 @@ mod tests {
         let params = FsWriteFileParams {
             path: absolute_path("tmp/example.bin"),
             data_base64: "AAE=".to_string(),
+            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/writeFile params");
@@ -6575,6 +6602,7 @@ mod tests {
             json!({
                 "path": absolute_path_string("tmp/example.bin"),
                 "dataBase64": "AAE=",
+                "sandboxPolicy": null,
             })
         );
 
@@ -6589,6 +6617,7 @@ mod tests {
             source_path: absolute_path("tmp/source"),
             destination_path: absolute_path("tmp/destination"),
             recursive: true,
+            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/copy params");
@@ -6598,6 +6627,7 @@ mod tests {
                 "sourcePath": absolute_path_string("tmp/source"),
                 "destinationPath": absolute_path_string("tmp/destination"),
                 "recursive": true,
+                "sandboxPolicy": null,
             })
         );
 

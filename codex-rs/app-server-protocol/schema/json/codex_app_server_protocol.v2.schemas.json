@@ -4117,6 +4117,224 @@
       "title": "FileChangeOutputDeltaNotification",
       "type": "object"
     },
+    "FileSystemAccessMode": {
+      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
+      "enum": [
+        "read",
+        "write",
+        "none"
+      ],
+      "type": "string"
+    },
+    "FileSystemPath": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "path"
+              ],
+              "title": "PathFileSystemPathType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "PathFileSystemPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "special"
+              ],
+              "title": "SpecialFileSystemPathType",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/definitions/FileSystemSpecialPath"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "SpecialFileSystemPath",
+          "type": "object"
+        }
+      ]
+    },
+    "FileSystemSandboxEntry": {
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/FileSystemAccessMode"
+        },
+        "path": {
+          "$ref": "#/definitions/FileSystemPath"
+        }
+      },
+      "required": [
+        "access",
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileSystemSandboxKind": {
+      "enum": [
+        "restricted",
+        "unrestricted",
+        "external-sandbox"
+      ],
+      "type": "string"
+    },
+    "FileSystemSandboxPolicy": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/FileSystemSandboxEntry"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/definitions/FileSystemSandboxKind"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "FileSystemSpecialPath": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "root"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "RootFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "minimal"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "MinimalFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "current_working_directory"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "project_roots"
+              ],
+              "type": "string"
+            },
+            "subpath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "KindFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "tmpdir"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "TmpdirFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "slash_tmp"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "SlashTmpFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "description": "WARNING: `:special_path` tokens are part of config compatibility. Do not make older runtimes reject newly introduced tokens. New parser support should be additive, while unknown values must stay representable so config from a newer Codex degrades to warn-and-ignore instead of failing to load. Codex 0.112.0 rejected unknown values here, which broke forward compatibility for newer config. Preserves future special-path tokens so older runtimes can ignore them without rejecting config authored by a newer release.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "subpath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "FileUpdateChange": {
       "properties": {
         "diff": {
@@ -4182,6 +4400,17 @@
           "description": "Required for directory copies; ignored for file copies.",
           "type": "boolean"
         },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sandbox policy for re-invoking this filesystem operation under a sandbox."
+        },
         "sourcePath": {
           "allOf": [
             {
@@ -4222,6 +4451,17 @@
             "boolean",
             "null"
           ]
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sandbox policy for re-invoking this filesystem operation under a sandbox."
         }
       },
       "required": [
@@ -4247,6 +4487,17 @@
             }
           ],
           "description": "Absolute path to inspect."
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sandbox policy for re-invoking this filesystem operation under a sandbox."
         }
       },
       "required": [
@@ -4321,6 +4572,17 @@
             }
           ],
           "description": "Absolute directory path to read."
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sandbox policy for re-invoking this filesystem operation under a sandbox."
         }
       },
       "required": [
@@ -4358,6 +4620,17 @@
             }
           ],
           "description": "Absolute path to read."
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sandbox policy for re-invoking this filesystem operation under a sandbox."
         }
       },
       "required": [
@@ -4406,6 +4679,17 @@
             "boolean",
             "null"
           ]
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sandbox policy for re-invoking this filesystem operation under a sandbox."
         }
       },
       "required": [
@@ -4499,6 +4783,17 @@
             }
           ],
           "description": "Absolute path to write."
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sandbox policy for re-invoking this filesystem operation under a sandbox."
         }
       },
       "required": [

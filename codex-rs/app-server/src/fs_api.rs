@@ -46,7 +46,7 @@ impl FsApi {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file(&params.path)
+            .read_file_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -64,7 +64,7 @@ impl FsApi {
             ))
         })?;
         self.file_system
-            .write_file(&params.path, bytes)
+            .write_file_with_sandbox_policy(&params.path, bytes, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -75,11 +75,12 @@ impl FsApi {
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         self.file_system
-            .create_directory(
+            .create_directory_with_sandbox_policy(
                 &params.path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
+                params.sandbox_policy.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
@@ -92,7 +93,7 @@ impl FsApi {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata(&params.path)
+            .get_metadata_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -109,7 +110,7 @@ impl FsApi {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory(&params.path)
+            .read_directory_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -129,12 +130,13 @@ impl FsApi {
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
         self.file_system
-            .remove(
+            .remove_with_sandbox_policy(
                 &params.path,
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
                 },
+                params.sandbox_policy.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
@@ -146,12 +148,13 @@ impl FsApi {
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.file_system
-            .copy(
+            .copy_with_sandbox_policy(
                 &params.source_path,
                 &params.destination_path,
                 CopyOptions {
                     recursive: params.recursive,
                 },
+                params.sandbox_policy.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
