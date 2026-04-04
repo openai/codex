@@ -1307,6 +1307,33 @@ fn search_tool_requires_model_capability_and_feature_flag() {
 }
 
 #[test]
+fn search_tool_is_registered_for_watchdog_namespace_without_app_tools() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AgentWatchdog);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME, "watchdog"]);
+}
+
+#[test]
 fn tool_suggest_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();

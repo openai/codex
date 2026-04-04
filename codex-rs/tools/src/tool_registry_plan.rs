@@ -230,9 +230,8 @@ pub fn build_tool_registry_plan(
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
     }
 
-    if config.search_tool
-        && let Some(app_tools) = params.app_tools
-    {
+    if config.search_tool && (config.agent_watchdog || params.app_tools.is_some()) {
+        let app_tools = params.app_tools.unwrap_or(&[]);
         let search_app_infos = collect_tool_search_app_infos(
             app_tools.iter().map(|tool| ToolSearchAppSource {
                 server_name: tool.server_name,
