@@ -29,6 +29,7 @@ fn exec_params(process_id: &str) -> ExecParams {
         env,
         tty: false,
         arg0: None,
+        sandbox: None,
     }
 }
 

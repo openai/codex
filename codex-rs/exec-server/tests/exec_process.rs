@@ -54,6 +54,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -130,11 +131,12 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "session output\n");
@@ -159,13 +161,14 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             env: Default::default(),
             tty: true,
             arg0: None,
+            sandbox: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     session.process.write(b"hello\n".to_vec()).await?;
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
@@ -195,12 +198,13 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: None,
         })
         .await?;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "queued output\n");
@@ -225,6 +229,7 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: None,
         })
         .await?;
 
