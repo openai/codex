@@ -186,16 +186,9 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          bazel_clippy_args=(
-            --config=clippy
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
-            --build_metadata=TAG_job=clippy
-          )
+          bazel_extra_args=()
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            # Some explicit targets pulled in through //codex-rs/... are
-            # intentionally incompatible with `//:local_windows`, but the lint
-            # aspect still traverses their compatible Rust deps.
-            bazel_clippy_args+=(--skip_incompatible_explicit_targets)
+            bazel_extra_args+=(--skip_incompatible_explicit_targets)
           fi
 
           bazel_target_lines="$(./scripts/list-bazel-clippy-targets.sh)"
@@ -207,7 +200,10 @@ jobs:
           ./.github/scripts/run-bazel-ci.sh \
             -- \
             build \
-            "${bazel_clippy_args[@]}" \
+            --config=clippy \
+            "${bazel_extra_args[@]}" \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=clippy \
             -- \
             "${bazel_targets[@]}"
 
