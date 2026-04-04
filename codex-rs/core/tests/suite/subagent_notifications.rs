@@ -458,6 +458,10 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
     let mut builder = test_codex().with_config(|config| {
         config
             .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
             .enable(Feature::MultiAgentV2)
             .expect("test config should allow feature update");
         config.developer_instructions = Some("Parent developer instructions.".to_string());
