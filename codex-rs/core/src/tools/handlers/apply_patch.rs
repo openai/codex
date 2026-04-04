@@ -197,7 +197,7 @@ impl ToolHandler for ApplyPatchHandler {
                             file_paths,
                             changes,
                             sandbox_policy: EffectiveSandboxPermissions::new(
-                                &turn.sandbox_policy.get(),
+                                turn.sandbox_policy.get(),
                                 effective_additional_permissions
                                     .additional_permissions
                                     .as_ref(),
@@ -303,7 +303,7 @@ pub(crate) async fn intercept_apply_patch(
                         file_paths: approval_keys,
                         changes,
                         sandbox_policy: EffectiveSandboxPermissions::new(
-                            &turn.sandbox_policy.get(),
+                            turn.sandbox_policy.get(),
                             effective_additional_permissions
                                 .additional_permissions
                                 .as_ref(),
