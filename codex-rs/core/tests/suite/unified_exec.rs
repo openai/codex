@@ -2700,6 +2700,11 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    if let Err(err) = std::net::TcpListener::bind("127.0.0.1:0") {
+        eprintln!("unable to bind localhost for mock server, skipping test: {err}");
+        return Ok(());
+    }
+
     let python = match which::which("python").or_else(|_| which::which("python3")) {
         Ok(path) => path,
         Err(_) => {
