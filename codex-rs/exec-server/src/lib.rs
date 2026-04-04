@@ -38,6 +38,7 @@ pub use file_system::CopyOptions;
 pub use file_system::CreateDirectoryOptions;
 pub use file_system::ExecutorFileSystem;
 pub use file_system::FileMetadata;
+pub use file_system::FileSystemOperationOptions;
 pub use file_system::FileSystemResult;
 pub use file_system::ReadDirectoryEntry;
 pub use file_system::RemoveOptions;

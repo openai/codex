@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Component;
 use std::path::Path;
@@ -13,6 +14,7 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
 use crate::FileMetadata;
+use crate::FileSystemOperationOptions;
 use crate::FileSystemResult;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
@@ -38,8 +40,27 @@ impl ExecutorFileSystem for LocalFileSystem {
         tokio::fs::read(path.as_path()).await
     }
 
+    async fn read_file_with_options(
+        &self,
+        path: &AbsolutePathBuf,
+        options: &FileSystemOperationOptions,
+    ) -> FileSystemResult<Vec<u8>> {
+        enforce_read_access(path, options)?;
+        self.read_file(path).await
+    }
+
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
         tokio::fs::write(path.as_path(), contents).await
+    }
+
+    async fn write_file_with_options(
+        &self,
+        path: &AbsolutePathBuf,
+        contents: Vec<u8>,
+        options: &FileSystemOperationOptions,
+    ) -> FileSystemResult<()> {
+        enforce_write_access(path, options)?;
+        self.write_file(path, contents).await
     }
 
     async fn create_directory(
@@ -55,6 +76,16 @@ impl ExecutorFileSystem for LocalFileSystem {
         Ok(())
     }
 
+    async fn create_directory_with_options(
+        &self,
+        path: &AbsolutePathBuf,
+        create_directory_options: CreateDirectoryOptions,
+        options: &FileSystemOperationOptions,
+    ) -> FileSystemResult<()> {
+        enforce_write_access(path, options)?;
+        self.create_directory(path, create_directory_options).await
+    }
+
     async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         Ok(FileMetadata {
@@ -63,6 +94,15 @@ impl ExecutorFileSystem for LocalFileSystem {
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
         })
+    }
+
+    async fn get_metadata_with_options(
+        &self,
+        path: &AbsolutePathBuf,
+        options: &FileSystemOperationOptions,
+    ) -> FileSystemResult<FileMetadata> {
+        enforce_read_access(path, options)?;
+        self.get_metadata(path).await
     }
 
     async fn read_directory(
@@ -80,6 +120,15 @@ impl ExecutorFileSystem for LocalFileSystem {
             });
         }
         Ok(entries)
+    }
+
+    async fn read_directory_with_options(
+        &self,
+        path: &AbsolutePathBuf,
+        options: &FileSystemOperationOptions,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        enforce_read_access(path, options)?;
+        self.read_directory(path).await
     }
 
     async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
@@ -100,6 +149,16 @@ impl ExecutorFileSystem for LocalFileSystem {
             Err(err) if err.kind() == io::ErrorKind::NotFound && options.force => Ok(()),
             Err(err) => Err(err),
         }
+    }
+
+    async fn remove_with_options(
+        &self,
+        path: &AbsolutePathBuf,
+        remove_options: RemoveOptions,
+        options: &FileSystemOperationOptions,
+    ) -> FileSystemResult<()> {
+        enforce_write_access(path, options)?;
+        self.remove(path, remove_options).await
     }
 
     async fn copy(
@@ -151,6 +210,67 @@ impl ExecutorFileSystem for LocalFileSystem {
         })
         .await
         .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
+    }
+
+    async fn copy_with_options(
+        &self,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
+        copy_options: CopyOptions,
+        options: &FileSystemOperationOptions,
+    ) -> FileSystemResult<()> {
+        enforce_read_access(source_path, options)?;
+        enforce_write_access(destination_path, options)?;
+        self.copy(source_path, destination_path, copy_options).await
+    }
+}
+
+fn enforce_read_access(
+    path: &AbsolutePathBuf,
+    options: &FileSystemOperationOptions,
+) -> FileSystemResult<()> {
+    enforce_access(
+        path,
+        options,
+        FileSystemSandboxPolicy::can_read_path_with_cwd,
+        "read",
+    )
+}
+
+fn enforce_write_access(
+    path: &AbsolutePathBuf,
+    options: &FileSystemOperationOptions,
+) -> FileSystemResult<()> {
+    enforce_access(
+        path,
+        options,
+        FileSystemSandboxPolicy::can_write_path_with_cwd,
+        "write",
+    )
+}
+
+fn enforce_access(
+    path: &AbsolutePathBuf,
+    options: &FileSystemOperationOptions,
+    is_allowed: fn(&FileSystemSandboxPolicy, &Path, &Path) -> bool,
+    access_kind: &str,
+) -> FileSystemResult<()> {
+    let Some(sandbox_policy) = &options.sandbox_policy else {
+        return Ok(());
+    };
+    let cwd = std::env::current_dir()
+        .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
+    let file_system_policy = FileSystemSandboxPolicy::from(sandbox_policy);
+    if is_allowed(&file_system_policy, path.as_path(), cwd.as_path()) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "fs/{access_kind} is not permitted by sandbox policy for path {}",
+                path.as_path().display()
+            ),
+        ))
     }
 }
 

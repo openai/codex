@@ -162,13 +162,13 @@ Example with notification opt-out:
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
-- `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
-- `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
-- `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
-- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `createdAtMs`, and `modifiedAtMs`.
-- `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
-- `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
-- `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
+- `fs/readFile` — read an absolute file path and return `{ dataBase64 }`; accepts optional `sandboxPolicy`.
+- `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}` and accepts optional `sandboxPolicy`.
+- `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`, and requests may include optional `sandboxPolicy`.
+- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `createdAtMs`, and `modifiedAtMs`; accepts optional `sandboxPolicy`.
+- `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path. Requests may include optional `sandboxPolicy`.
+- `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`, and requests may include optional `sandboxPolicy`.
+- `fs/copy` — copy between absolute paths; directory copies require `recursive: true`, and requests may include optional `sandboxPolicy`.
 - `fs/watch` — subscribe this connection to filesystem change notifications for an absolute file or directory path and caller-provided `watchId`; returns the canonicalized `path`.
 - `fs/unwatch` — stop sending notifications for a prior `fs/watch`; returns `{}`.
 - `fs/changed` — notification emitted when watched paths change, including the `watchId` and `changedPaths`.
@@ -819,7 +819,7 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 
 These methods operate on absolute paths on the host filesystem and cover reading, writing, directory traversal, copying, removal, and change notifications.
 
-All filesystem paths in this section must be absolute.
+All filesystem paths in this section must be absolute. When provided, `sandboxPolicy` uses the same shape as `thread/start` and `command/exec`.
 
 ```json
 { "method": "fs/createDirectory", "id": 40, "params": {

@@ -1676,14 +1676,16 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::FsGetMetadataParams {
                 path: absolute_path("tmp/example"),
+                sandbox_policy: None,
             },
         };
         assert_eq!(
             json!({
                 "method": "fs/getMetadata",
                 "id": 9,
-                "params": {
-                    "path": absolute_path_string("tmp/example")
+            "params": {
+                    "path": absolute_path_string("tmp/example"),
+                    "sandboxPolicy": null
                 }
             }),
             serde_json::to_value(&request)?,
