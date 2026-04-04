@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::agent_resolver::resolve_agent_targets;
 use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use futures::FutureExt;
@@ -49,7 +48,11 @@ impl ToolHandler for Handler {
             )));
         }
 
-        let receiver_thread_ids = resolve_agent_targets(&session, &turn, args.targets).await?;
+        let receiver_thread_ids = args
+            .targets
+            .iter()
+            .map(|target| parse_agent_id_target(target))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
         let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {

@@ -14,6 +14,9 @@ const TUI_CLIENT_NAME: &str = "codex-tui";
 pub const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 pub const TOOL_SEARCH_DEFAULT_LIMIT: usize = 8;
 pub const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
+const WATCHDOG_TOOLS_NAMESPACE: &str = "watchdog";
+const WATCHDOG_TOOLS_NAMESPACE_DESCRIPTION: &str =
+    "Watchdog-only tools for parent-thread recovery and watchdog check-in lifecycle control.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSearchAppInfo {
@@ -143,7 +146,11 @@ pub struct ToolSuggestEntry {
     pub app_connector_ids: Vec<String>,
 }
 
-pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: usize) -> ToolSpec {
+pub fn create_tool_search_tool(
+    app_tools: &[ToolSearchAppInfo],
+    default_limit: usize,
+    include_watchdog_tools: bool,
+) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "query".to_string(),
@@ -162,6 +169,12 @@ pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: u
     ]);
 
     let mut app_descriptions = BTreeMap::new();
+    if include_watchdog_tools {
+        app_descriptions.insert(
+            WATCHDOG_TOOLS_NAMESPACE.to_string(),
+            Some(WATCHDOG_TOOLS_NAMESPACE_DESCRIPTION.to_string()),
+        );
+    }
     for app_tool in app_tools {
         app_descriptions
             .entry(app_tool.name.clone())

@@ -394,10 +394,7 @@ impl AgentControl {
             options.post_fork_developer_message.as_deref(),
         )
         .await;
-        append_post_fork_developer_message(
-            &mut forked_rollout_items,
-            post_fork_developer_message,
-        );
+        append_post_fork_developer_message(&mut forked_rollout_items, post_fork_developer_message);
 
         state
             .fork_thread_with_source(

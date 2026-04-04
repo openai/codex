@@ -46,6 +46,7 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_apps() {
                 },
             ],
             /*default_limit*/ 8,
+            /*include_watchdog_tools*/ false,
         ),
         ToolSpec::ToolSearch {
             execution: "client".to_string(),

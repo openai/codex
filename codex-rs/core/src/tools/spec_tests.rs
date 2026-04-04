@@ -13,29 +13,58 @@ use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::AdditionalProperties;
+use codex_tools::CommandToolOptions;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ShellCommandBackendConfig;
+use codex_tools::SpawnAgentToolOptions;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::TOOL_SUGGEST_TOOL_NAME;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_tools::UnifiedExecShellMode;
+use codex_tools::ViewImageToolOptions;
+use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::ZshForkConfig;
+use codex_tools::create_apply_patch_freeform_tool;
+use codex_tools::create_close_agent_tool_v1;
+use codex_tools::create_close_agent_tool_v2;
+use codex_tools::create_compact_parent_context_tool;
+use codex_tools::create_exec_command_tool;
+use codex_tools::create_list_agents_tool as create_list_agents_tool_v2;
+use codex_tools::create_request_permissions_tool;
+use codex_tools::create_request_user_input_tool;
+use codex_tools::create_resume_agent_tool;
+use codex_tools::create_send_input_tool_v1;
+use codex_tools::create_send_message_tool;
+use codex_tools::create_spawn_agent_tool_v1;
+use codex_tools::create_spawn_agent_tool_v2;
+use codex_tools::create_update_plan_tool;
+use codex_tools::create_view_image_tool;
+use codex_tools::create_wait_agent_tool_v1;
+use codex_tools::create_wait_agent_tool_v2;
+use codex_tools::create_watchdog_self_close_tool;
+use codex_tools::create_watchdog_tools_namespace;
+use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_call_tool_result_output_schema;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
+use codex_tools::request_permissions_tool_description;
+use codex_tools::request_user_input_tool_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -145,6 +174,44 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
     }
 }
 
+fn configured_tool_spec_names(tool: &ConfiguredToolSpec) -> Vec<&str> {
+    match &tool.spec {
+        ToolSpec::Namespace(namespace) => namespace
+            .tools
+            .iter()
+            .map(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
+            })
+            .collect(),
+        _ => vec![tool.name()],
+    }
+}
+
+fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
+    let names = tools
+        .iter()
+        .flat_map(configured_tool_spec_names)
+        .collect::<Vec<_>>();
+    assert!(
+        !names.contains(&expected_absent),
+        "expected tool {expected_absent} to be absent; had: {names:?}"
+    );
+}
+
+fn assert_contains_top_level_tool_name(tools: &[ConfiguredToolSpec], expected: &str) {
+    assert!(
+        tools.iter().any(|tool| tool.name() == expected),
+        "expected top-level tool {expected} to be present"
+    );
+}
+
+fn assert_lacks_top_level_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
+    assert!(
+        !tools.iter().any(|tool| tool.name() == expected_absent),
+        "expected top-level tool {expected_absent} to be absent"
+    );
+}
+
 fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     match config.shell_type {
         ConfigShellToolType::Default => Some("shell"),
@@ -152,6 +219,27 @@ fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         ConfigShellToolType::UnifiedExec => None,
         ConfigShellToolType::Disabled => None,
         ConfigShellToolType::ShellCommand => Some("shell_command"),
+    }
+}
+
+fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
+    create_request_user_input_tool(request_user_input_tool_description(
+        default_mode_request_user_input,
+    ))
+}
+
+fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
+    SpawnAgentToolOptions {
+        available_models: &config.available_models,
+        agent_type_description: config.agent_type_description.clone(),
+    }
+}
+
+fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
+    WaitAgentTimeoutOptions {
+        default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+        min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+        max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
     }
 }
 
@@ -218,6 +306,46 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
         .find(|candidate| candidate.slug == slug)
         .unwrap_or_else(|| panic!("model slug {slug} is missing from models.json"));
     with_config_overrides(model, &config)
+}
+
+fn strip_descriptions_schema(schema: &mut JsonSchema) {
+    match schema {
+        JsonSchema::Boolean { description }
+        | JsonSchema::String { description }
+        | JsonSchema::Number { description } => {
+            *description = None;
+        }
+        JsonSchema::Array { items, description } => {
+            strip_descriptions_schema(items);
+            *description = None;
+        }
+        JsonSchema::Object {
+            properties,
+            required: _,
+            additional_properties,
+        } => {
+            for value in properties.values_mut() {
+                strip_descriptions_schema(value);
+            }
+            if let Some(AdditionalProperties::Schema(schema)) = additional_properties {
+                strip_descriptions_schema(schema);
+            }
+        }
+    }
+}
+
+fn strip_descriptions_tool(spec: &mut ToolSpec) {
+    match spec {
+        ToolSpec::ToolSearch { parameters, .. } => strip_descriptions_schema(parameters),
+        ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
+            strip_descriptions_schema(parameters);
+        }
+        ToolSpec::Namespace(_)
+        | ToolSpec::Freeform(_)
+        | ToolSpec::LocalShell {}
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::WebSearch { .. } => {}
+    }
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
@@ -307,7 +435,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             exec_permission_approvals_enabled: false,
         }),
         create_write_stdin_tool(),
-        PLAN_TOOL.clone(),
+        create_update_plan_tool(),
         request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
@@ -340,7 +468,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             create_close_agent_tool_v1(),
         ];
         if config.agent_watchdog {
-            collab_specs.push(create_list_agents_tool(config.agent_watchdog));
+            collab_specs.push(create_list_agents_tool_v2());
         }
         collab_specs
     };

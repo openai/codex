@@ -22,6 +22,7 @@ use crate::create_assign_task_tool;
 use crate::create_close_agent_tool_v1;
 use crate::create_close_agent_tool_v2;
 use crate::create_code_mode_tool;
+use crate::create_compact_parent_context_tool;
 use crate::create_exec_command_tool;
 use crate::create_image_generation_tool;
 use crate::create_js_repl_reset_tool;
@@ -51,6 +52,8 @@ use crate::create_view_image_tool;
 use crate::create_wait_agent_tool_v1;
 use crate::create_wait_agent_tool_v2;
 use crate::create_wait_tool;
+use crate::create_watchdog_self_close_tool;
+use crate::create_watchdog_tools_namespace;
 use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
 use crate::dynamic_tool_to_responses_api_tool;
@@ -239,7 +242,11 @@ pub fn build_tool_registry_plan(
             params.codex_apps_mcp_server_name,
         );
         plan.push_spec(
-            create_tool_search_tool(&search_app_infos, TOOL_SEARCH_DEFAULT_LIMIT),
+            create_tool_search_tool(
+                &search_app_infos,
+                TOOL_SEARCH_DEFAULT_LIMIT,
+                config.agent_watchdog,
+            ),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
@@ -420,6 +427,25 @@ pub fn build_tool_registry_plan(
             plan.register_handler("wait_agent", ToolHandlerKind::WaitAgentV1);
             plan.register_handler("close_agent", ToolHandlerKind::CloseAgentV1);
         }
+    }
+
+    if config.agent_watchdog {
+        plan.push_spec(
+            create_watchdog_tools_namespace(vec![
+                create_compact_parent_context_tool(),
+                create_watchdog_self_close_tool(),
+            ]),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler(
+            "watchdog:compact_parent_context",
+            ToolHandlerKind::CompactParentContext,
+        );
+        plan.register_handler(
+            "watchdog:watchdog_self_close",
+            ToolHandlerKind::WatchdogSelfClose,
+        );
     }
 
     if config.agent_jobs_tools {
