@@ -9,9 +9,11 @@ use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::ApplyPatchFileSystem;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemOperationOptions;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::future::Future;
@@ -28,16 +30,13 @@ pub(crate) enum InternalApplyPatchInvocation {
 
     /// The `apply_patch` call was approved, either automatically because it
     /// appears that it should be allowed based on the user's sandbox policy
-    /// *or* because the user explicitly approved it. In either case, we use
-    /// exec with [`codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1`] to realize
-    /// the `apply_patch` call,
-    /// but [`ApplyPatchExec::auto_approved`] is used to determine the sandbox
-    /// used with the `exec()`.
-    DelegateToExec(ApplyPatchExec),
+    /// or because the user explicitly approved it. The tool runtime realizes
+    /// the verified patch through the environment filesystem.
+    DelegateToRuntime(ApprovedApplyPatch),
 }
 
 #[derive(Debug)]
-pub(crate) struct ApplyPatchExec {
+pub(crate) struct ApprovedApplyPatch {
     pub(crate) action: ApplyPatchAction,
     pub(crate) auto_approved: bool,
     pub(crate) exec_approval_requirement: ExecApprovalRequirement,
@@ -45,11 +44,27 @@ pub(crate) struct ApplyPatchExec {
 
 pub(crate) struct EnvironmentApplyPatchFileSystem {
     file_system: Arc<dyn ExecutorFileSystem>,
+    operation_options: FileSystemOperationOptions,
 }
 
 impl EnvironmentApplyPatchFileSystem {
-    pub(crate) fn new(file_system: Arc<dyn ExecutorFileSystem>) -> Self {
-        Self { file_system }
+    pub(crate) fn for_verification(file_system: Arc<dyn ExecutorFileSystem>) -> Self {
+        Self {
+            file_system,
+            operation_options: FileSystemOperationOptions::default(),
+        }
+    }
+
+    pub(crate) fn for_apply(
+        file_system: Arc<dyn ExecutorFileSystem>,
+        sandbox_policy: SandboxPolicy,
+    ) -> Self {
+        Self {
+            file_system,
+            operation_options: FileSystemOperationOptions {
+                sandbox_policy: Some(sandbox_policy),
+            },
+        }
     }
 }
 
@@ -61,9 +76,13 @@ impl ApplyPatchFileSystem for EnvironmentApplyPatchFileSystem {
     {
         Box::pin(async move {
             let path = absolute_path(path)?;
-            let bytes = self.file_system.read_file(&path).await.map_err(|source| {
-                ApplyPatchError::io_error(format!("Failed to read {}", path.display()), source)
-            })?;
+            let bytes = self
+                .file_system
+                .read_file_with_options(&path, &self.operation_options)
+                .await
+                .map_err(|source| {
+                    ApplyPatchError::io_error(format!("Failed to read {}", path.display()), source)
+                })?;
             String::from_utf8(bytes).map_err(|source| {
                 ApplyPatchError::io_error(
                     format!("Failed to decode UTF-8 for {}", path.display()),
@@ -80,8 +99,9 @@ impl ApplyPatchFileSystem for EnvironmentApplyPatchFileSystem {
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>> {
         Box::pin(async move {
             let path = absolute_path(path)?;
+            let contents = contents.into_bytes();
             self.file_system
-                .write_file(&path, contents.into_bytes())
+                .write_file_with_options(&path, contents, &self.operation_options)
                 .await
                 .map_err(|source| {
                     ApplyPatchError::io_error(
@@ -99,7 +119,11 @@ impl ApplyPatchFileSystem for EnvironmentApplyPatchFileSystem {
         Box::pin(async move {
             let path = absolute_path(path)?;
             self.file_system
-                .create_directory(&path, CreateDirectoryOptions { recursive: true })
+                .create_directory_with_options(
+                    &path,
+                    CreateDirectoryOptions { recursive: true },
+                    &self.operation_options,
+                )
                 .await
                 .map_err(|source| {
                     ApplyPatchError::io_error(
@@ -116,14 +140,12 @@ impl ApplyPatchFileSystem for EnvironmentApplyPatchFileSystem {
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>> {
         Box::pin(async move {
             let path = absolute_path(path)?;
+            let remove_options = RemoveOptions {
+                recursive: false,
+                force: false,
+            };
             self.file_system
-                .remove(
-                    &path,
-                    RemoveOptions {
-                        recursive: false,
-                        force: false,
-                    },
-                )
+                .remove_with_options(&path, remove_options, &self.operation_options)
                 .await
                 .map_err(|source| {
                     ApplyPatchError::io_error(
@@ -160,7 +182,7 @@ pub(crate) async fn apply_patch(
         SafetyCheck::AutoApprove {
             user_explicitly_approved,
             ..
-        } => InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+        } => InternalApplyPatchInvocation::DelegateToRuntime(ApprovedApplyPatch {
             action,
             auto_approved: !user_explicitly_approved,
             exec_approval_requirement: ExecApprovalRequirement::Skip {
@@ -172,7 +194,7 @@ pub(crate) async fn apply_patch(
             // Delegate the approval prompt (including cached approvals) to the
             // tool runtime, consistent with how shell/unified_exec approvals
             // are orchestrator-driven.
-            InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+            InternalApplyPatchInvocation::DelegateToRuntime(ApprovedApplyPatch {
                 action,
                 auto_approved: false,
                 exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {

@@ -1,16 +1,12 @@
 //! Apply Patch runtime: executes verified patches under the orchestrator.
 //!
 //! Assumes `apply_patch` verification/approval happened upstream. Reuses that
-//! decision to avoid re-prompting, builds the self-invocation command for
-//! `codex --codex-run-as-apply-patch`, and runs under the current
-//! `SandboxAttempt` with a minimal environment.
+//! decision to avoid re-prompting, then applies the verified action directly
+//! through the turn environment's filesystem with the effective sandbox policy.
 use crate::apply_patch::EnvironmentApplyPatchFileSystem;
-use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::sandboxing::ExecOptions;
-use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -21,18 +17,15 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
-use codex_sandboxing::SandboxCommand;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -41,10 +34,9 @@ pub struct ApplyPatchRequest {
     pub action: ApplyPatchAction,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
+    pub sandbox_policy: SandboxPolicy,
     pub exec_approval_requirement: ExecApprovalRequirement,
-    pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
-    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Default)]
@@ -65,58 +57,6 @@ impl ApplyPatchRuntime {
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         }
-    }
-
-    #[cfg(target_os = "windows")]
-    fn build_sandbox_command(
-        req: &ApplyPatchRequest,
-        codex_home: &std::path::Path,
-    ) -> Result<SandboxCommand, ToolError> {
-        Ok(Self::build_sandbox_command_with_program(
-            req,
-            codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
-        ))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn build_sandbox_command(
-        req: &ApplyPatchRequest,
-        codex_self_exe: Option<&PathBuf>,
-    ) -> Result<SandboxCommand, ToolError> {
-        let exe = Self::resolve_apply_patch_program(codex_self_exe)?;
-        Ok(Self::build_sandbox_command_with_program(req, exe))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn resolve_apply_patch_program(codex_self_exe: Option<&PathBuf>) -> Result<PathBuf, ToolError> {
-        if let Some(path) = codex_self_exe {
-            return Ok(path.clone());
-        }
-
-        std::env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
-    }
-
-    fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
-        SandboxCommand {
-            program: exe.into_os_string(),
-            args: vec![
-                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
-                req.action.patch.clone(),
-            ],
-            cwd: req.action.cwd.clone(),
-            // Run apply_patch with a minimal environment for determinism and to avoid leaks.
-            env: HashMap::new(),
-            additional_permissions: req.additional_permissions.clone(),
-        }
-    }
-
-    fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
-        Some(crate::exec::StdoutStream {
-            sub_id: ctx.turn.sub_id.clone(),
-            call_id: ctx.call_id.clone(),
-            tx_event: ctx.session.get_tx_event(),
-        })
     }
 
     async fn run_with_environment_fs(
@@ -234,29 +174,14 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     async fn run(
         &mut self,
         req: &ApplyPatchRequest,
-        attempt: &SandboxAttempt<'_>,
+        _attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        if ctx.turn.environment.exec_server_url().is_some() {
-            let fs = EnvironmentApplyPatchFileSystem::new(ctx.turn.environment.get_filesystem());
-            return Self::run_with_environment_fs(req, fs).await;
-        }
-
-        #[cfg(target_os = "windows")]
-        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
-        #[cfg(not(target_os = "windows"))]
-        let command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
-        let options = ExecOptions {
-            expiration: req.timeout_ms.into(),
-            capture_policy: ExecCapturePolicy::ShellTool,
-        };
-        let env = attempt
-            .env_for(command, options, /*network*/ None)
-            .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(env, Self::stdout_stream(ctx))
-            .await
-            .map_err(ToolError::Codex)?;
-        Ok(out)
+        let fs = EnvironmentApplyPatchFileSystem::for_apply(
+            ctx.turn.environment.get_filesystem(),
+            req.sandbox_policy.clone(),
+        );
+        Self::run_with_environment_fs(req, fs).await
     }
 }
 
