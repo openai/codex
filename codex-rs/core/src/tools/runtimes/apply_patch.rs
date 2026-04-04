@@ -20,6 +20,9 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -63,6 +66,7 @@ impl ApplyPatchRuntime {
     async fn run_with_environment_fs(
         req: &ApplyPatchRequest,
         fs: EnvironmentApplyPatchFileSystem,
+        ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let affected: codex_apply_patch::AffectedPaths =
             codex_apply_patch::apply_action_with_fs(&req.action, &fs)
@@ -75,6 +79,18 @@ impl ApplyPatchRuntime {
         let stdout = String::from_utf8(stdout).map_err(|err| {
             ToolError::Rejected(format!("apply_patch wrote non-UTF-8 output: {err}"))
         })?;
+        if !stdout.is_empty() {
+            ctx.session
+                .send_event(
+                    ctx.turn.as_ref(),
+                    EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                        call_id: ctx.call_id.clone(),
+                        stream: ExecOutputStream::Stdout,
+                        chunk: stdout.clone().into_bytes(),
+                    }),
+                )
+                .await;
+        }
         Ok(ExecToolCallOutput {
             exit_code: 0,
             stdout: StreamOutput::new(stdout.clone()),
@@ -215,7 +231,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
             req.action.cwd.clone(),
             req.sandbox_policy.clone(),
         );
-        Self::run_with_environment_fs(req, fs).await
+        Self::run_with_environment_fs(req, fs, ctx).await
     }
 }
 
