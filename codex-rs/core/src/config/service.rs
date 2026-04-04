@@ -140,6 +140,16 @@ impl ConfigService {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn without_managed_config_for_tests(codex_home: PathBuf) -> Self {
+        Self::new(
+            codex_home,
+            Vec::new(),
+            LoaderOverrides::without_managed_config_for_tests(),
+            CloudRequirementsLoader::default(),
+        )
+    }
+
     pub async fn read(
         &self,
         params: ConfigReadParams,
