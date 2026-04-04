@@ -6,7 +6,6 @@ use codex_exec_server::FileSystemOperationOptions;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -177,12 +176,14 @@ impl ExecutorFileSystem for RecordingExecutorFileSystem {
 #[tokio::test]
 async fn verification_filesystem_uses_default_operation_options() {
     let file_system = Arc::new(RecordingExecutorFileSystem::default());
-    let cwd = PathBuf::from("/tmp/apply-patch-verification");
+    let tmp = tempdir().expect("tmp");
+    let cwd = tmp.path().join("apply-patch-verification");
+    let path = tmp.path().join("apply-patch-verification.txt");
     let adapter =
         EnvironmentApplyPatchFileSystem::for_verification(file_system.clone(), cwd.clone());
 
     let content = adapter
-        .read_text(Path::new("/tmp/apply-patch-verification.txt"))
+        .read_text(path.as_path())
         .await
         .expect("read through adapter");
 
@@ -204,11 +205,9 @@ async fn verification_filesystem_uses_default_operation_options() {
             .lock()
             .expect("raw_reads lock")
             .as_slice(),
-        [
-            absolute_path(Path::new("/tmp/apply-patch-verification.txt"))
-                .expect("normalized path")
-                .into_path_buf()
-        ]
+        [absolute_path(path.as_path())
+            .expect("normalized path")
+            .into_path_buf()]
     );
 }
 
@@ -216,9 +215,10 @@ async fn verification_filesystem_uses_default_operation_options() {
 async fn apply_filesystem_uses_sandbox_options() {
     let file_system = Arc::new(RecordingExecutorFileSystem::default());
     let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
-    let path = Path::new("/tmp/apply-patch-sandboxed/new.txt");
-    let cwd = PathBuf::from("/tmp/apply-patch-sandboxed");
-    let action = ApplyPatchAction::new_add_for_test(path, "hello".to_string());
+    let tmp = tempdir().expect("tmp");
+    let cwd = tmp.path().join("apply-patch-sandboxed");
+    let path = cwd.join("new.txt");
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
     let adapter = EnvironmentApplyPatchFileSystem::for_apply(
         file_system.clone(),
         cwd.clone(),
