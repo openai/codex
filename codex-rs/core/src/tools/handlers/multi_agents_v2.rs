@@ -32,6 +32,7 @@ pub(crate) use followup_task::Handler as FollowupTaskHandler;
 pub(crate) use list_agents::Handler as ListAgentsHandler;
 pub(crate) use send_message::Handler as SendMessageHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
+pub(crate) use spawn::SPAWN_AGENT_DEVELOPER_INSTRUCTIONS;
 pub(crate) use wait::Handler as WaitAgentHandler;
 
 mod close_agent;
