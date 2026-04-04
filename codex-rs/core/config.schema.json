@@ -2595,6 +2595,11 @@
       ],
       "description": "Collection of settings that are specific to the TUI."
     },
+    "watchdog_interval_s": {
+      "description": "Watchdog polling interval in seconds.",
+      "format": "int64",
+      "type": "integer"
+    },
     "web_search": {
       "allOf": [
         {

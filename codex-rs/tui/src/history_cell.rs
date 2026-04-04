@@ -507,6 +507,7 @@ pub(crate) struct SubagentPanelAgent {
     pub(crate) name: String,
     pub(crate) status: AgentStatus,
     pub(crate) is_watchdog: bool,
+    pub(crate) watchdog_countdown_duration: Duration,
     pub(crate) watchdog_countdown_started_at: Option<Instant>,
     pub(crate) preview: String,
     pub(crate) latest_update_at: Instant,
@@ -729,7 +730,6 @@ fn status_span_for_panel(agent: &SubagentPanelAgent, now: Instant) -> Span<'stat
 
 #[cfg_attr(not(test), allow(dead_code))]
 const SUBAGENT_SHIMMER_WINDOW: Duration = Duration::from_secs(1);
-const WATCHDOG_COUNTDOWN: Duration = Duration::from_secs(60);
 
 #[cfg_attr(not(test), allow(dead_code))]
 fn should_shimmer(agent: &SubagentPanelAgent, now: Instant) -> bool {
@@ -757,7 +757,7 @@ fn watchdog_countdown_remaining(agent: &SubagentPanelAgent, now: Instant) -> Opt
         return None;
     };
     let elapsed = now.saturating_duration_since(started_at);
-    Some(WATCHDOG_COUNTDOWN.saturating_sub(elapsed))
+    Some(agent.watchdog_countdown_duration.saturating_sub(elapsed))
 }
 
 #[allow(dead_code)]
@@ -3663,6 +3663,7 @@ mod tests {
                 name: "watchdog-agent".to_string(),
                 status: AgentStatus::PendingInit,
                 is_watchdog: true,
+                watchdog_countdown_duration: Duration::from_secs(60),
                 watchdog_countdown_started_at: Some(Instant::now()),
                 preview: "monitor parent progress".to_string(),
                 latest_update_at: Instant::now(),
@@ -3687,6 +3688,7 @@ mod tests {
                 name: "watchdog-agent".to_string(),
                 status: AgentStatus::PendingInit,
                 is_watchdog: true,
+                watchdog_countdown_duration: Duration::from_secs(60),
                 watchdog_countdown_started_at: Some(Instant::now()),
                 preview: "monitor parent progress".to_string(),
                 latest_update_at: Instant::now(),
@@ -3708,6 +3710,7 @@ mod tests {
                 name: "watchdog-agent".to_string(),
                 status: AgentStatus::PendingInit,
                 is_watchdog: true,
+                watchdog_countdown_duration: Duration::from_secs(60),
                 watchdog_countdown_started_at: Some(
                     Instant::now()
                         .checked_sub(Duration::from_secs(61))
@@ -3723,6 +3726,28 @@ mod tests {
     }
 
     #[test]
+    fn watchdog_countdown_remaining_uses_agent_countdown_duration() {
+        let started_at = Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .unwrap_or_else(Instant::now);
+        let agent = SubagentPanelAgent {
+            ordinal: 1,
+            name: "watchdog-agent".to_string(),
+            status: AgentStatus::PendingInit,
+            is_watchdog: true,
+            watchdog_countdown_duration: Duration::from_secs(1),
+            watchdog_countdown_started_at: Some(started_at),
+            preview: "watchdog idle".to_string(),
+            latest_update_at: Instant::now(),
+        };
+
+        assert_eq!(
+            watchdog_countdown_remaining(&agent, Instant::now()),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
     fn subagent_panel_animation_tick_runs_for_recent_running_updates() {
         let state = Arc::new(Mutex::new(SubagentPanelState {
             started_at: Instant::now(),
@@ -3733,6 +3758,7 @@ mod tests {
                 name: "worker-agent".to_string(),
                 status: AgentStatus::Running,
                 is_watchdog: false,
+                watchdog_countdown_duration: Duration::from_secs(60),
                 watchdog_countdown_started_at: None,
                 preview: "working".to_string(),
                 latest_update_at: Instant::now(),
@@ -3760,6 +3786,7 @@ mod tests {
                 name: "worker-agent".to_string(),
                 status: AgentStatus::Running,
                 is_watchdog: false,
+                watchdog_countdown_duration: Duration::from_secs(60),
                 watchdog_countdown_started_at: None,
                 preview: "working".to_string(),
                 latest_update_at: stale_update,
