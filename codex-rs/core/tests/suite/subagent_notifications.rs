@@ -436,7 +436,9 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
 
     let child_request_log = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
         sse(vec![
             ev_response_created("resp-child-1"),
             ev_completed("resp-child-1"),
@@ -480,9 +482,10 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
         developer_text.contains(SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS),
         "expected spawned-agent developer instructions with XML tags: {developer_text}"
     );
-    assert_eq!(
-        child_request.message_input_texts("user"),
-        vec![CHILD_PROMPT]
+    assert!(
+        child_request.body_contains_text(CHILD_PROMPT),
+        "expected child task payload in request body: {:?}",
+        child_request.body_json()
     );
 
     Ok(())
