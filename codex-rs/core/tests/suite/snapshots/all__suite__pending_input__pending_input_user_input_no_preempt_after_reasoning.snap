@@ -18,5 +18,7 @@ Scenario: /responses POST bodies (input only, redacted like other suite snapshot
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first prompt
 03:reasoning:summary=thinking:encrypted=true
-04:message/assistant:first answer
-05:message/user:second prompt
+04:function_call/shell
+05:message/assistant:first answer
+06:function_call_output:failed to parse function arguments: invalid type: string "echo preserved tool call", expected a sequence at line 1 column 37
+07:message/user:second prompt
