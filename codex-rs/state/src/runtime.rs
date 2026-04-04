@@ -38,6 +38,7 @@ use sqlx::Sqlite;
 use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
+use sqlx::sqlite::SqliteAutoVacuum;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -100,14 +101,14 @@ impl StateRuntime {
         .await;
         let state_path = state_db_path(codex_home.as_path());
         let logs_path = logs_db_path(codex_home.as_path());
-        let pool = match open_sqlite(&state_path, &STATE_MIGRATOR).await {
+        let pool = match open_state_sqlite(&state_path, &STATE_MIGRATOR).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
                 return Err(err);
             }
         };
-        let logs_pool = match open_sqlite(&logs_path, &LOGS_MIGRATOR).await {
+        let logs_pool = match open_logs_sqlite(&logs_path, &LOGS_MIGRATOR).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open logs db at {}: {err}", logs_path.display());
@@ -120,6 +121,12 @@ impl StateRuntime {
             codex_home,
             default_provider,
         });
+        if let Err(err) = runtime.run_logs_startup_maintenance().await {
+            warn!(
+                "failed to run startup maintenance for logs db at {}: {err}",
+                logs_path.display(),
+            );
+        }
         Ok(runtime)
     }
 
@@ -129,14 +136,44 @@ impl StateRuntime {
     }
 }
 
-async fn open_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
-    let options = SqliteConnectOptions::new()
+fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(Duration::from_secs(5))
-        .log_statements(LevelFilter::Off);
+        .log_statements(LevelFilter::Off)
+}
+
+async fn open_state_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
+    let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await?;
+    migrator.run(&pool).await?;
+    let auto_vacuum = sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+        .fetch_one(&pool)
+        .await?;
+    if auto_vacuum != SqliteAutoVacuum::Incremental as i64 {
+        // Existing state DBs need one non-transactional `VACUUM` before
+        // SQLite persists `auto_vacuum = INCREMENTAL` in the database header.
+        sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
+            .execute(&pool)
+            .await?;
+        // We do it on best effort. If the lock can't be acquired, it will be done at next run.
+        let _ = sqlx::query("VACUUM").execute(&pool).await;
+    }
+    // We do it on best effort. If the lock can't be acquired, it will be done at next run.
+    let _ = sqlx::query("PRAGMA incremental_vacuum")
+        .execute(&pool)
+        .await;
+    Ok(pool)
+}
+
+async fn open_logs_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
+    let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)

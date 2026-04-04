@@ -30,7 +30,6 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::AuthManager;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
@@ -49,6 +48,7 @@ use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::models_manager::manager::ModelsManager;
+use codex_login::AuthManager;
 use codex_protocol::protocol::InitialHistory;
 
 #[cfg(test)]
@@ -516,7 +516,6 @@ async fn handle_patch_approval(
     } = event;
     let approval_id = call_id.clone();
     let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
-        let change_count = changes.len();
         let maybe_files = changes
             .keys()
             .map(|path| parent_ctx.cwd.join(path).ok())
@@ -557,7 +556,6 @@ async fn handle_patch_approval(
                     id: approval_id.clone(),
                     cwd: parent_ctx.cwd.to_path_buf(),
                     files,
-                    change_count,
                     patch,
                 },
                 reason.clone(),

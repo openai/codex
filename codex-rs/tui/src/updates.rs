@@ -6,7 +6,7 @@ use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
 use codex_core::config::Config;
-use codex_core::default_client::create_client;
+use codex_login::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;

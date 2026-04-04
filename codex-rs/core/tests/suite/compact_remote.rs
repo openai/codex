@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use codex_core::CodexAuth;
 use codex_core::compact::SUMMARY_PREFIX;
+use codex_login::CodexAuth;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;

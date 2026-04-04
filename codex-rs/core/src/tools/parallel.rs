@@ -9,7 +9,6 @@ use tracing::Instrument;
 use tracing::instrument;
 use tracing::trace_span;
 
-use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
@@ -22,6 +21,7 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::ResponseInputItem;
+use codex_tools::ToolSpec;
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {

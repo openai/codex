@@ -11,12 +11,12 @@ use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::auth::CodexAuth;
 use crate::error::CodexErr;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::model_provider_info::ModelProviderInfo;
+use codex_login::CodexAuth;
 
 pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
     match err {

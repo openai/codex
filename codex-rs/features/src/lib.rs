@@ -124,6 +124,8 @@ pub enum Feature {
     CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
+    /// Enable thread lifecycle analytics emitted via the app-server analytics pipeline.
+    GeneralAnalytics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -615,6 +617,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GeneralAnalytics,
+        key: "general_analytics",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

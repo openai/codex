@@ -1,5 +1,9 @@
 use super::*;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use pretty_assertions::assert_eq;
+use std::num::NonZeroU64;
+use tempfile::tempdir;
 
 #[test]
 fn test_deserialize_ollama_model_provider_toml() {
@@ -13,6 +17,7 @@ base_url = "http://localhost:11434/v1"
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -43,6 +48,7 @@ query_params = { api-version = "2025-04-01-preview" }
         env_key: Some("AZURE_OPENAI_API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
@@ -76,6 +82,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         env_key: Some("API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
@@ -120,4 +127,53 @@ supports_websockets = true
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.websocket_connect_timeout_ms, Some(15_000));
+}
+
+#[test]
+fn test_deserialize_provider_auth_config_defaults() {
+    let base_dir = tempdir().unwrap();
+    let provider_toml = r#"
+name = "Corp"
+
+[auth]
+command = "./scripts/print-token"
+args = ["--format=text"]
+        "#;
+
+    let provider: ModelProviderInfo = {
+        let _guard = AbsolutePathBufGuard::new(base_dir.path());
+        toml::from_str(provider_toml).unwrap()
+    };
+
+    assert_eq!(
+        provider.auth,
+        Some(ModelProviderAuthInfo {
+            command: "./scripts/print-token".to_string(),
+            args: vec!["--format=text".to_string()],
+            timeout_ms: NonZeroU64::new(5_000).unwrap(),
+            refresh_interval_ms: 300_000,
+            cwd: AbsolutePathBuf::resolve_path_against_base(".", base_dir.path()).unwrap(),
+        })
+    );
+}
+
+#[test]
+fn test_deserialize_provider_auth_config_allows_zero_refresh_interval() {
+    let base_dir = tempdir().unwrap();
+    let provider_toml = r#"
+name = "Corp"
+
+[auth]
+command = "./scripts/print-token"
+refresh_interval_ms = 0
+        "#;
+
+    let provider: ModelProviderInfo = {
+        let _guard = AbsolutePathBufGuard::new(base_dir.path());
+        toml::from_str(provider_toml).unwrap()
+    };
+
+    let auth = provider.auth.expect("auth config should deserialize");
+    assert_eq!(auth.refresh_interval_ms, 0);
+    assert_eq!(auth.refresh_interval(), None);
 }

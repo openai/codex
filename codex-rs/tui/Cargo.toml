@@ -17,14 +17,6 @@ path = "src/bin/md-events.rs"
 name = "codex_tui"
 path = "src/lib.rs"
 
-[features]
-default = ["voice-input"]
-# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
-vt100-tests = []
-# Gate verbose debug logging inside the TUI implementation.
-debug-logs = []
-voice-input = ["dep:cpal"]
-
 [lints]
 workspace = true
 
@@ -39,6 +31,7 @@ codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-requirements = { workspace = true }
+codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
@@ -47,6 +40,7 @@ codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
@@ -116,7 +110,7 @@ codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-cpal = { version = "0.15", optional = true }
+cpal = "0.15"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -138,6 +132,7 @@ arboard = { workspace = true }
 [dev-dependencies]
 codex-cli = { workspace = true }
 codex-core = { workspace = true }
+codex-mcp = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }

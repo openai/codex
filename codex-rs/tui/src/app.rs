@@ -3,13 +3,16 @@ use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::FeedbackCategory;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::ThreadSessionState;
+use crate::app_server_session::app_server_rate_limit_snapshots_to_core;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -55,6 +58,9 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
@@ -76,13 +82,13 @@ use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_config::types::ApprovalsReviewer;
+use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::types::ApprovalsReviewer;
-use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -108,6 +114,7 @@ use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
@@ -227,16 +234,6 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
         },
         _ => None,
     }
-}
-
-fn convert_via_json<T, U>(value: T) -> Option<U>
-where
-    T: serde::Serialize,
-    U: serde::de::DeserializeOwned,
-{
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn default_exec_approval_decisions(
@@ -502,6 +499,15 @@ enum ThreadBufferedEvent {
     Notification(ServerNotification),
     Request(ServerRequest),
     HistoryEntryResponse(GetHistoryEntryResponseEvent),
+    FeedbackSubmission(FeedbackThreadEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FeedbackThreadEvent {
+    category: FeedbackCategory,
+    include_logs: bool,
+    feedback_audience: FeedbackAudience,
+    result: Result<String, String>,
 }
 
 #[derive(Debug)]
@@ -523,6 +529,7 @@ impl ThreadEventStore {
             ThreadBufferedEvent::Request(_)
                 | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
                 | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
+                | ThreadBufferedEvent::FeedbackSubmission(_)
         )
     }
 
@@ -627,7 +634,8 @@ impl ThreadEventStore {
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
-                    | ThreadBufferedEvent::HistoryEntryResponse(_) => true,
+                    | ThreadBufferedEvent::HistoryEntryResponse(_)
+                    | ThreadBufferedEvent::FeedbackSubmission(_) => true,
                 })
                 .cloned()
                 .collect(),
@@ -1054,7 +1062,6 @@ impl App {
             model_catalog: self.model_catalog.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
-            feedback_audience: self.feedback_audience,
             status_account_display: self.chat_widget.status_account_display().cloned(),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
@@ -1686,11 +1693,8 @@ impl App {
                 let network_approval_context = params
                     .network_approval_context
                     .clone()
-                    .and_then(convert_via_json);
-                let additional_permissions = params
-                    .additional_permissions
-                    .clone()
-                    .and_then(convert_via_json);
+                    .map(network_approval_context_to_core);
+                let additional_permissions = params.additional_permissions.clone().map(Into::into);
                 let proposed_execpolicy_amendment = params
                     .proposed_execpolicy_amendment
                     .clone()
@@ -1785,10 +1789,7 @@ impl App {
                     thread_label,
                     call_id: params.item_id.clone(),
                     reason: params.reason.clone(),
-                    permissions: serde_json::from_value(
-                        serde_json::to_value(&params.permissions).ok()?,
-                    )
-                    .ok()?,
+                    permissions: params.permissions.clone().into(),
                 }),
             ),
             _ => None,
@@ -1861,6 +1862,17 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+        });
+    }
+
+    fn refresh_rate_limits(&mut self, app_server: &AppServerSession, request_id: u64) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_account_rate_limits(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::RateLimitsLoaded { request_id, result });
         });
     }
 
@@ -1940,6 +1952,124 @@ impl App {
                 result,
             });
         });
+    }
+
+    fn submit_feedback(
+        &mut self,
+        app_server: &AppServerSession,
+        category: FeedbackCategory,
+        reason: Option<String>,
+        include_logs: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        let origin_thread_id = self.chat_widget.thread_id();
+        let rollout_path = if include_logs {
+            self.chat_widget.rollout_path()
+        } else {
+            None
+        };
+        let params = build_feedback_upload_params(
+            origin_thread_id,
+            rollout_path,
+            category,
+            reason,
+            include_logs,
+        );
+        tokio::spawn(async move {
+            let result = fetch_feedback_upload(request_handle, params)
+                .await
+                .map(|response| response.thread_id)
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::FeedbackSubmitted {
+                origin_thread_id,
+                category,
+                include_logs,
+                result,
+            });
+        });
+    }
+
+    fn handle_feedback_thread_event(&mut self, event: FeedbackThreadEvent) {
+        match event.result {
+            Ok(thread_id) => {
+                self.chat_widget
+                    .add_to_history(crate::bottom_pane::feedback_success_cell(
+                        event.category,
+                        event.include_logs,
+                        &thread_id,
+                        event.feedback_audience,
+                    ))
+            }
+            Err(err) => self
+                .chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to upload feedback: {err}"
+                ))),
+        }
+    }
+
+    async fn enqueue_thread_feedback_event(
+        &mut self,
+        thread_id: ThreadId,
+        event: FeedbackThreadEvent,
+    ) {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard
+                .buffer
+                .push_back(ThreadBufferedEvent::FeedbackSubmission(event.clone()));
+            if guard.buffer.len() > guard.capacity
+                && let Some(removed) = guard.buffer.pop_front()
+                && let ThreadBufferedEvent::Request(request) = &removed
+            {
+                guard
+                    .pending_interactive_replay
+                    .note_evicted_server_request(request);
+            }
+            guard.active
+        };
+
+        if should_send {
+            match sender.try_send(ThreadBufferedEvent::FeedbackSubmission(event)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
+        }
+    }
+
+    async fn handle_feedback_submitted(
+        &mut self,
+        origin_thread_id: Option<ThreadId>,
+        category: FeedbackCategory,
+        include_logs: bool,
+        result: Result<String, String>,
+    ) {
+        let event = FeedbackThreadEvent {
+            category,
+            include_logs,
+            feedback_audience: self.feedback_audience,
+            result,
+        };
+        if let Some(thread_id) = origin_thread_id {
+            self.enqueue_thread_feedback_event(thread_id, event).await;
+        } else {
+            self.handle_feedback_thread_event(event);
+        }
     }
 
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
@@ -2057,7 +2187,7 @@ impl App {
         match op.view() {
             AppCommandView::Interrupt => {
                 let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await else {
-                    return Ok(false);
+                    return Ok(true);
                 };
                 app_server.turn_interrupt(thread_id, turn_id).await?;
                 Ok(true)
@@ -2353,7 +2483,6 @@ impl App {
                 .await
             {
                 Ok(thread) => {
-                    self.ensure_thread_channel(thread_id);
                     self.upsert_agent_picker_thread(
                         thread_id,
                         thread.agent_nickname,
@@ -2537,6 +2666,9 @@ impl App {
                     self.enqueue_thread_history_entry_response(thread_id, event)
                         .await?;
                 }
+                ThreadBufferedEvent::FeedbackSubmission(event) => {
+                    self.enqueue_thread_feedback_event(thread_id, event).await;
+                }
             }
         }
         self.chat_widget
@@ -2627,51 +2759,18 @@ impl App {
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
     async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
-        let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
+        let mut thread_ids = self.agent_navigation.tracked_thread_ids();
+        for thread_id in self.thread_event_channels.keys().copied() {
+            if !thread_ids.contains(&thread_id) {
+                thread_ids.push(thread_id);
+            }
+        }
         for thread_id in thread_ids {
-            let existing_entry = self.agent_navigation.get(&thread_id).cloned();
-            match app_server
-                .thread_read(thread_id, /*include_turns*/ false)
+            if !self
+                .refresh_agent_picker_thread_liveness(app_server, thread_id)
                 .await
             {
-                Ok(thread) => {
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        thread.agent_nickname.or_else(|| {
-                            existing_entry
-                                .as_ref()
-                                .and_then(|entry| entry.agent_nickname.clone())
-                        }),
-                        thread.agent_role.or_else(|| {
-                            existing_entry
-                                .as_ref()
-                                .and_then(|entry| entry.agent_role.clone())
-                        }),
-                        matches!(
-                            thread.status,
-                            codex_app_server_protocol::ThreadStatus::NotLoaded
-                        ),
-                    );
-                }
-                Err(err) => {
-                    let is_closed = Self::closed_state_for_thread_read_error(
-                        &err,
-                        existing_entry.as_ref().map(|entry| entry.is_closed),
-                    );
-                    if let Some(entry) = existing_entry {
-                        self.upsert_agent_picker_thread(
-                            thread_id,
-                            entry.agent_nickname,
-                            entry.agent_role,
-                            is_closed,
-                        );
-                    } else {
-                        self.upsert_agent_picker_thread(
-                            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
-                            is_closed,
-                        );
-                    }
-                }
+                continue;
             }
         }
 
@@ -2744,6 +2843,14 @@ impl App {
         Self::is_terminal_thread_read_error(err) || existing_is_closed.unwrap_or(false)
     }
 
+    fn can_fallback_from_include_turns_error(err: &color_eyre::Report) -> bool {
+        err.chain().any(|cause| {
+            let message = cause.to_string();
+            message.contains("includeTurns is unavailable before first user message")
+                || message.contains("ephemeral threads do not support includeTurns")
+        })
+    }
+
     /// Updates cached picker metadata and then mirrors any visible-label change into the footer.
     ///
     /// These two writes stay paired so the picker rows and contextual footer continue to describe
@@ -2772,6 +2879,168 @@ impl App {
     fn mark_agent_picker_thread_closed(&mut self, thread_id: ThreadId) {
         self.agent_navigation.mark_closed(thread_id);
         self.sync_active_agent_label();
+    }
+
+    async fn refresh_agent_picker_thread_liveness(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> bool {
+        let existing_entry = self.agent_navigation.get(&thread_id).cloned();
+        let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
+        match app_server
+            .thread_read(thread_id, /*include_turns*/ false)
+            .await
+        {
+            Ok(thread) => {
+                self.upsert_agent_picker_thread(
+                    thread_id,
+                    thread.agent_nickname.or_else(|| {
+                        existing_entry
+                            .as_ref()
+                            .and_then(|entry| entry.agent_nickname.clone())
+                    }),
+                    thread.agent_role.or_else(|| {
+                        existing_entry
+                            .as_ref()
+                            .and_then(|entry| entry.agent_role.clone())
+                    }),
+                    matches!(
+                        thread.status,
+                        codex_app_server_protocol::ThreadStatus::NotLoaded
+                    ),
+                );
+                true
+            }
+            Err(err) => {
+                if Self::is_terminal_thread_read_error(&err) && !has_replay_channel {
+                    self.agent_navigation.remove(thread_id);
+                    return false;
+                }
+                let is_closed = Self::closed_state_for_thread_read_error(
+                    &err,
+                    existing_entry.as_ref().map(|entry| entry.is_closed),
+                );
+                if let Some(entry) = existing_entry {
+                    self.upsert_agent_picker_thread(
+                        thread_id,
+                        entry.agent_nickname,
+                        entry.agent_role,
+                        is_closed,
+                    );
+                } else {
+                    self.upsert_agent_picker_thread(
+                        thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                        is_closed,
+                    );
+                }
+                true
+            }
+        }
+    }
+
+    async fn session_state_for_thread_read(
+        &self,
+        thread_id: ThreadId,
+        thread: &codex_app_server_protocol::Thread,
+    ) -> ThreadSessionState {
+        let mut session = self
+            .primary_session_configured
+            .clone()
+            .unwrap_or(ThreadSessionState {
+                thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: self.chat_widget.current_model().to_string(),
+                model_provider_id: self.config.model_provider_id.clone(),
+                service_tier: self.chat_widget.current_service_tier(),
+                approval_policy: self.config.permissions.approval_policy.value(),
+                approvals_reviewer: self.config.approvals_reviewer,
+                sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                cwd: thread.cwd.clone(),
+                reasoning_effort: self.chat_widget.current_reasoning_effort(),
+                history_log_id: 0,
+                history_entry_count: 0,
+                network_proxy: None,
+                rollout_path: thread.path.clone(),
+            });
+        session.thread_id = thread_id;
+        session.thread_name = thread.name.clone();
+        session.model_provider_id = thread.model_provider.clone();
+        session.cwd = thread.cwd.clone();
+        session.rollout_path = thread.path.clone();
+        if let Some(model) =
+            read_session_model(&self.config, thread_id, thread.path.as_deref()).await
+        {
+            session.model = model;
+        } else if thread.path.is_some() {
+            session.model.clear();
+        }
+        session.history_log_id = 0;
+        session.history_entry_count = 0;
+        session
+    }
+
+    /// Materializes a live thread into local replay state when the picker knows about it but the
+    /// TUI has not cached a local event channel yet.
+    ///
+    /// Resume-time backfill intentionally avoids creating empty placeholder channels, because those
+    /// placeholders make stale `/agent` entries open blank transcripts. When a user later selects a
+    /// still-live discovered thread, attach it on demand with a real resumed snapshot.
+    async fn attach_live_thread_for_selection(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> Result<bool> {
+        if self.thread_event_channels.contains_key(&thread_id) {
+            return Ok(true);
+        }
+
+        let (session, turns, live_attached) = match app_server
+            .resume_thread(self.config.clone(), thread_id)
+            .await
+        {
+            Ok(started) => (started.session, started.turns, true),
+            Err(resume_err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %resume_err,
+                    "failed to resume live thread for selection; falling back to thread/read"
+                );
+                let (thread, turns) = match app_server
+                    .thread_read(thread_id, /*include_turns*/ true)
+                    .await
+                {
+                    Ok(thread) => {
+                        let turns = thread.turns.clone();
+                        (thread, turns)
+                    }
+                    Err(err) if Self::can_fallback_from_include_turns_error(&err) => {
+                        let thread = app_server
+                            .thread_read(thread_id, /*include_turns*/ false)
+                            .await?;
+                        (thread, Vec::new())
+                    }
+                    Err(err) => return Err(err),
+                };
+                if turns.is_empty() {
+                    // A `thread/read` fallback without turns would create a blank local replay
+                    // channel with no live listener attached, which blocks later real re-attach.
+                    return Err(color_eyre::eyre::eyre!(
+                        "Agent thread {thread_id} is not yet available for replay or live attach."
+                    ));
+                }
+                let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
+                // `thread/read` can seed replay state, but it does not attach the app-server
+                // listener that `thread/resume` establishes, so treat this path as replay-only.
+                session.model.clear();
+                (session, turns, false)
+            }
+        };
+        let channel = self.ensure_thread_channel(thread_id);
+        let mut store = channel.store.lock().await;
+        store.set_session(session, turns);
+        Ok(live_attached)
     }
 
     /// Replaces the chat widget and re-seeds the new widget's collab metadata from the navigation
@@ -2810,15 +3079,43 @@ impl App {
             return Ok(());
         }
 
-        if !self.thread_event_channels.contains_key(&thread_id) {
+        if !self
+            .refresh_agent_picker_thread_liveness(app_server, thread_id)
+            .await
+        {
             self.chat_widget
-                .add_error_message(format!("Failed to attach to agent thread {thread_id}."));
+                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
             return Ok(());
         }
-        let is_replay_only = self
+
+        let mut is_replay_only = self
             .agent_navigation
             .get(&thread_id)
             .is_some_and(|entry| entry.is_closed);
+        let mut attached_replay_only = false;
+        if self.should_attach_live_thread_for_selection(thread_id) {
+            match self
+                .attach_live_thread_for_selection(app_server, thread_id)
+                .await
+            {
+                Ok(live_attached) => {
+                    attached_replay_only = !live_attached;
+                    if attached_replay_only {
+                        is_replay_only = true;
+                    }
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to attach to agent thread {thread_id}: {err}"
+                    ));
+                    return Ok(());
+                }
+            }
+        } else if !self.thread_event_channels.contains_key(&thread_id) && is_replay_only {
+            self.chat_widget
+                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+            return Ok(());
+        }
 
         let previous_thread_id = self.active_thread_id;
         self.store_active_thread_receiver().await;
@@ -2850,15 +3147,27 @@ impl App {
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
         if is_replay_only {
-            self.chat_widget.add_info_message(
-                format!("Agent thread {thread_id} is closed. Replaying saved transcript."),
-                /*hint*/ None,
-            );
+            let message = if attached_replay_only {
+                format!(
+                    "Agent thread {thread_id} could not be resumed live. Replaying saved transcript."
+                )
+            } else {
+                format!("Agent thread {thread_id} is closed. Replaying saved transcript.")
+            };
+            self.chat_widget.add_info_message(message, /*hint*/ None);
         }
         self.drain_active_thread_events(tui).await?;
         self.refresh_pending_thread_approvals().await;
 
         Ok(())
+    }
+
+    fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {
+        !self.thread_event_channels.contains_key(&thread_id)
+            && self
+                .agent_navigation
+                .get(&thread_id)
+                .is_none_or(|entry| !entry.is_closed)
     }
 
     fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -3014,7 +3323,6 @@ impl App {
         }
 
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
-            self.ensure_thread_channel(thread.thread_id);
             self.upsert_agent_picker_thread(
                 thread.thread_id,
                 thread.agent_nickname,
@@ -3242,7 +3550,7 @@ impl App {
             /*account_id*/ None,
             bootstrap.account_email.clone(),
             auth_mode,
-            codex_core::default_client::originator().value,
+            codex_login::default_client::originator().value,
             config.otel.log_user_prompt,
             user_agent(),
             SessionSource::Cli,
@@ -3282,7 +3590,6 @@ impl App {
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
                     model: Some(model.clone()),
@@ -3317,7 +3624,6 @@ impl App {
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
@@ -3357,7 +3663,6 @@ impl App {
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
@@ -4058,9 +4363,23 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            AppEvent::RefreshRateLimits { request_id } => {
+                self.refresh_rate_limits(app_server, request_id);
             }
+            AppEvent::RateLimitsLoaded { request_id, result } => match result {
+                Ok(snapshots) => {
+                    for snapshot in snapshots {
+                        self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                    }
+                    self.chat_widget
+                        .finish_status_rate_limit_refresh(request_id);
+                }
+                Err(err) => {
+                    tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+                    self.chat_widget
+                        .finish_status_rate_limit_refresh(request_id);
+                }
+            },
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -4117,6 +4436,22 @@ impl App {
             }
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
+            }
+            AppEvent::SubmitFeedback {
+                category,
+                reason,
+                include_logs,
+            } => {
+                self.submit_feedback(app_server, category, reason, include_logs);
+            }
+            AppEvent::FeedbackSubmitted {
+                origin_thread_id,
+                category,
+                include_logs,
+                result,
+            } => {
+                self.handle_feedback_submitted(origin_thread_id, category, include_logs, result)
+                    .await;
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
@@ -5209,6 +5544,9 @@ impl App {
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
             }
+            ThreadBufferedEvent::FeedbackSubmission(event) => {
+                self.handle_feedback_thread_event(event);
+            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -5225,6 +5563,9 @@ impl App {
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
+            }
+            ThreadBufferedEvent::FeedbackSubmission(event) => {
+                self.handle_feedback_thread_event(event);
             }
         }
     }
@@ -5629,6 +5970,21 @@ async fn fetch_all_mcp_server_statuses(
     Ok(statuses)
 }
 
+async fn fetch_account_rate_limits(
+    request_handle: AppServerRequestHandle,
+) -> Result<Vec<RateLimitSnapshot>> {
+    let request_id = RequestId::String(format!("account-rate-limits-{}", Uuid::new_v4()));
+    let response: GetAccountRateLimitsResponse = request_handle
+        .request_typed(ClientRequest::GetAccountRateLimits {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/rateLimits/read failed in TUI")?;
+
+    Ok(app_server_rate_limit_snapshots_to_core(response))
+}
+
 async fn fetch_plugins_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
@@ -5692,6 +6048,38 @@ async fn fetch_plugin_uninstall(
         })
         .await
         .wrap_err("plugin/uninstall failed in TUI")
+}
+
+fn build_feedback_upload_params(
+    origin_thread_id: Option<ThreadId>,
+    rollout_path: Option<PathBuf>,
+    category: FeedbackCategory,
+    reason: Option<String>,
+    include_logs: bool,
+) -> FeedbackUploadParams {
+    let extra_log_files = if include_logs {
+        rollout_path.map(|rollout_path| vec![rollout_path])
+    } else {
+        None
+    };
+    FeedbackUploadParams {
+        classification: crate::bottom_pane::feedback_classification(category).to_string(),
+        reason,
+        thread_id: origin_thread_id.map(|thread_id| thread_id.to_string()),
+        include_logs,
+        extra_log_files,
+    }
+}
+
+async fn fetch_feedback_upload(
+    request_handle: AppServerRequestHandle,
+    params: FeedbackUploadParams,
+) -> Result<FeedbackUploadResponse> {
+    let request_id = RequestId::String(format!("feedback-upload-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::FeedbackUpload { request_id, params })
+        .await
+        .wrap_err("feedback/upload failed in TUI")
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the
@@ -5761,6 +6149,7 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -5782,6 +6171,7 @@ mod tests {
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
     use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
+    use codex_app_server_protocol::PermissionsRequestApprovalParams;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -5798,9 +6188,9 @@ mod tests {
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
+    use codex_config::types::ModelAvailabilityNuxConfig;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::config::types::ModelAvailabilityNuxConfig;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
@@ -5808,6 +6198,7 @@ mod tests {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -5823,8 +6214,10 @@ mod tests {
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use codex_protocol::request_permissions::RequestPermissionProfile;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -5834,6 +6227,10 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
     use tokio::time;
+
+    fn test_absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -6091,7 +6488,6 @@ mod tests {
             model_catalog: app.model_catalog.clone(),
             feedback: codex_feedback::CodexFeedback::new(),
             is_first_run: false,
-            feedback_audience: app.feedback_audience,
             status_account_display: None,
             initial_plan_type: None,
             model: Some(model),
@@ -6972,6 +7368,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.open_agent_picker(&mut app_server).await;
+
+        assert_eq!(app.agent_navigation.get(&thread_id), None);
+        assert!(app.agent_navigation.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
@@ -7041,6 +7459,19 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn include_turns_fallback_detection_handles_unmaterialized_and_ephemeral_threads() {
+        let unmaterialized = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: thread thr_123 is not materialized yet; includeTurns is unavailable before first user message"
+        );
+        let ephemeral = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: ephemeral threads do not support includeTurns"
+        );
+
+        assert!(App::can_fallback_from_include_turns_error(&unmaterialized));
+        assert!(App::can_fallback_from_include_turns_error(&ephemeral));
+    }
+
     #[tokio::test]
     async fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
         let mut app = make_test_app().await;
@@ -7065,6 +7496,122 @@ mod tests {
                 is_closed: false,
             })
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let thread_id = started.session.thread_id;
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Scout".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        let err = app
+            .attach_live_thread_for_selection(&mut app_server, thread_id)
+            .await
+            .expect_err("empty fallback should not attach as a blank replay-only thread");
+
+        assert_eq!(
+            err.to_string(),
+            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+        );
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let mut ephemeral_config = app.chat_widget.config_ref().clone();
+        ephemeral_config.ephemeral = true;
+        let started = app_server.start_thread(&ephemeral_config).await?;
+        let thread_id = started.session.thread_id;
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Scout".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        let err = app
+            .attach_live_thread_for_selection(&mut app_server, thread_id)
+            .await
+            .expect_err("ephemeral fallback should not attach as a blank live thread");
+
+        assert_eq!(
+            err.to_string(),
+            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+        );
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_threads() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ true,
+        );
+
+        assert!(!app.should_attach_live_thread_for_selection(thread_id));
+
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+        assert!(app.should_attach_live_thread_for_selection(thread_id));
+
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        assert!(!app.should_attach_live_thread_for_selection(thread_id));
+    }
+
+    #[tokio::test]
+    async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        let is_available = app
+            .refresh_agent_picker_thread_liveness(&mut app_server, thread_id)
+            .await;
+
+        assert!(!is_available);
+        assert_eq!(app.agent_navigation.get(&thread_id), None);
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
         Ok(())
     }
 
@@ -7761,13 +8308,16 @@ guardian_approval = true
         };
         params.network_approval_context = Some(AppServerNetworkApprovalContext {
             host: "example.com".to_string(),
-            protocol: AppServerNetworkApprovalProtocol::Https,
+            protocol: AppServerNetworkApprovalProtocol::Socks5Tcp,
         });
         params.additional_permissions = Some(AdditionalPermissionProfile {
             network: Some(AdditionalNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: None,
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                write: Some(vec![test_absolute_path("/tmp/write")]),
+            }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
             host: "example.com".to_string(),
@@ -7790,7 +8340,7 @@ guardian_approval = true
             network_approval_context,
             Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
-                protocol: NetworkApprovalProtocol::Https,
+                protocol: NetworkApprovalProtocol::Socks5Tcp,
             })
         );
         assert_eq!(
@@ -7799,7 +8349,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: None,
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                    write: Some(vec![test_absolute_path("/tmp/write")]),
+                }),
             })
         );
         assert_eq!(
@@ -7850,6 +8403,53 @@ guardian_approval = true
                 "-lc".to_string(),
                 script.to_string(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_permissions_approval_preserves_file_system_permissions() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let request = ServerRequest::PermissionsRequestApproval {
+            request_id: AppServerRequestId::Integer(7),
+            params: PermissionsRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-approval".to_string(),
+                item_id: "call-approval".to_string(),
+                reason: Some("Need access to .git".to_string()),
+                permissions: codex_app_server_protocol::RequestPermissionProfile {
+                    network: Some(AdditionalNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                        write: Some(vec![test_absolute_path("/tmp/write")]),
+                    }),
+                },
+            },
+        };
+
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
+            permissions,
+            ..
+        })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected permissions approval request");
+        };
+
+        assert_eq!(
+            permissions,
+            RequestPermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                    write: Some(vec![test_absolute_path("/tmp/write")]),
+                }),
+            }
         );
     }
 
@@ -8774,6 +9374,132 @@ guardian_approval = true
         );
     }
 
+    #[test]
+    fn build_feedback_upload_params_includes_thread_id_and_rollout_path() {
+        let thread_id = ThreadId::new();
+        let rollout_path = PathBuf::from("/tmp/rollout.jsonl");
+
+        let params = build_feedback_upload_params(
+            Some(thread_id),
+            Some(rollout_path.clone()),
+            FeedbackCategory::SafetyCheck,
+            Some("needs follow-up".to_string()),
+            /*include_logs*/ true,
+        );
+
+        assert_eq!(params.classification, "safety_check");
+        assert_eq!(params.reason, Some("needs follow-up".to_string()));
+        assert_eq!(params.thread_id, Some(thread_id.to_string()));
+        assert_eq!(params.include_logs, true);
+        assert_eq!(params.extra_log_files, Some(vec![rollout_path]));
+    }
+
+    #[test]
+    fn build_feedback_upload_params_omits_rollout_path_without_logs() {
+        let params = build_feedback_upload_params(
+            /*origin_thread_id*/ None,
+            Some(PathBuf::from("/tmp/rollout.jsonl")),
+            FeedbackCategory::GoodResult,
+            /*reason*/ None,
+            /*include_logs*/ false,
+        );
+
+        assert_eq!(params.classification, "good_result");
+        assert_eq!(params.reason, None);
+        assert_eq!(params.thread_id, None);
+        assert_eq!(params.include_logs, false);
+        assert_eq!(params.extra_log_files, None);
+    }
+
+    #[tokio::test]
+    async fn feedback_submission_without_thread_emits_error_history_cell() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.handle_feedback_submitted(
+            /*origin_thread_id*/ None,
+            FeedbackCategory::Bug,
+            /*include_logs*/ true,
+            Err("boom".to_string()),
+        )
+        .await;
+
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected feedback error history cell, saw {other:?}"),
+        };
+        assert_eq!(
+            lines_to_single_string(&cell.display_lines(/*width*/ 120)),
+            "■ Failed to upload feedback: boom"
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_submission_for_inactive_thread_replays_into_origin_thread() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let origin_thread_id = ThreadId::new();
+        let active_thread_id = ThreadId::new();
+        let origin_session = test_thread_session(origin_thread_id, PathBuf::from("/tmp/origin"));
+        let active_session = test_thread_session(active_thread_id, PathBuf::from("/tmp/active"));
+        app.thread_event_channels.insert(
+            origin_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                origin_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.thread_event_channels.insert(
+            active_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                active_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.activate_thread_channel(active_thread_id).await;
+        app.chat_widget.handle_thread_session(active_session);
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_feedback_submitted(
+            Some(origin_thread_id),
+            FeedbackCategory::Bug,
+            /*include_logs*/ true,
+            Ok("uploaded-thread".to_string()),
+        )
+        .await;
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
+
+        let snapshot = {
+            let channel = app
+                .thread_event_channels
+                .get(&origin_thread_id)
+                .expect("origin thread channel should exist");
+            let store = channel.store.lock().await;
+            assert!(matches!(
+                store.buffer.back(),
+                Some(ThreadBufferedEvent::FeedbackSubmission(_))
+            ));
+            store.snapshot()
+        };
+
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+        let mut rendered_cells = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+            }
+        }
+        assert!(rendered_cells.iter().any(|cell| {
+            cell.contains("• Feedback uploaded. Please open an issue using the following URL:")
+                && cell.contains("uploaded-thread")
+        }));
+    }
+
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -9679,7 +10405,6 @@ guardian_approval = true
             model_catalog: app.model_catalog.clone(),
             feedback: app.feedback.clone(),
             is_first_run: false,
-            feedback_audience: app.feedback_audience,
             status_account_display: app.chat_widget.status_account_display().cloned(),
             initial_plan_type: app.chat_widget.current_plan_type(),
             model: Some(app.chat_widget.current_model().to_string()),
@@ -9983,6 +10708,24 @@ guardian_approval = true
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn interrupt_without_active_turn_is_treated_as_handled() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let op = AppCommand::interrupt();
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            .await
+            .expect("interrupt submission should not fail");
+
+        assert_eq!(handled, true);
     }
 
     #[tokio::test]

@@ -718,7 +718,8 @@ mod tests {
     #[test]
     fn rewrites_proxy_url_to_local_loopback_port() {
         let rewritten =
-            rewrite_proxy_env_value("socks5h://127.0.0.1:8081", 43210).expect("rewritten value");
+            rewrite_proxy_env_value("socks5h://127.0.0.1:8081", /*local_port*/ 43210)
+                .expect("rewritten value");
         assert_eq!(rewritten, "socks5h://127.0.0.1:43210");
     }
 

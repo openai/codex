@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
-use codex_core::CodexAuth;
 use codex_core::ModelClient;
 use codex_core::ModelClientSession;
 use codex_core::ModelProviderInfo;
@@ -10,6 +9,7 @@ use codex_core::ResponseEvent;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::current_span_w3c_trace_context;
@@ -1674,6 +1674,7 @@ fn websocket_provider_with_connect_timeout(
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

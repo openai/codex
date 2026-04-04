@@ -11,7 +11,6 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
@@ -23,6 +22,7 @@ use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -270,7 +270,7 @@ fn docker_command_success<const N: usize>(args: [&str; N]) -> Result<()> {
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -286,7 +286,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -346,7 +346,7 @@ impl TestCodexBuilder {
     pub fn with_model(self, model: &str) -> Self {
         let new_model = model.to_string();
         self.with_config(move |config| {
-            config.model = Some(new_model.clone());
+            config.model = Some(new_model);
         })
     }
 

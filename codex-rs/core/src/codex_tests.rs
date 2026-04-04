@@ -1,5 +1,4 @@
 use super::*;
-use crate::CodexAuth;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -12,12 +11,13 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
-use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
 use codex_features::Features;
+use codex_login::CodexAuth;
+use codex_mcp::mcp_connection_manager::ToolInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -33,20 +33,6 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
-use crate::protocol::CompactedItem;
-use crate::protocol::CreditsSnapshot;
-use crate::protocol::InitialHistory;
-use crate::protocol::NetworkApprovalProtocol;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::RateLimitWindow;
-use crate::protocol::ResumedHistory;
-use crate::protocol::RolloutItem;
-use crate::protocol::TokenCountEvent;
-use crate::protocol::TokenUsage;
-use crate::protocol::TokenUsageInfo;
-use crate::protocol::TurnCompleteEvent;
-use crate::protocol::TurnStartedEvent;
-use crate::protocol::UserMessageEvent;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
@@ -78,9 +64,26 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::NetworkApprovalProtocol;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
@@ -238,7 +241,7 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
         .expect("channel open");
     assert!(matches!(
         second.msg,
-        EventMsg::TurnAborted(crate::protocol::TurnAbortedEvent {
+        EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(turn_id),
             reason: TurnAbortReason::Interrupted,
         }) if turn_id == tc.sub_id
@@ -601,7 +604,7 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
         .and_then(|table| table.get("apps"))
         .cloned()
         .expect("apps table");
-    let apps = crate::config::types::AppsConfigToml::deserialize(apps_toml)
+    let apps = codex_config::types::AppsConfigToml::deserialize(apps_toml)
         .expect("deserialize apps config");
     let app = apps
         .apps
@@ -2120,9 +2123,7 @@ fn success_flag_true_with_no_error_and_content_used() {
     assert_eq!(expected, got);
 }
 
-async fn wait_for_thread_rolled_back(
-    rx: &async_channel::Receiver<Event>,
-) -> crate::protocol::ThreadRolledBackEvent {
+async fn wait_for_thread_rolled_back(rx: &async_channel::Receiver<Event>) -> ThreadRolledBackEvent {
     let deadline = StdDuration::from_secs(2);
     let start = std::time::Instant::now();
     loop {
@@ -2658,11 +2659,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
-            McpConnectionManager::new_mcp_connection_manager_for_tests(
-                &config.permissions.approval_policy,
-            ),
-        )),
+        mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+            &config.permissions.approval_policy,
+        ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -2741,6 +2740,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_outcome,
     );
 
+    let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Session {
         conversation_id,
         tx_event,
@@ -2751,6 +2751,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        mailbox,
+        mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -2793,15 +2795,13 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
     Arc::get_mut(&mut turn_context)
         .expect("single turn context ref")
         .approval_policy
-        .set(crate::protocol::AskForApproval::Granular(
-            crate::protocol::GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            },
-        ))
+        .set(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }))
         .expect("test setup should allow updating approval policy");
 
     let session = Arc::new(session);
@@ -2868,15 +2868,13 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
     Arc::get_mut(&mut turn_context)
         .expect("single turn context ref")
         .approval_policy
-        .set(crate::protocol::AskForApproval::Granular(
-            crate::protocol::GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: false,
-                mcp_elicitations: true,
-            },
-        ))
+        .set(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }))
         .expect("test setup should allow updating approval policy");
 
     let session = Arc::new(session);
@@ -3099,7 +3097,7 @@ async fn user_turn_updates_approvals_reviewer() {
             }],
             cwd: config.cwd.to_path_buf(),
             approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: Some(crate::config::types::ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,
@@ -3115,7 +3113,7 @@ async fn user_turn_updates_approvals_reviewer() {
     let state = session.state.lock().await;
     assert_eq!(
         state.session_configuration.approvals_reviewer,
-        crate::config::types::ApprovalsReviewer::GuardianSubagent
+        codex_config::types::ApprovalsReviewer::GuardianSubagent
     );
 }
 
@@ -3500,11 +3498,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
 
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
-            McpConnectionManager::new_mcp_connection_manager_for_tests(
-                &config.permissions.approval_policy,
-            ),
-        )),
+        mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+            &config.permissions.approval_policy,
+        ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -3583,6 +3579,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         skills_outcome,
     ));
 
+    let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Arc::new(Session {
         conversation_id,
         tx_event,
@@ -3593,6 +3590,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        mailbox,
+        mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -5093,10 +5092,10 @@ async fn sample_rollout(
 #[tokio::test]
 async fn rejects_escalated_permissions_when_policy_not_on_request() {
     use crate::exec::ExecParams;
-    use crate::protocol::AskForApproval;
-    use crate::protocol::SandboxPolicy;
     use crate::sandboxing::SandboxPermissions;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
 
     let (session, mut turn_context_raw) = make_session_and_context().await;
@@ -5248,9 +5247,9 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
 }
 #[tokio::test]
 async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
-    use crate::protocol::AskForApproval;
     use crate::sandboxing::SandboxPermissions;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::protocol::AskForApproval;
 
     let (session, mut turn_context_raw) = make_session_and_context().await;
     turn_context_raw

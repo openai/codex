@@ -1,6 +1,6 @@
-use crate::config::types::EnvironmentVariablePattern;
-use crate::config::types::ShellEnvironmentPolicy;
-use crate::config::types::ShellEnvironmentPolicyInherit;
+use codex_config::types::EnvironmentVariablePattern;
+use codex_config::types::ShellEnvironmentPolicy;
+use codex_config::types::ShellEnvironmentPolicyInherit;
 use codex_protocol::ThreadId;
 use std::collections::HashMap;
 use std::collections::HashSet;

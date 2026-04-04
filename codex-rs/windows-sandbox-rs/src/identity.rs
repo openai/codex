@@ -122,7 +122,7 @@ fn select_identity(
     };
     let password = decode_password(&chosen)?;
     Ok(Some(SandboxIdentity {
-        username: chosen.username.clone(),
+        username: chosen.username,
         password,
     }))
 }
@@ -187,8 +187,8 @@ pub fn require_logon_sandbox_creds(
                 proxy_enforced,
             },
             crate::setup::SetupRootOverrides {
-                read_roots: Some(needed_read.clone()),
-                write_roots: Some(needed_write.clone()),
+                read_roots: Some(needed_read),
+                write_roots: Some(needed_write),
             },
         )?;
         identity = select_identity(network_identity, codex_home)?;

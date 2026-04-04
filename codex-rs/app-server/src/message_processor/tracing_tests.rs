@@ -7,6 +7,7 @@ use crate::transport::AppServerTransport;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
+use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeCapabilities;
@@ -246,6 +247,7 @@ fn build_test_processor(
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         enable_codex_api_key_env: false,
+        rpc_transport: AppServerRpcTransport::Stdio,
     });
     (processor, outgoing_rx)
 }

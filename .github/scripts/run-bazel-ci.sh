@@ -41,6 +41,15 @@ if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
   bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
 fi
 
+run_bazel() {
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    MSYS2_ARG_CONV_EXCL='*' bazel "$@"
+    return
+  fi
+
+  bazel "$@"
+}
+
 ci_config=ci-linux
 case "${RUNNER_OS:-}" in
   macOS)
@@ -60,7 +69,7 @@ print_bazel_test_log_tails() {
     bazel_info_cmd+=("${bazel_startup_args[@]}")
   fi
 
-  testlogs_dir="$("${bazel_info_cmd[@]}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
 
   local failed_targets=()
   while IFS= read -r target; do
@@ -126,6 +135,41 @@ if [[ $remote_download_toplevel -eq 1 ]]; then
   post_config_bazel_args+=(--remote_download_toplevel)
 fi
 
+if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
+  # Windows self-hosted runners can run multiple Bazel jobs concurrently. Give
+  # each job its own repo contents cache so they do not fight over the shared
+  # path configured in `ci-windows`.
+  post_config_bazel_args+=("--repo_contents_cache=${BAZEL_REPO_CONTENTS_CACHE}")
+fi
+
+if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
+  post_config_bazel_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
+fi
+
+if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  windows_action_env_vars=(
+    INCLUDE
+    LIB
+    LIBPATH
+    PATH
+    UCRTVersion
+    UniversalCRTSdkDir
+    VCINSTALLDIR
+    VCToolsInstallDir
+    WindowsLibPath
+    WindowsSdkBinPath
+    WindowsSdkDir
+    WindowsSDKLibVersion
+    WindowsSDKVersion
+  )
+
+  for env_var in "${windows_action_env_vars[@]}"; do
+    if [[ -n "${!env_var:-}" ]]; then
+      post_config_bazel_args+=("--action_env=${env_var}" "--host_action_env=${env_var}")
+    fi
+  done
+fi
+
 bazel_console_log="$(mktemp)"
 trap 'rm -f "$bazel_console_log"' EXIT
 
@@ -149,7 +193,7 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi
   set +e
-  "${bazel_cmd[@]}" \
+  run_bazel "${bazel_cmd[@]:1}" \
     --noexperimental_remote_repo_contents_cache \
     "${bazel_run_args[@]}" \
     -- \
@@ -184,7 +228,7 @@ else
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi
   set +e
-  "${bazel_cmd[@]}" \
+  run_bazel "${bazel_cmd[@]:1}" \
     --noexperimental_remote_repo_contents_cache \
     "${bazel_run_args[@]}" \
     -- \

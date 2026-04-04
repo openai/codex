@@ -4,11 +4,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;

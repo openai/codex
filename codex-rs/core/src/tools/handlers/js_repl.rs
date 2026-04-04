@@ -7,7 +7,6 @@ use std::time::Instant;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::function_tool::FunctionCallError;
-use crate::protocol::ExecCommandSource;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -22,6 +21,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_features::Feature;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::protocol::ExecCommandSource;
 
 pub struct JsReplHandler;
 pub struct JsReplResetHandler;

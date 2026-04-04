@@ -1,32 +1,5 @@
-use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::types::AppsConfigToml;
-use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
-use crate::config::types::History;
-use crate::config::types::McpServerConfig;
-use crate::config::types::McpServerDisabledReason;
-use crate::config::types::McpServerTransportConfig;
-use crate::config::types::MemoriesConfig;
-use crate::config::types::MemoriesToml;
-use crate::config::types::ModelAvailabilityNuxConfig;
-use crate::config::types::Notice;
-use crate::config::types::NotificationMethod;
-use crate::config::types::Notifications;
-use crate::config::types::OtelConfig;
-use crate::config::types::OtelConfigToml;
-use crate::config::types::OtelExporterKind;
-use crate::config::types::PluginConfig;
-use crate::config::types::SandboxWorkspaceWrite;
-use crate::config::types::ShellEnvironmentPolicy;
-use crate::config::types::ShellEnvironmentPolicyToml;
-use crate::config::types::SkillsConfig;
-use crate::config::types::ToolSuggestConfig;
-use crate::config::types::ToolSuggestDiscoverable;
-use crate::config::types::Tui;
-use crate::config::types::UriBasedFileOpener;
-use crate::config::types::WindowsSandboxModeToml;
-use crate::config::types::WindowsToml;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
@@ -50,9 +23,6 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
-use crate::protocol::AskForApproval;
-use crate::protocol::ReadOnlyAccess;
-use crate::protocol::SandboxPolicy;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -60,12 +30,41 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_config::types::ApprovalsReviewer;
+use codex_config::types::AppsConfigToml;
+use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
+use codex_config::types::History;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerDisabledReason;
+use codex_config::types::McpServerTransportConfig;
+use codex_config::types::MemoriesConfig;
+use codex_config::types::MemoriesToml;
+use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::Notice;
+use codex_config::types::NotificationMethod;
+use codex_config::types::Notifications;
+use codex_config::types::OtelConfig;
+use codex_config::types::OtelConfigToml;
+use codex_config::types::OtelExporterKind;
+use codex_config::types::PluginConfig;
+use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::ShellEnvironmentPolicy;
+use codex_config::types::ShellEnvironmentPolicyToml;
+use codex_config::types::SkillsConfig;
+use codex_config::types::ToolSuggestConfig;
+use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::Tui;
+use codex_config::types::UriBasedFileOpener;
+use codex_config::types::WindowsSandboxModeToml;
+use codex_config::types::WindowsToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_login::AuthCredentialsStoreMode;
+use codex_mcp::mcp::McpConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -82,6 +81,9 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -112,7 +114,6 @@ mod permissions;
 pub mod profile;
 pub mod schema;
 pub mod service;
-pub mod types;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -134,7 +135,6 @@ pub(crate) use permissions::overlay_network_domain_permissions;
 pub(crate) use permissions::resolve_permission_profile;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
-pub use types::ApprovalsReviewer;
 
 pub use codex_git_utils::GhostSnapshotConfig;
 
@@ -589,7 +589,7 @@ pub struct Config {
     pub tool_suggest: ToolSuggestConfig,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
-    pub otel: crate::config::types::OtelConfig,
+    pub otel: codex_config::types::OtelConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -691,6 +691,31 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn to_mcp_config(&self, plugins_manager: &crate::plugins::PluginsManager) -> McpConfig {
+        let loaded_plugins = plugins_manager.plugins_for_config(self);
+        let mut configured_mcp_servers = self.mcp_servers.get().clone();
+        for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
+            configured_mcp_servers.entry(name).or_insert(plugin_server);
+        }
+
+        McpConfig {
+            chatgpt_base_url: self.chatgpt_base_url.clone(),
+            codex_home: self.codex_home.clone(),
+            mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
+            mcp_oauth_callback_port: self.mcp_oauth_callback_port,
+            mcp_oauth_callback_url: self.mcp_oauth_callback_url.clone(),
+            skill_mcp_dependency_install_enabled: self
+                .features
+                .enabled(Feature::SkillMcpDependencyInstall),
+            approval_policy: self.permissions.approval_policy.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            use_legacy_landlock: self.features.use_legacy_landlock(),
+            apps_enabled: self.features.enabled(Feature::Apps),
+            configured_mcp_servers,
+            plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
+        }
+    }
+
     /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -706,6 +731,15 @@ impl Config {
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
+        Self::load_default_with_cli_overrides_for_codex_home(codex_home, cli_overrides)
+    }
+
+    /// Load a default configuration for a specific Codex home without reading
+    /// user, project, or system config layers.
+    pub fn load_default_with_cli_overrides_for_codex_home(
+        codex_home: PathBuf,
+        cli_overrides: Vec<(String, TomlValue)>,
+    ) -> std::io::Result<Self> {
         let mut merged = toml::Value::try_from(ConfigToml::default()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -1369,18 +1403,18 @@ pub struct ConfigToml {
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
     /// Defaults to `true`.
-    pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
+    pub analytics: Option<codex_config::types::AnalyticsConfigToml>,
 
     /// When `false`, disables feedback collection across Codex product surfaces.
     /// Defaults to `true`.
-    pub feedback: Option<crate::config::types::FeedbackConfigToml>,
+    pub feedback: Option<codex_config::types::FeedbackConfigToml>,
 
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
     /// OTEL configuration.
-    pub otel: Option<crate::config::types::OtelConfigToml>,
+    pub otel: Option<codex_config::types::OtelConfigToml>,
 
     /// Windows-specific configuration.
     #[serde(default)]
@@ -1390,7 +1424,7 @@ pub struct ConfigToml {
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
     /// Collection of in-product notices (different from notifications)
-    /// See [`crate::config::types::Notices`] for more details
+    /// See [`codex_config::types::Notice`] for more details
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
@@ -1881,6 +1915,18 @@ Built-in providers cannot be overridden. Rename your custom provider (for exampl
     }
 }
 
+fn validate_model_providers(
+    model_providers: &HashMap<String, ModelProviderInfo>,
+) -> Result<(), String> {
+    validate_reserved_model_provider_ids(model_providers)?;
+    for (key, provider) in model_providers {
+        provider
+            .validate()
+            .map_err(|message| format!("model_providers.{key}: {message}"))?;
+    }
+    Ok(())
+}
+
 fn deserialize_model_providers<'de, D>(
     deserializer: D,
 ) -> Result<HashMap<String, ModelProviderInfo>, D::Error>
@@ -1888,7 +1934,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let model_providers = HashMap::<String, ModelProviderInfo>::deserialize(deserializer)?;
-    validate_reserved_model_provider_ids(&model_providers).map_err(serde::de::Error::custom)?;
+    validate_model_providers(&model_providers).map_err(serde::de::Error::custom)?;
     Ok(model_providers)
 }
 
@@ -2013,7 +2059,7 @@ impl Config {
         codex_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
-        validate_reserved_model_provider_ids(&cfg.model_providers)
+        validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.

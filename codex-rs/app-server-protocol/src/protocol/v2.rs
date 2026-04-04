@@ -8,6 +8,8 @@ use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
+use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
@@ -4445,12 +4447,235 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
 #[ts(export_to = "v2/")]
 pub struct GuardianApprovalReview {
     pub status: GuardianApprovalReviewStatus,
-    #[serde(alias = "risk_score")]
     #[ts(type = "number | null")]
     pub risk_score: Option<u8>,
-    #[serde(alias = "risk_level")]
     pub risk_level: Option<GuardianRiskLevel>,
     pub rationale: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum GuardianCommandSource {
+    Shell,
+    UnifiedExec,
+}
+
+impl From<CoreGuardianCommandSource> for GuardianCommandSource {
+    fn from(value: CoreGuardianCommandSource) -> Self {
+        match value {
+            CoreGuardianCommandSource::Shell => Self::Shell,
+            CoreGuardianCommandSource::UnifiedExec => Self::UnifiedExec,
+        }
+    }
+}
+
+impl From<GuardianCommandSource> for CoreGuardianCommandSource {
+    fn from(value: GuardianCommandSource) -> Self {
+        match value {
+            GuardianCommandSource::Shell => Self::Shell,
+            GuardianCommandSource::UnifiedExec => Self::UnifiedExec,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianCommandReviewAction {
+    pub source: GuardianCommandSource,
+    pub command: String,
+    pub cwd: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianExecveReviewAction {
+    pub source: GuardianCommandSource,
+    pub program: String,
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianApplyPatchReviewAction {
+    pub cwd: PathBuf,
+    pub files: Vec<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianNetworkAccessReviewAction {
+    pub target: String,
+    pub host: String,
+    pub protocol: NetworkApprovalProtocol,
+    pub port: u16,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianMcpToolCallReviewAction {
+    pub server: String,
+    pub tool_name: String,
+    pub connector_id: Option<String>,
+    pub connector_name: Option<String>,
+    pub tool_title: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum GuardianApprovalReviewAction {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Command {
+        source: GuardianCommandSource,
+        command: String,
+        cwd: PathBuf,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Execve {
+        source: GuardianCommandSource,
+        program: String,
+        argv: Vec<String>,
+        cwd: PathBuf,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ApplyPatch { cwd: PathBuf, files: Vec<PathBuf> },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    NetworkAccess {
+        target: String,
+        host: String,
+        protocol: NetworkApprovalProtocol,
+        port: u16,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    McpToolCall {
+        server: String,
+        tool_name: String,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+        tool_title: Option<String>,
+    },
+}
+
+impl From<CoreGuardianAssessmentAction> for GuardianApprovalReviewAction {
+    fn from(value: CoreGuardianAssessmentAction) -> Self {
+        match value {
+            CoreGuardianAssessmentAction::Command {
+                source,
+                command,
+                cwd,
+            } => Self::Command {
+                source: source.into(),
+                command,
+                cwd,
+            },
+            CoreGuardianAssessmentAction::Execve {
+                source,
+                program,
+                argv,
+                cwd,
+            } => Self::Execve {
+                source: source.into(),
+                program,
+                argv,
+                cwd,
+            },
+            CoreGuardianAssessmentAction::ApplyPatch { cwd, files } => {
+                Self::ApplyPatch { cwd, files }
+            }
+            CoreGuardianAssessmentAction::NetworkAccess {
+                target,
+                host,
+                protocol,
+                port,
+            } => Self::NetworkAccess {
+                target,
+                host,
+                protocol: protocol.into(),
+                port,
+            },
+            CoreGuardianAssessmentAction::McpToolCall {
+                server,
+                tool_name,
+                connector_id,
+                connector_name,
+                tool_title,
+            } => Self::McpToolCall {
+                server,
+                tool_name,
+                connector_id,
+                connector_name,
+                tool_title,
+            },
+        }
+    }
+}
+
+impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
+    fn from(value: GuardianApprovalReviewAction) -> Self {
+        match value {
+            GuardianApprovalReviewAction::Command {
+                source,
+                command,
+                cwd,
+            } => Self::Command {
+                source: source.into(),
+                command,
+                cwd,
+            },
+            GuardianApprovalReviewAction::Execve {
+                source,
+                program,
+                argv,
+                cwd,
+            } => Self::Execve {
+                source: source.into(),
+                program,
+                argv,
+                cwd,
+            },
+            GuardianApprovalReviewAction::ApplyPatch { cwd, files } => {
+                Self::ApplyPatch { cwd, files }
+            }
+            GuardianApprovalReviewAction::NetworkAccess {
+                target,
+                host,
+                protocol,
+                port,
+            } => Self::NetworkAccess {
+                target,
+                host,
+                protocol: protocol.to_core(),
+                port,
+            },
+            GuardianApprovalReviewAction::McpToolCall {
+                server,
+                tool_name,
+                connector_id,
+                connector_name,
+                tool_title,
+            } => Self::McpToolCall {
+                server,
+                tool_name,
+                connector_id,
+                connector_name,
+                tool_title,
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4933,7 +5158,7 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
     pub turn_id: String,
     pub target_item_id: String,
     pub review: GuardianApprovalReview,
-    pub action: Option<JsonValue>,
+    pub action: GuardianApprovalReviewAction,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4950,7 +5175,7 @@ pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub turn_id: String,
     pub target_item_id: String,
     pub review: GuardianApprovalReview,
-    pub action: Option<JsonValue>,
+    pub action: GuardianApprovalReviewAction,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7488,26 +7713,6 @@ mod tests {
     }
 
     #[test]
-    fn automatic_approval_review_deserializes_legacy_snake_case_risk_fields() {
-        let review: GuardianApprovalReview = serde_json::from_value(json!({
-            "status": "denied",
-            "risk_score": 91,
-            "risk_level": "high",
-            "rationale": "too risky"
-        }))
-        .expect("legacy snake_case automatic review should deserialize");
-        assert_eq!(
-            review,
-            GuardianApprovalReview {
-                status: GuardianApprovalReviewStatus::Denied,
-                risk_score: Some(91),
-                risk_level: Some(GuardianRiskLevel::High),
-                rationale: Some("too risky".to_string()),
-            }
-        );
-    }
-
-    #[test]
     fn automatic_approval_review_deserializes_aborted_status() {
         let review: GuardianApprovalReview = serde_json::from_value(json!({
             "status": "aborted",
@@ -7524,6 +7729,31 @@ mod tests {
                 risk_level: None,
                 rationale: None,
             }
+        );
+    }
+
+    #[test]
+    fn guardian_approval_review_action_round_trips_command_shape() {
+        let value = json!({
+            "type": "command",
+            "source": "shell",
+            "command": "rm -rf /tmp/example.sqlite",
+            "cwd": "/tmp",
+        });
+        let action: GuardianApprovalReviewAction =
+            serde_json::from_value(value.clone()).expect("guardian review action");
+
+        assert_eq!(
+            action,
+            GuardianApprovalReviewAction::Command {
+                source: GuardianCommandSource::Shell,
+                command: "rm -rf /tmp/example.sqlite".to_string(),
+                cwd: "/tmp".into(),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&action).expect("serialize guardian review action"),
+            value
         );
     }
 

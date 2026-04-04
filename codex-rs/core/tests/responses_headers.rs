@@ -1,12 +1,12 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use codex_core::CodexAuth;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::WireApi;
+use codex_login::CodexAuth;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -46,6 +46,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -158,6 +159,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -265,6 +267,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

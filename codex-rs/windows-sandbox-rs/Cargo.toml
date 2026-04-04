@@ -1,6 +1,6 @@
 [package]
 build = "build.rs"
-edition = "2024"
+edition.workspace = true
 license.workspace = true
 name = "codex-windows-sandbox"
 version.workspace = true
@@ -16,6 +16,9 @@ path = "src/bin/setup_main.rs"
 [[bin]]
 name = "codex-command-runner"
 path = "src/bin/command_runner.rs"
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = "1.0"

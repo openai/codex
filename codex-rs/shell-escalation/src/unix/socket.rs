@@ -62,7 +62,7 @@ fn extract_fds(control: &[u8]) -> Vec<OwnedFd> {
             let fd_count: usize = {
                 // `cmsghdr::cmsg_len` is not typed consistently across targets, so normalize it
                 // before doing the size arithmetic.
-                #[allow(clippy::useless_conversion)]
+                #[allow(clippy::useless_conversion, clippy::expect_used)]
                 let cmsg_data_len = usize::try_from(unsafe { (*cmsg).cmsg_len })
                     .expect("cmsghdr length fits")
                     - unsafe { libc::CMSG_LEN(0) as usize };

@@ -45,7 +45,7 @@ use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
-use codex_core::config::types::NotificationMethod;
+use codex_config::types::NotificationMethod;
 
 mod event_stream;
 mod frame_rate_limiter;

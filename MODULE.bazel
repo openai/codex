@@ -82,6 +82,13 @@ rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_r
 rules_rust.patch(
     patches = [
         "//patches:rules_rust_windows_gnullvm_build_script.patch",
+        "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
+        "//patches:rules_rust_windows_bootstrap_process_wrapper_linker.patch",
+        "//patches:rules_rust_windows_msvc_direct_link_args.patch",
+        "//patches:rules_rust_windows_exec_bin_target.patch",
+        "//patches:rules_rust_windows_exec_std.patch",
+        "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
+        "//patches:rules_rust_repository_set_exec_constraints.patch",
     ],
     strip = 1,
 )
@@ -95,6 +102,35 @@ nightly_rust.toolchain(
     versions = ["nightly/2025-09-18"],
     dev_components = True,
     edition = "2024",
+)
+# Keep Windows exec tools on MSVC so Bazel helper binaries link correctly, but
+# lint crate targets as `windows-gnullvm` to preserve the repo's actual cfgs.
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64",
+    dev_components = True,
+    edition = "2024",
+    exec_triple = "x86_64-pc-windows-msvc",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+    ],
+    target_triple = "x86_64-pc-windows-msvc",
+    versions = ["nightly/2025-09-18"],
+)
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+    ],
+    target_triple = "x86_64-pc-windows-gnullvm",
 )
 use_repo(nightly_rust, "rust_toolchains")
 
@@ -163,6 +199,8 @@ crate.annotation(
     patch_args = ["-p1"],
     patches = [
         "//patches:aws-lc-sys_memcmp_check.patch",
+        "//patches:aws-lc-sys_windows_msvc_prebuilt_nasm.patch",
+        "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
     ],
 )
 

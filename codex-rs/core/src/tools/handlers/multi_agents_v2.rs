@@ -2,9 +2,7 @@
 
 use crate::agent::AgentStatus;
 use crate::agent::agent_resolver::resolve_agent_target;
-use crate::agent::agent_resolver::resolve_agent_targets;
 use crate::agent::exceeds_thread_spawn_depth_limit;
-use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -15,12 +13,10 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::AgentPath;
-use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
-use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
 use codex_protocol::protocol::CollabCloseBeginEvent;

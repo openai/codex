@@ -7,8 +7,6 @@ use arc_swap::ArcSwap;
 
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
-use crate::is_dangerous_command::command_might_be_dangerous;
-use crate::is_safe_command::is_known_safe_command;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -25,16 +23,18 @@ use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
+use codex_shell_command::is_safe_command::is_known_safe_command;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
 use tracing::instrument;
 
-use crate::bash::parse_shell_lc_plain_commands;
-use crate::bash::parse_shell_lc_single_command_prefix;
 use crate::config::Config;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use codex_shell_command::bash::parse_shell_lc_plain_commands;
+use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 

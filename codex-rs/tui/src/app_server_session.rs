@@ -1063,7 +1063,7 @@ async fn thread_session_state_from_thread_response(
     })
 }
 
-fn app_server_rate_limit_snapshots_to_core(
+pub(crate) fn app_server_rate_limit_snapshots_to_core(
     response: GetAccountRateLimitsResponse,
 ) -> Vec<RateLimitSnapshot> {
     let mut snapshots = Vec::new();

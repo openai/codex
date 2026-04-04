@@ -5,10 +5,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
 use crate::codex::run_turn;
-use crate::protocol::EventMsg;
-use crate::protocol::TurnStartedEvent;
 use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
 use crate::state::TaskKind;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::UserInput;
 use tracing::Instrument;
 use tracing::trace_span;

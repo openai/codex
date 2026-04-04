@@ -20,6 +20,7 @@ use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
@@ -32,6 +33,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -179,8 +181,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
@@ -191,21 +192,16 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
-use codex_core::auth::AuthMode as CoreAuthMode;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_state;
-use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
 use codex_core::error::Result as CodexResult;
 use codex_core::exec::ExecCapturePolicy;
@@ -216,10 +212,6 @@ use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
-use codex_core::mcp::auth::discover_supported_scopes;
-use codex_core::mcp::auth::resolve_oauth_scopes;
-use codex_core::mcp::collect_mcp_snapshot;
-use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
@@ -235,9 +227,6 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::get_state_db;
-use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
@@ -246,12 +235,22 @@ use codex_features::Feature;
 use codex_features::Stage;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::git_diff_to_remote;
+use codex_login::AuthManager;
+use codex_login::AuthMode as CoreAuthMode;
+use codex_login::CLIENT_ID;
+use codex_login::CodexAuth;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
+use codex_login::default_client::set_default_client_residency_requirement;
+use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_mcp::mcp::auth::discover_supported_scopes;
+use codex_mcp::mcp::auth::resolve_oauth_scopes;
+use codex_mcp::mcp::collect_mcp_snapshot;
+use codex_mcp::mcp::group_tools_by_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -282,6 +281,9 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_rollout::state_db::StateDbHandle;
+use codex_rollout::state_db::get_state_db;
+use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
@@ -403,6 +405,7 @@ pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
+    analytics_events_client: AnalyticsEventsClient,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
@@ -433,6 +436,8 @@ struct ListenerTaskContext {
     thread_manager: Arc<ThreadManager>,
     thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
+    analytics_events_client: AnalyticsEventsClient,
+    general_analytics_enabled: bool,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
@@ -455,6 +460,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) thread_manager: Arc<ThreadManager>,
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
@@ -519,6 +525,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             cli_overrides,
@@ -531,6 +538,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing: outgoing.clone(),
+            analytics_events_client,
             arg0_paths,
             config,
             cli_overrides,
@@ -1015,7 +1023,7 @@ impl CodexMessageProcessor {
         &mut self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        if self.auth_manager.is_external_auth_active() {
+        if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
         }
 
@@ -1094,7 +1102,7 @@ impl CodexMessageProcessor {
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
-        if self.auth_manager.is_external_auth_active() {
+        if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
         }
 
@@ -1531,7 +1539,7 @@ impl CodexMessageProcessor {
     }
 
     async fn refresh_token_if_requested(&self, do_refresh: bool) -> RefreshTokenRequestOutcome {
-        if self.auth_manager.is_external_auth_active() {
+        if self.auth_manager.is_external_chatgpt_auth_active() {
             return RefreshTokenRequestOutcome::NotAttemptedOrSucceeded;
         }
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
@@ -2086,6 +2094,8 @@ impl CodexMessageProcessor {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
+            analytics_events_client: self.analytics_events_client.clone(),
+            general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
@@ -2318,6 +2328,17 @@ impl CodexMessageProcessor {
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
+                if listener_task_context.general_analytics_enabled {
+                    listener_task_context
+                        .analytics_events_client
+                        .track_response(
+                            request_id.connection_id.0,
+                            ClientResponse::ThreadStart {
+                                request_id: request_id.request_id.clone(),
+                                response: response.clone(),
+                            },
+                        );
+                }
 
                 listener_task_context
                     .outgoing
@@ -3805,6 +3826,15 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::ThreadResume {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
+                }
 
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -4412,6 +4442,15 @@ impl CodexMessageProcessor {
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
+        if self.config.features.enabled(Feature::GeneralAnalytics) {
+            self.analytics_events_client.track_response(
+                request_id.connection_id.0,
+                ClientResponse::ThreadFork {
+                    request_id: request_id.request_id.clone(),
+                    response: response.clone(),
+                },
+            );
+        }
 
         self.outgoing.send_response(request_id, response).await;
 
@@ -5009,9 +5048,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let mcp_config = config.to_mcp_config(self.thread_manager.plugins_manager().as_ref());
+        let auth = self.auth_manager.auth().await;
 
         tokio::spawn(async move {
-            Self::list_mcp_server_status_task(outgoing, request, params, config).await;
+            Self::list_mcp_server_status_task(outgoing, request, params, config, mcp_config, auth)
+                .await;
         });
     }
 
@@ -5020,8 +5062,15 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ListMcpServerStatusParams,
         config: Config,
+        mcp_config: codex_mcp::mcp::McpConfig,
+        auth: Option<CodexAuth>,
     ) {
-        let snapshot = collect_mcp_snapshot(&config).await;
+        let snapshot = collect_mcp_snapshot(
+            &mcp_config,
+            auth.as_ref(),
+            request_id.request_id.to_string(),
+        )
+        .await;
 
         let tools_by_server = group_tools_by_server(&snapshot.tools);
 
@@ -6993,6 +7042,8 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                analytics_events_client: self.analytics_events_client.clone(),
+                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -7080,6 +7131,8 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                analytics_events_client: self.analytics_events_client.clone(),
+                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -7111,6 +7164,8 @@ impl CodexMessageProcessor {
             outgoing,
             thread_manager,
             thread_state_manager,
+            analytics_events_client: _,
+            general_analytics_enabled: _,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,

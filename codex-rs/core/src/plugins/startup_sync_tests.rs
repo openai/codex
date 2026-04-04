@@ -1,10 +1,10 @@
 use super::*;
-use crate::auth::CodexAuth;
 use crate::config::CONFIG_TOML_FILE;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
+use codex_login::CodexAuth;
 use pretty_assertions::assert_eq;
 use std::io::Write;
 use std::path::Path;

@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::RemovedWatchdog;
 use crate::agent::WatchdogRegistration;
 use crate::agent::control::LiveAgent;
+use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
@@ -138,7 +139,7 @@ impl ToolHandler for Handler {
                     Some(spawn_source),
                     SpawnAgentOptions {
                         fork_parent_spawn_call_id: fork_context.then(|| call_id.clone()),
-                        ..Default::default()
+                        fork_mode: fork_context.then_some(SpawnAgentForkMode::FullHistory),
                     },
                 )
                 .await

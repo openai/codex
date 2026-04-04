@@ -105,7 +105,7 @@ async fn summarize_memories_returns_empty_for_empty_input() {
 #[test]
 fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     let auth_context = AuthRequestTelemetryContext::new(
-        Some(crate::auth::AuthMode::Chatgpt),
+        Some(codex_login::AuthMode::Chatgpt),
         &crate::api_bridge::CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
             mode: "managed",

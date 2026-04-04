@@ -309,7 +309,7 @@ where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
 {
-    Option::<Vec<T>>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
+    Option::<Vec<T>>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
 #[derive(Clone, Debug, Deserialize)]

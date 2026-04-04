@@ -1,6 +1,4 @@
 use crate::codex::TurnContext;
-use crate::protocol::EventMsg;
-use crate::protocol::WarningEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -10,6 +8,8 @@ use codex_git_utils::GhostSnapshotReport;
 use codex_git_utils::GitToolingError;
 use codex_git_utils::create_ghost_commit_with_report;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;

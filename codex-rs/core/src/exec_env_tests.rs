@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::types::ShellEnvironmentPolicyInherit;
+use codex_config::types::ShellEnvironmentPolicyInherit;
 use maplit::hashmap;
 
 fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {

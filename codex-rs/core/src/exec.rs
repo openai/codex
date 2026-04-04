@@ -20,11 +20,6 @@ use tokio_util::sync::CancellationToken;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
-use crate::protocol::ExecOutputStream;
-use crate::protocol::SandboxPolicy;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -37,6 +32,11 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -314,7 +314,6 @@ pub fn build_exec_request(
 
 pub(crate) async fn execute_exec_request(
     exec_request: ExecRequest,
-    sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
@@ -328,13 +327,12 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        sandbox_policy: _sandbox_policy_from_env,
+        sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_restricted_token_filesystem_overlay,
         arg0,
     } = exec_request;
-    let _ = _sandbox_policy_from_env;
 
     let params = ExecParams {
         command,
@@ -354,7 +352,7 @@ pub(crate) async fn execute_exec_request(
     let raw_output_result = exec(
         params,
         sandbox,
-        sandbox_policy,
+        &sandbox_policy,
         &file_system_sandbox_policy,
         windows_restricted_token_filesystem_overlay.as_ref(),
         network_sandbox_policy,

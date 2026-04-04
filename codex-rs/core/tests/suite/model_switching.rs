@@ -1,8 +1,8 @@
 use anyhow::Result;
-use codex_core::CodexAuth;
-use codex_core::config::types::Personality;
+use codex_config::types::Personality;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ConfigShellToolType;

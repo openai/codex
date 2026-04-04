@@ -4,49 +4,39 @@ use crate::models_manager::model_info::with_config_overrides;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::ToolRouter;
+use crate::tools::registry::tool_handler_key;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_tools::AdditionalProperties;
-use codex_tools::CommandToolOptions;
 use codex_tools::ConfiguredToolSpec;
-use codex_tools::FreeformTool;
-use codex_tools::ResponsesApiWebSearchFilters;
-use codex_tools::ResponsesApiWebSearchUserLocation;
-use codex_tools::SpawnAgentToolOptions;
-use codex_tools::ViewImageToolOptions;
-use codex_tools::WaitAgentTimeoutOptions;
-use codex_tools::create_close_agent_tool_v1;
-use codex_tools::create_close_agent_tool_v2;
-use codex_tools::create_exec_command_tool;
-use codex_tools::create_request_permissions_tool;
-use codex_tools::create_request_user_input_tool;
-use codex_tools::create_resume_agent_tool;
-use codex_tools::create_send_input_tool_v1;
-use codex_tools::create_send_message_tool;
-use codex_tools::create_spawn_agent_tool_v1;
-use codex_tools::create_spawn_agent_tool_v2;
-use codex_tools::create_view_image_tool;
-use codex_tools::create_wait_agent_tool_v1;
-use codex_tools::create_wait_agent_tool_v2;
-use codex_tools::create_watchdog_self_close_tool;
-use codex_tools::create_write_stdin_tool;
+use codex_tools::DiscoverableTool;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ShellCommandBackendConfig;
+use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::TOOL_SUGGEST_TOOL_NAME;
+use codex_tools::ToolSpec;
+use codex_tools::ToolsConfig;
+use codex_tools::ToolsConfigParams;
+use codex_tools::UnifiedExecShellMode;
+use codex_tools::ZshForkConfig;
+use codex_tools::mcp_call_tool_result_output_schema;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::*;
@@ -138,7 +128,7 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
     use std::collections::HashSet;
     let mut names = HashSet::new();
     let mut duplicates = Vec::new();
-    for name in tools.iter().flat_map(configured_tool_spec_names) {
+    for name in tools.iter().map(ConfiguredToolSpec::name) {
         if !names.insert(name) {
             duplicates.push(name);
         }
@@ -155,44 +145,6 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
     }
 }
 
-fn configured_tool_spec_names(tool: &ConfiguredToolSpec) -> Vec<&str> {
-    match &tool.spec {
-        ToolSpec::Namespace(namespace) => namespace
-            .tools
-            .iter()
-            .map(|tool| match tool {
-                codex_tools::ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
-            })
-            .collect(),
-        _ => vec![tool.name()],
-    }
-}
-
-fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
-    let names = tools
-        .iter()
-        .flat_map(configured_tool_spec_names)
-        .collect::<Vec<_>>();
-    assert!(
-        !names.contains(&expected_absent),
-        "expected tool {expected_absent} to be absent; had: {names:?}"
-    );
-}
-
-fn assert_contains_top_level_tool_name(tools: &[ConfiguredToolSpec], expected: &str) {
-    assert!(
-        tools.iter().any(|tool| tool.name() == expected),
-        "expected top-level tool {expected} to be present"
-    );
-}
-
-fn assert_lacks_top_level_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
-    assert!(
-        !tools.iter().any(|tool| tool.name() == expected_absent),
-        "expected top-level tool {expected_absent} to be absent"
-    );
-}
-
 fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     match config.shell_type {
         ConfigShellToolType::Default => Some("shell"),
@@ -200,27 +152,6 @@ fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         ConfigShellToolType::UnifiedExec => None,
         ConfigShellToolType::Disabled => None,
         ConfigShellToolType::ShellCommand => Some("shell_command"),
-    }
-}
-
-fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
-    create_request_user_input_tool(request_user_input_tool_description(
-        default_mode_request_user_input,
-    ))
-}
-
-fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
-    SpawnAgentToolOptions {
-        available_models: &config.available_models,
-        agent_type_description: crate::agent::role::spawn_tool_spec::build(&config.agent_roles),
-    }
-}
-
-fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
-    WaitAgentTimeoutOptions {
-        default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
-        min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
-        max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
     }
 }
 
@@ -233,9 +164,7 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
             continue;
         };
         if let Some(tool) = namespace.tools.iter().find_map(|tool| match tool {
-            codex_tools::ResponsesApiNamespaceTool::Function(tool)
-                if tool.name == expected_name =>
-            {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => {
                 Some(tool.clone())
             }
             _ => None,
@@ -266,9 +195,7 @@ fn find_namespaced_tool(
         .tools
         .iter()
         .find_map(|tool| match tool {
-            codex_tools::ResponsesApiNamespaceTool::Function(tool)
-                if tool.name == expected_name =>
-            {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => {
                 Some(tool.clone())
             }
             _ => None,
@@ -279,46 +206,6 @@ fn find_namespaced_tool(
         ToolSpec::Function(tool),
         /*supports_parallel_tool_calls*/ false,
     )
-}
-
-fn strip_descriptions_schema(schema: &mut JsonSchema) {
-    match schema {
-        JsonSchema::Boolean { description }
-        | JsonSchema::String { description }
-        | JsonSchema::Number { description } => {
-            *description = None;
-        }
-        JsonSchema::Array { items, description } => {
-            strip_descriptions_schema(items);
-            *description = None;
-        }
-        JsonSchema::Object {
-            properties,
-            required: _,
-            additional_properties,
-        } => {
-            for v in properties.values_mut() {
-                strip_descriptions_schema(v);
-            }
-            if let Some(AdditionalProperties::Schema(s)) = additional_properties {
-                strip_descriptions_schema(s);
-            }
-        }
-    }
-}
-
-fn strip_descriptions_tool(spec: &mut ToolSpec) {
-    match spec {
-        ToolSpec::ToolSearch { parameters, .. } => strip_descriptions_schema(parameters),
-        ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
-            strip_descriptions_schema(parameters);
-        }
-        ToolSpec::Namespace(_)
-        | ToolSpec::Freeform(_)
-        | ToolSpec::LocalShell {}
-        | ToolSpec::ImageGeneration { .. }
-        | ToolSpec::WebSearch { .. } => {}
-    }
 }
 
 fn model_info_from_models_json(slug: &str) -> ModelInfo {
@@ -333,28 +220,20 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
     with_config_overrides(model, &config)
 }
 
-#[test]
-fn unified_exec_is_blocked_for_windows_sandboxed_policies_only() {
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::new_read_only_policy(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::new_workspace_write_policy(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::DangerFullAccess,
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::DangerFullAccess,
-        WindowsSandboxLevel::Disabled,
-    ));
+/// Builds the tool registry builder while collecting tool specs for later serialization.
+fn build_specs(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    app_tools: Option<HashMap<String, ToolInfo>>,
+    dynamic_tools: &[DynamicToolSpec],
+) -> ToolRegistryBuilder {
+    build_specs_with_discoverable_tools(
+        config,
+        mcp_tools,
+        app_tools,
+        /*discoverable_tools*/ None,
+        dynamic_tools,
+    )
 }
 
 #[test]
@@ -1058,168 +937,6 @@ fn get_memory_requires_feature_flag() {
     );
 }
 
-#[test]
-fn js_repl_requires_feature_flag() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let features = Features::with_defaults();
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    assert!(
-        !tools.iter().any(|tool| tool.spec.name() == "js_repl"),
-        "js_repl should be disabled when the feature is off"
-    );
-    assert!(
-        !tools.iter().any(|tool| tool.spec.name() == "js_repl_reset"),
-        "js_repl_reset should be disabled when the feature is off"
-    );
-}
-
-#[test]
-fn js_repl_enabled_adds_tools() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::JsRepl);
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-    assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
-}
-
-#[test]
-fn image_generation_tools_require_feature_and_supported_model() {
-    let config = test_config();
-    let mut supported_model_info =
-        ModelsManager::construct_model_info_offline_for_tests("gpt-5.2", &config);
-    supported_model_info.slug = "custom/gpt-5.2-variant".to_string();
-    let mut unsupported_model_info = supported_model_info.clone();
-    unsupported_model_info.input_modalities = vec![InputModality::Text];
-    let default_features = Features::with_defaults();
-    let mut image_generation_features = default_features.clone();
-    image_generation_features.enable(Feature::ImageGeneration);
-
-    let available_models = Vec::new();
-    let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &supported_model_info,
-        available_models: &available_models,
-        features: &default_features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (default_tools, _) = build_specs(
-        &default_tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-    assert!(
-        !default_tools
-            .iter()
-            .any(|tool| tool.spec.name() == "image_generation"),
-        "image_generation should be disabled by default"
-    );
-
-    let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &supported_model_info,
-        available_models: &available_models,
-        features: &image_generation_features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (supported_tools, _) = build_specs(
-        &supported_tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-    assert_contains_tool_names(&supported_tools, &["image_generation"]);
-    let image_generation_tool = find_tool(&supported_tools, "image_generation");
-    assert_eq!(
-        serde_json::to_value(&image_generation_tool.spec).expect("serialize image tool"),
-        serde_json::json!({
-            "type": "image_generation",
-            "output_format": "png"
-        })
-    );
-
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &unsupported_model_info,
-        available_models: &available_models,
-        features: &image_generation_features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-    assert!(
-        !tools
-            .iter()
-            .any(|tool| tool.spec.name() == "image_generation"),
-        "image_generation should be disabled for unsupported models"
-    );
-}
-
-#[test]
-fn js_repl_freeform_grammar_blocks_common_non_js_prefixes() {
-    let ToolSpec::Freeform(FreeformTool { format, .. }) = create_js_repl_tool() else {
-        panic!("js_repl should use a freeform tool spec");
-    };
-
-    assert_eq!(format.syntax, "lark");
-    assert!(format.definition.contains("PRAGMA_LINE"));
-    assert!(format.definition.contains("`[^`]"));
-    assert!(format.definition.contains("``[^`]"));
-    assert!(format.definition.contains("PLAIN_JS_SOURCE"));
-    assert!(format.definition.contains("codex-js-repl:"));
-    assert!(!format.definition.contains("(?!"));
-}
-
 fn assert_model_tools(
     model_slug: &str,
     features: &Features,
@@ -1278,244 +995,6 @@ fn assert_default_model_tools(
     };
     expected.extend(expected_tail);
     assert_model_tools(model_slug, features, web_search_mode, &expected);
-}
-
-#[test]
-fn web_search_mode_cached_sets_external_web_access_false() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let features = Features::with_defaults();
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    let tool = find_tool(&tools, "web_search");
-    assert_eq!(
-        tool.spec,
-        ToolSpec::WebSearch {
-            external_web_access: Some(false),
-            filters: None,
-            user_location: None,
-            search_context_size: None,
-            search_content_types: None,
-        }
-    );
-}
-
-#[test]
-fn web_search_mode_live_sets_external_web_access_true() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let features = Features::with_defaults();
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Live),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    let tool = find_tool(&tools, "web_search");
-    assert_eq!(
-        tool.spec,
-        ToolSpec::WebSearch {
-            external_web_access: Some(true),
-            filters: None,
-            user_location: None,
-            search_context_size: None,
-            search_content_types: None,
-        }
-    );
-}
-
-#[test]
-fn web_search_config_is_forwarded_to_tool_spec() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let features = Features::with_defaults();
-    let web_search_config = WebSearchConfig {
-        filters: Some(codex_protocol::config_types::WebSearchFilters {
-            allowed_domains: Some(vec!["example.com".to_string()]),
-        }),
-        user_location: Some(codex_protocol::config_types::WebSearchUserLocation {
-            r#type: codex_protocol::config_types::WebSearchUserLocationType::Approximate,
-            country: Some("US".to_string()),
-            region: Some("California".to_string()),
-            city: Some("San Francisco".to_string()),
-            timezone: Some("America/Los_Angeles".to_string()),
-        }),
-        search_context_size: Some(codex_protocol::config_types::WebSearchContextSize::High),
-    };
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Live),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    })
-    .with_web_search_config(Some(web_search_config.clone()));
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    let tool = find_tool(&tools, "web_search");
-    assert_eq!(
-        tool.spec,
-        ToolSpec::WebSearch {
-            external_web_access: Some(true),
-            filters: web_search_config
-                .filters
-                .map(ResponsesApiWebSearchFilters::from),
-            user_location: web_search_config
-                .user_location
-                .map(ResponsesApiWebSearchUserLocation::from),
-            search_context_size: web_search_config.search_context_size,
-            search_content_types: None,
-        }
-    );
-}
-
-#[test]
-fn web_search_tool_type_text_and_image_sets_search_content_types() {
-    let config = test_config();
-    let mut model_info =
-        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
-    let features = Features::with_defaults();
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Live),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    let tool = find_tool(&tools, "web_search");
-    assert_eq!(
-        tool.spec,
-        ToolSpec::WebSearch {
-            external_web_access: Some(true),
-            filters: None,
-            user_location: None,
-            search_context_size: None,
-            search_content_types: Some(
-                WEB_SEARCH_CONTENT_TYPES
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect()
-            ),
-        }
-    );
-}
-
-#[test]
-fn mcp_resource_tools_are_hidden_without_mcp_servers() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    assert!(
-        !tools.iter().any(|tool| matches!(
-            tool.spec.name(),
-            "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource"
-        )),
-        "MCP resource tools should be omitted when no MCP servers are configured"
-    );
-}
-
-#[test]
-fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        Some(HashMap::new()),
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-        ],
-    );
 }
 
 #[test]
@@ -1806,7 +1285,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     assert_eq!(
         tools_config
             .with_unified_exec_shell_mode_for_session(
-                &user_shell,
+                tool_user_shell_type(&user_shell),
                 Some(&PathBuf::from(if cfg!(windows) {
                     r"C:\opt\codex\zsh"
                 } else {
@@ -1831,492 +1310,6 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
             UnifiedExecShellMode::Direct
         }
     );
-}
-
-#[test]
-#[ignore]
-fn test_parallel_support_flags() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
-    assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
-}
-
-#[test]
-fn test_test_model_info_includes_sync_tool() {
-    let _config = test_config();
-    let mut model_info = model_info_from_models_json("gpt-5-codex");
-    model_info.experimental_supported_tools = vec!["test_sync_tool".to_string()];
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    assert!(tools.iter().any(|tool| tool.name() == "test_sync_tool"));
-}
-
-#[test]
-fn test_build_specs_mcp_tools_converted() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Live),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        Some(HashMap::from([(
-            "test_server/do_something_cool".to_string(),
-            mcp_tool(
-                "do_something_cool",
-                "Do something cool",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "string_argument": { "type": "string" },
-                        "number_argument": { "type": "number" },
-                        "object_argument": {
-                            "type": "object",
-                            "properties": {
-                                "string_property": { "type": "string" },
-                                "number_property": { "type": "number" },
-                            },
-                            "required": ["string_property", "number_property"],
-                            "additionalProperties": false,
-                        },
-                    },
-                }),
-            ),
-        )])),
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    let tool = find_tool(&tools, "test_server/do_something_cool");
-    assert_eq!(
-        &tool.spec,
-        &ToolSpec::Function(ResponsesApiTool {
-            name: "test_server/do_something_cool".to_string(),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
-                    (
-                        "string_argument".to_string(),
-                        JsonSchema::String { description: None }
-                    ),
-                    (
-                        "number_argument".to_string(),
-                        JsonSchema::Number { description: None }
-                    ),
-                    (
-                        "object_argument".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([
-                                (
-                                    "string_property".to_string(),
-                                    JsonSchema::String { description: None }
-                                ),
-                                (
-                                    "number_property".to_string(),
-                                    JsonSchema::Number { description: None }
-                                ),
-                            ]),
-                            required: Some(vec![
-                                "string_property".to_string(),
-                                "number_property".to_string(),
-                            ]),
-                            additional_properties: Some(false.into()),
-                        },
-                    ),
-                ]),
-                required: None,
-                additional_properties: None,
-            },
-            description: "Do something cool".to_string(),
-            strict: false,
-            output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
-            defer_loading: None,
-        })
-    );
-}
-
-#[test]
-fn test_build_specs_mcp_tools_sorted_by_name() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    // Intentionally construct a map with keys that would sort alphabetically.
-    let tools_map: HashMap<String, rmcp::model::Tool> = HashMap::from([
-        (
-            "test_server/do".to_string(),
-            mcp_tool("a", "a", serde_json::json!({"type": "object"})),
-        ),
-        (
-            "test_server/something".to_string(),
-            mcp_tool("b", "b", serde_json::json!({"type": "object"})),
-        ),
-        (
-            "test_server/cool".to_string(),
-            mcp_tool("c", "c", serde_json::json!({"type": "object"})),
-        ),
-    ]);
-
-    let (tools, _) = build_specs(&tools_config, Some(tools_map), /*app_tools*/ None, &[]).build();
-
-    // Only assert that the MCP tools themselves are sorted by fully-qualified name.
-    let mcp_names: Vec<_> = tools
-        .iter()
-        .map(|t| t.name().to_string())
-        .filter(|n| n.starts_with("test_server/"))
-        .collect();
-    let expected = vec![
-        "test_server/cool".to_string(),
-        "test_server/do".to_string(),
-        "test_server/something".to_string(),
-    ];
-    assert_eq!(mcp_names, expected);
-}
-
-#[test]
-fn search_tool_description_lists_each_codex_apps_connector_once() {
-    let model_info = search_capable_model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Apps);
-    features.enable(Feature::ToolSearch);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let (tools, _) = build_specs(
-        &tools_config,
-        Some(HashMap::from([
-            (
-                "mcp__codex_apps__calendar_create_event".to_string(),
-                mcp_tool(
-                    "calendar_create_event",
-                    "Create calendar event",
-                    serde_json::json!({"type": "object"}),
-                ),
-            ),
-            (
-                "mcp__rmcp__echo".to_string(),
-                mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
-            ),
-        ])),
-        Some(HashMap::from([
-            (
-                "mcp__codex_apps__calendar_create_event".to_string(),
-                ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "_create_event".to_string(),
-                    tool_namespace: "mcp__codex_apps__calendar".to_string(),
-                    tool: mcp_tool(
-                        "calendar-create-event",
-                        "Create calendar event",
-                        serde_json::json!({"type": "object"}),
-                    ),
-                    connector_id: Some("calendar".to_string()),
-                    connector_name: Some("Calendar".to_string()),
-                    plugin_display_names: Vec::new(),
-                    connector_description: Some(
-                        "Plan events and manage your calendar.".to_string(),
-                    ),
-                },
-            ),
-            (
-                "mcp__codex_apps__calendar_list_events".to_string(),
-                ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "_list_events".to_string(),
-                    tool_namespace: "mcp__codex_apps__calendar".to_string(),
-                    tool: mcp_tool(
-                        "calendar-list-events",
-                        "List calendar events",
-                        serde_json::json!({"type": "object"}),
-                    ),
-                    connector_id: Some("calendar".to_string()),
-                    connector_name: Some("Calendar".to_string()),
-                    plugin_display_names: Vec::new(),
-                    connector_description: Some(
-                        "Plan events and manage your calendar.".to_string(),
-                    ),
-                },
-            ),
-            (
-                "mcp__codex_apps__gmail_search_threads".to_string(),
-                ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "_search_threads".to_string(),
-                    tool_namespace: "mcp__codex_apps__gmail".to_string(),
-                    tool: mcp_tool(
-                        "gmail-search-threads",
-                        "Search email threads",
-                        serde_json::json!({"type": "object"}),
-                    ),
-                    connector_id: Some("gmail".to_string()),
-                    connector_name: Some("Gmail".to_string()),
-                    plugin_display_names: Vec::new(),
-                    connector_description: Some("Find and summarize email threads.".to_string()),
-                },
-            ),
-            (
-                "mcp__rmcp__echo".to_string(),
-                ToolInfo {
-                    server_name: "rmcp".to_string(),
-                    tool_name: "echo".to_string(),
-                    tool_namespace: "rmcp".to_string(),
-                    tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
-                    connector_id: None,
-                    connector_name: None,
-                    plugin_display_names: Vec::new(),
-                    connector_description: None,
-                },
-            ),
-        ])),
-        &[],
-    )
-    .build();
-
-    let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
-        panic!("expected tool_search tool");
-    };
-    let description = description.as_str();
-    assert!(description.contains("- Calendar: Plan events and manage your calendar."));
-    assert!(description.contains("- Gmail: Find and summarize email threads."));
-    assert_eq!(
-        description
-            .matches("- Calendar: Plan events and manage your calendar.")
-            .count(),
-        1
-    );
-    assert!(!description.contains("mcp__rmcp__echo"));
-}
-
-#[test]
-fn search_tool_requires_model_capability_and_feature_flag() {
-    let model_info = search_capable_model_info();
-    let app_tools = Some(HashMap::from([(
-        "mcp__codex_apps__calendar_create_event".to_string(),
-        ToolInfo {
-            server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool_name: "calendar_create_event".to_string(),
-            tool_namespace: "mcp__codex_apps__calendar".to_string(),
-            tool: mcp_tool(
-                "calendar_create_event",
-                "Create calendar event",
-                serde_json::json!({"type": "object"}),
-            ),
-            connector_id: Some("calendar".to_string()),
-            connector_name: Some("Calendar".to_string()),
-            connector_description: None,
-            plugin_display_names: Vec::new(),
-        },
-    )]));
-
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &ModelInfo {
-            supports_search_tool: false,
-            ..model_info.clone()
-        },
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        app_tools.clone(),
-        &[],
-    )
-    .build();
-    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        app_tools.clone(),
-        &[],
-    )
-    .build();
-    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
-
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(&tools_config, /*mcp_tools*/ None, app_tools, &[]).build();
-    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
-}
-
-#[test]
-fn tool_suggest_is_not_registered_without_feature_flag() {
-    let model_info = search_capable_model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
-    features.enable(Feature::Apps);
-    features.enable(Feature::Plugins);
-    features.disable(Feature::ToolSuggest);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs_with_discoverable_tools(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        Some(vec![discoverable_connector(
-            "connector_2128aebfecb84f64a069897515042a44",
-            "Google Calendar",
-            "Plan events and schedules.",
-        )]),
-        &[],
-    )
-    .build();
-
-    assert!(
-        !tools
-            .iter()
-            .any(|tool| tool.name() == TOOL_SUGGEST_TOOL_NAME)
-    );
-}
-
-#[test]
-fn tool_suggest_can_be_registered_without_search_tool() {
-    let model_info = ModelInfo {
-        supports_search_tool: false,
-        ..search_capable_model_info()
-    };
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Apps);
-    features.enable(Feature::Plugins);
-    features.enable(Feature::ToolSuggest);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs_with_discoverable_tools(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        Some(vec![discoverable_connector(
-            "connector_2128aebfecb84f64a069897515042a44",
-            "Google Calendar",
-            "Plan events and schedules.",
-        )]),
-        &[],
-    )
-    .build();
-
-    assert_contains_tool_names(&tools, &[TOOL_SUGGEST_TOOL_NAME]);
-    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
-
-    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
-        panic!("expected function tool");
-    };
-    assert!(description.contains(
-        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
-    ));
-    assert!(description.contains(
-        "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
-    ));
 }
 
 #[test]
@@ -2421,7 +1414,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
         Some(HashMap::from([(
             "mcp__codex_apps__calendar_create_event".to_string(),
             ToolInfo {
-                server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 tool_name: "_create_event".to_string(),
                 tool_namespace: "mcp__codex_apps__calendar".to_string(),
                 tool: mcp_tool(
@@ -2471,7 +1464,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
             (
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_create_event".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: mcp_tool(
@@ -2488,7 +1481,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
             (
                 "mcp__codex_apps__calendar_list_events".to_string(),
                 ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_list_events".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: mcp_tool(
@@ -2511,111 +1504,6 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
 
     assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, /*namespace*/ None));
     assert!(registry.has_handler(alias.as_str(), /*namespace*/ None));
-}
-
-#[test]
-fn tool_suggest_description_lists_discoverable_tools() {
-    let model_info = search_capable_model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Apps);
-    features.enable(Feature::Plugins);
-    features.enable(Feature::ToolSearch);
-    features.enable(Feature::ToolSuggest);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let discoverable_tools = vec![
-        discoverable_connector(
-            "connector_2128aebfecb84f64a069897515042a44",
-            "Google Calendar",
-            "Plan events and schedules.",
-        ),
-        discoverable_connector(
-            "connector_68df038e0ba48191908c8434991bbac2",
-            "Gmail",
-            "Find and summarize email threads.",
-        ),
-        DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
-            id: "sample@test".to_string(),
-            name: "Sample Plugin".to_string(),
-            description: None,
-            has_skills: true,
-            mcp_server_names: vec!["sample-docs".to_string()],
-            app_connector_ids: vec!["connector_sample".to_string()],
-        })),
-    ];
-
-    let (tools, _) = build_specs_with_discoverable_tools(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        Some(discoverable_tools),
-        &[],
-    )
-    .build();
-
-    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
-    let ToolSpec::Function(ResponsesApiTool {
-        description,
-        parameters,
-        ..
-    }) = &tool_suggest.spec
-    else {
-        panic!("expected function tool");
-    };
-    assert!(description.contains(
-        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
-    ));
-    assert!(description.contains("Google Calendar"));
-    assert!(description.contains("Gmail"));
-    assert!(description.contains("Sample Plugin"));
-    assert!(description.contains("Plan events and schedules."));
-    assert!(description.contains("Find and summarize email threads."));
-    assert!(description.contains("id: `sample@test`, type: plugin, action: install"));
-    assert!(description.contains("`action_type`: `install` or `enable`"));
-    assert!(
-        description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
-    );
-    assert!(
-        description.contains(
-            "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
-        )
-    );
-    assert!(description.contains(
-        "For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely."
-    ));
-    assert!(description.contains(
-        "For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself."
-    ));
-    assert!(description.contains(
-        "Do not suggest a plugin just because one of its connectors or capabilities seems relevant."
-    ));
-    assert!(description.contains(
-        "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
-    ));
-    assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
-    assert!(!description.contains("{{discoverable_tools}}"));
-    assert!(!description.contains("tool_search fails to find a good match"));
-    let JsonSchema::Object { required, .. } = parameters else {
-        panic!("expected object parameters");
-    };
-    assert_eq!(
-        required.as_ref(),
-        Some(&vec![
-            "tool_type".to_string(),
-            "action_type".to_string(),
-            "tool_id".to_string(),
-            "suggest_reason".to_string(),
-        ])
-    );
 }
 
 #[test]
@@ -3001,95 +1889,6 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
 }
 
 #[test]
-fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::CodeMode);
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
-        &find_tool(&tools, "view_image").spec
-    else {
-        panic!("expected function tool");
-    };
-
-    assert_eq!(
-        description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<{ detail: string | null; image_url: string; }>; };\n```"
-    );
-}
-
-#[test]
-fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::CodeMode);
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let (tools, _) = build_specs(
-        &tools_config,
-        Some(HashMap::from([(
-            "mcp__sample__echo".to_string(),
-            mcp_tool(
-                "echo",
-                "Echo text",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"}
-                    },
-                    "required": ["message"],
-                    "additionalProperties": false
-                }),
-            ),
-        )])),
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
-        &find_tool(&tools, "mcp__sample__echo").spec
-    else {
-        panic!("expected function tool");
-    };
-
-    assert_eq!(
-        description,
-        "Echo text\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```"
-    );
-}
-
-#[test]
 fn code_mode_only_restricts_model_tools_to_exec_tools() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
@@ -3101,79 +1900,4 @@ fn code_mode_only_restricts_model_tools_to_exec_tools() {
         Some(WebSearchMode::Live),
         &["exec", "wait"],
     );
-}
-
-#[test]
-fn code_mode_only_exec_description_includes_full_nested_tool_details() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::CodeMode);
-    features.enable(Feature::CodeModeOnly);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
-    else {
-        panic!("expected freeform tool");
-    };
-
-    assert!(!description.contains("Enabled nested tools:"));
-    assert!(!description.contains("Nested tool reference:"));
-    assert!(description.starts_with(
-        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
-    ));
-    assert!(description.contains("### `update_plan` (`update_plan`)"));
-    assert!(description.contains("### `view_image` (`view_image`)"));
-}
-
-#[test]
-fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::CodeMode);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
-    else {
-        panic!("expected freeform tool");
-    };
-
-    assert!(!description.starts_with(
-        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
-    ));
-    assert!(!description.contains("### `update_plan` (`update_plan`)"));
-    assert!(!description.contains("### `view_image` (`view_image`)"));
 }

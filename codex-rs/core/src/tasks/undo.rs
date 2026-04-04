@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
-use crate::protocol::EventMsg;
-use crate::protocol::UndoCompletedEvent;
-use crate::protocol::UndoStartedEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -11,6 +8,9 @@ use async_trait::async_trait;
 use codex_git_utils::RestoreGhostCommitOptions;
 use codex_git_utils::restore_ghost_commit_with_options;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::UndoCompletedEvent;
+use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
