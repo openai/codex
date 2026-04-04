@@ -35,7 +35,7 @@ const REQUESTED_MODEL: &str = "gpt-5.1";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 const ROLE_MODEL: &str = "gpt-5.1-codex-max";
 const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
-const SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS: &str = "<spawned_agent_context>\nYou are a newly spawned agent in a team of agents collaborating to complete a task. You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. You are responsible for returning the response to your assigned task in the final channel. When you give your response, the contents of your response in the final channel will be immediately delivered back to your parent agent. The prior conversation history was forked from your parent agent. Treat the next user message as your assigned task, and use the forked history only as background context.\n</spawned_agent_context>";
+const SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS: &str = "You are a newly spawned agent in a team of agents collaborating to complete a task. You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. You are responsible for returning the response to your assigned task in the final channel. When you give your response, the contents of your response in the final channel will be immediately delivered back to your parent agent. The prior conversation history was forked from your parent agent. Treat the next user message as your assigned task, and use the forked history only as background context.";
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     let is_zstd = req
@@ -434,12 +434,10 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
     )
     .await;
 
-    let child_request_log = mount_sse_once_match(
+    let _child_request_log = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT)
-                && body_contains(req, "<spawned_agent_context>")
-                && !body_contains(req, SPAWN_CALL_ID)
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
         },
         sse(vec![
             ev_response_created("resp-child-1"),
@@ -474,29 +472,37 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
 
     test.submit_turn(TURN_1_PROMPT).await?;
 
-    let child_request = child_request_log
-        .requests()
-        .into_iter()
-        .find(|request| {
-            request.body_contains_text(SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS)
-                && request.body_contains_text(CHILD_PROMPT)
-        })
-        .expect("expected child request with spawned-agent developer context");
-    assert!(
-        child_request.body_contains_text("Parent developer instructions."),
-        "expected inherited parent developer instructions: {:?}",
-        child_request.body_json()
-    );
-    assert!(
-        child_request.body_contains_text(SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS),
-        "expected spawned-agent developer instructions with XML tags: {:?}",
-        child_request.body_json()
-    );
-    assert!(
-        child_request.body_contains_text(CHILD_PROMPT),
-        "expected child task payload in request body: {:?}",
-        child_request.body_json()
-    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|request| {
+                body_contains(request, CHILD_PROMPT)
+                    && body_contains(request, "<spawned_agent_context>")
+                    && body_contains(request, SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS)
+                    && !body_contains(request, SPAWN_CALL_ID)
+            })
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for spawned child request with developer context");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert!(body_contains(
+        &child_request,
+        "Parent developer instructions."
+    ));
+    assert!(body_contains(&child_request, "<spawned_agent_context>"));
+    assert!(body_contains(
+        &child_request,
+        SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS
+    ));
+    assert!(body_contains(&child_request, CHILD_PROMPT));
 
     Ok(())
 }
