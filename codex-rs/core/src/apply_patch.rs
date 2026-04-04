@@ -52,7 +52,7 @@ impl EnvironmentApplyPatchFileSystem {
         Self {
             file_system,
             operation_options: FileSystemOperationOptions {
-                cwd: AbsolutePathBuf::from_absolute_path(cwd).ok(),
+                cwd: absolute_path(cwd.as_path()).ok(),
                 ..FileSystemOperationOptions::default()
             },
         }
@@ -67,7 +67,7 @@ impl EnvironmentApplyPatchFileSystem {
             file_system,
             operation_options: FileSystemOperationOptions {
                 sandbox_policy: Some(sandbox_policy),
-                cwd: AbsolutePathBuf::from_absolute_path(cwd).ok(),
+                cwd: absolute_path(cwd.as_path()).ok(),
             },
         }
     }

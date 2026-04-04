@@ -44,8 +44,13 @@ fn absolute_path_normalizes_existing_symlink_ancestor() {
 
     let path = link_root.join("nested").join("file.txt");
     let got = absolute_path(path.as_path()).expect("normalize absolute path");
-    let expected = AbsolutePathBuf::from_absolute_path(real_root.join("nested/file.txt"))
-        .expect("expected normalized path");
+    let expected = AbsolutePathBuf::from_absolute_path(
+        real_root
+            .canonicalize()
+            .expect("canonicalize real root")
+            .join("nested/file.txt"),
+    )
+    .expect("expected normalized path");
 
     assert_eq!(got, expected);
 }
@@ -190,7 +195,7 @@ async fn verification_filesystem_uses_default_operation_options() {
             .as_slice(),
         [FileSystemOperationOptions {
             sandbox_policy: None,
-            cwd: Some(AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd")),
+            cwd: Some(absolute_path(cwd.as_path()).expect("normalized cwd")),
         }]
     );
     assert_eq!(
@@ -199,7 +204,11 @@ async fn verification_filesystem_uses_default_operation_options() {
             .lock()
             .expect("raw_reads lock")
             .as_slice(),
-        [PathBuf::from("/tmp/apply-patch-verification.txt")]
+        [
+            absolute_path(Path::new("/tmp/apply-patch-verification.txt"))
+                .expect("normalized path")
+                .into_path_buf()
+        ]
     );
 }
 
@@ -228,7 +237,7 @@ async fn apply_filesystem_uses_sandbox_options() {
             .as_slice(),
         [FileSystemOperationOptions {
             sandbox_policy: Some(sandbox_policy.clone()),
-            cwd: Some(AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd")),
+            cwd: Some(absolute_path(cwd.as_path()).expect("normalized cwd")),
         }]
     );
     assert_eq!(
@@ -239,10 +248,7 @@ async fn apply_filesystem_uses_sandbox_options() {
             .as_slice(),
         [FileSystemOperationOptions {
             sandbox_policy: Some(sandbox_policy),
-            cwd: Some(
-                AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/apply-patch-sandboxed"))
-                    .expect("absolute cwd")
-            ),
+            cwd: Some(absolute_path(cwd.as_path()).expect("normalized cwd")),
         }]
     );
 }
