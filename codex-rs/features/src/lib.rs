@@ -437,7 +437,10 @@ impl Features {
         if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
             self.enable(Feature::Collab);
         }
-        if self.enabled(Feature::AgentWatchdog) && !self.enabled(Feature::ToolSearch) {
+        if self.enabled(Feature::AgentWatchdog) {
+            self.enable(Feature::Collab);
+            self.enable(Feature::AgentFunctionCallInbox);
+            self.enable(Feature::AgentPromptInjection);
             self.enable(Feature::ToolSearch);
         }
         if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {

@@ -199,18 +199,39 @@ fn enable_fanout_normalization_enables_multi_agent_one_way() {
 }
 
 #[test]
-fn agent_watchdog_normalization_enables_tool_search_one_way() {
+fn agent_watchdog_normalization_enables_dependency_features_one_way() {
     let mut watchdog_features = Features::with_defaults();
     watchdog_features.enable(Feature::AgentWatchdog);
     watchdog_features.normalize_dependencies();
     assert_eq!(watchdog_features.enabled(Feature::AgentWatchdog), true);
+    assert_eq!(watchdog_features.enabled(Feature::Collab), true);
+    assert_eq!(
+        watchdog_features.enabled(Feature::AgentFunctionCallInbox),
+        true
+    );
+    assert_eq!(
+        watchdog_features.enabled(Feature::AgentPromptInjection),
+        true
+    );
     assert_eq!(watchdog_features.enabled(Feature::ToolSearch), true);
 
-    let mut tool_search_features = Features::with_defaults();
-    tool_search_features.enable(Feature::ToolSearch);
-    tool_search_features.normalize_dependencies();
-    assert_eq!(tool_search_features.enabled(Feature::ToolSearch), true);
-    assert_eq!(tool_search_features.enabled(Feature::AgentWatchdog), false);
+    for dependency in [
+        Feature::Collab,
+        Feature::AgentFunctionCallInbox,
+        Feature::AgentPromptInjection,
+        Feature::ToolSearch,
+    ] {
+        let mut features = Features::with_defaults();
+        if dependency == Feature::Collab {
+            features.disable(Feature::AgentFunctionCallInbox);
+            features.disable(Feature::AgentPromptInjection);
+            features.disable(Feature::ToolSearch);
+        }
+        features.enable(dependency);
+        features.normalize_dependencies();
+        assert_eq!(features.enabled(dependency), true);
+        assert_eq!(features.enabled(Feature::AgentWatchdog), false);
+    }
 }
 
 #[test]
