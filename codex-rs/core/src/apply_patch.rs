@@ -48,21 +48,26 @@ pub(crate) struct EnvironmentApplyPatchFileSystem {
 }
 
 impl EnvironmentApplyPatchFileSystem {
-    pub(crate) fn for_verification(file_system: Arc<dyn ExecutorFileSystem>) -> Self {
+    pub(crate) fn for_verification(file_system: Arc<dyn ExecutorFileSystem>, cwd: PathBuf) -> Self {
         Self {
             file_system,
-            operation_options: FileSystemOperationOptions::default(),
+            operation_options: FileSystemOperationOptions {
+                cwd: AbsolutePathBuf::from_absolute_path(cwd).ok(),
+                ..FileSystemOperationOptions::default()
+            },
         }
     }
 
     pub(crate) fn for_apply(
         file_system: Arc<dyn ExecutorFileSystem>,
+        cwd: PathBuf,
         sandbox_policy: SandboxPolicy,
     ) -> Self {
         Self {
             file_system,
             operation_options: FileSystemOperationOptions {
                 sandbox_policy: Some(sandbox_policy),
+                cwd: AbsolutePathBuf::from_absolute_path(cwd).ok(),
             },
         }
     }

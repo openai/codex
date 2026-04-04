@@ -13,7 +13,9 @@ use codex_app_server_protocol::FsUnwatchParams;
 use codex_app_server_protocol::FsWatchResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::ReadOnlyAccess;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -61,6 +63,16 @@ fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(path).expect("path should be absolute")
 }
 
+fn read_only_sandbox_policy(readable_root: PathBuf) -> SandboxPolicy {
+    SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::Restricted {
+            include_platform_defaults: false,
+            readable_roots: vec![absolute_path(readable_root)],
+        },
+        network_access: false,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -71,6 +83,8 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
     let request_id = mcp
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
             path: absolute_path(file_path.clone()),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let response = timeout(
@@ -129,6 +143,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_create_directory_request(codex_app_server_protocol::FsCreateDirectoryParams {
             path: absolute_path(nested_dir.clone()),
             recursive: None,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -141,6 +157,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(nested_file.clone()),
             data_base64: STANDARD.encode("hello from app-server"),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -153,6 +171,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(source_file.clone()),
             data_base64: STANDARD.encode("hello from source root"),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -164,6 +184,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(nested_file.clone()),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -185,6 +207,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(nested_file.clone()),
             destination_path: absolute_path(copy_file_path.clone()),
             recursive: false,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -202,6 +226,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -217,6 +243,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let read_directory_request_id = mcp
         .send_fs_read_directory_request(codex_app_server_protocol::FsReadDirectoryParams {
             path: absolute_path(source_dir.clone()),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let readdir_response = timeout(
@@ -249,6 +277,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             path: absolute_path(copied_dir.clone()),
             recursive: None,
             force: None,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -275,6 +305,8 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(file_path.clone()),
             data_base64: STANDARD.encode(bytes),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -287,6 +319,8 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(file_path),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -316,6 +350,8 @@ async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(file_path),
             data_base64: "%%%".to_string(),
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let error = timeout(
@@ -331,6 +367,70 @@ async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
         "unexpected error message: {}",
         error.error.message
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_read_file_respects_sandbox_policy() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let allowed_dir = codex_home.path().join("allowed");
+    let file_path = allowed_dir.join("note.txt");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::write(&file_path, "sandboxed hello")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let request_id = mcp
+        .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            path: absolute_path(file_path),
+            sandbox_policy: Some(read_only_sandbox_policy(allowed_dir)),
+            cwd: None,
+        })
+        .await?;
+    let response: FsReadFileResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(
+        response,
+        FsReadFileResponse {
+            data_base64: STANDARD.encode("sandboxed hello"),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_write_file_rejects_path_outside_sandbox_policy() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let allowed_dir = codex_home.path().join("allowed");
+    let blocked_path = codex_home.path().join("blocked.txt");
+    std::fs::create_dir_all(&allowed_dir)?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let request_id = mcp
+        .send_fs_write_file_request(FsWriteFileParams {
+            path: absolute_path(blocked_path.clone()),
+            data_base64: STANDARD.encode("nope"),
+            sandbox_policy: Some(read_only_sandbox_policy(allowed_dir)),
+            cwd: None,
+        })
+        .await?;
+    expect_error_message(
+        &mut mcp,
+        request_id,
+        format!(
+            "fs/write is not permitted by sandbox policy for path {}",
+            blocked_path.display()
+        )
+        .as_str(),
+    )
+    .await?;
+    assert!(!blocked_path.exists());
 
     Ok(())
 }
@@ -471,6 +571,8 @@ async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(codex_home.path().join("dest")),
             recursive: false,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let error = timeout(
@@ -498,6 +600,8 @@ async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(source_dir.join("nested").join("copy")),
             recursive: true,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let error = timeout(
@@ -529,6 +633,8 @@ async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -569,6 +675,8 @@ async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()>
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -606,6 +714,8 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
             source_path: absolute_path(fifo_path),
             destination_path: absolute_path(codex_home.path().join("copied")),
             recursive: false,
+            sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     expect_error_message(

@@ -361,7 +361,10 @@ async fn parse_apply_patch_verified(
     command: &[String],
     cwd: &Path,
 ) -> codex_apply_patch::MaybeApplyPatchVerified {
-    let fs = EnvironmentApplyPatchFileSystem::for_verification(turn.environment.get_filesystem());
+    let fs = EnvironmentApplyPatchFileSystem::for_verification(
+        turn.environment.get_filesystem(),
+        turn.cwd.to_path_buf(),
+    );
     codex_apply_patch::maybe_parse_apply_patch_verified_with_fs(command, cwd, &fs).await
 }
 

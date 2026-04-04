@@ -8,6 +8,17 @@
   },
   "description": "Remove a file or directory tree from the host filesystem.",
   "properties": {
+    "cwd": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+    },
     "force": {
       "description": "Whether missing paths should be ignored. Defaults to `true`.",
       "type": [

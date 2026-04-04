@@ -4170,6 +4170,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Copy a file or directory tree on the host filesystem.",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+        },
         "destinationPath": {
           "allOf": [
             {
@@ -4208,6 +4219,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Create a directory on the host filesystem.",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+        },
         "path": {
           "allOf": [
             {
@@ -4240,6 +4262,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Request metadata for an absolute path.",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+        },
         "path": {
           "allOf": [
             {
@@ -4314,6 +4347,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "List direct child names for a directory.",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+        },
         "path": {
           "allOf": [
             {
@@ -4351,6 +4395,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Read a file from the host filesystem.",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+        },
         "path": {
           "allOf": [
             {
@@ -4385,6 +4440,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Remove a file or directory tree from the host filesystem.",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+        },
         "force": {
           "description": "Whether missing paths should be ignored. Defaults to `true`.",
           "type": [
@@ -4488,6 +4554,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Write a file on the host filesystem.",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+        },
         "dataBase64": {
           "description": "File contents encoded as base64.",
           "type": "string"

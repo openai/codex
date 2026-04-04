@@ -8,6 +8,17 @@
   },
   "description": "Request metadata for an absolute path.",
   "properties": {
+    "cwd": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional cwd to resolve legacy sandbox workspace roots against."
+    },
     "path": {
       "allOf": [
         {

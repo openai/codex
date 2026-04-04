@@ -34,13 +34,13 @@ fn convert_apply_patch_maps_add_variant() {
 #[derive(Default)]
 struct RecordingExecutorFileSystem {
     raw_reads: Mutex<Vec<PathBuf>>,
-    option_reads: Mutex<Vec<Option<SandboxPolicy>>>,
+    option_reads: Mutex<Vec<FileSystemOperationOptions>>,
     raw_writes: Mutex<Vec<PathBuf>>,
-    option_writes: Mutex<Vec<Option<SandboxPolicy>>>,
+    option_writes: Mutex<Vec<FileSystemOperationOptions>>,
     raw_creates: Mutex<Vec<PathBuf>>,
-    option_creates: Mutex<Vec<Option<SandboxPolicy>>>,
+    option_creates: Mutex<Vec<FileSystemOperationOptions>>,
     raw_removes: Mutex<Vec<PathBuf>>,
-    option_removes: Mutex<Vec<Option<SandboxPolicy>>>,
+    option_removes: Mutex<Vec<FileSystemOperationOptions>>,
 }
 
 #[async_trait]
@@ -61,7 +61,7 @@ impl ExecutorFileSystem for RecordingExecutorFileSystem {
         self.option_reads
             .lock()
             .expect("option_reads lock")
-            .push(options.sandbox_policy.clone());
+            .push(options.clone());
         self.read_file(path).await
     }
 
@@ -82,7 +82,7 @@ impl ExecutorFileSystem for RecordingExecutorFileSystem {
         self.option_writes
             .lock()
             .expect("option_writes lock")
-            .push(options.sandbox_policy.clone());
+            .push(options.clone());
         self.write_file(path, contents).await
     }
 
@@ -107,7 +107,7 @@ impl ExecutorFileSystem for RecordingExecutorFileSystem {
         self.option_creates
             .lock()
             .expect("option_creates lock")
-            .push(fs_options.sandbox_policy.clone());
+            .push(fs_options.clone());
         self.create_directory(path, options).await
     }
 
@@ -136,7 +136,7 @@ impl ExecutorFileSystem for RecordingExecutorFileSystem {
         self.option_removes
             .lock()
             .expect("option_removes lock")
-            .push(fs_options.sandbox_policy.clone());
+            .push(fs_options.clone());
         self.remove(path, options).await
     }
 
@@ -153,7 +153,9 @@ impl ExecutorFileSystem for RecordingExecutorFileSystem {
 #[tokio::test]
 async fn verification_filesystem_uses_default_operation_options() {
     let file_system = Arc::new(RecordingExecutorFileSystem::default());
-    let adapter = EnvironmentApplyPatchFileSystem::for_verification(file_system.clone());
+    let cwd = PathBuf::from("/tmp/apply-patch-verification");
+    let adapter =
+        EnvironmentApplyPatchFileSystem::for_verification(file_system.clone(), cwd.clone());
 
     let content = adapter
         .read_text(Path::new("/tmp/apply-patch-verification.txt"))
@@ -167,7 +169,10 @@ async fn verification_filesystem_uses_default_operation_options() {
             .lock()
             .expect("option_reads lock")
             .as_slice(),
-        [None]
+        [FileSystemOperationOptions {
+            sandbox_policy: None,
+            cwd: Some(AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd")),
+        }]
     );
     assert_eq!(
         file_system
@@ -184,9 +189,13 @@ async fn apply_filesystem_uses_sandbox_options() {
     let file_system = Arc::new(RecordingExecutorFileSystem::default());
     let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let path = Path::new("/tmp/apply-patch-sandboxed/new.txt");
+    let cwd = PathBuf::from("/tmp/apply-patch-sandboxed");
     let action = ApplyPatchAction::new_add_for_test(path, "hello".to_string());
-    let adapter =
-        EnvironmentApplyPatchFileSystem::for_apply(file_system.clone(), sandbox_policy.clone());
+    let adapter = EnvironmentApplyPatchFileSystem::for_apply(
+        file_system.clone(),
+        cwd.clone(),
+        sandbox_policy.clone(),
+    );
 
     codex_apply_patch::apply_action_with_fs(&action, &adapter)
         .await
@@ -198,7 +207,10 @@ async fn apply_filesystem_uses_sandbox_options() {
             .lock()
             .expect("option_creates lock")
             .as_slice(),
-        [Some(sandbox_policy.clone())]
+        [FileSystemOperationOptions {
+            sandbox_policy: Some(sandbox_policy.clone()),
+            cwd: Some(AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd")),
+        }]
     );
     assert_eq!(
         file_system
@@ -206,6 +218,12 @@ async fn apply_filesystem_uses_sandbox_options() {
             .lock()
             .expect("option_writes lock")
             .as_slice(),
-        [Some(sandbox_policy)]
+        [FileSystemOperationOptions {
+            sandbox_policy: Some(sandbox_policy),
+            cwd: Some(
+                AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/apply-patch-sandboxed"))
+                    .expect("absolute cwd")
+            ),
+        }]
     );
 }

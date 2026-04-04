@@ -212,6 +212,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let fs = EnvironmentApplyPatchFileSystem::for_apply(
             ctx.turn.environment.get_filesystem(),
+            req.action.cwd.clone(),
             req.sandbox_policy.clone(),
         );
         Self::run_with_environment_fs(req, fs).await
