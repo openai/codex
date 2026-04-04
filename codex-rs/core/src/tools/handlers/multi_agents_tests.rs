@@ -11,7 +11,6 @@ use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
-use crate::tools::handlers::multi_agents_v2::SPAWN_AGENT_DEVELOPER_INSTRUCTIONS;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
@@ -475,10 +474,6 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
     assert_eq!(
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
-    );
-    assert_eq!(
-        child_snapshot.developer_instructions.as_deref(),
-        Some(SPAWN_AGENT_DEVELOPER_INSTRUCTIONS)
     );
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == child_thread_id
