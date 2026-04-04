@@ -2239,17 +2239,18 @@ impl Config {
                     default_permissions,
                     &mut startup_warnings,
                 )?;
-            let mut sandbox_policy = file_system_sandbox_policy
-                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
-            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+            if !file_system_sandbox_policy
+                .get_writable_roots_with_cwd(resolved_cwd.as_path())
+                .is_empty()
+            {
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
                     );
-                sandbox_policy = file_system_sandbox_policy
-                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             }
+            let sandbox_policy = file_system_sandbox_policy
+                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             (
                 configured_network_proxy_config,
                 sandbox_policy,

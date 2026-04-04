@@ -61,6 +61,31 @@ fn base_policy_allows_node_cpu_sysctls() {
 }
 
 #[test]
+fn restricted_platform_defaults_do_not_include_tmp_write_rules() {
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Minimal,
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+
+    let args = create_seatbelt_command_args_for_policies(
+        vec!["/bin/true".to_string()],
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+        Path::new("/"),
+        false,
+        None,
+    );
+
+    let policy = seatbelt_policy_arg(&args);
+    assert!(!policy.contains("(subpath \"/tmp\")"));
+    assert!(!policy.contains("(subpath \"/private/tmp\")"));
+    assert!(!policy.contains("(subpath \"/var/tmp\")"));
+    assert!(!policy.contains("(subpath \"/private/var/tmp\")"));
+}
+
+#[test]
 fn create_seatbelt_args_routes_network_through_proxy_ports() {
     let policy = dynamic_network_policy(
         &SandboxPolicy::new_read_only_policy(),
