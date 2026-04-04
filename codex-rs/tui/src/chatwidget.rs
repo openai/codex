@@ -6016,7 +6016,16 @@ impl ChatWidget {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                if from_replay {
+                let mut completed_reasoning = summary.join("\n\n");
+                if self.config.show_raw_agent_reasoning {
+                    if !completed_reasoning.is_empty() && !content.is_empty() {
+                        completed_reasoning.push_str("\n\n");
+                    }
+                    completed_reasoning.push_str(&content.join("\n\n"));
+                }
+                let streamed_reasoning =
+                    format!("{}{}", self.full_reasoning_buffer, self.reasoning_buffer);
+                if from_replay || streamed_reasoning.trim().is_empty() {
                     for delta in summary {
                         self.on_agent_reasoning_delta(delta);
                     }
@@ -6025,6 +6034,17 @@ impl ChatWidget {
                             self.on_agent_reasoning_delta(delta);
                         }
                     }
+                } else if !completed_reasoning.is_empty()
+                    && completed_reasoning != streamed_reasoning
+                    && let Some(missing_prefix) = completed_reasoning
+                        .strip_suffix(&streamed_reasoning)
+                        .filter(|missing_prefix| !missing_prefix.is_empty())
+                {
+                    // If early summary deltas were dropped before the item became active, prepend
+                    // the missing prefix from the completed item snapshot and keep the streamed
+                    // suffix so we still avoid double-rendering.
+                    self.full_reasoning_buffer =
+                        format!("{missing_prefix}{}", self.full_reasoning_buffer);
                 }
                 self.on_agent_reasoning_final();
             }

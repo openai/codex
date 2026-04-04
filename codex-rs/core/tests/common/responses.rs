@@ -719,6 +719,13 @@ pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
     })
 }
 
+pub fn ev_reasoning_summary_part_added(summary_index: i64) -> Value {
+    serde_json::json!({
+        "type": "response.reasoning_summary_part.added",
+        "summary_index": summary_index,
+    })
+}
+
 pub fn ev_reasoning_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_text.delta",

@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/history_replay.rs
+expression: rendered
+---
+• prefix suffix

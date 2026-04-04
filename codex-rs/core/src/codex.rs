@@ -7433,6 +7433,9 @@ async fn try_run_sampling_request(
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
+    // Some streams send output text deltas before the assistant message item is announced.
+    // Hold those early bytes so we can replay them once `output_item.added` arrives.
+    let mut pending_output_text_delta = String::new();
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
@@ -7472,6 +7475,8 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                let completed_assistant_message =
+                    matches!(&item, ResponseItem::Message { role, .. } if role == "assistant");
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7529,6 +7534,17 @@ async fn try_run_sampling_request(
                 let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)
                     .instrument(handle_responses)
                     .await?;
+                if completed_assistant_message && !pending_output_text_delta.is_empty() {
+                    // If an assistant message completed while this buffer is still non-empty,
+                    // those bytes could not be matched to that message item. Clear them so they
+                    // don't leak into a later assistant item, but keep the buffer across
+                    // reasoning/tool completions so a delayed message item can still claim it.
+                    warn!(
+                        buffered_len = pending_output_text_delta.len(),
+                        "dropping buffered output text deltas after item completion"
+                    );
+                    pending_output_text_delta.clear();
+                }
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                 }
@@ -7554,26 +7570,46 @@ async fn try_run_sampling_request(
                 .await
                 {
                     let mut turn_item = turn_item;
-                    let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
-                    let mut seeded_item_id: Option<String> = None;
-                    if matches!(turn_item, TurnItem::AgentMessage(_))
-                        && let Some(raw_text) = raw_assistant_output_text_from_item(&item)
-                    {
+                    let mut seeded_emit: Option<(String, ParsedAssistantTextDelta)> = None;
+                    let mut pending_emit: Option<(String, ParsedAssistantTextDelta)> = None;
+                    let raw_output_text = matches!(turn_item, TurnItem::AgentMessage(_))
+                        .then(|| raw_assistant_output_text_from_item(&item))
+                        .flatten();
+                    if matches!(turn_item, TurnItem::AgentMessage(_)) {
                         let item_id = turn_item.id();
-                        let mut seeded =
-                            assistant_message_stream_parsers.seed_item_text(&item_id, &raw_text);
-                        if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
-                            agent_message.content =
-                                vec![codex_protocol::items::AgentMessageContent::Text {
-                                    text: if plan_mode {
-                                        String::new()
-                                    } else {
-                                        std::mem::take(&mut seeded.visible_text)
-                                    },
-                                }];
+                        if let Some(raw_text) = raw_output_text.as_deref() {
+                            let mut seeded =
+                                assistant_message_stream_parsers.seed_item_text(&item_id, raw_text);
+                            if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
+                                agent_message.content =
+                                    vec![codex_protocol::items::AgentMessageContent::Text {
+                                        text: if plan_mode {
+                                            String::new()
+                                        } else {
+                                            std::mem::take(&mut seeded.visible_text)
+                                        },
+                                    }];
+                            }
+                            seeded_emit = plan_mode.then_some((item_id.clone(), seeded));
                         }
-                        seeded_parsed = plan_mode.then_some(seeded);
-                        seeded_item_id = Some(item_id);
+                        if !pending_output_text_delta.is_empty() {
+                            let mut pending_delta = std::mem::take(&mut pending_output_text_delta);
+                            if let Some(raw_text) = raw_output_text.as_deref() {
+                                // The item payload may already contain all or part of the text we
+                                // buffered from pre-item deltas. Trim the overlap so replayed
+                                // deltas don't duplicate visible output.
+                                if pending_delta.starts_with(raw_text) {
+                                    pending_delta.drain(..raw_text.len());
+                                } else if raw_text.starts_with(&pending_delta) {
+                                    pending_delta.clear();
+                                }
+                            }
+                            if !pending_delta.is_empty() {
+                                let parsed = assistant_message_stream_parsers
+                                    .parse_delta(&item_id, &pending_delta);
+                                pending_emit = Some((item_id, parsed));
+                            }
+                        }
                     }
                     if let Some(state) = plan_mode_state.as_mut()
                         && matches!(turn_item, TurnItem::AgentMessage(_))
@@ -7585,16 +7621,22 @@ async fn try_run_sampling_request(
                     } else {
                         sess.emit_turn_item_started(&turn_context, &turn_item).await;
                     }
-                    if let (Some(state), Some(item_id), Some(parsed)) = (
-                        plan_mode_state.as_mut(),
-                        seeded_item_id.as_deref(),
-                        seeded_parsed,
-                    ) {
+                    if let Some((item_id, parsed)) = seeded_emit {
                         emit_streamed_assistant_text_delta(
                             &sess,
                             &turn_context,
-                            Some(state),
-                            item_id,
+                            plan_mode_state.as_mut(),
+                            &item_id,
+                            parsed,
+                        )
+                        .await;
+                    }
+                    if let Some((item_id, parsed)) = pending_emit {
+                        emit_streamed_assistant_text_delta(
+                            &sess,
+                            &turn_context,
+                            plan_mode_state.as_mut(),
+                            &item_id,
                             parsed,
                         )
                         .await;
@@ -7671,7 +7713,12 @@ async fn try_run_sampling_request(
                             .await;
                     }
                 } else {
-                    error_or_panic("OutputTextDelta without active item".to_string());
+                    // This event should normally follow `output_item.added`, but tolerate the
+                    // reversed ordering by buffering text until the item metadata arrives.
+                    if pending_output_text_delta.is_empty() {
+                        warn!("buffering OutputTextDelta without active item");
+                    }
+                    pending_output_text_delta.push_str(&delta);
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
@@ -7689,7 +7736,12 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    // Without an active reasoning item there is nowhere safe to attach this delta.
+                    // Drop the orphan event and rely on the eventual completed item snapshot.
+                    warn!(
+                        summary_index,
+                        "dropping ReasoningSummaryDelta without active item"
+                    );
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
@@ -7701,7 +7753,12 @@ async fn try_run_sampling_request(
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                    // Keep section-break handling consistent with summary deltas: a break without
+                    // an active reasoning item is orphaned stream state, not a fatal parser error.
+                    warn!(
+                        summary_index,
+                        "dropping ReasoningSummaryPartAdded without active item"
+                    );
                 }
             }
             ResponseEvent::ReasoningContentDelta {
@@ -7719,7 +7776,12 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                    // Raw reasoning deltas can also arrive before their item in malformed or
+                    // reordered streams. Preserve liveness by dropping the orphan event.
+                    warn!(
+                        content_index,
+                        "dropping ReasoningRawContentDelta without active item"
+                    );
                 }
             }
         }
