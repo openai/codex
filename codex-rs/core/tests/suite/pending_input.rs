@@ -11,6 +11,7 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -278,6 +279,11 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
             gate_reasoning_done_rx,
             vec![
                 ev_reasoning_item("reason-1", &["thinking"], &[]),
+                ev_function_call(
+                    "call-stale",
+                    "shell",
+                    r#"{"command":"echo stale tool call"}"#,
+                ),
                 ev_message_item_added("msg-stale", ""),
                 ev_output_text_delta("stale final"),
                 ev_message_item_done("msg-stale", "stale final"),
@@ -328,6 +334,11 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
                         "phase": "commentary",
                     }
                 }),
+                ev_function_call(
+                    "call-stale",
+                    "shell",
+                    r#"{"command":"echo stale tool call"}"#,
+                ),
                 ev_message_item_added("msg-stale", ""),
                 ev_output_text_delta("stale final"),
                 ev_message_item_done("msg-stale", "stale final"),
@@ -377,6 +388,11 @@ async fn user_input_does_not_preempt_after_reasoning_item() {
             gate_reasoning_done_rx,
             vec![
                 ev_reasoning_item("reason-1", &["thinking"], &[]),
+                ev_function_call(
+                    "call-preserved",
+                    "shell",
+                    r#"{"command":"echo preserved tool call"}"#,
+                ),
                 ev_message_item_added("msg-1", ""),
                 ev_output_text_delta("first answer"),
                 ev_message_item_done("msg-1", "first answer"),
