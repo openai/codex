@@ -31,6 +31,25 @@ fn convert_apply_patch_maps_add_variant() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn absolute_path_normalizes_existing_symlink_ancestor() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempdir().expect("tempdir");
+    let real_root = tmp.path().join("real");
+    let link_root = tmp.path().join("link");
+    std::fs::create_dir_all(&real_root).expect("create real root");
+    symlink(&real_root, &link_root).expect("create symlink");
+
+    let path = link_root.join("nested").join("file.txt");
+    let got = absolute_path(path.as_path()).expect("normalize absolute path");
+    let expected = AbsolutePathBuf::from_absolute_path(real_root.join("nested/file.txt"))
+        .expect("expected normalized path");
+
+    assert_eq!(got, expected);
+}
+
 #[derive(Default)]
 struct RecordingExecutorFileSystem {
     raw_reads: Mutex<Vec<PathBuf>>,

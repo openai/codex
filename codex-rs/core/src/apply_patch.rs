@@ -163,12 +163,31 @@ impl ApplyPatchFileSystem for EnvironmentApplyPatchFileSystem {
 }
 
 fn absolute_path(path: &std::path::Path) -> std::result::Result<AbsolutePathBuf, ApplyPatchError> {
-    AbsolutePathBuf::from_absolute_path(path).map_err(|error| {
+    let path = AbsolutePathBuf::from_absolute_path(path).map_err(|error| {
         ApplyPatchError::io_error(
             format!("Expected absolute path for apply_patch: {}", path.display()),
             io::Error::new(io::ErrorKind::InvalidInput, error.to_string()),
         )
-    })
+    })?;
+    Ok(normalize_existing_ancestor_path(path))
+}
+
+fn normalize_existing_ancestor_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
+    let raw_path = path.to_path_buf();
+    for ancestor in raw_path.ancestors() {
+        let Ok(canonical_ancestor) = ancestor.canonicalize() else {
+            continue;
+        };
+        let Ok(suffix) = raw_path.strip_prefix(ancestor) else {
+            continue;
+        };
+        if let Ok(normalized_path) =
+            AbsolutePathBuf::from_absolute_path(canonical_ancestor.join(suffix))
+        {
+            return normalized_path;
+        }
+    }
+    path
 }
 
 pub(crate) async fn apply_patch(
