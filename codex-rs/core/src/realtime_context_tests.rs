@@ -13,6 +13,7 @@ use tempfile::TempDir;
 fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMetadata {
     ThreadMetadata {
         id: ThreadId::new(),
+        forked_from_id: None,
         rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
         created_at: Utc
             .timestamp_opt(1_709_251_100, 0)

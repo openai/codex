@@ -162,6 +162,7 @@ WHERE thread_id = ?
             r#"
 SELECT
     id,
+    forked_from_id,
     rollout_path,
     created_at,
     updated_at,

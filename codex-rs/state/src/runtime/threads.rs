@@ -7,6 +7,7 @@ impl StateRuntime {
             r#"
 SELECT
     id,
+    forked_from_id,
     rollout_path,
     created_at,
     updated_at,
@@ -344,6 +345,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
             r#"
 SELECT
     id,
+    forked_from_id,
     rollout_path,
     created_at,
     updated_at,
@@ -445,6 +447,7 @@ FROM threads
             r#"
 INSERT INTO threads (
     id,
+    forked_from_id,
     rollout_path,
     created_at,
     updated_at,
@@ -468,11 +471,12 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
         .bind(metadata.id.to_string())
+        .bind(metadata.forked_from_id.map(|id| id.to_string()))
         .bind(metadata.rollout_path.display().to_string())
         .bind(datetime_to_epoch_seconds(metadata.created_at))
         .bind(datetime_to_epoch_seconds(metadata.updated_at))
@@ -572,6 +576,7 @@ WHERE id = ?
             r#"
 INSERT INTO threads (
     id,
+    forked_from_id,
     rollout_path,
     created_at,
     updated_at,
@@ -595,8 +600,9 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
+    forked_from_id = excluded.forked_from_id,
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
@@ -622,6 +628,7 @@ ON CONFLICT(id) DO UPDATE SET
             "#,
         )
         .bind(metadata.id.to_string())
+        .bind(metadata.forked_from_id.map(|id| id.to_string()))
         .bind(metadata.rollout_path.display().to_string())
         .bind(datetime_to_epoch_seconds(metadata.created_at))
         .bind(datetime_to_epoch_seconds(metadata.updated_at))
@@ -1049,6 +1056,59 @@ mod tests {
             .await
             .expect("memory mode should load");
         assert_eq!(memory_mode.as_deref(), Some("polluted"));
+    }
+
+    #[tokio::test]
+    async fn apply_rollout_items_persists_forked_from_id_from_session_meta() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000555").expect("valid thread id");
+        let forked_from_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000777").expect("valid thread id");
+        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        let builder = ThreadMetadataBuilder::new(
+            thread_id,
+            metadata.rollout_path.clone(),
+            metadata.created_at,
+            SessionSource::Cli,
+        );
+        let items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                forked_from_id: Some(forked_from_id),
+                timestamp: metadata.created_at.to_rfc3339(),
+                cwd: metadata.cwd.clone(),
+                originator: String::new(),
+                cli_version: "0.0.0".to_string(),
+                source: SessionSource::Cli,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: None,
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+            },
+            git: None,
+        })];
+
+        runtime
+            .apply_rollout_items(
+                &builder, &items, /*new_thread_memory_mode*/ None,
+                /*updated_at_override*/ None,
+            )
+            .await
+            .expect("apply_rollout_items should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.forked_from_id, Some(forked_from_id));
     }
 
     #[tokio::test]

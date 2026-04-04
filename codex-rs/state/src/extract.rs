@@ -47,6 +47,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
         return;
     }
     metadata.id = meta_line.meta.id;
+    metadata.forked_from_id = meta_line.meta.forked_from_id;
     metadata.source = enum_to_string(&meta_line.meta.source);
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
@@ -364,6 +365,40 @@ mod tests {
     }
 
     #[test]
+    fn session_meta_sets_forked_from_id() {
+        let mut metadata = metadata_for_test();
+        let thread_id = metadata.id;
+        let forked_from_id =
+            ThreadId::from_string(&Uuid::from_u128(7).to_string()).expect("thread id");
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: thread_id,
+                    forked_from_id: Some(forked_from_id),
+                    timestamp: "2026-02-26T00:00:00.000Z".to_string(),
+                    cwd: PathBuf::from("/workspace"),
+                    originator: "codex_cli_rs".to_string(),
+                    cli_version: "0.0.0".to_string(),
+                    source: SessionSource::Cli,
+                    agent_path: None,
+                    agent_nickname: None,
+                    agent_role: None,
+                    model_provider: Some("openai".to_string()),
+                    base_instructions: None,
+                    dynamic_tools: None,
+                    memory_mode: None,
+                },
+                git: None,
+            }),
+            "test-provider",
+        );
+
+        assert_eq!(metadata.forked_from_id, Some(forked_from_id));
+    }
+
+    #[test]
     fn session_meta_does_not_set_model_or_reasoning_effort() {
         let mut metadata = metadata_for_test();
         let thread_id = metadata.id;
@@ -401,6 +436,7 @@ mod tests {
         let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
         ThreadMetadata {
             id,
+            forked_from_id: None,
             rollout_path: PathBuf::from("/tmp/a.jsonl"),
             created_at,
             updated_at: created_at,
@@ -429,11 +465,14 @@ mod tests {
     fn diff_fields_detects_changes() {
         let mut base = metadata_for_test();
         base.id = ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id");
+        base.forked_from_id =
+            Some(ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"));
         base.title = "hello".to_string();
         let mut other = base.clone();
+        other.forked_from_id = None;
         other.tokens_used = 2;
         other.title = "world".to_string();
         let diffs = base.diff_fields(&other);
-        assert_eq!(diffs, vec!["title", "tokens_used"]);
+        assert_eq!(diffs, vec!["forked_from_id", "title", "tokens_used"]);
     }
 }

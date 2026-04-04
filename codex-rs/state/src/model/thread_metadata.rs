@@ -57,6 +57,8 @@ pub struct ExtractionOutcome {
 pub struct ThreadMetadata {
     /// The thread identifier.
     pub id: ThreadId,
+    /// The source thread identifier this thread was forked from, if any.
+    pub forked_from_id: Option<ThreadId>,
     /// The absolute rollout path on disk.
     pub rollout_path: PathBuf,
     /// The creation timestamp.
@@ -106,6 +108,8 @@ pub struct ThreadMetadata {
 pub struct ThreadMetadataBuilder {
     /// The thread identifier.
     pub id: ThreadId,
+    /// The source thread identifier this thread was forked from, if any.
+    pub forked_from_id: Option<ThreadId>,
     /// The absolute rollout path on disk.
     pub rollout_path: PathBuf,
     /// The creation timestamp.
@@ -150,6 +154,7 @@ impl ThreadMetadataBuilder {
     ) -> Self {
         Self {
             id,
+            forked_from_id: None,
             rollout_path,
             created_at,
             updated_at: None,
@@ -181,6 +186,7 @@ impl ThreadMetadataBuilder {
             .unwrap_or(created_at);
         ThreadMetadata {
             id: self.id,
+            forked_from_id: self.forked_from_id,
             rollout_path: self.rollout_path.clone(),
             created_at,
             updated_at,
@@ -231,6 +237,9 @@ impl ThreadMetadata {
         let mut diffs = Vec::new();
         if self.id != other.id {
             diffs.push("id");
+        }
+        if self.forked_from_id != other.forked_from_id {
+            diffs.push("forked_from_id");
         }
         if self.rollout_path != other.rollout_path {
             diffs.push("rollout_path");
@@ -306,6 +315,7 @@ fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
 #[derive(Debug)]
 pub(crate) struct ThreadRow {
     id: String,
+    forked_from_id: Option<String>,
     rollout_path: String,
     created_at: i64,
     updated_at: i64,
@@ -333,6 +343,7 @@ impl ThreadRow {
     pub(crate) fn try_from_row(row: &SqliteRow) -> Result<Self> {
         Ok(Self {
             id: row.try_get("id")?,
+            forked_from_id: row.try_get("forked_from_id")?,
             rollout_path: row.try_get("rollout_path")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
@@ -364,6 +375,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
     fn try_from(row: ThreadRow) -> std::result::Result<Self, Self::Error> {
         let ThreadRow {
             id,
+            forked_from_id,
             rollout_path,
             created_at,
             updated_at,
@@ -388,6 +400,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
         } = row;
         Ok(Self {
             id: ThreadId::try_from(id)?,
+            forked_from_id: forked_from_id.map(ThreadId::try_from).transpose()?,
             rollout_path: PathBuf::from(rollout_path),
             created_at: epoch_seconds_to_datetime(created_at)?,
             updated_at: epoch_seconds_to_datetime(updated_at)?,
@@ -457,6 +470,7 @@ mod tests {
     fn thread_row(reasoning_effort: Option<&str>) -> ThreadRow {
         ThreadRow {
             id: "00000000-0000-0000-0000-000000000123".to_string(),
+            forked_from_id: Some("00000000-0000-0000-0000-000000000456".to_string()),
             rollout_path: "/tmp/rollout-123.jsonl".to_string(),
             created_at: 1_700_000_000,
             updated_at: 1_700_000_100,
@@ -485,6 +499,10 @@ mod tests {
         ThreadMetadata {
             id: ThreadId::from_string("00000000-0000-0000-0000-000000000123")
                 .expect("valid thread id"),
+            forked_from_id: Some(
+                ThreadId::from_string("00000000-0000-0000-0000-000000000456")
+                    .expect("valid thread id"),
+            ),
             rollout_path: PathBuf::from("/tmp/rollout-123.jsonl"),
             created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),

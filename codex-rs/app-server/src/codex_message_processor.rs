@@ -8487,6 +8487,7 @@ async fn summary_from_thread_list_item(
         );
         return Some(ConversationSummary {
             conversation_id: thread_id,
+            forked_from_id: None,
             path: it.path,
             preview: it.first_user_message.unwrap_or_default(),
             timestamp,
@@ -8531,6 +8532,7 @@ fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
 #[allow(clippy::too_many_arguments)]
 fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
+    forked_from_id: Option<ThreadId>,
     path: PathBuf,
     first_user_message: Option<String>,
     timestamp: String,
@@ -8561,6 +8563,7 @@ fn summary_from_state_db_metadata(
     };
     ConversationSummary {
         conversation_id,
+        forked_from_id,
         path,
         preview,
         timestamp: Some(timestamp),
@@ -8576,6 +8579,7 @@ fn summary_from_state_db_metadata(
 fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummary {
     summary_from_state_db_metadata(
         metadata.id,
+        metadata.forked_from_id,
         metadata.rollout_path.clone(),
         metadata.first_user_message.clone(),
         metadata
@@ -8658,6 +8662,7 @@ pub(crate) async fn read_summary_from_rollout(
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
+        forked_from_id: session_meta.forked_from_id,
         timestamp,
         updated_at,
         path: path.to_path_buf(),
@@ -8718,6 +8723,7 @@ fn extract_conversation_summary(
 
     Some(ConversationSummary {
         conversation_id,
+        forked_from_id: session_meta.forked_from_id,
         timestamp,
         updated_at,
         path,
@@ -8876,6 +8882,7 @@ fn build_thread_from_snapshot(
 pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
+        forked_from_id,
         path,
         preview,
         timestamp,
@@ -8897,7 +8904,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 
     Thread {
         id: conversation_id.to_string(),
-        forked_from_id: None,
+        forked_from_id: forked_from_id.map(|id| id.to_string()),
         preview,
         ephemeral: false,
         model_provider,
@@ -9276,6 +9283,7 @@ mod tests {
 
         let expected = ConversationSummary {
             conversation_id,
+            forked_from_id: None,
             timestamp: timestamp.clone(),
             updated_at: timestamp,
             path,
@@ -9332,6 +9340,7 @@ mod tests {
 
         let expected = ConversationSummary {
             conversation_id,
+            forked_from_id: None,
             timestamp: Some(timestamp.clone()),
             updated_at: Some("2025-09-05T16:53:11Z".to_string()),
             path: path.clone(),
@@ -9429,6 +9438,11 @@ mod tests {
             forked_from_id_from_rollout(path.as_path()).await,
             Some(forked_from_id.to_string())
         );
+
+        let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
+        let thread = summary_to_thread(summary);
+
+        assert_eq!(thread.forked_from_id, Some(forked_from_id.to_string()));
         Ok(())
     }
 
@@ -9506,6 +9520,7 @@ mod tests {
 
         let summary = summary_from_state_db_metadata(
             conversation_id,
+            /*forked_from_id*/ None,
             PathBuf::from("/tmp/rollout.jsonl"),
             Some("hi".to_string()),
             "2025-09-05T16:53:11Z".to_string(),
@@ -9525,6 +9540,35 @@ mod tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn summary_from_state_db_metadata_preserves_forked_from_id() -> Result<()> {
+        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let forked_from_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+
+        let summary = summary_from_state_db_metadata(
+            conversation_id,
+            Some(forked_from_id),
+            PathBuf::from("/tmp/rollout.jsonl"),
+            Some("hi".to_string()),
+            "2025-09-05T16:53:11Z".to_string(),
+            "2025-09-05T16:53:12Z".to_string(),
+            "test-provider".to_string(),
+            PathBuf::from("/"),
+            "0.0.0".to_string(),
+            serde_json::to_string(&SessionSource::Cli)?,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*git_sha*/ None,
+            /*git_branch*/ None,
+            /*git_origin_url*/ None,
+        );
+
+        let thread = summary_to_thread(summary);
+
+        assert_eq!(thread.forked_from_id, Some(forked_from_id.to_string()));
         Ok(())
     }
 
