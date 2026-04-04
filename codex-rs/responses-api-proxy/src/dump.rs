@@ -157,7 +157,7 @@ struct HeaderDump {
 impl From<&Header> for HeaderDump {
     fn from(header: &Header) -> Self {
         let name = header.field.as_str().to_string();
-        let value = if name.eq_ignore_ascii_case(AUTHORIZATION_HEADER_NAME) {
+        let value = if should_redact_header(&name) {
             REDACTED_HEADER_VALUE.to_string()
         } else {
             header.value.as_str().to_string()
@@ -170,7 +170,7 @@ impl From<&Header> for HeaderDump {
 impl From<(&reqwest::header::HeaderName, &reqwest::header::HeaderValue)> for HeaderDump {
     fn from(header: (&reqwest::header::HeaderName, &reqwest::header::HeaderValue)) -> Self {
         let name = header.0.as_str();
-        let value = if name.eq_ignore_ascii_case(AUTHORIZATION_HEADER_NAME) {
+        let value = if should_redact_header(name) {
             REDACTED_HEADER_VALUE.to_string()
         } else {
             String::from_utf8_lossy(header.1.as_bytes()).into_owned()
@@ -181,6 +181,11 @@ impl From<(&reqwest::header::HeaderName, &reqwest::header::HeaderValue)> for Hea
             value,
         }
     }
+}
+
+fn should_redact_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case(AUTHORIZATION_HEADER_NAME)
+        || name.to_ascii_lowercase().contains("cookie")
 }
 
 fn dump_body(body: &[u8]) -> Value {
@@ -223,6 +228,7 @@ mod tests {
         let headers = vec![
             Header::from_bytes(&b"Authorization"[..], &b"Bearer secret"[..])
                 .expect("authorization header"),
+            Header::from_bytes(&b"Cookie"[..], &b"user-session=secret"[..]).expect("cookie header"),
             Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                 .expect("content-type header"),
         ];
@@ -247,6 +253,10 @@ mod tests {
                 "headers": [
                     {
                         "name": "Authorization",
+                        "value": "[REDACTED]"
+                    },
+                    {
+                        "name": "Cookie",
                         "value": "[REDACTED]"
                     },
                     {
@@ -282,10 +292,18 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
         headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        headers.insert(
+            "set-cookie",
+            HeaderValue::from_static("user-session=secret"),
+        );
 
         let mut response_body = String::new();
         exchange_dump
-            .tee_response_body(200, &headers, Cursor::new(b"data: hello\n\n".to_vec()))
+            .tee_response_body(
+                /*status*/ 200,
+                &headers,
+                Cursor::new(b"data: hello\n\n".to_vec()),
+            )
             .read_to_string(&mut response_body)
             .expect("read response body");
 
@@ -304,6 +322,10 @@ mod tests {
                     },
                     {
                         "name": "authorization",
+                        "value": "[REDACTED]"
+                    },
+                    {
+                        "name": "set-cookie",
                         "value": "[REDACTED]"
                     }
                 ],
