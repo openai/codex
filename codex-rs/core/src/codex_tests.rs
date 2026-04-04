@@ -2193,7 +2193,7 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
     let recorder = RolloutRecorder::new(
         config.as_ref(),
         RolloutRecorderParams::new(
-            ThreadId::default(),
+            session.conversation_id,
             /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),

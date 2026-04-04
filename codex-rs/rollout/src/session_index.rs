@@ -136,10 +136,32 @@ pub async fn find_thread_path_by_name_str(
     codex_home: &Path,
     name: &str,
 ) -> std::io::Result<Option<PathBuf>> {
-    let Some(thread_id) = find_thread_id_by_name(codex_home, name).await? else {
+    if name.trim().is_empty() {
         return Ok(None);
-    };
-    super::list::find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await
+    }
+    let path = session_index_path(codex_home);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let name = name.to_string();
+    // Collect all matching thread ids newest-first instead of stopping at the first name hit:
+    // the newest entry may point at a thread whose rollout was never materialized.
+    let thread_ids =
+        tokio::task::spawn_blocking(move || collect_thread_ids_from_end_by_name(&path, &name))
+            .await
+            .map_err(std::io::Error::other)??;
+
+    for thread_id in thread_ids {
+        // Keep walking until a matching id resolves to an existing rollout so an unsaved rename
+        // cannot shadow an older persisted session with the same name.
+        if let Some(path) =
+            super::list::find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await?
+        {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
 }
 
 fn session_index_path(codex_home: &Path) -> PathBuf {
@@ -160,12 +182,41 @@ fn scan_index_from_end_by_name(
     scan_index_from_end(path, |entry| entry.thread_name == name)
 }
 
+fn collect_thread_ids_from_end_by_name(path: &Path, name: &str) -> std::io::Result<Vec<ThreadId>> {
+    let mut seen = HashSet::new();
+    let mut ids = Vec::new();
+    scan_index_from_end_for_each(path, |entry| {
+        // The first row seen for an id is its latest name. Ignore older rows for that id so a
+        // historical name cannot be treated as the current one after the thread is renamed.
+        if seen.insert(entry.id) && entry.thread_name == name {
+            ids.push(entry.id);
+        }
+        Ok(None)
+    })?;
+    Ok(ids)
+}
+
 fn scan_index_from_end<F>(
     path: &Path,
     mut predicate: F,
 ) -> std::io::Result<Option<SessionIndexEntry>>
 where
     F: FnMut(&SessionIndexEntry) -> bool,
+{
+    scan_index_from_end_for_each(path, |entry| {
+        if predicate(entry) {
+            return Ok(Some(entry.clone()));
+        }
+        Ok(None)
+    })
+}
+
+fn scan_index_from_end_for_each<F>(
+    path: &Path,
+    mut visit_entry: F,
+) -> std::io::Result<Option<SessionIndexEntry>>
+where
+    F: FnMut(&SessionIndexEntry) -> std::io::Result<Option<SessionIndexEntry>>,
 {
     let mut file = File::open(path)?;
     let mut remaining = file.metadata()?.len();
@@ -181,7 +232,7 @@ where
 
         for &byte in buf[..read_size].iter().rev() {
             if byte == b'\n' {
-                if let Some(entry) = parse_line_from_rev(&mut line_rev, &mut predicate)? {
+                if let Some(entry) = parse_line_from_rev(&mut line_rev, &mut visit_entry)? {
                     return Ok(Some(entry));
                 }
                 continue;
@@ -190,7 +241,7 @@ where
         }
     }
 
-    if let Some(entry) = parse_line_from_rev(&mut line_rev, &mut predicate)? {
+    if let Some(entry) = parse_line_from_rev(&mut line_rev, &mut visit_entry)? {
         return Ok(Some(entry));
     }
 
@@ -199,10 +250,10 @@ where
 
 fn parse_line_from_rev<F>(
     line_rev: &mut Vec<u8>,
-    predicate: &mut F,
+    visit_entry: &mut F,
 ) -> std::io::Result<Option<SessionIndexEntry>>
 where
-    F: FnMut(&SessionIndexEntry) -> bool,
+    F: FnMut(&SessionIndexEntry) -> std::io::Result<Option<SessionIndexEntry>>,
 {
     if line_rev.is_empty() {
         return Ok(None);
@@ -222,10 +273,7 @@ where
     let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
         return Ok(None);
     };
-    if predicate(&entry) {
-        return Ok(Some(entry));
-    }
-    Ok(None)
+    visit_entry(&entry)
 }
 
 #[cfg(test)]
