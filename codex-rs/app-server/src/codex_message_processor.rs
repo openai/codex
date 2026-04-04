@@ -2215,14 +2215,28 @@ impl CodexMessageProcessor {
             }
         };
 
+        // The user may have requested WorkspaceWrite or DangerFullAccess via
+        // the command line, though in the process of deriving the Config, it
+        // could be downgraded to ReadOnly (perhaps there is no sandbox
+        // available on Windows or the enterprise config disallows it). The cwd
+        // should still be considered "trusted" in this case.
+        let requested_sandbox_trusts_project = matches!(
+            typesafe_overrides.sandbox_mode,
+            Some(
+                codex_protocol::config_types::SandboxMode::WorkspaceWrite
+                    | codex_protocol::config_types::SandboxMode::DangerFullAccess
+            )
+        );
+
         if requested_cwd.is_some()
             && !config.active_project.is_trusted()
-            && matches!(
-                config.permissions.sandbox_policy.get(),
-                codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                    | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
-                    | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
-            )
+            && (requested_sandbox_trusts_project
+                || matches!(
+                    config.permissions.sandbox_policy.get(),
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                        | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+                ))
         {
             let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
                 .unwrap_or_else(|| config.cwd.to_path_buf());

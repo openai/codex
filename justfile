@@ -69,8 +69,9 @@ bazel-lock-check:
 bazel-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
 
+[no-cd]
 bazel-clippy:
-    bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
+    bazel_targets="$(./scripts/list-bazel-clippy-targets.sh)" && bazel build --config=clippy -- ${bazel_targets}
 
 [no-cd]
 bazel-argument-comment-lint:

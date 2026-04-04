@@ -25,7 +25,6 @@ use tokio::time::sleep;
 use wiremock::MockServer;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
-const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
 const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
@@ -372,8 +371,7 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
             .unwrap_or_default()
             .into_iter()
             .find(|request| {
-                body_contains(request, CHILD_PROMPT)
-                    && body_contains(request, FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)
+                body_contains(request, CHILD_PROMPT) && !body_contains(request, SPAWN_CALL_ID)
             })
         {
             break request;
@@ -384,30 +382,7 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
         sleep(Duration::from_millis(10)).await;
     };
     assert!(body_contains(&child_request, TURN_0_FORK_PROMPT));
-    assert!(body_contains(&child_request, "seeded"));
-
-    let child_body = child_request
-        .body_json::<serde_json::Value>()
-        .expect("forked child request body should be json");
-    let function_call_output = child_body["input"]
-        .as_array()
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item["type"].as_str() == Some("function_call_output")
-                    && item["call_id"].as_str() == Some(SPAWN_CALL_ID)
-            })
-        })
-        .unwrap_or_else(|| panic!("expected forked child request to include spawn_agent output"));
-    let (content, success) = match &function_call_output["output"] {
-        serde_json::Value::String(text) => (Some(text.as_str()), None),
-        serde_json::Value::Object(output) => (
-            output.get("content").and_then(serde_json::Value::as_str),
-            output.get("success").and_then(serde_json::Value::as_bool),
-        ),
-        _ => (None, None),
-    };
-    assert_eq!(content, Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE));
-    assert_ne!(success, Some(false));
+    assert!(!body_contains(&child_request, SPAWN_CALL_ID));
 
     Ok(())
 }

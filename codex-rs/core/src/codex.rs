@@ -3579,22 +3579,24 @@ impl Session {
         {
             developer_sections.push(model_switch_message.into_text());
         }
-        developer_sections.push(
-            DeveloperInstructions::from_policy(
-                turn_context.sandbox_policy.get(),
-                turn_context.approval_policy.value(),
-                turn_context.config.approvals_reviewer,
-                self.services.exec_policy.current().as_ref(),
-                &turn_context.cwd,
-                turn_context
-                    .features
-                    .enabled(Feature::ExecPermissionApprovals),
-                turn_context
-                    .features
-                    .enabled(Feature::RequestPermissionsTool),
-            )
-            .into_text(),
-        );
+        if turn_context.config.include_permissions_instructions {
+            developer_sections.push(
+                DeveloperInstructions::from_policy(
+                    turn_context.sandbox_policy.get(),
+                    turn_context.approval_policy.value(),
+                    turn_context.config.approvals_reviewer,
+                    self.services.exec_policy.current().as_ref(),
+                    &turn_context.cwd,
+                    turn_context
+                        .features
+                        .enabled(Feature::ExecPermissionApprovals),
+                    turn_context
+                        .features
+                        .enabled(Feature::RequestPermissionsTool),
+                )
+                .into_text(),
+            );
+        }
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_reviewer_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
@@ -3644,7 +3646,7 @@ impl Session {
                 );
             }
         }
-        if turn_context.apps_enabled() {
+        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
@@ -3687,16 +3689,18 @@ impl Session {
                 .serialize_to_text(),
             );
         }
-        let subagents = self
-            .services
-            .agent_control
-            .format_environment_context_subagents(self.conversation_id)
-            .await;
-        contextual_user_sections.push(
-            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                .with_subagents(subagents)
-                .serialize_to_xml(),
-        );
+        if turn_context.config.include_environment_context {
+            let subagents = self
+                .services
+                .agent_control
+                .format_environment_context_subagents(self.conversation_id)
+                .await;
+            contextual_user_sections.push(
+                EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                    .with_subagents(subagents)
+                    .serialize_to_xml(),
+            );
+        }
 
         let mut items = Vec::with_capacity(3);
         if let Some(developer_message) =
@@ -6486,6 +6490,7 @@ pub(crate) fn build_prompt(
         output_schema: turn_context.final_output_json_schema.clone(),
     }
 }
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,

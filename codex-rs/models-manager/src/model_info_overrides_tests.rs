@@ -32,8 +32,10 @@ async fn offline_model_info_without_tool_output_override() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_model_info_with_tool_output_override() {
     let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = ModelsManagerConfig::default();
-    config.tool_output_token_limit = Some(123);
+    let config = ModelsManagerConfig {
+        tool_output_token_limit: Some(123),
+        ..Default::default()
+    };
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let manager = ModelsManager::new(

@@ -47,6 +47,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
@@ -93,6 +94,13 @@ fn message_input_texts(item: &serde_json::Value) -> Vec<&str> {
         .iter()
         .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .collect()
+}
+
+fn message_input_text_contains(request: &ResponsesRequest, role: &str, needle: &str) -> bool {
+    request
+        .message_input_texts(role)
+        .iter()
+        .any(|text| text.contains(needle))
 }
 
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
@@ -1208,47 +1216,19 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let request_body = request.body_json();
-    let input = request_body["input"].as_array().expect("input array");
     let apps_snippet =
         "Apps (Connectors) can be explicitly triggered in user messages in the format";
 
-    let has_developer_apps_guidance = input.iter().any(|item| {
-        item.get("role").and_then(|value| value.as_str()) == Some("developer")
-            && item
-                .get("content")
-                .and_then(|value| value.as_array())
-                .is_some_and(|content| {
-                    content.iter().any(|entry| {
-                        entry
-                            .get("text")
-                            .and_then(|value| value.as_str())
-                            .is_some_and(|text| text.contains(apps_snippet))
-                    })
-                })
-    });
     assert!(
-        has_developer_apps_guidance,
-        "expected apps guidance in a developer message, got {input:#?}"
+        message_input_text_contains(&request, "developer", apps_snippet),
+        "expected apps guidance in a developer message, got {:?}",
+        request.body_json()["input"]
     );
 
-    let has_user_apps_guidance = input.iter().any(|item| {
-        item.get("role").and_then(|value| value.as_str()) == Some("user")
-            && item
-                .get("content")
-                .and_then(|value| value.as_array())
-                .is_some_and(|content| {
-                    content.iter().any(|entry| {
-                        entry
-                            .get("text")
-                            .and_then(|value| value.as_str())
-                            .is_some_and(|text| text.contains(apps_snippet))
-                    })
-                })
-    });
     assert!(
-        !has_user_apps_guidance,
-        "did not expect apps guidance in user messages, got {input:#?}"
+        !message_input_text_contains(&request, "user", apps_snippet),
+        "did not expect apps guidance in user messages, got {:?}",
+        request.body_json()["input"]
     );
 }
 
@@ -1296,26 +1276,105 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let request_body = request.body_json();
-    let input = request_body["input"].as_array().expect("input array");
     let apps_snippet =
         "Apps (Connectors) can be explicitly triggered in user messages in the format";
 
-    let has_apps_guidance = input.iter().any(|item| {
-        item.get("content")
-            .and_then(|value| value.as_array())
-            .is_some_and(|content| {
-                content.iter().any(|entry| {
-                    entry
-                        .get("text")
-                        .and_then(|value| value.as_str())
-                        .is_some_and(|text| text.contains(apps_snippet))
-                })
-            })
-    });
     assert!(
-        !has_apps_guidance,
-        "did not expect apps guidance for API key auth, got {input:#?}"
+        !message_input_text_contains(&request, "developer", apps_snippet)
+            && !message_input_text_contains(&request, "user", apps_snippet),
+        "did not expect apps guidance for API key auth, got {:?}",
+        request.body_json()["input"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn omits_apps_guidance_when_configured_off() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+    let apps_server = AppsTestServer::mount(&server)
+        .await
+        .expect("mount apps MCP mock");
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+            config.chatgpt_base_url = apps_base_url;
+            config.include_apps_instructions = false;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    assert!(
+        !message_input_text_contains(&request, "developer", "<apps_instructions>"),
+        "did not expect apps instructions when include_apps_instructions = false, got {:?}",
+        request.body_json()["input"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn omits_environment_context_when_configured_off() {
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.include_environment_context = false;
+    });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    assert!(
+        !message_input_text_contains(&request, "user", "<environment_context>"),
+        "did not expect environment context when include_environment_context = false, got {:?}",
+        request.body_json()["input"]
     );
 }
 

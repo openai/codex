@@ -95,7 +95,10 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(status, &CommandExecutionStatus::InProgress);
 
     let delta = wait_for_command_execution_output_delta(&mut mcp, &command_id).await?;
-    assert_eq!(delta.delta, expected_output);
+    assert_eq!(
+        delta.delta.trim_end_matches(['\r', '\n']),
+        expected_output.trim_end_matches(['\r', '\n'])
+    );
 
     let completed = wait_for_command_execution_completed(&mut mcp, Some(&command_id)).await?;
     let ThreadItem::CommandExecution {

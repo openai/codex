@@ -72,6 +72,7 @@ single_version_override(
     patches = [
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_delete_git_worktree_pointer.patch",
+        "//patches:rules_rs_windows_exec_linker.patch",
     ],
     version = "0.0.43",
 )
@@ -85,7 +86,9 @@ rules_rust.patch(
         "//patches:rules_rust_windows_gnullvm_build_script.patch",
         "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
         "//patches:rules_rust_windows_bootstrap_process_wrapper_linker.patch",
+        "//patches:rules_rust_windows_build_script_runner_paths.patch",
         "//patches:rules_rust_windows_msvc_direct_link_args.patch",
+        "//patches:rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
         "//patches:rules_rust_windows_exec_bin_target.patch",
         "//patches:rules_rust_windows_exec_std.patch",
         "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
@@ -189,8 +192,18 @@ bazel_dep(name = "zstd", version = "1.5.7")
 
 crate.annotation(
     crate = "zstd-sys",
-    gen_build_script = "off",
-    deps = ["@zstd"],
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:zstd-sys_windows_msvc_include_dirs.patch",
+    ],
+)
+crate.annotation(
+    crate = "ring",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:ring_windows_msvc_include_dirs.patch",
+    ],
 )
 crate.annotation(
     build_script_env = {
@@ -218,8 +231,7 @@ bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
 
 crate.annotation(
     crate = "bzip2-sys",
-    gen_build_script = "off",
-    deps = ["@bzip2//:bz2"],
+    gen_build_script = "on",
 )
 
 inject_repo(crate, "bzip2")
@@ -228,23 +240,18 @@ bazel_dep(name = "zlib", version = "1.3.1.bcr.8")
 
 crate.annotation(
     crate = "libz-sys",
-    gen_build_script = "off",
-    deps = ["@zlib"],
+    gen_build_script = "on",
 )
 
 inject_repo(crate, "zlib")
 
-bazel_dep(name = "xz", version = "5.4.5.bcr.8")
-
+# TODO(zbarsky): Enable annotation after fixing windows arm64 builds.
 crate.annotation(
     crate = "lzma-sys",
-    gen_build_script = "off",
-    deps = ["@xz//:lzma"],
+    gen_build_script = "on",
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
-
-inject_repo(crate, "xz")
 
 crate.annotation(
     build_script_data = [

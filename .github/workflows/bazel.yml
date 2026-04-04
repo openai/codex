@@ -82,9 +82,16 @@ jobs:
             -//third_party/v8:all
           )
 
+          bazel_wrapper_args=(
+            --print-failed-test-logs
+            --use-node-test-env
+          )
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            bazel_wrapper_args+=(--windows-msvc-host-platform)
+          fi
+
           ./.github/scripts/run-bazel-ci.sh \
-            --print-failed-test-logs \
-            --use-node-test-env \
+            "${bazel_wrapper_args[@]}" \
             -- \
             test \
             --test_tag_filters=-argument-comment-lint \
@@ -147,13 +154,17 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/bazel-execution-logs"
           echo "CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR=${RUNNER_TEMP}/bazel-execution-logs" >> "${GITHUB_ENV}"
 
-      - name: bazel build --config=clippy //codex-rs/...
+      - name: bazel build --config=clippy lint targets
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          # Keep the initial Bazel clippy scope on codex-rs and out of the
-          # V8 proof-of-concept target for now.
+          bazel_target_lines="$(./scripts/list-bazel-clippy-targets.sh)"
+          bazel_targets=()
+          while IFS= read -r target; do
+            bazel_targets+=("${target}")
+          done <<< "${bazel_target_lines}"
+
           ./.github/scripts/run-bazel-ci.sh \
             -- \
             build \
@@ -161,8 +172,7 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
             --build_metadata=TAG_job=clippy \
             -- \
-            //codex-rs/... \
-            -//codex-rs/v8-poc:all
+            "${bazel_targets[@]}"
 
       - name: Upload Bazel execution logs
         if: always() && !cancelled()

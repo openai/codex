@@ -650,8 +650,9 @@ mod tests {
         let snapshot_with_diagnostics = CodexFeedback::new()
             .snapshot(/*session_id*/ None)
             .with_feedback_diagnostics(FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
-                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+                headline: "Proxy environment variables are set and may affect connectivity."
+                    .to_string(),
+                details: vec!["HTTPS_PROXY = https://example.com:443".to_string()],
             }]));
 
         let attachments_with_diagnostics = snapshot_with_diagnostics.feedback_attachments(
@@ -674,7 +675,7 @@ mod tests {
         assert_eq!(attachments_with_diagnostics[0].buffer, vec![1]);
         assert_eq!(
             attachments_with_diagnostics[1].buffer,
-            b"Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1".to_vec()
+            b"Connectivity diagnostics\n\n- Proxy environment variables are set and may affect connectivity.\n  - HTTPS_PROXY = https://example.com:443".to_vec()
         );
         assert_eq!(attachments_with_diagnostics[2].buffer, b"rollout".to_vec());
         assert_eq!(

@@ -256,6 +256,9 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// This test verifies that a shell, particularly PowerShell, can correctly
+/// handle unicode output when the UTF-8 BOM is used. See
+/// https://github.com/openai/codex/pull/7902 for more context.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(true ; "with_login")]
 #[test_case(false ; "without_login")]
@@ -264,10 +267,11 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.2")).await?;
 
-    // We use a child process on windows instead of a direct builtin like 'echo' to ensure that Powershell
-    // config is actually being set correctly.
     let call_id = "unicode_output";
     let command = if cfg!(windows) {
+        // We use a child process on Windows instead of a PowerShell command
+        // like `Write-Output` to ensure that the Powershell config is set
+        // correctly.
         "cmd.exe /c echo naïve_café"
     } else {
         "echo \"naïve_café\""

@@ -91,7 +91,6 @@ trust_level = "trusted"
         .env("CODEX_HOME", codex_home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture_path)
-        .env("OPENAI_BASE_URL", "http://unused.local")
         .output()
         .context("failed to execute codex exec")?;
     anyhow::ensure!(
