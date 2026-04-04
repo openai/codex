@@ -49,7 +49,10 @@ pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
 async fn apply_patch_harness_with(
     configure: impl FnOnce(TestCodexBuilder) -> TestCodexBuilder,
 ) -> Result<TestCodexHarness> {
-    let builder = configure(test_codex()).with_config(|config| {
+    // Keep Windows shell-command apply_patch tests on a deterministic outer
+    // shell so heredoc interception does not depend on runner-local shell
+    // auto-detection.
+    let builder = configure(test_codex().with_windows_cmd_shell()).with_config(|config| {
         config.include_apply_patch_tool = true;
     });
     // Box harness construction so apply_patch_cli tests do not inline the
