@@ -257,20 +257,18 @@ single_version_override(
 
 crate.annotation(
     crate = "lzma-sys",
-    gen_build_script = crate.select(
-        common = "off",
-        selects = {
-            "aarch64-pc-windows-gnullvm": "on",
-            "aarch64-pc-windows-msvc": "on",
-        },
-    ),
-    deps = crate.select(
-        common = ["@xz//:lzma"],
-        selects = {
-            "aarch64-pc-windows-gnullvm": [],
-            "aarch64-pc-windows-msvc": [],
-        },
-    ),
+    gen_build_script = "off",
+    deps = ["@xz//:lzma"],
+)
+
+crate.annotation_select(
+    crate = "lzma-sys",
+    deps = [],
+    gen_build_script = "on",
+    triples = [
+        "aarch64-pc-windows-gnullvm",
+        "aarch64-pc-windows-msvc",
+    ],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
