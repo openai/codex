@@ -296,10 +296,12 @@ impl ExecPolicyManager {
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox if execpolicy allows the command
-                bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-                }),
+                // Keep sandboxing in place when the filesystem policy
+                // contains explicit deny-read carveouts.
+                bypass_sandbox: !file_system_sandbox_policy.has_denied_read_restrictions()
+                    && evaluation.matched_rules.iter().any(|rule_match| {
+                        is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+                    }),
                 proposed_execpolicy_amendment: if auto_amendment_allowed {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
                 } else {

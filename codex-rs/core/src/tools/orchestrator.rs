@@ -241,6 +241,15 @@ impl ToolOrchestrator {
                         network_policy_decision,
                     })));
                 }
+                if turn_ctx
+                    .file_system_sandbox_policy
+                    .has_denied_read_restrictions()
+                {
+                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output,
+                        network_policy_decision,
+                    })));
+                }
                 if !tool.escalate_on_failure() {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,

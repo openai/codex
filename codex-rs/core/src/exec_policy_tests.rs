@@ -1651,6 +1651,37 @@ async fn dangerous_command_forbidden_in_external_sandbox_when_policy_matches() {
     .await;
 }
 
+#[tokio::test]
+async fn allow_rule_does_not_bypass_sandbox_when_deny_read_paths_exist() {
+    let policy_src = Some(r#"prefix_rule(pattern=["cat"], decision="allow")"#.to_string());
+    let command = vec_str(&["cat", "~/.gitconfig"]);
+    let deny_path = AbsolutePathBuf::try_from("/tmp/secret-config").expect("absolute path");
+    let file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: deny_path },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src,
+            command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
 struct ExecApprovalRequirementScenario {
     /// Source for the Starlark `.rules` file.
     policy_src: Option<String>,
