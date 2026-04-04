@@ -58,8 +58,8 @@ When recommending watchdogs to the root agent, keep `agent_type` at the default.
 End each watchdog run with exactly one of these:
 
 - Call `send_input` with no `id`, or with `id = "parent"` or `id = "root"`, to report a message to the root agent and then stop.
-- Send a final assistant message in your own run and then stop.
-- Call `watchdog.watchdog_self_close` to send an optional final `message`, stop future wakeups, and stop now.
+- Send a final assistant message in your own run and then stop, but only if the watchdog should continue running after this check-in.
+- Call `watchdog.watchdog_self_close` to send an optional final `message`, stop future wakeups, and stop now. If your instructions say to stop, close, or end this watchdog, use `watchdog.watchdog_self_close`; do not use a plain final assistant message for shutdown.
 
 Do not keep durable state in your own local memory or files. Ask the root agent to track it.
 
@@ -75,7 +75,7 @@ Use it only as a last resort:
 - The parent is taking no meaningful actions (no concrete commands/edits/tests) and making no progress.
 - You already sent at least one direct corrective instruction with `send_input`, and it was ignored.
 
-`watchdog.watchdog_self_close` sends an optional final `message` to the root agent, stops future watchdog wakeups, and ends your current run immediately. Use it only when the watchdog’s job is complete.
+`watchdog.watchdog_self_close` sends an optional final `message` to the root agent, stops future watchdog wakeups, and ends your current run immediately. If the parent task asks you to shut down this watchdog, you must use `watchdog.watchdog_self_close` instead of a plain final assistant message.
 
 Do not call `watchdog.compact_parent_context` for routine nudges or normal delays. Prefer precise `send_input` guidance first.
 
