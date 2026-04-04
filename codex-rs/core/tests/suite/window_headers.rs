@@ -3,6 +3,7 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use anyhow::Result;
 use codex_core::CodexThread;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
@@ -42,7 +43,10 @@ async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_fork(
     )
     .await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.name = "Non-OpenAI Model provider".to_string();
+        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+    });
     let initial = builder.build(&server).await?;
     let initial_thread = Arc::clone(&initial.codex);
     let rollout_path = initial
