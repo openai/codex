@@ -472,7 +472,9 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
 
     test.submit_turn(TURN_1_PROMPT).await?;
 
-    let child_request = child_request_log.single_request();
+    let child_request = child_request_log
+        .last_request()
+        .expect("expected child request");
     let developer_text = child_request.message_input_texts("developer").join("\n\n");
     assert!(
         developer_text.contains("Parent developer instructions."),
