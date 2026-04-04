@@ -1,0 +1,21 @@
+---
+source: core/tests/suite/pending_input.rs
+expression: snapshot
+---
+Scenario: /responses POST bodies (input only, redacted like other suite snapshots)
+
+## First request
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <SKILLS_INSTRUCTIONS>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:first prompt
+
+## Second request
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <SKILLS_INSTRUCTIONS>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:first prompt
+03:message/assistant:first turn
+04:message/user:second prompt

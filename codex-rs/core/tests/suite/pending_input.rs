@@ -7,6 +7,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_message_item_added;
@@ -22,7 +24,6 @@ use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
-use serde_json::to_string_pretty;
 use tokio::sync::oneshot;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
@@ -119,14 +120,26 @@ async fn wait_for_turn_complete(codex: &CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }
 
-fn assert_two_responses_requests_snapshot(snapshot_name: &str, requests: &[Vec<u8>]) {
+fn assert_two_responses_input_snapshot(snapshot_name: &str, requests: &[Vec<u8>]) {
     assert_eq!(requests.len(), 2);
+    let options = ContextSnapshotOptions::default();
     let first: Value = from_slice(&requests[0]).expect("parse first request");
     let second: Value = from_slice(&requests[1]).expect("parse second request");
-    let snapshot = format!(
-        "=== first request ===\n{}\n\n=== second request ===\n{}",
-        to_string_pretty(&first).expect("serialize first body"),
-        to_string_pretty(&second).expect("serialize second body"),
+    let first_items = first["input"]
+        .as_array()
+        .expect("first request input")
+        .clone();
+    let second_items = second["input"]
+        .as_array()
+        .expect("second request input")
+        .clone();
+    let snapshot = context_snapshot::format_labeled_items_snapshot(
+        "/responses POST bodies (input only, redacted like other suite snapshots)",
+        &[
+            ("First request", first_items.as_slice()),
+            ("Second request", second_items.as_slice()),
+        ],
+        &options,
     );
     insta::assert_snapshot!(snapshot_name, snapshot);
 }
@@ -164,10 +177,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    assert_two_responses_requests_snapshot(
-        "pending_input_injected_user_input_follow_up",
-        &requests,
-    );
+    assert_two_responses_input_snapshot("pending_input_injected_user_input_follow_up", &requests);
 
     server.shutdown().await;
 }
@@ -207,7 +217,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    assert_two_responses_requests_snapshot("pending_input_queued_mail_after_reasoning", &requests);
+    assert_two_responses_input_snapshot("pending_input_queued_mail_after_reasoning", &requests);
 
     server.shutdown().await;
 }
@@ -266,7 +276,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    assert_two_responses_requests_snapshot("pending_input_queued_mail_after_commentary", &requests);
+    assert_two_responses_input_snapshot("pending_input_queued_mail_after_commentary", &requests);
 
     server.shutdown().await;
 }
@@ -308,7 +318,7 @@ async fn user_input_does_not_preempt_after_reasoning_item() {
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
-    assert_two_responses_requests_snapshot(
+    assert_two_responses_input_snapshot(
         "pending_input_user_input_no_preempt_after_reasoning",
         &requests,
     );
