@@ -3941,6 +3941,9 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optional turn-scoped Responses API client metadata.
+    #[ts(optional = nullable)]
+    pub client_metadata: Option<HashMap<String, String>>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -4057,6 +4060,9 @@ pub struct TurnStartResponse {
 pub struct TurnSteerParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optional turn-scoped Responses API client metadata.
+    #[ts(optional = nullable)]
+    pub client_metadata: Option<HashMap<String, String>>,
     /// Required active turn id precondition. The request fails when it does not
     /// match the currently active turn.
     pub expected_turn_id: String,
@@ -8299,6 +8305,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            client_metadata: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -8314,5 +8321,59 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn turn_params_round_trip_client_metadata() {
+        let turn_start: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "clientMetadata": {
+                "fiber_run_id": "fiber-123",
+                "origin": "gaas"
+            }
+        }))
+        .expect("turn start params should deserialize");
+        assert_eq!(
+            turn_start.client_metadata,
+            Some(HashMap::from([
+                ("fiber_run_id".to_string(), "fiber-123".to_string()),
+                ("origin".to_string(), "gaas".to_string()),
+            ]))
+        );
+        assert_eq!(
+            serde_json::to_value(&turn_start)
+                .expect("turn start params should serialize")
+                .get("clientMetadata"),
+            Some(&json!({
+                "fiber_run_id": "fiber-123",
+                "origin": "gaas"
+            }))
+        );
+
+        let turn_steer: TurnSteerParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "clientMetadata": {
+                "fiber_run_id": "fiber-456"
+            },
+            "expectedTurnId": "turn_123"
+        }))
+        .expect("turn steer params should deserialize");
+        assert_eq!(
+            turn_steer.client_metadata,
+            Some(HashMap::from([(
+                "fiber_run_id".to_string(),
+                "fiber-456".to_string(),
+            )]))
+        );
+        assert_eq!(
+            serde_json::to_value(&turn_steer)
+                .expect("turn steer params should serialize")
+                .get("clientMetadata"),
+            Some(&json!({
+                "fiber_run_id": "fiber-456"
+            }))
+        );
     }
 }

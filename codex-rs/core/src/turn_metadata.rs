@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -6,6 +7,7 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use serde::Serialize;
+use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use crate::sandbox_tags::sandbox_tag;
@@ -69,6 +71,20 @@ impl TurnMetadataBag {
     }
 }
 
+fn merge_client_metadata(
+    header: &str,
+    client_metadata: Option<&HashMap<String, String>>,
+) -> Option<String> {
+    let client_metadata = client_metadata?;
+    let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(header).ok()?;
+    for (key, value) in client_metadata {
+        metadata
+            .entry(key.clone())
+            .or_insert_with(|| Value::String(value.clone()));
+    }
+    serde_json::to_string(&metadata).ok()
+}
+
 fn build_turn_metadata_bag(
     session_id: Option<String>,
     turn_id: Option<String>,
@@ -129,6 +145,7 @@ pub(crate) struct TurnMetadataState {
     base_metadata: TurnMetadataBag,
     base_header: String,
     enriched_header: Arc<RwLock<Option<String>>>,
+    client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
@@ -159,26 +176,41 @@ impl TurnMetadataState {
             base_metadata,
             base_header,
             enriched_header: Arc::new(RwLock::new(None)),
+            client_metadata: Arc::new(RwLock::new(None)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
     }
 
     pub(crate) fn current_header_value(&self) -> Option<String> {
-        if let Some(header) = self
+        let header = if let Some(header) = self
             .enriched_header
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .cloned()
         {
-            return Some(header);
-        }
-        Some(self.base_header.clone())
+            header
+        } else {
+            self.base_header.clone()
+        };
+        let client_metadata = self
+            .client_metadata
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        merge_client_metadata(&header, client_metadata.as_ref()).or(Some(header))
     }
 
     pub(crate) fn current_meta_value(&self) -> Option<serde_json::Value> {
         self.current_header_value()
             .and_then(|header| serde_json::from_str(&header).ok())
+    }
+
+    pub(crate) fn set_client_metadata(&self, client_metadata: HashMap<String, String>) {
+        *self
+            .client_metadata
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(client_metadata);
     }
 
     pub(crate) fn spawn_git_enrichment_task(&self) {

@@ -1371,11 +1371,17 @@ fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<Head
 }
 
 fn build_ws_client_metadata(turn_metadata_header: Option<&str>) -> Option<HashMap<String, String>> {
-    let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header)?;
-    let turn_metadata = turn_metadata_header.to_str().ok()?.to_string();
     let mut client_metadata = HashMap::new();
-    client_metadata.insert(X_CODEX_TURN_METADATA_HEADER.to_string(), turn_metadata);
-    Some(client_metadata)
+    if let Some(turn_metadata_header) = parse_turn_metadata_header(turn_metadata_header)
+        && let Ok(turn_metadata) = turn_metadata_header.to_str()
+    {
+        client_metadata.insert(
+            X_CODEX_TURN_METADATA_HEADER.to_string(),
+            turn_metadata.to_string(),
+        );
+    }
+
+    (!client_metadata.is_empty()).then_some(client_metadata)
 }
 
 /// Builds the extra headers attached to Responses API requests.
