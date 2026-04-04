@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "accountUserId": {
+      "type": "string"
+    },
+    "avatarId": {
+      "type": "string"
+    },
+    "awardId": {
+      "type": "string"
+    },
+    "awardedAt": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "awardedBy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "metadataJson": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sourceRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sourceSummary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sourceType": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "accountUserId",
+    "avatarId",
+    "awardId",
+    "sourceType"
+  ],
+  "title": "CodexAvatarAdminAwardGrantParams",
+  "type": "object"
+}

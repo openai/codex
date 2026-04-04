@@ -147,6 +147,63 @@
       ],
       "type": "object"
     },
+    "CodexAvatarAdminAwardGrantParams": {
+      "properties": {
+        "accountUserId": {
+          "type": "string"
+        },
+        "avatarId": {
+          "type": "string"
+        },
+        "awardId": {
+          "type": "string"
+        },
+        "awardedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "awardedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadataJson": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSummary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountUserId",
+        "avatarId",
+        "awardId",
+        "sourceType"
+      ],
+      "type": "object"
+    },
+    "CodexAvatarAdminCapabilitiesReadParams": {
+      "type": "object"
+    },
     "CodexAvatarEquipParams": {
       "properties": {
         "avatarId": {
@@ -4598,6 +4655,54 @@
         "params"
       ],
       "title": "Avatar/equipRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "avatar/admin/award"
+          ],
+          "title": "Avatar/admin/awardRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CodexAvatarAdminAwardGrantParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Avatar/admin/awardRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "avatar/admin/capabilities/read"
+          ],
+          "title": "Avatar/admin/capabilities/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CodexAvatarAdminCapabilitiesReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Avatar/admin/capabilities/readRequest",
       "type": "object"
     },
     {

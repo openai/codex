@@ -15,6 +15,7 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::CodexAvatarAdminAwardGrantParams;
 use codex_app_server_protocol::CodexAvatarEquipParams;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CommandExecParams;
@@ -310,6 +311,22 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("avatar/equip", params).await
+    }
+
+    /// Send an `avatar/admin/award` JSON-RPC request.
+    pub async fn send_avatar_admin_award_request(
+        &mut self,
+        params: CodexAvatarAdminAwardGrantParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("avatar/admin/award", params).await
+    }
+
+    /// Send an `avatar/admin/capabilities/read` JSON-RPC request.
+    pub async fn send_avatar_admin_capabilities_read_request(&mut self) -> anyhow::Result<i64> {
+        let params = Some(serde_json::json!({}));
+        self.send_request("avatar/admin/capabilities/read", params)
+            .await
     }
 
     /// Send an `account/login/start` JSON-RPC request with ChatGPT auth tokens.

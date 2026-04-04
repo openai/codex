@@ -495,6 +495,16 @@ client_request_definitions! {
         response: v2::CodexAvatarInventoryReadResponse,
     },
 
+    AvatarAdminAward => "avatar/admin/award" {
+        params: v2::CodexAvatarAdminAwardGrantParams,
+        response: v2::CodexAvatarInventoryReadResponse,
+    },
+
+    AvatarAdminCapabilitiesRead => "avatar/admin/capabilities/read" {
+        params: v2::CodexAvatarAdminCapabilitiesReadParams,
+        response: v2::CodexAvatarAdminCapabilitiesReadResponse,
+    },
+
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
@@ -1559,6 +1569,60 @@ mod tests {
                 "params": {
                     "avatarId": "clippy"
                 }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_avatar_admin_award() -> Result<()> {
+        let request = ClientRequest::AvatarAdminAward {
+            request_id: RequestId::Integer(9),
+            params: v2::CodexAvatarAdminAwardGrantParams {
+                account_user_id: "target-user-123".to_string(),
+                award_id: "manual-grant-1".to_string(),
+                avatar_id: "prism".to_string(),
+                source_type: "manual-admin-grant".to_string(),
+                source_ref: Some("support-ticket-1".to_string()),
+                awarded_at: Some(123),
+                awarded_by: Some("admin-user".to_string()),
+                metadata_json: Some("{\"reason\":\"support\"}".to_string()),
+                source_summary: Some("Manual support grant".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "avatar/admin/award",
+                "id": 9,
+                "params": {
+                    "accountUserId": "target-user-123",
+                    "awardId": "manual-grant-1",
+                    "avatarId": "prism",
+                    "sourceType": "manual-admin-grant",
+                    "sourceRef": "support-ticket-1",
+                    "awardedAt": 123,
+                    "awardedBy": "admin-user",
+                    "metadataJson": "{\"reason\":\"support\"}",
+                    "sourceSummary": "Manual support grant"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_avatar_admin_capabilities_read() -> Result<()> {
+        let request = ClientRequest::AvatarAdminCapabilitiesRead {
+            request_id: RequestId::Integer(10),
+            params: v2::CodexAvatarAdminCapabilitiesReadParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "avatar/admin/capabilities/read",
+                "id": 10,
+                "params": {}
             }),
             serde_json::to_value(&request)?,
         );

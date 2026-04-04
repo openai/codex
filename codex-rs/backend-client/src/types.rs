@@ -74,6 +74,20 @@ pub struct CodexAvatarEquipRequest {
     pub avatar_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAvatarAdminAwardGrantRequest {
+    pub account_user_id: String,
+    pub award_id: String,
+    pub avatar_id: String,
+    pub source_type: String,
+    pub source_ref: Option<String>,
+    pub awarded_at: Option<i64>,
+    pub awarded_by: Option<String>,
+    pub metadata_json: Option<String>,
+    pub source_summary: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexAvatarInventoryResponse {
@@ -85,6 +99,12 @@ pub struct CodexAvatarInventoryResponse {
     pub updated_at: i64,
     pub synced_at: i64,
     pub catalog_version: Option<i64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAvatarAdminCapabilitiesResponse {
+    pub can_grant_awards: bool,
 }
 
 /// Hand-rolled models for the Cloud Tasks task-details response.

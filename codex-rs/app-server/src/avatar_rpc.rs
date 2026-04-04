@@ -1,5 +1,7 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use codex_app_server_protocol::CodexAvatarAdminAwardGrantParams;
+use codex_app_server_protocol::CodexAvatarAdminCapabilitiesReadResponse;
 use codex_app_server_protocol::CodexAvatarDefinition;
 use codex_app_server_protocol::CodexAvatarEquipParams;
 use codex_app_server_protocol::CodexAvatarInventoryReadResponse;
@@ -8,6 +10,8 @@ use codex_app_server_protocol::CodexAvatarRarity;
 use codex_app_server_protocol::CodexAvatarStatus;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::CodexAvatarAdminAwardGrantRequest as BackendAvatarAdminAwardGrantRequest;
+use codex_backend_client::CodexAvatarAdminCapabilitiesResponse as BackendAvatarAdminCapabilitiesResponse;
 use codex_backend_client::CodexAvatarDefinition as BackendAvatarDefinition;
 use codex_backend_client::CodexAvatarInventoryResponse as BackendAvatarInventoryResponse;
 use codex_backend_client::CodexAvatarOwnership as BackendAvatarOwnership;
@@ -42,6 +46,41 @@ pub(crate) async fn equip_avatar(
     Ok(map_avatar_inventory_response(response))
 }
 
+pub(crate) async fn grant_admin_avatar_award(
+    auth_manager: &AuthManager,
+    chatgpt_base_url: &str,
+    params: CodexAvatarAdminAwardGrantParams,
+) -> Result<CodexAvatarInventoryReadResponse, JSONRPCErrorError> {
+    let client = avatar_backend_client(auth_manager, chatgpt_base_url).await?;
+    let response = client
+        .grant_admin_avatar_award(BackendAvatarAdminAwardGrantRequest {
+            account_user_id: params.account_user_id,
+            award_id: params.award_id,
+            avatar_id: params.avatar_id,
+            source_type: params.source_type,
+            source_ref: params.source_ref,
+            awarded_at: params.awarded_at,
+            awarded_by: params.awarded_by,
+            metadata_json: params.metadata_json,
+            source_summary: params.source_summary,
+        })
+        .await
+        .map_err(|err| backend_avatar_error("grant avatar award", err))?;
+    Ok(map_avatar_inventory_response(response))
+}
+
+pub(crate) async fn read_avatar_admin_capabilities(
+    auth_manager: &AuthManager,
+    chatgpt_base_url: &str,
+) -> Result<CodexAvatarAdminCapabilitiesReadResponse, JSONRPCErrorError> {
+    let client = avatar_backend_client(auth_manager, chatgpt_base_url).await?;
+    let response = client
+        .get_avatar_admin_capabilities()
+        .await
+        .map_err(|err| backend_avatar_error("read avatar admin capabilities", err))?;
+    Ok(map_avatar_admin_capabilities_response(response))
+}
+
 async fn avatar_backend_client(
     auth_manager: &AuthManager,
     chatgpt_base_url: &str,
@@ -71,7 +110,9 @@ async fn avatar_backend_client(
 
 fn backend_avatar_error(action: &str, err: RequestError) -> JSONRPCErrorError {
     match &err {
-        RequestError::UnexpectedStatus { status, body, .. } if status.as_u16() == 400 => {
+        RequestError::UnexpectedStatus { status, body, .. }
+            if status.as_u16() == 400 || status.as_u16() == 403 =>
+        {
             JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: avatar_error_detail(body)
@@ -115,6 +156,14 @@ fn map_avatar_inventory_response(
         updated_at: response.updated_at,
         synced_at: response.synced_at,
         catalog_version: response.catalog_version,
+    }
+}
+
+fn map_avatar_admin_capabilities_response(
+    response: BackendAvatarAdminCapabilitiesResponse,
+) -> CodexAvatarAdminCapabilitiesReadResponse {
+    CodexAvatarAdminCapabilitiesReadResponse {
+        can_grant_awards: response.can_grant_awards,
     }
 }
 

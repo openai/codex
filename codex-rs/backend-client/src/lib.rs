@@ -5,6 +5,8 @@ pub use client::Client;
 pub use client::RequestError;
 pub use types::CodeTaskDetailsResponse;
 pub use types::CodeTaskDetailsResponseExt;
+pub use types::CodexAvatarAdminAwardGrantRequest;
+pub use types::CodexAvatarAdminCapabilitiesResponse;
 pub use types::CodexAvatarDefinition;
 pub use types::CodexAvatarEquipRequest;
 pub use types::CodexAvatarInventoryResponse;

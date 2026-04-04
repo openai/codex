@@ -1813,6 +1813,38 @@ pub struct CodexAvatarEquipParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct CodexAvatarAdminAwardGrantParams {
+    pub account_user_id: String,
+    pub award_id: String,
+    pub avatar_id: String,
+    pub source_type: String,
+    #[ts(optional = nullable)]
+    pub source_ref: Option<String>,
+    #[ts(optional = nullable)]
+    pub awarded_at: Option<i64>,
+    #[ts(optional = nullable)]
+    pub awarded_by: Option<String>,
+    #[ts(optional = nullable)]
+    pub metadata_json: Option<String>,
+    #[ts(optional = nullable)]
+    pub source_summary: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarAdminCapabilitiesReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarAdminCapabilitiesReadResponse {
+    pub can_grant_awards: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CodexAvatarInventoryReadResponse {
     pub account_user_id: String,
     pub avatar_definitions: Vec<CodexAvatarDefinition>,

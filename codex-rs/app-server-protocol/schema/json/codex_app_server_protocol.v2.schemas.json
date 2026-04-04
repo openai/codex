@@ -1949,6 +1949,54 @@
             },
             "method": {
               "enum": [
+                "avatar/admin/award"
+              ],
+              "title": "Avatar/admin/awardRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CodexAvatarAdminAwardGrantParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Avatar/admin/awardRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "avatar/admin/capabilities/read"
+              ],
+              "title": "Avatar/admin/capabilities/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CodexAvatarAdminCapabilitiesReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Avatar/admin/capabilities/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "feedback/upload"
               ],
               "title": "Feedback/uploadRequestMethod",
@@ -2259,6 +2307,80 @@
         }
       ],
       "title": "ClientRequest"
+    },
+    "CodexAvatarAdminAwardGrantParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accountUserId": {
+          "type": "string"
+        },
+        "avatarId": {
+          "type": "string"
+        },
+        "awardId": {
+          "type": "string"
+        },
+        "awardedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "awardedBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadataJson": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSummary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountUserId",
+        "avatarId",
+        "awardId",
+        "sourceType"
+      ],
+      "title": "CodexAvatarAdminAwardGrantParams",
+      "type": "object"
+    },
+    "CodexAvatarAdminCapabilitiesReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CodexAvatarAdminCapabilitiesReadParams",
+      "type": "object"
+    },
+    "CodexAvatarAdminCapabilitiesReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "canGrantAwards": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "canGrantAwards"
+      ],
+      "title": "CodexAvatarAdminCapabilitiesReadResponse",
+      "type": "object"
     },
     "CodexAvatarDefinition": {
       "properties": {

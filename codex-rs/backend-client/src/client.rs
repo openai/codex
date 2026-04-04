@@ -1,4 +1,6 @@
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::CodexAvatarAdminAwardGrantRequest;
+use crate::types::CodexAvatarAdminCapabilitiesResponse;
 use crate::types::CodexAvatarEquipRequest;
 use crate::types::CodexAvatarInventoryResponse;
 use crate::types::ConfigFileResponse;
@@ -297,6 +299,42 @@ impl Client {
             .json(&CodexAvatarEquipRequest { avatar_id });
         let (body, ct) = self.exec_request_detailed(req, "POST", &url).await?;
         self.decode_json::<CodexAvatarInventoryResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
+    pub async fn grant_admin_avatar_award(
+        &self,
+        request_body: CodexAvatarAdminAwardGrantRequest,
+    ) -> std::result::Result<CodexAvatarInventoryResponse, RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/avatars/admin/awards", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/avatars/admin/awards", self.base_url),
+        };
+        let req = self
+            .http
+            .post(&url)
+            .headers(self.headers())
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(&request_body);
+        let (body, ct) = self.exec_request_detailed(req, "POST", &url).await?;
+        self.decode_json::<CodexAvatarInventoryResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
+    pub async fn get_avatar_admin_capabilities(
+        &self,
+    ) -> std::result::Result<CodexAvatarAdminCapabilitiesResponse, RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => {
+                format!("{}/api/codex/avatars/admin/capabilities", self.base_url)
+            }
+            PathStyle::ChatGptApi => {
+                format!("{}/wham/avatars/admin/capabilities", self.base_url)
+            }
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
+        self.decode_json::<CodexAvatarAdminCapabilitiesResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
     }
 
