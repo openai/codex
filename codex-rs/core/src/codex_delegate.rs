@@ -30,7 +30,6 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::AuthManager;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
@@ -49,6 +48,7 @@ use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::models_manager::manager::ModelsManager;
+use codex_login::AuthManager;
 use codex_protocol::protocol::InitialHistory;
 
 #[cfg(test)]

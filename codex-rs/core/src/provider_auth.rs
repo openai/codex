@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::AuthManager;
 use crate::model_provider_info::ModelProviderInfo;
+use codex_login::AuthManager;
 
 /// Returns the provider-scoped auth manager when this provider uses command-backed auth.
 ///

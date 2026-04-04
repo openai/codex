@@ -850,12 +850,18 @@ struct SubagentRegistry {
     panel_state: Option<Arc<StdMutex<SubagentPanelState>>>,
     panel_cell: Option<Arc<SubagentStatusCell>>,
     animations_enabled: bool,
+    watchdog_countdown_duration: Duration,
 }
 
 impl SubagentRegistry {
-    fn new(animations_enabled: bool) -> Self {
+    fn new(animations_enabled: bool, watchdog_interval_s: i64) -> Self {
         Self {
             animations_enabled,
+            watchdog_countdown_duration: u64::try_from(watchdog_interval_s)
+                .ok()
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(60)),
             ..Self::default()
         }
     }
@@ -1133,6 +1139,10 @@ impl SubagentRegistry {
                 name: info.name.clone(),
                 status: info.status.clone(),
                 is_watchdog: info.is_watchdog(),
+                watchdog_countdown_duration: self.watchdog_countdown_duration,
+                watchdog_countdown_started_at: info
+                    .is_watchdog()
+                    .then_some(info.running_started_at()),
                 preview: running_preview(info),
                 latest_update_at: info.latest_update_at,
             })
@@ -3934,7 +3944,8 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.subagent_anim_running.store(false, Ordering::Release);
         self.thread_event_channels.clear();
-        self.subagents = SubagentRegistry::new(self.config.animations);
+        self.subagents =
+            SubagentRegistry::new(self.config.animations, self.config.watchdog_interval_s);
         self.agent_navigation.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
@@ -4301,7 +4312,7 @@ impl App {
             /*account_id*/ None,
             bootstrap.account_email.clone(),
             auth_mode,
-            codex_core::default_client::originator().value,
+            codex_login::default_client::originator().value,
             config.otel.log_user_prompt,
             user_agent(),
             SessionSource::Cli,
@@ -4437,6 +4448,7 @@ impl App {
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
         let animations_enabled = config.animations;
+        let watchdog_interval_s = config.watchdog_interval_s;
 
         let mut app = Self {
             model_catalog,
@@ -4470,7 +4482,7 @@ impl App {
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
-            subagents: SubagentRegistry::new(animations_enabled),
+            subagents: SubagentRegistry::new(animations_enabled, watchdog_interval_s),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -9903,6 +9915,7 @@ guardian_approval = true
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
         let animations_enabled = config.animations;
+        let watchdog_interval_s = config.watchdog_interval_s;
 
         App {
             model_catalog: chat_widget.model_catalog(),
@@ -9936,7 +9949,7 @@ guardian_approval = true
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
-            subagents: SubagentRegistry::new(animations_enabled),
+            subagents: SubagentRegistry::new(animations_enabled, watchdog_interval_s),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -9959,6 +9972,7 @@ guardian_approval = true
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
         let animations_enabled = config.animations;
+        let watchdog_interval_s = config.watchdog_interval_s;
 
         (
             App {
@@ -9993,7 +10007,7 @@ guardian_approval = true
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
-                subagents: SubagentRegistry::new(animations_enabled),
+                subagents: SubagentRegistry::new(animations_enabled, watchdog_interval_s),
                 agent_navigation: AgentNavigationState::default(),
                 active_thread_id: None,
                 active_thread_rx: None,

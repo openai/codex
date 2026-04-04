@@ -6,9 +6,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use crate::AuthManager;
-use crate::CodexAuth;
-use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
@@ -30,7 +27,6 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::manager::RefreshStrategy;
-use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -71,6 +67,14 @@ use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::default_client::originator;
+use codex_mcp::mcp_connection_manager::McpConnectionManager;
+use codex_mcp::mcp_connection_manager::SandboxState;
+use codex_mcp::mcp_connection_manager::ToolInfo as McpToolInfo;
+use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
+use codex_mcp::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
@@ -122,6 +126,8 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_rollout::state_db;
+use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -262,13 +268,7 @@ use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
 use crate::instructions::UserInstructions;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
-use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::with_codex_apps_mcp;
-use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::codex_apps_tools_cache_key;
-use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
@@ -281,43 +281,6 @@ use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
 use crate::project_doc::get_user_instructions;
-use crate::protocol::AgentMessageContentDeltaEvent;
-use crate::protocol::AgentReasoningSectionBreakEvent;
-use crate::protocol::ApplyPatchApprovalRequestEvent;
-use crate::protocol::AskForApproval;
-use crate::protocol::BackgroundEventEvent;
-use crate::protocol::CompactedItem;
-use crate::protocol::DeprecationNoticeEvent;
-use crate::protocol::ErrorEvent;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecApprovalRequestEvent;
-use crate::protocol::McpServerRefreshConfig;
-use crate::protocol::ModelRerouteEvent;
-use crate::protocol::ModelRerouteReason;
-use crate::protocol::NetworkApprovalContext;
-use crate::protocol::Op;
-use crate::protocol::PlanDeltaEvent;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::ReasoningContentDeltaEvent;
-use crate::protocol::ReasoningRawContentDeltaEvent;
-use crate::protocol::RequestUserInputEvent;
-use crate::protocol::ReviewDecision;
-use crate::protocol::SandboxPolicy;
-use crate::protocol::SessionConfiguredEvent;
-use crate::protocol::SessionNetworkProxyRuntime;
-use crate::protocol::SkillDependencies as ProtocolSkillDependencies;
-use crate::protocol::SkillErrorInfo;
-use crate::protocol::SkillInterface as ProtocolSkillInterface;
-use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
-use crate::protocol::SkillToolDependency as ProtocolSkillToolDependency;
-use crate::protocol::StreamErrorEvent;
-use crate::protocol::Submission;
-use crate::protocol::TokenCountEvent;
-use crate::protocol::TokenUsage;
-use crate::protocol::TokenUsageInfo;
-use crate::protocol::TurnDiffEvent;
-use crate::protocol::WarningEvent;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -332,7 +295,6 @@ use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
-use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -356,6 +318,9 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
+use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::mcp::auth::compute_auth_statuses;
+use codex_mcp::mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::names::THREAD_STARTED_METRIC;
@@ -369,9 +334,46 @@ use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AgentMessageContentDeltaEvent;
+use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::McpServerRefreshConfig;
+use codex_protocol::protocol::ModelRerouteEvent;
+use codex_protocol::protocol::ModelRerouteReason;
+use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NonSteerableTurnKind;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PlanDeltaEvent;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::ReasoningContentDeltaEvent;
+use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::RequestUserInputEvent;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionNetworkProxyRuntime;
+use codex_protocol::protocol::SkillDependencies as ProtocolSkillDependencies;
+use codex_protocol::protocol::SkillErrorInfo;
+use codex_protocol::protocol::SkillInterface as ProtocolSkillInterface;
+use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::SkillToolDependency as ProtocolSkillToolDependency;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
@@ -1664,7 +1666,7 @@ impl Session {
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
-        let originator = crate::default_client::originator().value;
+        let originator = originator().value;
         let terminal_type = user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
         let auth_env_telemetry = collect_auth_env_telemetry(
@@ -4965,7 +4967,7 @@ mod handlers {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::GetHistoryEntryResponse(
-                    crate::protocol::GetHistoryEntryResponseEvent {
+                    codex_protocol::protocol::GetHistoryEntryResponseEvent {
                         offset,
                         log_id,
                         entry: entry_opt.map(|e| codex_protocol::message_history::HistoryEntry {
@@ -6017,7 +6019,7 @@ pub(crate) async fn run_turn(
                     for run in sess.hooks().preview_stop(&stop_request) {
                         sess.send_event(
                             &turn_context,
-                            EventMsg::HookStarted(crate::protocol::HookStartedEvent {
+                            EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
                                 turn_id: Some(turn_context.sub_id.clone()),
                                 run,
                             }),
@@ -6367,10 +6369,10 @@ fn connector_inserted_in_messages(
 }
 
 fn filter_codex_apps_mcp_tools(
-    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    mcp_tools: &HashMap<String, McpToolInfo>,
     connectors: &[connectors::AppInfo],
     config: &Config,
-) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
+) -> HashMap<String, McpToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
         .map(|connector| connector.id.as_str())
@@ -6391,7 +6393,7 @@ fn filter_codex_apps_mcp_tools(
         .collect()
 }
 
-fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Option<&str> {
+fn codex_apps_connector_id(tool: &McpToolInfo) -> Option<&str> {
     tool.connector_id.as_deref()
 }
 

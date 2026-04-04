@@ -7,7 +7,7 @@ use rand::Rng;
 use tracing::error;
 
 use crate::auth_env_telemetry::AuthEnvTelemetry;
-use crate::parse_command::shlex_join;
+use codex_shell_command::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;

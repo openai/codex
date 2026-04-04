@@ -210,6 +210,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_turn_copyable_output: None,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
+        subagent_panel: None,
         pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -286,9 +287,8 @@ pub(super) async fn make_chatwidget_manual(
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_event: None,
-        last_non_retry_error: None,
-        subagent_panel: None,
         last_replayed_agent_inbox_message: None,
+        last_non_retry_error: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

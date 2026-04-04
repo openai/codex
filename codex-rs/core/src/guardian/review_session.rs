@@ -17,6 +17,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
@@ -35,7 +36,6 @@ use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::config::types::McpServerConfig;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::protocol::SandboxPolicy;
 use crate::rollout::recorder::RolloutRecorder;
 use codex_features::Feature;
 

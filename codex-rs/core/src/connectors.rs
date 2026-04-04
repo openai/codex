@@ -24,29 +24,30 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::warn;
 
-use crate::AuthManager;
-use crate::CodexAuth;
-use crate::SandboxState;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
 use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::AppsRequirementsToml;
-use crate::default_client::create_client;
-use crate::default_client::is_first_party_chat_originator;
-use crate::default_client::originator;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
-use crate::mcp::ToolPluginProvenance;
-use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::with_codex_apps_mcp;
-use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use codex_features::Feature;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::default_client::create_client;
+use codex_login::default_client::is_first_party_chat_originator;
+use codex_login::default_client::originator;
+use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::mcp::ToolPluginProvenance;
+use codex_mcp::mcp::auth::compute_auth_statuses;
+use codex_mcp::mcp::with_codex_apps_mcp;
+use codex_mcp::mcp_connection_manager::McpConnectionManager;
+use codex_mcp::mcp_connection_manager::SandboxState;
+use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -154,7 +155,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
 pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
-    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
 ) {
     if !config.features.enabled(Feature::Apps) {
         return;
@@ -508,7 +509,7 @@ pub fn connector_mention_slug(connector: &AppInfo) -> String {
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
-    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
 ) -> Vec<AppInfo> {
     // ToolInfo already carries plugin provenance, so app-level plugin sources
     // can be derived here instead of requiring a separate enrichment pass.
@@ -682,10 +683,7 @@ pub(crate) fn app_tool_policy(
     )
 }
 
-pub(crate) fn codex_app_tool_is_enabled(
-    config: &Config,
-    tool_info: &crate::mcp_connection_manager::ToolInfo,
-) -> bool {
+pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -> bool {
     if tool_info.server_name != CODEX_APPS_MCP_SERVER_NAME {
         return true;
     }

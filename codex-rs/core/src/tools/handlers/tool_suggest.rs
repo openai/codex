@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::AppInfo;
+use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
@@ -18,7 +19,6 @@ use tracing::warn;
 
 use crate::connectors;
 use crate::function_tool::FunctionCallError;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -160,7 +160,7 @@ async fn verify_tool_suggestion_completed(
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
     tool: &DiscoverableTool,
-    auth: Option<&crate::CodexAuth>,
+    auth: Option<&codex_login::CodexAuth>,
 ) -> bool {
     match tool {
         DiscoverableTool::Connector(connector) => refresh_missing_suggested_connectors(
@@ -198,7 +198,7 @@ async fn verify_tool_suggestion_completed(
 async fn refresh_missing_suggested_connectors(
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
-    auth: Option<&crate::CodexAuth>,
+    auth: Option<&codex_login::CodexAuth>,
     expected_connector_ids: &[String],
     tool_id: &str,
 ) -> Option<Vec<AppInfo>> {

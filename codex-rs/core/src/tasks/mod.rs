@@ -19,7 +19,6 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
-use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
@@ -29,13 +28,10 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
-use crate::protocol::EventMsg;
-use crate::protocol::TurnAbortReason;
-use crate::protocol::TurnAbortedEvent;
-use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_login::AuthManager;
 use codex_otel::SessionTelemetry;
 use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
 use codex_otel::metrics::names::TURN_NETWORK_PROXY_METRIC;
@@ -44,7 +40,12 @@ use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
@@ -405,7 +406,7 @@ impl Session {
                 &[tmp_mem],
             );
             let total_token_usage = self.total_token_usage().await.unwrap_or_default();
-            let turn_token_usage = crate::protocol::TokenUsage {
+            let turn_token_usage = TokenUsage {
                 input_tokens: (total_token_usage.input_tokens
                     - token_usage_at_turn_start.input_tokens)
                     .max(0),

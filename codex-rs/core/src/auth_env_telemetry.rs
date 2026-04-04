@@ -1,9 +1,9 @@
 use codex_otel::AuthEnvTelemetryMetadata;
 
-use crate::auth::CODEX_API_KEY_ENV_VAR;
-use crate::auth::OPENAI_API_KEY_ENV_VAR;
-use crate::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use crate::model_provider_info::ModelProviderInfo;
+use codex_login::CODEX_API_KEY_ENV_VAR;
+use codex_login::OPENAI_API_KEY_ENV_VAR;
+use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AuthEnvTelemetry {

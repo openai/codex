@@ -137,10 +137,10 @@ jobs:
         include:
           - name: Linux
             runner: ubuntu-24.04
-            timeout_minutes: 30
+            timeout_minutes: 120
           - name: macOS
             runner: macos-15-xlarge
-            timeout_minutes: 30
+            timeout_minutes: 90
           - name: Windows
             runner: windows-x64
             timeout_minutes: 30

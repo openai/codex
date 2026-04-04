@@ -1,4 +1,3 @@
-use crate::default_client::build_reqwest_client;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -16,8 +15,9 @@ use tracing::info;
 use tracing::warn;
 use zip::ZipArchive;
 
-use crate::AuthManager;
 use crate::config::Config;
+use codex_login::AuthManager;
+use codex_login::default_client::build_reqwest_client;
 
 use super::PluginsManager;
 

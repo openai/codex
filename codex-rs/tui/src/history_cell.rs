@@ -47,10 +47,10 @@ use codex_core::config::types::McpServerTransportConfig;
 #[cfg(test)]
 use codex_core::mcp::McpManager;
 #[cfg(test)]
-use codex_core::mcp::qualified_mcp_tool_name_prefix;
-#[cfg(test)]
 use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
+#[cfg(test)]
+use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ServiceTier;
@@ -507,6 +507,8 @@ pub(crate) struct SubagentPanelAgent {
     pub(crate) name: String,
     pub(crate) status: AgentStatus,
     pub(crate) is_watchdog: bool,
+    pub(crate) watchdog_countdown_duration: Duration,
+    pub(crate) watchdog_countdown_started_at: Option<Instant>,
     pub(crate) preview: String,
     pub(crate) latest_update_at: Instant,
 }
@@ -530,7 +532,7 @@ impl SubagentPanelState {
     pub(crate) fn has_animating_agents(&self, now: Instant) -> bool {
         self.running_agents
             .iter()
-            .any(|agent| should_shimmer(agent, now))
+            .any(|agent| should_shimmer(agent, now) || has_watchdog_countdown(agent, now))
     }
 }
 
@@ -604,7 +606,7 @@ impl HistoryCell for SubagentStatusCell {
             }
             spans.push(Span::from(agent.name.clone()));
             spans.push(" ".into());
-            spans.push(status_span_for_panel(&agent));
+            spans.push(status_span_for_panel(&agent, now));
             spans.push(" — ".dim());
             if self.animations_enabled && should_shimmer(&agent, now) {
                 spans.extend(shimmer_spans(&preview));
@@ -708,9 +710,15 @@ fn is_running_status(status: &AgentStatus) -> bool {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn status_span_for_panel(agent: &SubagentPanelAgent) -> Span<'static> {
+fn status_span_for_panel(agent: &SubagentPanelAgent, now: Instant) -> Span<'static> {
     match &agent.status {
-        AgentStatus::PendingInit if agent.is_watchdog => "idle".dim(),
+        AgentStatus::PendingInit if agent.is_watchdog => {
+            if let Some(countdown) = watchdog_countdown_remaining(agent, now) {
+                format!("idle ({})", fmt_elapsed_compact(countdown.as_secs())).dim()
+            } else {
+                "idle".dim()
+            }
+        }
         AgentStatus::PendingInit | AgentStatus::Running => "running".cyan().bold(),
         AgentStatus::Interrupted => "interrupted".magenta(),
         AgentStatus::Completed(_) => "completed".green(),
@@ -730,6 +738,26 @@ fn should_shimmer(agent: &SubagentPanelAgent, now: Instant) -> bool {
     }
     is_running_status(&agent.status)
         && now.saturating_duration_since(agent.latest_update_at) <= SUBAGENT_SHIMMER_WINDOW
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn has_watchdog_countdown(agent: &SubagentPanelAgent, now: Instant) -> bool {
+    watchdog_countdown_remaining(agent, now).is_some_and(|remaining| remaining > Duration::ZERO)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn watchdog_countdown_remaining(agent: &SubagentPanelAgent, now: Instant) -> Option<Duration> {
+    if !agent.is_watchdog {
+        return None;
+    }
+    if !matches!(agent.status, AgentStatus::PendingInit) {
+        return None;
+    }
+    let Some(started_at) = agent.watchdog_countdown_started_at else {
+        return None;
+    };
+    let elapsed = now.saturating_duration_since(started_at);
+    Some(agent.watchdog_countdown_duration.saturating_sub(elapsed))
 }
 
 #[allow(dead_code)]
@@ -3635,6 +3663,8 @@ mod tests {
                 name: "watchdog-agent".to_string(),
                 status: AgentStatus::PendingInit,
                 is_watchdog: true,
+                watchdog_countdown_duration: Duration::from_secs(60),
+                watchdog_countdown_started_at: Some(Instant::now()),
                 preview: "monitor parent progress".to_string(),
                 latest_update_at: Instant::now(),
             }],
@@ -3644,10 +3674,11 @@ mod tests {
 
         assert!(lines[0].contains("no subagents running"));
         assert!(lines[1].contains("[watchdog] watchdog-agent idle"));
+        assert!(lines[1].contains("idle ("));
     }
 
     #[test]
-    fn subagent_panel_animation_tick_ignores_idle_watchdogs() {
+    fn subagent_panel_animation_tick_ticks_idle_watchdogs() {
         let state = Arc::new(Mutex::new(SubagentPanelState {
             started_at: Instant::now(),
             total_agents: 1,
@@ -3657,6 +3688,34 @@ mod tests {
                 name: "watchdog-agent".to_string(),
                 status: AgentStatus::PendingInit,
                 is_watchdog: true,
+                watchdog_countdown_duration: Duration::from_secs(60),
+                watchdog_countdown_started_at: Some(Instant::now()),
+                preview: "monitor parent progress".to_string(),
+                latest_update_at: Instant::now(),
+            }],
+        }));
+        let cell = SubagentStatusCell::new(state, /*animations_enabled*/ true);
+
+        assert!(cell.transcript_animation_tick().is_some());
+    }
+
+    #[test]
+    fn subagent_panel_animation_tick_stops_after_countdown_expires() {
+        let state = Arc::new(Mutex::new(SubagentPanelState {
+            started_at: Instant::now(),
+            total_agents: 1,
+            running_count: 0,
+            running_agents: vec![SubagentPanelAgent {
+                ordinal: 1,
+                name: "watchdog-agent".to_string(),
+                status: AgentStatus::PendingInit,
+                is_watchdog: true,
+                watchdog_countdown_duration: Duration::from_secs(60),
+                watchdog_countdown_started_at: Some(
+                    Instant::now()
+                        .checked_sub(Duration::from_secs(61))
+                        .unwrap_or_else(Instant::now),
+                ),
                 preview: "monitor parent progress".to_string(),
                 latest_update_at: Instant::now(),
             }],
@@ -3664,6 +3723,28 @@ mod tests {
         let cell = SubagentStatusCell::new(state, /*animations_enabled*/ true);
 
         assert_eq!(cell.transcript_animation_tick(), None);
+    }
+
+    #[test]
+    fn watchdog_countdown_remaining_uses_agent_countdown_duration() {
+        let started_at = Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .unwrap_or_else(Instant::now);
+        let agent = SubagentPanelAgent {
+            ordinal: 1,
+            name: "watchdog-agent".to_string(),
+            status: AgentStatus::PendingInit,
+            is_watchdog: true,
+            watchdog_countdown_duration: Duration::from_secs(1),
+            watchdog_countdown_started_at: Some(started_at),
+            preview: "watchdog idle".to_string(),
+            latest_update_at: Instant::now(),
+        };
+
+        assert_eq!(
+            watchdog_countdown_remaining(&agent, Instant::now()),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
@@ -3677,6 +3758,8 @@ mod tests {
                 name: "worker-agent".to_string(),
                 status: AgentStatus::Running,
                 is_watchdog: false,
+                watchdog_countdown_duration: Duration::from_secs(60),
+                watchdog_countdown_started_at: None,
                 preview: "working".to_string(),
                 latest_update_at: Instant::now(),
             }],
@@ -3703,6 +3786,8 @@ mod tests {
                 name: "worker-agent".to_string(),
                 status: AgentStatus::Running,
                 is_watchdog: false,
+                watchdog_countdown_duration: Duration::from_secs(60),
+                watchdog_countdown_started_at: None,
                 preview: "working".to_string(),
                 latest_update_at: stale_update,
             }],

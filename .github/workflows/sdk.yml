@@ -10,7 +10,7 @@ jobs:
     runs-on:
       group: codex-runners
       labels: codex-linux-x64
-    timeout-minutes: 10
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

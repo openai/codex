@@ -1384,7 +1384,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
 
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
-        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
@@ -1453,7 +1453,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
 
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
-        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
@@ -1522,7 +1522,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
 
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
-        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
@@ -1591,7 +1591,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
 
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
-        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
     turn_context
         .approval_policy
@@ -1689,7 +1689,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
 
     let (mut session, mut turn_context) = make_session_and_context().await;
     turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
-        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
     turn_context
         .approval_policy

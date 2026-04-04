@@ -20,11 +20,11 @@ use tracing::warn;
 use crate::SkillMetadata;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::mcp::auth::McpOAuthLoginSupport;
-use crate::mcp::auth::oauth_login_support;
-use crate::mcp::auth::resolve_oauth_scopes;
-use crate::mcp::auth::should_retry_without_scopes;
 use crate::skills::model::SkillToolDependency;
+use codex_mcp::mcp::auth::McpOAuthLoginSupport;
+use codex_mcp::mcp::auth::oauth_login_support;
+use codex_mcp::mcp::auth::resolve_oauth_scopes;
+use codex_mcp::mcp::auth::should_retry_without_scopes;
 
 const SKILL_MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
 const MCP_DEPENDENCY_OPTION_INSTALL: &str = "Install";

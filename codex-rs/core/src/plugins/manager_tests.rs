@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth::CodexAuth;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::types::McpServerTransportConfig;
@@ -15,6 +14,7 @@ use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
 use pretty_assertions::assert_eq;
 use std::fs;

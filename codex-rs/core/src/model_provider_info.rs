@@ -5,10 +5,10 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
-use crate::auth::AuthMode;
 use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
+use codex_login::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use http::HeaderMap;
 use http::header::HeaderName;

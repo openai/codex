@@ -1,26 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
-pub use codex_mcp::mcp::McpConfig;
-pub use codex_mcp::mcp::ToolPluginProvenance;
-pub use codex_mcp::mcp::auth;
-pub use codex_mcp::mcp::canonical_mcp_server_key;
-pub use codex_mcp::mcp::collect_mcp_snapshot;
-pub use codex_mcp::mcp::collect_mcp_snapshot_from_manager;
-pub use codex_mcp::mcp::collect_missing_mcp_dependencies;
-pub use codex_mcp::mcp::configured_mcp_servers;
-pub use codex_mcp::mcp::effective_mcp_servers;
-pub use codex_mcp::mcp::group_tools_by_server;
-pub use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
-pub use codex_mcp::mcp::split_qualified_tool_name;
-pub use codex_mcp::mcp::tool_plugin_provenance as mcp_tool_plugin_provenance;
-pub use codex_mcp::mcp::with_codex_apps_mcp;
-
-use crate::CodexAuth;
 use crate::config::Config;
 use crate::plugins::PluginsManager;
 use codex_config::McpServerConfig;
+use codex_login::CodexAuth;
+use codex_mcp::mcp::ToolPluginProvenance;
+use codex_mcp::mcp::configured_mcp_servers;
+use codex_mcp::mcp::effective_mcp_servers;
+use codex_mcp::mcp::tool_plugin_provenance as collect_tool_plugin_provenance;
 
 #[derive(Clone)]
 pub struct McpManager {
@@ -48,6 +36,6 @@ impl McpManager {
 
     pub fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
         let mcp_config = config.to_mcp_config(self.plugins_manager.as_ref());
-        mcp_tool_plugin_provenance(&mcp_config)
+        collect_tool_plugin_provenance(&mcp_config)
     }
 }

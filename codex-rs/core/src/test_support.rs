@@ -14,8 +14,6 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use once_cell::sync::Lazy;
 
-use crate::AuthManager;
-use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::ThreadManager;
 use crate::config::Config;
@@ -23,6 +21,8 @@ use crate::models_manager::collaboration_mode_presets;
 use crate::models_manager::manager::ModelsManager;
 use crate::thread_manager;
 use crate::unified_exec;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 
 static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     let file_contents = include_str!("../models.json");

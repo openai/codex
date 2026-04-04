@@ -5283,7 +5283,7 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_core::auth::logout(
+                if let Err(e) = codex_login::logout(
                     &self.config.codex_home,
                     self.config.cli_auth_credentials_store_mode,
                 ) {

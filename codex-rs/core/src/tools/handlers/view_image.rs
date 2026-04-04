@@ -12,14 +12,14 @@ use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
-use crate::protocol::EventMsg;
-use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ViewImageToolCallEvent;
 
 pub struct ViewImageHandler;
 

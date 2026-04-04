@@ -1,13 +1,13 @@
 use super::*;
-use crate::AuthManager;
-use crate::CodexAuth;
-use crate::ModelProviderAuthInfo;
-use crate::auth::AuthCredentialsStoreMode;
 use crate::config::ConfigBuilder;
 use crate::model_provider_info::WireApi;
 use base64::Engine as _;
 use chrono::Utc;
 use codex_api::TransportError;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses::mount_models_once;
 use http::HeaderMap;
