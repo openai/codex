@@ -46,6 +46,9 @@ use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::terminal_multiplexer::FORK_PLACEMENT_REQUIRES_MULTIPLEXER_MESSAGE;
+use crate::terminal_multiplexer::ForkPaneSpawnResult;
+use crate::terminal_multiplexer::spawn_fork_in_new_pane;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 use crate::tui;
@@ -119,6 +122,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_terminal_detection::terminal_info;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -4146,7 +4150,7 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::ForkCurrentSession => {
+            AppEvent::ForkCurrentSession { placement } => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
                     /*inc*/ 1,
@@ -4157,11 +4161,46 @@ impl App {
                     self.chat_widget.thread_id(),
                     self.chat_widget.thread_name(),
                 );
-                self.chat_widget
-                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
+                let terminal_info = terminal_info();
+                if terminal_info.multiplexer.is_none() {
+                    self.chat_widget
+                        .add_plain_history_lines(vec!["/fork".magenta().into()]);
+                }
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
+                    if let Some(multiplexer) = terminal_info.multiplexer.as_ref() {
+                        match spawn_fork_in_new_pane(
+                            multiplexer,
+                            &thread_id,
+                            &self.config,
+                            &self.harness_overrides.additional_writable_roots,
+                            placement,
+                        )
+                        .await
+                        {
+                            ForkPaneSpawnResult::Spawned => {
+                                tui.frame_requester().schedule_frame();
+                                return Ok(AppRunControl::Continue);
+                            }
+                            ForkPaneSpawnResult::InvalidPlacement(message) => {
+                                self.chat_widget.add_error_message(message);
+                                tui.frame_requester().schedule_frame();
+                                return Ok(AppRunControl::Continue);
+                            }
+                            ForkPaneSpawnResult::Failed(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to open a new pane for /fork: {err}"
+                                ));
+                            }
+                        }
+                    } else if placement.is_some() {
+                        self.chat_widget.add_error_message(
+                            FORK_PLACEMENT_REQUIRES_MULTIPLEXER_MESSAGE.to_string(),
+                        );
+                        tui.frame_requester().schedule_frame();
+                        return Ok(AppRunControl::Continue);
+                    }
                     match app_server.fork_thread(self.config.clone(), thread_id).await {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
