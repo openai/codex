@@ -4,8 +4,10 @@ mod seek_sequence;
 mod standalone_executable;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -18,6 +20,7 @@ use similar::TextDiff;
 use thiserror::Error;
 
 pub use invocation::maybe_parse_apply_patch_verified;
+pub use invocation::maybe_parse_apply_patch_verified_with_fs;
 pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
@@ -48,6 +51,15 @@ pub enum ApplyPatchError {
         "patch detected without explicit call to apply_patch. Rerun as [\"apply_patch\", \"<patch>\"]"
     )]
     ImplicitInvocation,
+}
+
+impl ApplyPatchError {
+    pub fn io_error(context: impl Into<String>, source: std::io::Error) -> Self {
+        Self::IoError(IoError {
+            context: context.into(),
+            source,
+        })
+    }
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -177,6 +189,33 @@ impl ApplyPatchAction {
             patch,
         }
     }
+}
+
+/// Filesystem operations required to verify and apply a patch.
+///
+/// This keeps the patch parser/diff logic independent from the host filesystem
+/// so callers can provide sandboxed or remote-backed implementations.
+pub trait ApplyPatchFileSystem: Send + Sync {
+    fn read_text<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<String, ApplyPatchError>> + Send + 'a>>;
+
+    fn write_text<'a>(
+        &'a self,
+        path: &'a Path,
+        contents: String,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>>;
+
+    fn create_dir_all<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>>;
+
+    fn remove_file<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>>;
 }
 
 /// Applies the patch and prints the result to stdout/stderr.
@@ -359,6 +398,14 @@ fn derive_new_contents_from_chunks(
         }
     };
 
+    derive_new_contents_from_text(&original_contents, path, chunks)
+}
+
+pub(crate) fn derive_new_contents_from_text(
+    original_contents: &str,
+    path: &Path,
+    chunks: &[UpdateFileChunk],
+) -> std::result::Result<AppliedPatch, ApplyPatchError> {
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 
     // Drop the trailing empty element that results from the final newline so
@@ -375,8 +422,85 @@ fn derive_new_contents_from_chunks(
     }
     let new_contents = new_lines.join("\n");
     Ok(AppliedPatch {
-        original_contents,
+        original_contents: original_contents.to_string(),
         new_contents,
+    })
+}
+
+pub(crate) async fn derive_new_contents_from_chunks_with_fs(
+    path: &Path,
+    chunks: &[UpdateFileChunk],
+    fs: &dyn ApplyPatchFileSystem,
+) -> std::result::Result<AppliedPatch, ApplyPatchError> {
+    let original_contents = match fs.read_text(path).await {
+        Ok(contents) => contents,
+        Err(ApplyPatchError::IoError(IoError { source, .. })) => {
+            return Err(ApplyPatchError::IoError(IoError {
+                context: format!("Failed to read file to update {}", path.display()),
+                source,
+            }));
+        }
+        Err(err) => return Err(err),
+    };
+
+    derive_new_contents_from_text(&original_contents, path, chunks)
+}
+
+/// Apply a verified patch action through an abstract filesystem.
+pub async fn apply_action_with_fs(
+    action: &ApplyPatchAction,
+    fs: &dyn ApplyPatchFileSystem,
+) -> std::result::Result<AffectedPaths, ApplyPatchError> {
+    if action.is_empty() {
+        return Err(ApplyPatchError::IoError(IoError {
+            context: "No files were modified.".to_string(),
+            source: std::io::Error::other("empty patch"),
+        }));
+    }
+
+    let mut added = Vec::new();
+    let mut modified = Vec::new();
+    let mut deleted = Vec::new();
+    for (path, change) in action.changes() {
+        match change {
+            ApplyPatchFileChange::Add { content } => {
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    fs.create_dir_all(parent).await?;
+                }
+                fs.write_text(path, content.clone()).await?;
+                added.push(path.clone());
+            }
+            ApplyPatchFileChange::Delete { .. } => {
+                fs.remove_file(path).await?;
+                deleted.push(path.clone());
+            }
+            ApplyPatchFileChange::Update {
+                new_content,
+                move_path,
+                ..
+            } => {
+                if let Some(dest) = move_path {
+                    if let Some(parent) = dest.parent()
+                        && !parent.as_os_str().is_empty()
+                    {
+                        fs.create_dir_all(parent).await?;
+                    }
+                    fs.write_text(dest, new_content.clone()).await?;
+                    fs.remove_file(path).await?;
+                    modified.push(dest.clone());
+                } else {
+                    fs.write_text(path, new_content.clone()).await?;
+                    modified.push(path.clone());
+                }
+            }
+        }
+    }
+    Ok(AffectedPaths {
+        added,
+        modified,
+        deleted,
     })
 }
 
@@ -556,8 +680,119 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::string::ToString;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
     use tempfile::tempdir;
+
+    #[derive(Default)]
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        let mut future = Pin::from(Box::new(future));
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(output) => return output,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct TestApplyPatchFileSystem {
+        files: std::sync::Arc<std::sync::Mutex<HashMap<PathBuf, String>>>,
+        removed: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+        directories: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    }
+
+    impl TestApplyPatchFileSystem {
+        fn with_file(path: &Path, content: &str) -> Self {
+            let file_system = Self::default();
+            file_system
+                .files
+                .lock()
+                .expect("lock files")
+                .insert(path.to_path_buf(), content.to_string());
+            file_system
+        }
+    }
+
+    impl ApplyPatchFileSystem for TestApplyPatchFileSystem {
+        fn read_text<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<String, ApplyPatchError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.files
+                    .lock()
+                    .expect("lock files")
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ApplyPatchError::io_error(
+                            format!("missing test file {}", path.display()),
+                            std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+                        )
+                    })
+            })
+        }
+
+        fn write_text<'a>(
+            &'a self,
+            path: &'a Path,
+            contents: String,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.files
+                    .lock()
+                    .expect("lock files")
+                    .insert(path.to_path_buf(), contents);
+                Ok(())
+            })
+        }
+
+        fn create_dir_all<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.directories
+                    .lock()
+                    .expect("lock dirs")
+                    .push(path.to_path_buf());
+                Ok(())
+            })
+        }
+
+        fn remove_file<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.files.lock().expect("lock files").remove(path);
+                self.removed
+                    .lock()
+                    .expect("lock removed")
+                    .push(path.to_path_buf());
+                Ok(())
+            })
+        }
+    }
 
     /// Helper to construct a patch with the given body.
     fn wrap_patch(body: &str) -> String {
@@ -1070,5 +1305,84 @@ g
         let mut stderr = Vec::new();
         let result = apply_patch(&patch, &mut stdout, &mut stderr);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn apply_action_with_fs_updates_file_without_touching_host_fs() {
+        let path = PathBuf::from("/virtual/update.txt");
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+-before
++after"#,
+            path.display()
+        ));
+        let argv = vec!["apply_patch".to_string(), patch];
+        let fs = TestApplyPatchFileSystem::with_file(&path, "before\n");
+
+        let action = match block_on(maybe_parse_apply_patch_verified_with_fs(
+            &argv,
+            Path::new("/"),
+            &fs,
+        )) {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected patch body, got {other:?}"),
+        };
+        let affected = block_on(apply_action_with_fs(&action, &fs)).expect("apply action");
+
+        assert_eq!(affected.modified, vec![path.clone()]);
+        assert_eq!(
+            fs.files.lock().expect("lock files").get(&path).cloned(),
+            Some("after\n".to_string())
+        );
+    }
+
+    #[test]
+    fn maybe_parse_apply_patch_verified_with_fs_uses_abstract_fs_for_update_and_delete() {
+        let update_path = PathBuf::from("/virtual/update.txt");
+        let delete_path = PathBuf::from("/virtual/delete.txt");
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+-before
++after
+*** Delete File: {}"#,
+            update_path.display(),
+            delete_path.display()
+        ));
+        let argv = vec!["apply_patch".to_string(), patch];
+        let fs = TestApplyPatchFileSystem::default();
+        fs.files
+            .lock()
+            .expect("lock files")
+            .insert(update_path.clone(), "before\n".to_string());
+        fs.files
+            .lock()
+            .expect("lock files")
+            .insert(delete_path.clone(), "gone\n".to_string());
+
+        let action = match block_on(maybe_parse_apply_patch_verified_with_fs(
+            &argv,
+            Path::new("/"),
+            &fs,
+        )) {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected patch body, got {other:?}"),
+        };
+
+        assert_eq!(
+            action.changes().get(&delete_path),
+            Some(&ApplyPatchFileChange::Delete {
+                content: "gone\n".to_string()
+            })
+        );
+        assert_eq!(
+            action.changes().get(&update_path),
+            Some(&ApplyPatchFileChange::Update {
+                unified_diff: "@@ -1 +1 @@\n-before\n+after\n".to_string(),
+                move_path: None,
+                new_content: "after\n".to_string(),
+            })
+        );
     }
 }

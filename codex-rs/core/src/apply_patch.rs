@@ -4,11 +4,21 @@ use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchError;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_apply_patch::ApplyPatchFileSystem;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::RemoveOptions;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::future::Future;
+use std::io;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
@@ -31,6 +41,107 @@ pub(crate) struct ApplyPatchExec {
     pub(crate) action: ApplyPatchAction,
     pub(crate) auto_approved: bool,
     pub(crate) exec_approval_requirement: ExecApprovalRequirement,
+}
+
+pub(crate) struct EnvironmentApplyPatchFileSystem {
+    file_system: Arc<dyn ExecutorFileSystem>,
+}
+
+impl EnvironmentApplyPatchFileSystem {
+    pub(crate) fn new(file_system: Arc<dyn ExecutorFileSystem>) -> Self {
+        Self { file_system }
+    }
+}
+
+impl ApplyPatchFileSystem for EnvironmentApplyPatchFileSystem {
+    fn read_text<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<String, ApplyPatchError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let path = absolute_path(path)?;
+            let bytes = self.file_system.read_file(&path).await.map_err(|source| {
+                ApplyPatchError::io_error(format!("Failed to read {}", path.display()), source)
+            })?;
+            String::from_utf8(bytes).map_err(|source| {
+                ApplyPatchError::io_error(
+                    format!("Failed to decode UTF-8 for {}", path.display()),
+                    io::Error::new(io::ErrorKind::InvalidData, source.to_string()),
+                )
+            })
+        })
+    }
+
+    fn write_text<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+        contents: String,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = absolute_path(path)?;
+            self.file_system
+                .write_file(&path, contents.into_bytes())
+                .await
+                .map_err(|source| {
+                    ApplyPatchError::io_error(
+                        format!("Failed to write file {}", path.display()),
+                        source,
+                    )
+                })
+        })
+    }
+
+    fn create_dir_all<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = absolute_path(path)?;
+            self.file_system
+                .create_directory(&path, CreateDirectoryOptions { recursive: true })
+                .await
+                .map_err(|source| {
+                    ApplyPatchError::io_error(
+                        format!("Failed to create parent directories for {}", path.display()),
+                        source,
+                    )
+                })
+        })
+    }
+
+    fn remove_file<'a>(
+        &'a self,
+        path: &'a std::path::Path,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), ApplyPatchError>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = absolute_path(path)?;
+            self.file_system
+                .remove(
+                    &path,
+                    RemoveOptions {
+                        recursive: false,
+                        force: false,
+                    },
+                )
+                .await
+                .map_err(|source| {
+                    ApplyPatchError::io_error(
+                        format!("Failed to delete file {}", path.display()),
+                        source,
+                    )
+                })
+        })
+    }
+}
+
+fn absolute_path(path: &std::path::Path) -> std::result::Result<AbsolutePathBuf, ApplyPatchError> {
+    AbsolutePathBuf::from_absolute_path(path).map_err(|error| {
+        ApplyPatchError::io_error(
+            format!("Expected absolute path for apply_patch: {}", path.display()),
+            io::Error::new(io::ErrorKind::InvalidInput, error.to_string()),
+        )
+    })
 }
 
 pub(crate) async fn apply_patch(

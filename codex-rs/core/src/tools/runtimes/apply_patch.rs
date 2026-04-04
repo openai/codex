@@ -4,6 +4,7 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
+use crate::apply_patch::EnvironmentApplyPatchFileSystem;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
@@ -22,6 +23,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -32,6 +34,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -113,6 +116,29 @@ impl ApplyPatchRuntime {
             sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
+        })
+    }
+
+    async fn run_with_environment_fs(
+        req: &ApplyPatchRequest,
+        fs: EnvironmentApplyPatchFileSystem,
+    ) -> Result<ExecToolCallOutput, ToolError> {
+        let affected = codex_apply_patch::apply_action_with_fs(&req.action, &fs)
+            .await
+            .map_err(|err| ToolError::Rejected(err.to_string()))?;
+        let mut stdout = Vec::new();
+        codex_apply_patch::print_summary(&affected, &mut stdout)
+            .map_err(|err| ToolError::Rejected(err.to_string()))?;
+        let stdout = String::from_utf8(stdout).map_err(|err| {
+            ToolError::Rejected(format!("apply_patch wrote non-UTF-8 output: {err}"))
+        })?;
+        Ok(ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(stdout.clone()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(stdout),
+            duration: Duration::ZERO,
+            timed_out: false,
         })
     }
 }
@@ -211,6 +237,11 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
+        if ctx.turn.environment.exec_server_url().is_some() {
+            let fs = EnvironmentApplyPatchFileSystem::new(ctx.turn.environment.get_filesystem());
+            return Self::run_with_environment_fs(req, fs).await;
+        }
+
         #[cfg(target_os = "windows")]
         let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
         #[cfg(not(target_os = "windows"))]

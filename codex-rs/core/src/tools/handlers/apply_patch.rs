@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::apply_patch;
+use crate::apply_patch::EnvironmentApplyPatchFileSystem;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::Session;
@@ -167,7 +168,7 @@ impl ToolHandler for ApplyPatchHandler {
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
+        match parse_apply_patch_verified(turn.as_ref(), &command, &cwd).await {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
                     effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
@@ -262,7 +263,7 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
+    match parse_apply_patch_verified(turn.as_ref(), command, cwd).await {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
@@ -344,6 +345,15 @@ pub(crate) async fn intercept_apply_patch(
         }
         codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => Ok(None),
     }
+}
+
+async fn parse_apply_patch_verified(
+    turn: &TurnContext,
+    command: &[String],
+    cwd: &Path,
+) -> codex_apply_patch::MaybeApplyPatchVerified {
+    let fs = EnvironmentApplyPatchFileSystem::new(turn.environment.get_filesystem());
+    codex_apply_patch::maybe_parse_apply_patch_verified_with_fs(command, cwd, &fs).await
 }
 
 #[cfg(test)]
