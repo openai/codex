@@ -307,6 +307,7 @@ pub fn apply_hunks(
 /// Applies each parsed patch hunk to the filesystem.
 /// Returns an error if any of the changes could not be applied.
 /// Tracks file paths affected by applying a patch.
+#[derive(Debug, PartialEq, Eq)]
 pub struct AffectedPaths {
     pub added: Vec<PathBuf>,
     pub modified: Vec<PathBuf>,

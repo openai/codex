@@ -26,6 +26,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -63,9 +64,11 @@ impl ApplyPatchRuntime {
         req: &ApplyPatchRequest,
         fs: EnvironmentApplyPatchFileSystem,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let affected = codex_apply_patch::apply_action_with_fs(&req.action, &fs)
-            .await
-            .map_err(|err| ToolError::Rejected(err.to_string()))?;
+        let affected: codex_apply_patch::AffectedPaths =
+            codex_apply_patch::apply_action_with_fs(&req.action, &fs)
+                .await
+                .map_err(|err| ToolError::Rejected(err.to_string()))?;
+        let affected = relativize_affected_paths(&affected, &req.action.cwd);
         let mut stdout = Vec::new();
         codex_apply_patch::print_summary(&affected, &mut stdout)
             .map_err(|err| ToolError::Rejected(err.to_string()))?;
@@ -80,6 +83,36 @@ impl ApplyPatchRuntime {
             duration: Duration::ZERO,
             timed_out: false,
         })
+    }
+}
+
+fn relativize_affected_paths(
+    affected: &codex_apply_patch::AffectedPaths,
+    cwd: &Path,
+) -> codex_apply_patch::AffectedPaths {
+    codex_apply_patch::AffectedPaths {
+        added: affected
+            .added
+            .iter()
+            .map(|path| summary_path(path, cwd))
+            .collect(),
+        modified: affected
+            .modified
+            .iter()
+            .map(|path| summary_path(path, cwd))
+            .collect(),
+        deleted: affected
+            .deleted
+            .iter()
+            .map(|path| summary_path(path, cwd))
+            .collect(),
+    }
+}
+
+fn summary_path(path: &Path, cwd: &Path) -> PathBuf {
+    match path.strip_prefix(cwd) {
+        Ok(relative) if !relative.as_os_str().is_empty() => relative.to_path_buf(),
+        _ => path.to_path_buf(),
     }
 }
 
