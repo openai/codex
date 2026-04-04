@@ -1,5 +1,52 @@
 use super::*;
+use crate::mention_codec::LinkedMention;
+use crate::mention_codec::encode_history_mentions;
 use pretty_assertions::assert_eq;
+
+fn configure_session(chat: &mut ChatWidget) {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "session-configured".to_string(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+}
+
+fn drain_history_and_user_turn_ops(
+    op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
+) -> (Vec<String>, Option<String>) {
+    let mut history_texts = Vec::new();
+    let mut user_turn_text = None;
+    while let Ok(op) = op_rx.try_recv() {
+        match op {
+            Op::AddToHistory { text } => history_texts.push(text),
+            Op::UserTurn { items, .. } => {
+                user_turn_text = items.into_iter().find_map(|item| match item {
+                    UserInput::Text { text, .. } => Some(text),
+                    _ => None,
+                });
+            }
+            _ => {}
+        }
+    }
+    (history_texts, user_turn_text)
+}
 
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
@@ -77,6 +124,195 @@ async fn slash_init_skips_when_project_doc_exists() {
         std::fs::read_to_string(existing_path).unwrap(),
         "existing instructions"
     );
+}
+
+#[tokio::test]
+async fn slash_init_before_session_configured_persists_command_but_not_generated_prompt() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane
+        .set_composer_text("/init".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let (history_texts, user_turn_text) = drain_history_and_user_turn_ops(&mut op_rx);
+    assert_eq!(history_texts, vec!["/init".to_string()]);
+    assert_eq!(user_turn_text, None);
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    let queued_prompt = chat
+        .queued_user_messages
+        .front()
+        .expect("expected /init to queue its generated prompt before session config");
+    assert!(!queued_prompt.text.is_empty());
+    assert!(!queued_prompt.persist_to_history);
+}
+
+#[tokio::test]
+async fn bare_slash_command_is_added_to_persistent_history_and_recall() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/diff".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let (history_texts, user_turn_text) = drain_history_and_user_turn_ops(&mut op_rx);
+    assert_eq!(history_texts, vec!["/diff".to_string()]);
+    assert_eq!(user_turn_text, None);
+
+    let _ = drain_insert_history(&mut rx);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "/diff");
+}
+
+#[tokio::test]
+async fn slash_plan_with_args_persists_exact_command_once_and_recalls_it() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    configure_session(&mut chat);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane.set_composer_text(
+        "/plan investigate this".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let (history_texts, user_turn_text) = drain_history_and_user_turn_ops(&mut op_rx);
+    assert_eq!(user_turn_text, Some("investigate this".to_string()));
+    assert_eq!(history_texts, vec!["/plan investigate this".to_string()]);
+
+    let _ = drain_insert_history(&mut rx);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "/plan investigate this");
+}
+
+#[tokio::test]
+async fn slash_plan_with_bound_mention_persists_encoded_history_text() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    configure_session(&mut chat);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "/plan ask $sample".to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }],
+    );
+    let result = chat
+        .bottom_pane
+        .handle_composer_key_event_without_popup(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match result {
+        InputResult::CommandWithArgs(cmd, args, text_elements) => {
+            assert_eq!(
+                chat.dispatch_command_with_args(cmd, args, text_elements),
+                SlashCommandDispatchOutcome::Committed
+            );
+            chat.commit_pending_slash_command_history();
+        }
+        other => panic!("expected inline-arg slash command, got {other:?}"),
+    }
+
+    let (history_texts, _user_turn_text) = drain_history_and_user_turn_ops(&mut op_rx);
+    assert_eq!(
+        history_texts,
+        vec![encode_history_mentions(
+            "/plan ask $sample",
+            &[LinkedMention {
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        )]
+    );
+}
+
+#[tokio::test]
+async fn slash_quit_is_added_to_history_before_exit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    configure_session(&mut chat);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane
+        .set_composer_text("/quit".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let (history_texts, user_turn_text) = drain_history_and_user_turn_ops(&mut op_rx);
+    assert_eq!(history_texts, vec!["/quit".to_string()]);
+    assert_eq!(user_turn_text, None);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_rename_with_args_persists_exact_command_once_and_recalls_it() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    configure_session(&mut chat);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane
+        .set_composer_text("/rename Better title".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let (history_texts, user_turn_text) = drain_history_and_user_turn_ops(&mut op_rx);
+    assert_eq!(history_texts, vec!["/rename Better title".to_string()]);
+    assert_eq!(user_turn_text, None);
+
+    let _ = drain_insert_history(&mut rx);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "/rename Better title");
+}
+
+#[tokio::test]
+async fn rejected_inline_slash_command_keeps_visible_draft_metadata() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    let image_path = PathBuf::from("/tmp/plan.png");
+
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "/fast badarg $sample".to_string(),
+        Vec::new(),
+        vec![image_path.clone()],
+        vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }],
+    );
+    chat.set_remote_image_urls(vec!["https://example.com/one.png".to_string()]);
+
+    let result = chat
+        .bottom_pane
+        .handle_composer_key_event_without_popup(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match result {
+        InputResult::CommandWithArgs(cmd, args, text_elements) => {
+            assert_eq!(
+                chat.dispatch_command_with_args(cmd, args, text_elements),
+                SlashCommandDispatchOutcome::RejectedKeepDraft
+            );
+            let _ = chat.bottom_pane.take_pending_slash_command_history();
+        }
+        other => panic!("expected inline-arg slash command, got {other:?}"),
+    }
+
+    assert_eq!(chat.bottom_pane.composer_text(), "/fast badarg $sample");
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![image_path]
+    );
+    assert_eq!(
+        chat.bottom_pane.remote_image_urls(),
+        vec!["https://example.com/one.png".to_string()]
+    );
+    assert_eq!(
+        chat.bottom_pane.composer_mention_bindings(),
+        vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }]
+    );
+    assert!(drain_history_and_user_turn_ops(&mut op_rx).0.is_empty());
 }
 
 #[tokio::test]

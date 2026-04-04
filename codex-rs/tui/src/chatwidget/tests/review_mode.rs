@@ -38,6 +38,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: first_elements,
         mention_bindings: Vec::new(),
+        persist_to_history: true,
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -48,6 +49,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: second_elements,
         mention_bindings: Vec::new(),
+        persist_to_history: true,
     });
     chat.refresh_pending_input_preview();
 
@@ -539,6 +541,7 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
         remote_image_urls: Vec::new(),
         text_elements,
         mention_bindings: Vec::new(),
+        persist_to_history: true,
     });
 
     match next_submit_op(&mut op_rx) {

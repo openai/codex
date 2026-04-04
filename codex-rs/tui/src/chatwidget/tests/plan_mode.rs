@@ -958,6 +958,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
             mention: "sample".to_string(),
             path: "plugin://sample@test".to_string(),
         }],
+        persist_to_history: true,
     });
 
     let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {

@@ -975,6 +975,13 @@ enum CodexOpTarget {
     AppEvent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlashCommandDispatchOutcome {
+    Committed,
+    RejectedKeepDraft,
+    RejectedDiscardPreparedState,
+}
+
 /// Snapshot of active-cell state that affects transcript overlay rendering.
 ///
 /// The overlay keeps a cached "live tail" for the in-flight cell; this key lets
@@ -1011,6 +1018,17 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+    /// Controls whether this message is recorded in cross-session persistent
+    /// history when submitted via `submit_user_message_with_history`.
+    ///
+    /// Defaults to `true` for normal prose messages. Set to `false` for
+    /// derived text that a slash command submits as a side effect (e.g. the
+    /// "investigate this" portion of `/plan investigate this`), because the
+    /// full command string is already persisted separately by
+    /// `commit_pending_slash_command_history`. Without this flag, the derived
+    /// text would be recorded a second time, producing a confusing duplicate
+    /// in recall.
+    persist_to_history: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1055,6 +1073,7 @@ impl From<String> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            persist_to_history: true,
         }
     }
 }
@@ -1068,6 +1087,7 @@ impl From<&str> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            persist_to_history: true,
         }
     }
 }
@@ -1100,6 +1120,7 @@ pub(crate) fn create_initial_user_message(
             remote_image_urls: Vec::new(),
             text_elements,
             mention_bindings: Vec::new(),
+            persist_to_history: true,
         })
     }
 }
@@ -1130,6 +1151,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         local_images,
         remote_image_urls,
         mention_bindings,
+        persist_to_history,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
@@ -1138,6 +1160,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             local_images,
             remote_image_urls,
             mention_bindings,
+            persist_to_history,
         };
     }
 
@@ -1194,16 +1217,19 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         remote_image_urls,
         text_elements: rebuilt_elements,
         mention_bindings,
+        persist_to_history,
     }
 }
 
 fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
+    let persist_to_history = messages.iter().all(|message| message.persist_to_history);
     let mut combined = UserMessage {
         text: String::new(),
         text_elements: Vec::new(),
         local_images: Vec::new(),
         remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
+        persist_to_history,
     };
     let total_remote_images = messages
         .iter()
@@ -1221,6 +1247,7 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
             local_images,
             remote_image_urls,
             mention_bindings,
+            persist_to_history: _,
         } = remap_placeholders_for_message(message, &mut next_image_label);
         append_text_with_rebased_elements(
             &mut combined.text,
@@ -3076,6 +3103,7 @@ impl ChatWidget {
             local_images: self.bottom_pane.composer_local_images(),
             remote_image_urls: self.bottom_pane.remote_image_urls(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            persist_to_history: true,
         };
 
         let mut to_merge: Vec<UserMessage> = self.rejected_steers_queue.drain(..).collect();
@@ -3102,6 +3130,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            persist_to_history: _,
         } = user_message;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
         self.set_remote_image_urls(remote_image_urls);
@@ -4864,6 +4893,7 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        persist_to_history: true,
                     };
                     if user_message.text.is_empty()
                         && user_message.local_images.is_empty()
@@ -4905,6 +4935,7 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        persist_to_history: true,
                     };
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
@@ -4914,10 +4945,24 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
                 InputResult::Command(cmd) => {
-                    self.dispatch_command(cmd);
+                    if self.dispatch_command(cmd) {
+                        self.commit_pending_slash_command_history();
+                    } else {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
                 }
                 InputResult::CommandWithArgs(cmd, args, text_elements) => {
-                    self.dispatch_command_with_args(cmd, args, text_elements);
+                    match self.dispatch_command_with_args(cmd, args, text_elements) {
+                        SlashCommandDispatchOutcome::Committed => {
+                            self.commit_pending_slash_command_history();
+                        }
+                        SlashCommandDispatchOutcome::RejectedKeepDraft => {
+                            let _ = self.bottom_pane.take_pending_slash_command_history();
+                        }
+                        SlashCommandDispatchOutcome::RejectedDiscardPreparedState => {
+                            self.bottom_pane.drain_pending_submission_state();
+                        }
+                    }
                 }
                 InputResult::None => {}
             },
@@ -4988,16 +5033,21 @@ impl ChatWidget {
         false
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
+    /// Executes a bare slash command (no inline arguments).
+    ///
+    /// Returns `true` if the command was accepted and should be persisted to
+    /// history, or `false` if it was rejected, unavailable, or handled as a
+    /// no-op/help-only UI message. The caller uses this to decide whether to
+    /// call `commit_pending_slash_command_history`.
+    fn dispatch_command(&mut self, cmd: SlashCommand) -> bool {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
-            return;
+            return false;
         }
         match cmd {
             SlashCommand::Feedback => {
@@ -5005,25 +5055,30 @@ impl ChatWidget {
                     let params = crate::bottom_pane::feedback_disabled_params();
                     self.bottom_pane.show_selection_view(params);
                     self.request_redraw();
-                    return;
+                    return false;
                 }
                 // Step 1: pick a category (UI built in feedback_view)
                 let params =
                     crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
                 self.bottom_pane.show_selection_view(params);
                 self.request_redraw();
+                true
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
+                true
             }
             SlashCommand::Clear => {
                 self.app_event_tx.send(AppEvent::ClearUi);
+                true
             }
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
+                true
             }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
+                true
             }
             SlashCommand::Init => {
                 let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
@@ -5032,7 +5087,7 @@ impl ChatWidget {
                         self.add_error_message(format!(
                             "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
                         ));
-                        return;
+                        return false;
                     }
                 };
                 if init_target.exists() {
@@ -5040,10 +5095,11 @@ impl ChatWidget {
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
                     );
                     self.add_info_message(message, /*hint*/ None);
-                    return;
+                    return false;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                self.submit_user_message(INIT_PROMPT.to_string().into());
+                self.submit_user_message_without_history(INIT_PROMPT.to_string().into());
+                true
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -5051,17 +5107,21 @@ impl ChatWidget {
                     self.bottom_pane.set_task_running(/*running*/ true);
                 }
                 self.app_event_tx.compact();
+                true
             }
             SlashCommand::Review => {
                 self.open_review_popup();
+                true
             }
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
+                true
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+                true
             }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
@@ -5070,25 +5130,29 @@ impl ChatWidget {
                     Some(ServiceTier::Fast)
                 };
                 self.set_service_tier_selection(next_tier);
+                true
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
-                    return;
+                    return false;
                 }
                 if self.realtime_conversation.is_live() {
                     self.stop_realtime_conversation_from_ui();
                 } else {
                     self.start_realtime_conversation();
                 }
+                true
             }
             SlashCommand::Settings => {
                 if !self.realtime_audio_device_selection_enabled() {
-                    return;
+                    return false;
                 }
                 self.open_realtime_audio_popup();
+                true
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
+                true
             }
             SlashCommand::Plan => {
                 if !self.collaboration_modes_enabled() {
@@ -5096,15 +5160,17 @@ impl ChatWidget {
                         "Collaboration modes are disabled.".to_string(),
                         Some("Enable collaboration modes to use /plan.".to_string()),
                     );
-                    return;
+                    return false;
                 }
                 if let Some(mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
                     self.set_collaboration_mask(mask);
+                    true
                 } else {
                     self.add_info_message(
                         "Plan mode unavailable right now.".to_string(),
                         /*hint*/ None,
                     );
+                    false
                 }
             }
             SlashCommand::Collab => {
@@ -5113,18 +5179,22 @@ impl ChatWidget {
                         "Collaboration modes are disabled.".to_string(),
                         Some("Enable collaboration modes to use /collab.".to_string()),
                     );
-                    return;
+                    return false;
                 }
                 self.open_collaboration_modes_popup();
+                true
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
+                true
             }
             SlashCommand::Approvals => {
                 self.open_permissions_popup();
+                true
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+                true
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -5137,7 +5207,7 @@ impl ChatWidget {
                     {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
-                        return;
+                        return false;
                     }
 
                     let Some(preset) = builtin_approval_presets()
@@ -5149,7 +5219,7 @@ impl ChatWidget {
                         self.add_error_message(
                             "Internal error: missing the 'auto' approval preset.".to_string(),
                         );
-                        return;
+                        return false;
                     };
 
                     if let Err(err) = self
@@ -5159,7 +5229,7 @@ impl ChatWidget {
                         .can_set(&preset.approval)
                     {
                         self.add_error_message(err.to_string());
-                        return;
+                        return false;
                     }
 
                     self.session_telemetry.counter(
@@ -5169,23 +5239,29 @@ impl ChatWidget {
                     );
                     self.app_event_tx
                         .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                    true
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
                     let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
-                };
+                    false
+                }
             }
             SlashCommand::SandboxReadRoot => {
                 self.add_error_message(
                     "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
                 );
+                false
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+                true
             }
             SlashCommand::Quit | SlashCommand::Exit => {
+                self.commit_pending_slash_command_history();
                 self.request_quit_without_confirmation();
+                true
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_login::logout(
@@ -5194,7 +5270,9 @@ impl ChatWidget {
                 ) {
                     tracing::error!("failed to logout: {e}");
                 }
+                self.commit_pending_slash_command_history();
                 self.request_quit_without_confirmation();
+                true
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -5215,6 +5293,7 @@ impl ChatWidget {
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
+                true
             }
             SlashCommand::Copy => {
                 let Some(text) = self.last_copyable_output.as_deref() else {
@@ -5223,7 +5302,7 @@ impl ChatWidget {
                             .to_string(),
                         /*hint*/ None,
                     );
-                    return;
+                    return false;
                 };
 
                 let copy_result = clipboard_text::copy_text_to_clipboard(text);
@@ -5243,12 +5322,15 @@ impl ChatWidget {
                         self.add_error_message(format!("Failed to copy to clipboard: {err}"))
                     }
                 }
+                true
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
+                true
             }
             SlashCommand::Skills => {
                 self.open_skills_menu();
+                true
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
@@ -5263,39 +5345,51 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
+                true
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
+                true
             }
             SlashCommand::Title => {
                 self.open_terminal_title_setup();
+                true
             }
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
+                true
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();
+                true
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
+                true
             }
             SlashCommand::Stop => {
                 self.clean_background_terminals();
+                true
             }
             SlashCommand::MemoryDrop => {
                 self.add_app_server_stub_message("Memory maintenance");
+                false
             }
             SlashCommand::MemoryUpdate => {
                 self.add_app_server_stub_message("Memory maintenance");
+                false
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+                true
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
+                true
             }
             SlashCommand::Plugins => {
                 self.add_plugins_output();
+                true
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -5309,6 +5403,7 @@ impl ChatWidget {
                         /*hint*/ None,
                     );
                 }
+                true
             }
             SlashCommand::TestApproval => {
                 use std::collections::HashMap;
@@ -5340,19 +5435,30 @@ impl ChatWidget {
                         grant_root: Some(PathBuf::from("/tmp")),
                     },
                 );
+                true
             }
         }
     }
 
+    /// Executes a slash command that was submitted with inline arguments
+    /// (e.g. `/plan investigate this`).
+    ///
+    /// Some rejections happen before submission prep consumes the draft,
+    /// while others happen after the draft was already prepared and cleared.
+    /// The caller uses the returned outcome to preserve visible draft state
+    /// when appropriate.
     fn dispatch_command_with_args(
         &mut self,
         cmd: SlashCommand,
         args: String,
         _text_elements: Vec<TextElement>,
-    ) {
+    ) -> SlashCommandDispatchOutcome {
         if !cmd.supports_inline_args() {
-            self.dispatch_command(cmd);
-            return;
+            return if self.dispatch_command(cmd) {
+                SlashCommandDispatchOutcome::Committed
+            } else {
+                SlashCommandDispatchOutcome::RejectedDiscardPreparedState
+            };
         }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -5361,15 +5467,18 @@ impl ChatWidget {
             );
             self.add_to_history(history_cell::new_error_event(message));
             self.request_redraw();
-            return;
+            return SlashCommandDispatchOutcome::RejectedKeepDraft;
         }
 
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Fast => {
                 if trimmed.is_empty() {
-                    self.dispatch_command(cmd);
-                    return;
+                    return if self.dispatch_command(cmd) {
+                        SlashCommandDispatchOutcome::Committed
+                    } else {
+                        SlashCommandDispatchOutcome::RejectedDiscardPreparedState
+                    };
                 }
                 match trimmed.to_ascii_lowercase().as_str() {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
@@ -5388,8 +5497,10 @@ impl ChatWidget {
                     }
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                        return SlashCommandDispatchOutcome::RejectedKeepDraft;
                     }
-                }
+                };
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
@@ -5398,28 +5509,28 @@ impl ChatWidget {
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
-                    return;
+                    return SlashCommandDispatchOutcome::RejectedDiscardPreparedState;
                 };
                 let cell = Self::rename_confirmation_cell(&name, self.thread_id);
                 self.add_boxed_history(Box::new(cell));
                 self.request_redraw();
                 self.app_event_tx.set_thread_name(name);
-                self.bottom_pane.drain_pending_submission_state();
+                self.bottom_pane.drain_recent_submission_state();
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
-                self.dispatch_command(cmd);
-                if self.active_mode_kind() != ModeKind::Plan {
-                    return;
+                if !self.dispatch_command(cmd) || self.active_mode_kind() != ModeKind::Plan {
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 }
                 let Some((prepared_args, prepared_elements)) = self
                     .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ true)
+                    .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 let local_images = self
                     .bottom_pane
@@ -5431,22 +5542,24 @@ impl ChatWidget {
                     remote_image_urls,
                     text_elements: prepared_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+                    persist_to_history: false,
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
                     self.full_reasoning_buffer.clear();
                     self.set_status_header(String::from("Working"));
-                    self.submit_user_message(user_message);
+                    self.submit_user_message_without_history(user_message);
                 } else {
                     self.queue_user_message(user_message);
                 }
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 self.submit_op(AppCommand::review(ReviewRequest {
                     target: ReviewTarget::Custom {
@@ -5454,22 +5567,30 @@ impl ChatWidget {
                     },
                     user_facing_hint: None,
                 }));
-                self.bottom_pane.drain_pending_submission_state();
+                self.bottom_pane.drain_recent_submission_state();
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
-                self.bottom_pane.drain_pending_submission_state();
+                self.bottom_pane.drain_recent_submission_state();
+                SlashCommandDispatchOutcome::Committed
             }
-            _ => self.dispatch_command(cmd),
+            _ => {
+                if self.dispatch_command(cmd) {
+                    SlashCommandDispatchOutcome::Committed
+                } else {
+                    SlashCommandDispatchOutcome::RejectedDiscardPreparedState
+                }
+            }
         }
     }
 
@@ -5565,6 +5686,26 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_history(user_message, /*persist_to_history*/ true);
+    }
+
+    /// Submits a user message while suppressing cross-session history persistence.
+    ///
+    /// Used for derived text that a slash command sends as a side effect (e.g.
+    /// `/init`'s generated prompt, `/plan <args>`'s argument text). The full
+    /// slash-command string is already persisted by the separate
+    /// `commit_pending_slash_command_history` path; recording the derived text
+    /// would create a confusing duplicate.
+    fn submit_user_message_without_history(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_history(user_message, /*persist_to_history*/ false);
+    }
+
+    fn submit_user_message_with_history(
+        &mut self,
+        mut user_message: UserMessage,
+        persist_to_history: bool,
+    ) {
+        user_message.persist_to_history &= persist_to_history;
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5577,6 +5718,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            persist_to_history: message_persist_to_history,
         } = user_message;
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;
@@ -5759,6 +5901,7 @@ impl ChatWidget {
                 remote_image_urls: remote_image_urls.clone(),
                 text_elements: text_elements.clone(),
                 mention_bindings: mention_bindings.clone(),
+                persist_to_history: message_persist_to_history,
             },
             compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
@@ -5789,7 +5932,7 @@ impl ChatWidget {
         // Persist the text to cross-session message history. Mentions are
         // encoded into placeholder syntax so recall can reconstruct the
         // mention bindings in a future session.
-        if !text.is_empty() {
+        if persist_to_history && message_persist_to_history && !text.is_empty() {
             let encoded_mentions = mention_bindings
                 .iter()
                 .map(|binding| LinkedMention {
@@ -5843,6 +5986,30 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+    }
+
+    /// Finalizes the staged slash-command history entry after a successful dispatch.
+    ///
+    /// Moves the entry from the composer's pending slot into the local history
+    /// ring (enabling Up-arrow recall) and emits `Op::AddToHistory` so the
+    /// backend persists it across sessions. Does nothing if no entry was staged.
+    fn commit_pending_slash_command_history(&mut self) {
+        let Some(history_entry) = self.bottom_pane.record_pending_slash_command_history() else {
+            return;
+        };
+        if history_entry.text.is_empty() {
+            return;
+        }
+        let encoded_mentions = history_entry
+            .mention_bindings
+            .iter()
+            .map(|binding| LinkedMention {
+                mention: binding.mention.clone(),
+                path: binding.path.clone(),
+            })
+            .collect::<Vec<_>>();
+        let history_text = encode_history_mentions(&history_entry.text, &encoded_mentions);
+        self.submit_op(Op::AddToHistory { text: history_text });
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.
@@ -10332,6 +10499,7 @@ impl ChatWidget {
             remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            persist_to_history: true,
         };
         if should_queue {
             self.queue_user_message(user_message);

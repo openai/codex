@@ -280,12 +280,41 @@ impl BottomPane {
         self.composer.take_recent_submission_mention_bindings()
     }
 
-    /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
-    pub(crate) fn drain_pending_submission_state(&mut self) {
+    /// Discards the staged slash-command history entry without recording it.
+    /// See [`ChatComposer::take_pending_slash_command_history`].
+    pub(crate) fn take_pending_slash_command_history(
+        &mut self,
+    ) -> Option<chat_composer_history::HistoryEntry> {
+        self.composer.take_pending_slash_command_history()
+    }
+
+    /// Commits the staged slash-command entry to the local history ring and
+    /// returns it for persistent storage.
+    /// See [`ChatComposer::record_pending_slash_command_history`].
+    pub(crate) fn record_pending_slash_command_history(
+        &mut self,
+    ) -> Option<chat_composer_history::HistoryEntry> {
+        self.composer.record_pending_slash_command_history()
+    }
+
+    /// Clears attachments and mention bindings that were staged while preparing
+    /// a submission, but preserves any pending slash-command history entry.
+    pub(crate) fn drain_recent_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
         let _ = self.take_remote_image_urls();
         let _ = self.take_recent_submission_mention_bindings();
         let _ = self.take_mention_bindings();
+    }
+
+    /// Clears pending attachments, mention bindings, and any staged
+    /// slash-command history entry.
+    ///
+    /// Used when a slash command is rejected or fails after the composer draft
+    /// was already cleared, so nothing should be committed to local/persistent
+    /// history.
+    pub(crate) fn drain_pending_submission_state(&mut self) {
+        self.drain_recent_submission_state();
+        let _ = self.take_pending_slash_command_history();
     }
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
@@ -445,6 +474,20 @@ impl BottomPane {
             }
             input_result
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_composer_key_event_without_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> InputResult {
+        let (input_result, needs_redraw) = self
+            .composer
+            .handle_key_event_without_popup_for_test(key_event);
+        if needs_redraw {
+            self.request_redraw();
+        }
+        input_result
     }
 
     /// Handles a Ctrl+C press within the bottom pane.
