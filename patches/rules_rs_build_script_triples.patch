@@ -11,7 +11,7 @@ diff --git a/rs/extensions.bzl b/rs/extensions.bzl
              build_script_deps_select = _select(feature_resolutions.build_deps),
 +            build_script_triples = annotation.build_script_triples,
              build_script_data = annotation.build_script_data,
-             build_script_data_select = _select(feature_resolutions.build_data),
+             build_script_data_select = annotation.build_script_data_select,
              build_script_env = annotation.build_script_env,
 @@ -1329,6 +1330,10 @@
          "build_script_tools_select": attr.string_list_dict(
@@ -139,3 +139,4 @@ diff --git a/rs/rust_crate.bzl b/rs/rust_crate.bzl
 +            maybe_build_script = ["_bs"]
      else:
          maybe_build_script = []
+ 
