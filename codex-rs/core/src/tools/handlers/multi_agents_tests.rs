@@ -1761,6 +1761,10 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
 
     let mut config = (*turn.config).clone();
     config.agent_max_depth = DEFAULT_AGENT_MAX_DEPTH + 1;
+    config
+        .features
+        .enable(Feature::SpawnCsv)
+        .expect("test config should allow spawn_csv");
     turn.config = Arc::new(config);
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: session.conversation_id,
@@ -1784,6 +1788,12 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
     let result: SpawnAgentResult =
         serde_json::from_str(&content).expect("spawn_agent result should be json");
     assert!(!result.agent_id.is_empty());
+    let child_thread = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned max-depth child thread should exist");
+    assert!(child_thread.enabled(Feature::Collab));
+    assert!(child_thread.enabled(Feature::SpawnCsv));
     assert!(
         result
             .nickname

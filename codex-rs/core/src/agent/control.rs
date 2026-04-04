@@ -483,16 +483,10 @@ impl AgentControl {
 
     async fn resume_single_agent_from_rollout(
         &self,
-        mut config: crate::config::Config,
+        config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
-            && *depth >= config.agent_max_depth
-        {
-            let _ = config.features.disable(Feature::SpawnCsv);
-            let _ = config.features.disable(Feature::Collab);
-        }
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
