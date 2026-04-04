@@ -4495,6 +4495,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             guardian_developer_instructions: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
+            include_environment_context: true,
             compact_prompt: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
@@ -4639,6 +4640,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         guardian_developer_instructions: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -4781,6 +4783,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         guardian_developer_instructions: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -4909,6 +4912,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         guardian_developer_instructions: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -5799,10 +5803,12 @@ async fn prompt_instruction_blocks_can_be_disabled_from_config_and_profiles() ->
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"include_permissions_instructions = false
 include_apps_instructions = false
+include_environment_context = false
 profile = "chatty"
 
 [profiles.chatty]
 include_permissions_instructions = true
+include_environment_context = true
 "#,
     )?;
 
@@ -5814,6 +5820,7 @@ include_permissions_instructions = true
 
     assert!(config.include_permissions_instructions);
     assert!(!config.include_apps_instructions);
+    assert!(config.include_environment_context);
     Ok(())
 }
 

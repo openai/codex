@@ -16,6 +16,10 @@ fn build_environment_update_item(
     next: &TurnContext,
     shell: &Shell,
 ) -> Option<ResponseItem> {
+    if !next.config.include_environment_context {
+        return None;
+    }
+
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
     let next_context = EnvironmentContext::from_turn_context(next, shell);

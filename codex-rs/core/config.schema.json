@@ -524,6 +524,9 @@
         "include_apps_instructions": {
           "type": "boolean"
         },
+        "include_environment_context": {
+          "type": "boolean"
+        },
         "include_permissions_instructions": {
           "type": "boolean"
         },
@@ -2276,6 +2279,10 @@
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_environment_context": {
+      "description": "Whether to inject the `<environment_context>` user block.",
       "type": "boolean"
     },
     "include_permissions_instructions": {

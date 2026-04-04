@@ -286,6 +286,9 @@ pub struct Config {
     /// Whether to inject the `<apps_instructions>` developer block.
     pub include_apps_instructions: bool,
 
+    /// Whether to inject the `<environment_context>` user block.
+    pub include_environment_context: bool,
+
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
@@ -1194,6 +1197,9 @@ pub struct ConfigToml {
 
     /// Whether to inject the `<apps_instructions>` developer block.
     pub include_apps_instructions: Option<bool>,
+
+    /// Whether to inject the `<environment_context>` user block.
+    pub include_environment_context: Option<bool>,
 
     /// Optional path to a file containing model instructions that will override
     /// the built-in instructions for the selected model. Users are STRONGLY
@@ -2472,6 +2478,10 @@ impl Config {
             .include_apps_instructions
             .or(cfg.include_apps_instructions)
             .unwrap_or(true);
+        let include_environment_context = config_profile
+            .include_environment_context
+            .or(cfg.include_environment_context)
+            .unwrap_or(true);
         let guardian_developer_instructions = guardian_developer_instructions_from_requirements(
             config_layer_stack.requirements_toml(),
         );
@@ -2640,6 +2650,7 @@ impl Config {
             commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
+            include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),

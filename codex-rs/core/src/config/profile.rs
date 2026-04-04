@@ -51,6 +51,7 @@ pub struct ConfigProfile {
     pub include_apply_patch_tool: Option<bool>,
     pub include_permissions_instructions: Option<bool>,
     pub include_apps_instructions: Option<bool>,
+    pub include_environment_context: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub tools_view_image: Option<bool>,
