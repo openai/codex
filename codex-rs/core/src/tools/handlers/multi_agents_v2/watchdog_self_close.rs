@@ -106,14 +106,6 @@ impl ToolHandler for Handler {
                 .await;
         }
 
-        let result = session
-            .services
-            .agent_control
-            .close_agent(target_thread_id)
-            .await
-            .map_err(|err| collab_agent_error(target_thread_id, err))
-            .map(|_| ());
-
         let receiver_agent = session
             .services
             .agent_control
@@ -149,7 +141,12 @@ impl ToolHandler for Handler {
             )
             .await;
 
-        result?;
+        session
+            .services
+            .agent_control
+            .close_agent(target_thread_id)
+            .await
+            .map_err(|err| collab_agent_error(target_thread_id, err))?;
 
         Ok(WatchdogSelfCloseResult {
             previous_status: status,

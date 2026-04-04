@@ -105,8 +105,18 @@ async fn attach_watchdog_helper_for_tests(
         .spawn_agent_handle(config.clone(), /*session_source*/ None)
         .await
         .expect("watchdog target thread should start");
-    let helper = manager
-        .start_thread(config.clone())
+    let helper_thread_id = agent_control
+        .spawn_agent(
+            config.clone(),
+            Op::Interrupt,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: owner.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("watchdog".to_string()),
+            })),
+        )
         .await
         .expect("helper thread should start");
     agent_control
@@ -121,16 +131,16 @@ async fn attach_watchdog_helper_for_tests(
         .await
         .expect("watchdog registration should succeed");
     agent_control
-        .set_watchdog_active_helper_for_tests(target, helper.thread_id)
+        .set_watchdog_active_helper_for_tests(target, helper_thread_id)
         .await;
     assert_eq!(
         agent_control
-            .watchdog_owner_for_active_helper(helper.thread_id)
+            .watchdog_owner_for_active_helper(helper_thread_id)
             .await,
         Some(owner.thread_id),
         "watchdog helper should be registered for owner"
     );
-    (owner.thread_id, target, helper.thread_id)
+    (owner.thread_id, target, helper_thread_id)
 }
 
 async fn wait_for_owner_close_end_event(
@@ -3256,6 +3266,41 @@ async fn watchdog_self_close_closes_watchdog_handle_and_returns_previous_status(
     assert_eq!(close_end.sender_thread_id, helper_thread_id);
     assert_eq!(close_end.receiver_thread_id, target_thread_id);
     assert_eq!(close_end.status, status_before);
+}
+
+#[tokio::test]
+async fn watchdog_self_close_from_real_helper_session_emits_owner_close_end() {
+    let (_session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let agent_control = manager.agent_control();
+    let (owner_thread_id, target_thread_id, helper_thread_id) =
+        attach_watchdog_helper_for_tests(&manager, &agent_control, turn.config.as_ref()).await;
+    let owner_thread = manager
+        .get_thread(owner_thread_id)
+        .await
+        .expect("owner thread should exist");
+    let helper_thread = manager
+        .get_thread(helper_thread_id)
+        .await
+        .expect("helper thread should exist");
+    let helper_session = helper_thread.codex.session.clone();
+
+    let output = WatchdogSelfCloseHandler
+        .handle(invocation(
+            helper_session.clone(),
+            helper_session.new_default_turn().await,
+            "watchdog_self_close",
+            function_payload(json!({"message": "watchdog done"})),
+        ))
+        .await
+        .expect("watchdog helper should self-close and notify owner");
+    let (_content, success) = expect_text_output(output);
+
+    assert_eq!(success, Some(true));
+    let close_end = wait_for_owner_close_end_event(owner_thread.as_ref(), target_thread_id).await;
+    assert_eq!(close_end.sender_thread_id, helper_thread_id);
+    assert_eq!(close_end.receiver_thread_id, target_thread_id);
+    assert_eq!(close_end.status, AgentStatus::PendingInit);
 }
 
 #[tokio::test]
