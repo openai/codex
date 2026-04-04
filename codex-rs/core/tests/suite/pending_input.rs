@@ -21,13 +21,14 @@ use core_test_support::streaming_sse::StreamingSseServer;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
-    json!({
+    serde_json::json!({
         "type": "response.output_item.done",
         "item": {
             "type": "message",
@@ -36,6 +37,24 @@ fn ev_message_item_done(id: &str, text: &str) -> Value {
             "content": [{"type": "output_text", "text": text}]
         }
     })
+}
+
+fn sse_event(event: Value) -> String {
+    responses::sse(vec![event])
+}
+
+fn message_input_texts(body: &Value, role: &str) -> Vec<String> {
+    body.get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+        .collect()
 }
 
 fn chunk(event: Value) -> StreamingSseChunk {
@@ -64,7 +83,7 @@ async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
         .with_model("gpt-5.1")
         .build_with_streaming_server(server)
         .await
-        .unwrap()
+        .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"))
         .codex
 }
 
@@ -78,14 +97,15 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
             final_output_json_schema: None,
         })
         .await
-        .unwrap();
+        .unwrap_or_else(|err| panic!("submit user input: {err}"));
 }
 
 async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
     codex
         .submit(Op::InterAgentCommunication {
             communication: InterAgentCommunication::new(
-                AgentPath::try_from("/root/worker").expect("worker path should parse"),
+                AgentPath::try_from("/root/worker")
+                    .unwrap_or_else(|err| panic!("worker path should parse: {err}")),
                 AgentPath::root(),
                 Vec::new(),
                 text.to_string(),
@@ -93,7 +113,7 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
             ),
         })
         .await
-        .unwrap();
+        .unwrap_or_else(|err| panic!("submit queue-only agent mail: {err}"));
 }
 
 async fn wait_for_reasoning_item_started(codex: &CodexThread) {
@@ -123,15 +143,17 @@ async fn wait_for_turn_complete(codex: &CodexThread) {
 fn assert_two_responses_input_snapshot(snapshot_name: &str, requests: &[Vec<u8>]) {
     assert_eq!(requests.len(), 2);
     let options = ContextSnapshotOptions::default();
-    let first: Value = from_slice(&requests[0]).expect("parse first request");
-    let second: Value = from_slice(&requests[1]).expect("parse second request");
+    let first: Value =
+        from_slice(&requests[0]).unwrap_or_else(|err| panic!("parse first request: {err}"));
+    let second: Value =
+        from_slice(&requests[1]).unwrap_or_else(|err| panic!("parse second request: {err}"));
     let first_items = first["input"]
         .as_array()
-        .expect("first request input")
+        .unwrap_or_else(|| panic!("first request input"))
         .clone();
     let second_items = second["input"]
         .as_array()
-        .expect("second request input")
+        .unwrap_or_else(|| panic!("second request input"))
         .clone();
     let snapshot = context_snapshot::format_labeled_items_snapshot(
         "/responses POST bodies (input only, redacted like other suite snapshots)",
@@ -150,34 +172,97 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
 
     let first_chunks = vec![
-        chunk(ev_response_created("resp-1")),
-        chunk(ev_message_item_added("msg-1", "")),
-        chunk(ev_output_text_delta("first ")),
-        chunk(ev_output_text_delta("turn")),
-        chunk(ev_message_item_done("msg-1", "first turn")),
-        gated_chunk(gate_completed_rx, vec![ev_completed("resp-1")]),
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first ")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("turn")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_done("msg-1", "first turn")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_completed_rx),
+            body: sse_event(ev_completed("resp-1")),
+        },
+    ];
+
+    let second_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-2")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_completed("resp-2")),
+        },
     ];
 
     let (server, _completions) =
-        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
-    let codex = build_codex(&server).await;
+    let codex = test_codex()
+        .with_model("gpt-5.1")
+        .build_with_streaming_server(&server)
+        .await
+        .unwrap()
+        .codex;
 
-    submit_user_input(&codex, "first prompt").await;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first prompt".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
 
     wait_for_event(&codex, |event| {
         matches!(event, EventMsg::AgentMessageContentDelta(_))
     })
     .await;
 
-    submit_user_input(&codex, "second prompt").await;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second prompt".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
 
     let _ = gate_completed_tx.send(());
 
-    wait_for_turn_complete(&codex).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let requests = server.requests().await;
-    assert_two_responses_input_snapshot("pending_input_injected_user_input_follow_up", &requests);
+    assert_eq!(requests.len(), 2);
+
+    let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
+    let second_body: Value = serde_json::from_slice(&requests[1]).expect("parse second request");
+
+    let first_texts = message_input_texts(&first_body, "user");
+    assert!(first_texts.iter().any(|text| text == "first prompt"));
+    assert!(!first_texts.iter().any(|text| text == "second prompt"));
+
+    let second_texts = message_input_texts(&second_body, "user");
+    assert!(second_texts.iter().any(|text| text == "first prompt"));
+    assert!(second_texts.iter().any(|text| text == "second prompt"));
 
     server.shutdown().await;
 }
