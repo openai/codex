@@ -249,28 +249,21 @@ bazel_dep(name = "xz", version = "5.4.5.bcr.8")
 
 crate.annotation(
     crate = "lzma-sys",
-    gen_build_script = crate.select(
-        "on",
-        {
-            "aarch64-apple-darwin": "off",
-            "aarch64-unknown-linux-gnu": "off",
-            "aarch64-unknown-linux-musl": "off",
-            "x86_64-apple-darwin": "off",
-            "x86_64-unknown-linux-gnu": "off",
-            "x86_64-unknown-linux-musl": "off",
-        },
-    ),
-    deps = crate.select(
-        [],
-        {
-            "aarch64-apple-darwin": ["@xz//:lzma"],
-            "aarch64-unknown-linux-gnu": ["@xz//:lzma"],
-            "aarch64-unknown-linux-musl": ["@xz//:lzma"],
-            "x86_64-apple-darwin": ["@xz//:lzma"],
-            "x86_64-unknown-linux-gnu": ["@xz//:lzma"],
-            "x86_64-unknown-linux-musl": ["@xz//:lzma"],
-        },
-    ),
+    gen_build_script = "on",
+)
+
+crate.annotation_select(
+    crate = "lzma-sys",
+    deps = ["@xz//:lzma"],
+    gen_build_script = "off",
+    triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+    ],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
