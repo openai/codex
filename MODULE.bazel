@@ -73,7 +73,6 @@ single_version_override(
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_delete_git_worktree_pointer.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
-        "//patches:rules_rs_build_script_triples.patch",
     ],
     version = "0.0.43",
 )
@@ -248,13 +247,17 @@ inject_repo(crate, "zlib")
 
 bazel_dep(name = "xz", version = "5.4.5.bcr.8")
 
+single_version_override(
+    module_name = "xz",
+    patch_strip = 1,
+    patches = [
+        "//patches:xz_windows_no_stack_protector.patch",
+    ],
+)
+
 crate.annotation(
     crate = "lzma-sys",
     gen_build_script = "off",
-    build_script_triples = [
-        "aarch64-pc-windows-gnullvm",
-        "x86_64-pc-windows-gnullvm",
-    ],
     deps = ["@xz//:lzma"],
 )
 

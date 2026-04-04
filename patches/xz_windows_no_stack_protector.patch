@@ -1,0 +1,27 @@
+# What: disable stack-protector codegen in the vendored xz libraries on
+# Windows so they link under the repo's direct MSVC exec linker path.
+# Scope: `@xz` library compilation flags only.
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -159,7 +159,7 @@ cc_library(
+         "src/liblzma/api/lzma.h",  # Publicly exported header
+     ],
+     copts = select({
+-        "@platforms//os:windows": [],
++        "@platforms//os:windows": ["-fno-stack-protector"],
+         "//conditions:default": ["-std=c99"],
+     }),
+     defines = select({
+@@ -281,6 +281,10 @@ cc_library(
+         ],
+     }),
+     hdrs = glob(["src/common/*.h"]),
++    copts = select({
++        "@platforms//os:windows": ["-fno-stack-protector"],
++        "//conditions:default": [],
++    }),
+     defines = ["HAVE_CONFIG_H"] + select({
+         "@platforms//os:windows": [
+             "LZMA_API_STATIC",
