@@ -1,6 +1,9 @@
 use super::*;
 use async_trait::async_trait;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemOperationOptions;
+use codex_exec_server::ReadDirectoryEntry;
 use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::path::Path;
