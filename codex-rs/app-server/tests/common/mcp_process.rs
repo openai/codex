@@ -15,6 +15,7 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::CodexAvatarEquipParams;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResizeParams;
@@ -294,6 +295,21 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("account/read", params).await
+    }
+
+    /// Send an `avatar/inventory/read` JSON-RPC request.
+    pub async fn send_avatar_inventory_read_request(&mut self) -> anyhow::Result<i64> {
+        let params = Some(serde_json::json!({}));
+        self.send_request("avatar/inventory/read", params).await
+    }
+
+    /// Send an `avatar/equip` JSON-RPC request.
+    pub async fn send_avatar_equip_request(
+        &mut self,
+        params: CodexAvatarEquipParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("avatar/equip", params).await
     }
 
     /// Send an `account/login/start` JSON-RPC request with ChatGPT auth tokens.

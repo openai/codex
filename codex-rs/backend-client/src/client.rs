@@ -1,8 +1,11 @@
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::CodexAvatarEquipRequest;
+use crate::types::CodexAvatarInventoryResponse;
 use crate::types::ConfigFileResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
+use crate::types::WorkspaceOutOfCreditsNotificationResponse;
 use anyhow::Result;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_core::auth::CodexAuth;
@@ -265,6 +268,38 @@ impl Client {
         Ok(Self::rate_limit_snapshots_from_payload(payload))
     }
 
+    pub async fn get_avatar_inventory(
+        &self,
+    ) -> std::result::Result<CodexAvatarInventoryResponse, RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/avatars/inventory", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/avatars/inventory", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
+        self.decode_json::<CodexAvatarInventoryResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
+    pub async fn equip_avatar(
+        &self,
+        avatar_id: String,
+    ) -> std::result::Result<CodexAvatarInventoryResponse, RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/avatars/equip", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/avatars/equip", self.base_url),
+        };
+        let req = self
+            .http
+            .post(&url)
+            .headers(self.headers())
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(&CodexAvatarEquipRequest { avatar_id });
+        let (body, ct) = self.exec_request_detailed(req, "POST", &url).await?;
+        self.decode_json::<CodexAvatarInventoryResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
     pub async fn list_tasks(
         &self,
         limit: Option<i32>,
@@ -354,6 +389,16 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
+    pub async fn post_workspace_out_of_credits_notification(
+        &self,
+    ) -> std::result::Result<WorkspaceOutOfCreditsNotificationResponse, RequestError> {
+        let url = self.workspace_out_of_credits_notification_url()?;
+        let req = self.http.post(&url).headers(self.headers());
+        let (body, ct) = self.exec_request_detailed(req, "POST", &url).await?;
+        self.decode_json::<WorkspaceOutOfCreditsNotificationResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
     }
 
@@ -497,6 +542,20 @@ impl Client {
 
         let seconds_i64 = i64::from(seconds);
         Some((seconds_i64 + 59) / 60)
+    }
+
+    fn workspace_out_of_credits_notification_url(
+        &self,
+    ) -> std::result::Result<String, RequestError> {
+        match self.path_style {
+            PathStyle::ChatGptApi => Ok(format!(
+                "{}/credits/workspace_out_of_credits_notifications",
+                self.base_url
+            )),
+            PathStyle::CodexApi => Err(RequestError::Other(anyhow::anyhow!(
+                "workspace out-of-credits notifications are only supported for ChatGPT backend-api"
+            ))),
+        }
     }
 }
 
@@ -648,5 +707,52 @@ mod tests {
             .cloned()
             .unwrap_or_else(|| snapshots[0].clone());
         assert_eq!(preferred.limit_id.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn workspace_notification_url_uses_chatgpt_credits_path() {
+        let client = Client::new("https://chatgpt.com").expect("client");
+
+        let url = client
+            .workspace_out_of_credits_notification_url()
+            .expect("chatgpt backend-api url");
+
+        assert_eq!(
+            url,
+            "https://chatgpt.com/backend-api/credits/workspace_out_of_credits_notifications"
+        );
+    }
+
+    #[test]
+    fn workspace_notification_url_rejects_codex_api_paths() {
+        let client = Client::new("https://api.openai.com").expect("client");
+
+        let err = client
+            .workspace_out_of_credits_notification_url()
+            .expect_err("codex api path should be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "workspace out-of-credits notifications are only supported for ChatGPT backend-api"
+        );
+    }
+
+    #[test]
+    fn workspace_notification_response_decodes() {
+        let client = Client::new("https://chatgpt.com").expect("client");
+        let response: WorkspaceOutOfCreditsNotificationResponse = client
+            .decode_json(
+                "https://chatgpt.com/backend-api/credits/workspace_out_of_credits_notifications",
+                "application/json",
+                r#"{"status":"cooldown_active"}"#,
+            )
+            .expect("response should decode");
+
+        assert_eq!(
+            response,
+            WorkspaceOutOfCreditsNotificationResponse {
+                status: crate::types::WorkspaceOutOfCreditsNotificationStatus::CooldownActive,
+            }
+        );
     }
 }

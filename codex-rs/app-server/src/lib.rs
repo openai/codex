@@ -61,6 +61,7 @@ use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod app_server_tracing;
+mod avatar_rpc;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;

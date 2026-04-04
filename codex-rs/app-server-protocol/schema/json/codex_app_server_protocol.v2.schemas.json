@@ -1901,6 +1901,54 @@
             },
             "method": {
               "enum": [
+                "avatar/inventory/read"
+              ],
+              "title": "Avatar/inventory/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CodexAvatarInventoryReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Avatar/inventory/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "avatar/equip"
+              ],
+              "title": "Avatar/equipRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CodexAvatarEquipParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Avatar/equipRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "feedback/upload"
               ],
               "title": "Feedback/uploadRequestMethod",
@@ -2211,6 +2259,175 @@
         }
       ],
       "title": "ClientRequest"
+    },
+    "CodexAvatarDefinition": {
+      "properties": {
+        "assetRef": {
+          "type": "string"
+        },
+        "avatarId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "rarity": {
+          "$ref": "#/definitions/CodexAvatarRarity"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/CodexAvatarStatus"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "assetRef",
+        "avatarId",
+        "createdAt",
+        "description",
+        "displayName",
+        "rarity",
+        "slug",
+        "sortOrder",
+        "status",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "CodexAvatarEquipParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "avatarId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "avatarId"
+      ],
+      "title": "CodexAvatarEquipParams",
+      "type": "object"
+    },
+    "CodexAvatarInventoryReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CodexAvatarInventoryReadParams",
+      "type": "object"
+    },
+    "CodexAvatarInventoryReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accountUserId": {
+          "type": "string"
+        },
+        "avatarDefinitions": {
+          "items": {
+            "$ref": "#/definitions/CodexAvatarDefinition"
+          },
+          "type": "array"
+        },
+        "catalogVersion": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "equippedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "equippedAvatarId": {
+          "type": "string"
+        },
+        "ownedAvatars": {
+          "items": {
+            "$ref": "#/definitions/CodexAvatarOwnership"
+          },
+          "type": "array"
+        },
+        "syncedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "accountUserId",
+        "avatarDefinitions",
+        "equippedAt",
+        "equippedAvatarId",
+        "ownedAvatars",
+        "syncedAt",
+        "updatedAt"
+      ],
+      "title": "CodexAvatarInventoryReadResponse",
+      "type": "object"
+    },
+    "CodexAvatarOwnership": {
+      "properties": {
+        "accountUserId": {
+          "type": "string"
+        },
+        "avatarId": {
+          "type": "string"
+        },
+        "firstUnlockedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "lastAwardedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "sourceSummary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "accountUserId",
+        "avatarId",
+        "firstUnlockedAt",
+        "lastAwardedAt"
+      ],
+      "type": "object"
+    },
+    "CodexAvatarRarity": {
+      "enum": [
+        "common",
+        "rare",
+        "epic",
+        "legendary"
+      ],
+      "type": "string"
+    },
+    "CodexAvatarStatus": {
+      "enum": [
+        "active",
+        "hidden",
+        "retired"
+      ],
+      "type": "string"
     },
     "CodexErrorInfo": {
       "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",

@@ -147,6 +147,20 @@
       ],
       "type": "object"
     },
+    "CodexAvatarEquipParams": {
+      "properties": {
+        "avatarId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "avatarId"
+      ],
+      "type": "object"
+    },
+    "CodexAvatarInventoryReadParams": {
+      "type": "object"
+    },
     "CollaborationMode": {
       "description": "Collaboration mode for a Codex session.",
       "properties": {
@@ -4536,6 +4550,54 @@
         "method"
       ],
       "title": "Account/rateLimits/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "avatar/inventory/read"
+          ],
+          "title": "Avatar/inventory/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CodexAvatarInventoryReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Avatar/inventory/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "avatar/equip"
+          ],
+          "title": "Avatar/equipRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CodexAvatarEquipParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Avatar/equipRequest",
       "type": "object"
     },
     {

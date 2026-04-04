@@ -9,6 +9,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+mod workspace_out_of_credits;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -730,6 +731,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+    let mut workspace_out_of_credits_candidate = false;
     let mut interrupt_channel_open = true;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
     loop {
@@ -768,6 +770,14 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 handle_server_request(&client, request, &mut error_seen).await;
             }
             InProcessServerEvent::ServerNotification(mut notification) => {
+                if workspace_out_of_credits::notification_is_usage_limit_failure(
+                    &notification,
+                    &primary_thread_id_for_requests,
+                    &task_id,
+                ) {
+                    workspace_out_of_credits_candidate = true;
+                }
+
                 if let ServerNotification::Error(payload) = &notification {
                     if payload.thread_id == primary_thread_id_for_requests
                         && payload.turn_id == task_id
@@ -824,6 +834,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         warn!("in-process app-server shutdown failed: {err}");
     }
     event_processor.print_final_output();
+    if let Err(err) = workspace_out_of_credits::maybe_prompt_for_workspace_out_of_credits(
+        &config,
+        workspace_out_of_credits_candidate && error_seen,
+        !json_mode,
+    )
+    .await
+    {
+        warn!("workspace out-of-credits prompt failed: {err}");
+    }
     if error_seen {
         std::process::exit(1);
     }

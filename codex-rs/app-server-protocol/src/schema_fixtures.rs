@@ -7,6 +7,7 @@ use crate::export::filter_experimental_ts_tree;
 use crate::export::generate_index_ts_tree;
 use crate::protocol::common::visit_client_response_types;
 use crate::protocol::common::visit_server_response_types;
+use crate::protocol::v2::CodexAvatarAward;
 use anyhow::Context;
 use anyhow::Result;
 use serde_json::Map;
@@ -65,6 +66,7 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
         visit_server_response_types(visitor);
     })?;
     collect_typescript_fixture_file::<ServerNotification>(&mut files, &mut seen)?;
+    collect_typescript_fixture_file::<CodexAvatarAward>(&mut files, &mut seen)?;
 
     filter_experimental_ts_tree(&mut files)?;
     generate_index_ts_tree(&mut files);

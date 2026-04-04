@@ -485,6 +485,16 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
+    AvatarInventoryRead => "avatar/inventory/read" {
+        params: v2::CodexAvatarInventoryReadParams,
+        response: v2::CodexAvatarInventoryReadResponse,
+    },
+
+    AvatarEquip => "avatar/equip" {
+        params: v2::CodexAvatarEquipParams,
+        response: v2::CodexAvatarInventoryReadResponse,
+    },
+
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
@@ -1510,6 +1520,44 @@ mod tests {
                 "id": 6,
                 "params": {
                     "refreshToken": false
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_avatar_inventory_read() -> Result<()> {
+        let request = ClientRequest::AvatarInventoryRead {
+            request_id: RequestId::Integer(7),
+            params: v2::CodexAvatarInventoryReadParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "avatar/inventory/read",
+                "id": 7,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_avatar_equip() -> Result<()> {
+        let request = ClientRequest::AvatarEquip {
+            request_id: RequestId::Integer(8),
+            params: v2::CodexAvatarEquipParams {
+                avatar_id: "clippy".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "avatar/equip",
+                "id": 8,
+                "params": {
+                    "avatarId": "clippy"
                 }
             }),
             serde_json::to_value(&request)?,

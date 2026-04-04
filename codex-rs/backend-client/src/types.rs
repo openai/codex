@@ -9,9 +9,83 @@ pub use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
 use serde::Deserialize;
+use serde::Serialize;
 use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceOutOfCreditsNotificationStatus {
+    Sent,
+    CooldownActive,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceOutOfCreditsNotificationResponse {
+    pub status: WorkspaceOutOfCreditsNotificationStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexAvatarStatus {
+    Active,
+    Hidden,
+    Retired,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexAvatarRarity {
+    Common,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAvatarDefinition {
+    pub avatar_id: String,
+    pub slug: String,
+    pub display_name: String,
+    pub description: String,
+    pub rarity: CodexAvatarRarity,
+    pub asset_ref: String,
+    pub status: CodexAvatarStatus,
+    pub sort_order: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAvatarOwnership {
+    pub account_user_id: String,
+    pub avatar_id: String,
+    pub first_unlocked_at: i64,
+    pub last_awarded_at: i64,
+    pub source_summary: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAvatarEquipRequest {
+    pub avatar_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAvatarInventoryResponse {
+    pub account_user_id: String,
+    pub avatar_definitions: Vec<CodexAvatarDefinition>,
+    pub owned_avatars: Vec<CodexAvatarOwnership>,
+    pub equipped_avatar_id: String,
+    pub equipped_at: i64,
+    pub updated_at: i64,
+    pub synced_at: i64,
+    pub catalog_version: Option<i64>,
+}
 
 /// Hand-rolled models for the Cloud Tasks task-details response.
 /// The generated OpenAPI models are pretty bad. This is a half-step

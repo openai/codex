@@ -1737,6 +1737,93 @@ pub struct GetAccountResponse {
     pub requires_openai_auth: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CodexAvatarStatus {
+    Active,
+    Hidden,
+    Retired,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CodexAvatarRarity {
+    Common,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarDefinition {
+    pub avatar_id: String,
+    pub slug: String,
+    pub display_name: String,
+    pub description: String,
+    pub rarity: CodexAvatarRarity,
+    pub asset_ref: String,
+    pub status: CodexAvatarStatus,
+    pub sort_order: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarOwnership {
+    pub account_user_id: String,
+    pub avatar_id: String,
+    pub first_unlocked_at: i64,
+    pub last_awarded_at: i64,
+    pub source_summary: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarAward {
+    pub award_id: String,
+    pub account_user_id: String,
+    pub avatar_id: String,
+    pub source_type: String,
+    pub source_ref: Option<String>,
+    pub awarded_at: i64,
+    pub awarded_by: Option<String>,
+    pub metadata_json: Option<String>,
+    pub source_summary: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarInventoryReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarEquipParams {
+    pub avatar_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarInventoryReadResponse {
+    pub account_user_id: String,
+    pub avatar_definitions: Vec<CodexAvatarDefinition>,
+    pub owned_avatars: Vec<CodexAvatarOwnership>,
+    pub equipped_avatar_id: String,
+    pub equipped_at: i64,
+    pub updated_at: i64,
+    pub synced_at: i64,
+    pub catalog_version: Option<i64>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

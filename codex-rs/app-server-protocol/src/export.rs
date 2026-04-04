@@ -118,6 +118,7 @@ pub fn generate_ts_with_options(
     ServerRequest::export_all_to(out_dir)?;
     export_server_responses(out_dir)?;
     ServerNotification::export_all_to(out_dir)?;
+    crate::protocol::v2::CodexAvatarAward::export_all_to(out_dir)?;
 
     if !options.experimental_api {
         filter_experimental_ts(out_dir)?;
@@ -206,6 +207,12 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
         |d| write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest"),
         |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
         |d| write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification"),
+        |d| {
+            write_json_schema_with_return::<crate::protocol::v2::CodexAvatarAward>(
+                d,
+                "CodexAvatarAward",
+            )
+        },
     ];
 
     let mut schemas: Vec<GeneratedSchema> = Vec::new();
