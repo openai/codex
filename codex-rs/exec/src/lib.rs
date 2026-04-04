@@ -790,8 +790,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     error_seen = true;
                 }
 
-                maybe_backfill_turn_completed_items(&client, &mut request_ids, &mut notification)
-                    .await;
+                maybe_backfill_turn_completed_items(
+                    config.ephemeral,
+                    &client,
+                    &mut request_ids,
+                    &mut notification,
+                )
+                .await;
 
                 if should_process_notification(
                     &notification,
@@ -1051,6 +1056,7 @@ fn should_process_notification(
 }
 
 async fn maybe_backfill_turn_completed_items(
+    thread_ephemeral: bool,
     client: &InProcessAppServerClient,
     request_ids: &mut RequestIdSequencer,
     notification: &mut ServerNotification,
@@ -1059,12 +1065,13 @@ async fn maybe_backfill_turn_completed_items(
     // guaranteeing `turn/completed`. Because app-server currently emits that completion with an
     // empty `turn.items`, exec does one last `thread/read` here so human/json output can recover
     // the final message and reconcile any still-running items before shutdown.
+    if !should_backfill_turn_completed_items(thread_ephemeral, notification) {
+        return;
+    }
+
     let ServerNotification::TurnCompleted(payload) = notification else {
         return;
     };
-    if !payload.turn.items.is_empty() {
-        return;
-    }
 
     let response = send_request_with_response::<ThreadReadResponse>(
         client,
@@ -1089,6 +1096,19 @@ async fn maybe_backfill_turn_completed_items(
             warn!("thread/read failed while backfilling turn items for turn completion: {err}");
         }
     }
+}
+
+/// Returns true only when `exec` can safely recover missing turn items from
+/// rollout-backed thread history.
+fn should_backfill_turn_completed_items(
+    thread_ephemeral: bool,
+    notification: &ServerNotification,
+) -> bool {
+    let ServerNotification::TurnCompleted(payload) = notification else {
+        return false;
+    };
+
+    !thread_ephemeral && payload.turn.items.is_empty()
 }
 
 fn turn_items_for_thread(
