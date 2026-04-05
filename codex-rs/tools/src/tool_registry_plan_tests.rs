@@ -8,6 +8,7 @@ use crate::JsonSchema;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
+use crate::ToolEnvironmentCapabilities;
 use crate::ToolHandlerSpec;
 use crate::ToolRegistryPlanAppTool;
 use crate::ToolsConfigParams;
@@ -451,6 +452,114 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
     };
     assert!(description.contains("only supported value is `original`"));
     assert!(description.contains("omit this field for default resized behavior"));
+}
+
+#[test]
+fn disabled_environment_omits_environment_backed_tools() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    features.enable(Feature::JsRepl);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_environment_capabilities(ToolEnvironmentCapabilities::new(
+        /*exec_enabled*/ false, /*filesystem_enabled*/ false,
+    ));
+    tools_config
+        .experimental_supported_tools
+        .push("list_dir".to_string());
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, "exec_command");
+    assert_lacks_tool_name(&tools, "write_stdin");
+    assert_lacks_tool_name(&tools, "js_repl");
+    assert_lacks_tool_name(&tools, "js_repl_reset");
+    assert_lacks_tool_name(&tools, "apply_patch");
+    assert_lacks_tool_name(&tools, "list_dir");
+    assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
+}
+
+#[test]
+fn environment_capabilities_gate_exec_and_filesystem_tools_independently() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    features.enable(Feature::JsRepl);
+    let available_models = Vec::new();
+
+    let mut exec_disabled = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_environment_capabilities(ToolEnvironmentCapabilities::new(
+        /*exec_enabled*/ false, /*filesystem_enabled*/ true,
+    ));
+    exec_disabled
+        .experimental_supported_tools
+        .push("list_dir".to_string());
+    let (exec_disabled_tools, _) = build_specs(
+        &exec_disabled,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&exec_disabled_tools, "exec_command");
+    assert_lacks_tool_name(&exec_disabled_tools, "write_stdin");
+    assert_lacks_tool_name(&exec_disabled_tools, "js_repl");
+    assert_lacks_tool_name(&exec_disabled_tools, "js_repl_reset");
+    assert_contains_tool_names(
+        &exec_disabled_tools,
+        &["apply_patch", "list_dir", VIEW_IMAGE_TOOL_NAME],
+    );
+
+    let mut filesystem_disabled = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_environment_capabilities(ToolEnvironmentCapabilities::new(
+        /*exec_enabled*/ true, /*filesystem_enabled*/ false,
+    ));
+    filesystem_disabled
+        .experimental_supported_tools
+        .push("list_dir".to_string());
+    let (filesystem_disabled_tools, _) = build_specs(
+        &filesystem_disabled,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_contains_tool_names(
+        &filesystem_disabled_tools,
+        &["exec_command", "write_stdin", "js_repl", "js_repl_reset"],
+    );
+    assert_lacks_tool_name(&filesystem_disabled_tools, "apply_patch");
+    assert_lacks_tool_name(&filesystem_disabled_tools, "list_dir");
+    assert_lacks_tool_name(&filesystem_disabled_tools, VIEW_IMAGE_TOOL_NAME);
 }
 
 #[test]
