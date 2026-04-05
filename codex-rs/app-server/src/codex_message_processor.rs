@@ -6593,9 +6593,21 @@ impl CodexMessageProcessor {
                     items: vec![],
                     error: None,
                     status: TurnStatus::InProgress,
+                    created_at: None,
+                    completed_at: None,
+                    duration_ms: None,
                 };
 
                 let response = TurnStartResponse { turn };
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::TurnStart {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
+                }
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -6929,6 +6941,9 @@ impl CodexMessageProcessor {
             items,
             error: None,
             status: TurnStatus::InProgress,
+            created_at: None,
+            completed_at: None,
+            duration_ms: None,
         }
     }
 
@@ -7369,6 +7384,7 @@ impl CodexMessageProcessor {
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
+                            listener_task_context.analytics_events_client.clone(),
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
@@ -9578,6 +9594,7 @@ mod tests {
             state.track_current_turn_event(&EventMsg::TurnStarted(
                 codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    created_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
                 },

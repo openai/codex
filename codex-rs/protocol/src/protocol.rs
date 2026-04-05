@@ -1864,11 +1864,23 @@ pub struct ContextCompactedEvent;
 pub struct TurnCompleteEvent {
     pub turn_id: String,
     pub last_agent_message: Option<String>,
+    /// Unix timestamp (in seconds) when the turn completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and completion in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
     pub turn_id: String,
+    /// Unix timestamp (in seconds) when the turn started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub created_at: Option<i64>,
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
     #[serde(default)]
@@ -2263,6 +2275,14 @@ pub enum InitialHistory {
 }
 
 impl InitialHistory {
+    pub fn scan_rollout_items(&self, mut predicate: impl FnMut(&RolloutItem) -> bool) -> bool {
+        match self {
+            InitialHistory::New => false,
+            InitialHistory::Resumed(resumed) => resumed.history.iter().any(&mut predicate),
+            InitialHistory::Forked(items) => items.iter().any(predicate),
+        }
+    }
+
     pub fn forked_from_id(&self) -> Option<ThreadId> {
         match self {
             InitialHistory::New => None,
@@ -3375,6 +3395,14 @@ pub struct Chunk {
 pub struct TurnAbortedEvent {
     pub turn_id: Option<String>,
     pub reason: TurnAbortReason,
+    /// Unix timestamp (in seconds) when the turn was aborted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and abort in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4543,7 +4571,9 @@ mod tests {
         }))?;
 
         match event {
-            EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) => {
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id, reason, ..
+            }) => {
                 assert_eq!(turn_id, None);
                 assert_eq!(reason, TurnAbortReason::Interrupted);
             }
