@@ -37,6 +37,7 @@ const HTTP_HEADER_TERMINATOR: &[u8] = b"\r\n\r\n";
 const REALTIME_AUDIO_CHANNELS: u8 = 1;
 const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const REALTIME_DATA_CHANNEL_TIMEOUT: Duration = Duration::from_secs(10);
+const REALTIME_DATA_CHANNEL_FLUSH_DELAY: Duration = Duration::from_millis(25);
 const REALTIME_MAX_DECODED_SAMPLES_PER_CHANNEL: usize = 5760;
 
 pub(super) async fn accept_is_http_post(stream: &TcpStream) -> bool {
@@ -404,6 +405,7 @@ async fn serve_scripted_requests(
     }
 
     if connection.close_after_requests {
+        tokio::time::sleep(REALTIME_DATA_CHANNEL_FLUSH_DELAY).await;
         let _ = data_channel.close().await;
     }
 }

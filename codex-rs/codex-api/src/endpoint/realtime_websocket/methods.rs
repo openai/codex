@@ -65,6 +65,7 @@ const REALTIME_AUDIO_CHANNELS: u16 = 1;
 const REALTIME_AUDIO_PACKET_SAMPLES: usize = 480;
 const REALTIME_AUDIO_PACKET_DURATION: Duration = Duration::from_millis(20);
 const REALTIME_DATA_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+const REALTIME_AUDIO_TRACK_BINDING_SETTLE_TIME: Duration = Duration::from_millis(250);
 const OPUS_MAX_PACKET_BYTES: usize = 4_000;
 const OPUS_MAX_DECODED_SAMPLES_PER_CHANNEL: usize = 2_880;
 
@@ -600,6 +601,11 @@ async fn connect_webrtc_transport(
             )
         })?
         .map_err(|_| ApiError::Stream("realtime WebRTC data channel did not open".to_string()))?;
+
+    // `TrackLocalStaticSample::write_sample()` silently drops samples until the RTP sender has
+    // finished binding after negotiation. Give webrtc-rs a short grace period so the first user
+    // audio frame is not discarded during startup.
+    tokio::time::sleep(REALTIME_AUDIO_TRACK_BINDING_SETTLE_TIME).await;
 
     info!(
         calls_url = %calls_url,
