@@ -418,12 +418,16 @@ bazel_dep(name = "meson", version = "1.5.1.bcr.1")
 crate.annotation(
     build_script_tools = [
         "@meson//:meson",
+        "@llvm-project//clang:libclang_interface_output",
+        "@llvm//:builtin_resource_dir",
         "@ninja_1.11.0_linux//:ninja_bin",
         "@ninja_1.12.1_linux_aarch64//:ninja_bin",
         "@ninja_1.11.0_mac//:ninja_bin",
         "@ninja_1.11.0_win//:ninja_bin",
     ],
     build_script_env = {
+        "BINDGEN_EXTRA_CLANG_ARGS": "-Xclang -internal-isystem -Xclang $(location @llvm//:builtin_resource_dir)/include",
+        "LIBCLANG_PATH": "$(location @llvm-project//clang:libclang_interface_output)",
         "MESON": "$(execpath @meson//:meson)",
     },
     build_script_env_select = {
@@ -447,7 +451,7 @@ crate.annotation(
     ],
 )
 
-inject_repo(crate, "meson", "ninja_1.11.0_linux", "ninja_1.12.1_linux_aarch64", "ninja_1.11.0_mac", "ninja_1.11.0_win")
+inject_repo(crate, "meson", "ninja_1.11.0_linux", "ninja_1.12.1_linux_aarch64", "ninja_1.11.0_mac", "ninja_1.11.0_win", "llvm", "llvm-project")
 bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
     module_name = "v8",

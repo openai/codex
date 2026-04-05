@@ -32,6 +32,11 @@ index 8578e9220a..bd5c9ba382 100644
 +            .expect("CARGO_MANIFEST_DIR points inside a Bazel runfiles tree");
 +        let staged_meson = build_dir.join("meson");
 +        fs::copy(&meson_launcher, &staged_meson).context("Failed to stage Meson launcher")?;
++        let meson_archive = PathBuf::from(&meson_launcher).with_extension("zip");
++        if meson_archive.exists() {
++            fs::copy(&meson_archive, build_dir.join("meson.zip"))
++                .context("Failed to stage Meson support archive")?;
++        }
 +        let mut meson_runfiles = staged_meson.as_os_str().to_owned();
 +        meson_runfiles.push(".runfiles");
 +        let _ = fs::remove_file(&meson_runfiles);
