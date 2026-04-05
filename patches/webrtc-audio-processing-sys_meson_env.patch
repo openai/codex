@@ -327,7 +327,29 @@ index 8578e92..7837fbf 100644
 +        let Some(tool_path) = env::var_os(tool_env).map(PathBuf::from) else {
 +            continue;
 +        };
-+        let tool_path = resolve_tool_path(tool_path);
++        let tool_path = if tool_path.is_absolute() {
++            tool_path
++        } else if let Ok(current_dir) = env::current_dir() {
++            let candidate = current_dir.join(&tool_path);
++            if candidate.exists() {
++                candidate
++            } else if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)
++            {
++                let mut resolved = None;
++                for ancestor in manifest_dir.ancestors() {
++                    let candidate = ancestor.join(&tool_path);
++                    if candidate.exists() {
++                        resolved = Some(candidate);
++                        break;
++                    }
++                }
++                resolved.unwrap_or(tool_path)
++            } else {
++                tool_path
++            }
++        } else {
++            tool_path
++        };
 +        let Some(tool_dir) = tool_path.parent() else {
 +            continue;
 +        };
@@ -335,74 +357,41 @@ index 8578e92..7837fbf 100644
 +            continue;
 +        };
 +
-+        if let Some(libclang_dir) = find_libclang_dir(tool_root) {
-+            env::set_var("LIBCLANG_PATH", libclang_dir);
-+            return;
++        let mut directories = vec![tool_root.join("lib"), tool_root.join("lib64")];
++        if let Ok(read_dir) = fs::read_dir(tool_root) {
++            directories.extend(
++                read_dir
++                    .filter_map(std::result::Result::ok)
++                    .map(|entry| entry.path())
++                    .filter(|path| path.is_dir()),
++            );
 +        }
-+    }
-+}
 +
-+fn resolve_tool_path(tool_path: PathBuf) -> PathBuf {
-+    if tool_path.is_absolute() {
-+        return tool_path;
-+    }
-+
-+    if let Ok(current_dir) = env::current_dir() {
-+        let candidate = current_dir.join(&tool_path);
-+        if candidate.exists() {
-+            return candidate;
-+        }
-+    }
-+
-+    if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from) {
-+        for ancestor in manifest_dir.ancestors() {
-+            let candidate = ancestor.join(&tool_path);
-+            if candidate.exists() {
-+                return candidate;
-+            }
-+        }
-+    }
-+
-+    tool_path
-+}
-+
-+fn find_libclang_dir(tool_root: &Path) -> Option<PathBuf> {
-+    let mut directories = vec![tool_root.join("lib"), tool_root.join("lib64")];
-+
-+    if let Ok(read_dir) = fs::read_dir(tool_root) {
-+        directories.extend(
-+            read_dir
-+                .filter_map(std::result::Result::ok)
-+                .map(|entry| entry.path())
-+                .filter(|path| path.is_dir()),
-+        );
-+    }
-+
-+    while let Some(directory) = directories.pop() {
-+        let Ok(read_dir) = fs::read_dir(&directory) else {
-+            continue;
-+        };
-+
-+        for entry in read_dir.filter_map(std::result::Result::ok) {
-+            let path = entry.path();
-+            if path.is_dir() {
-+                directories.push(path);
-+                continue;
-+            }
-+
-+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
++        while let Some(directory) = directories.pop() {
++            let Ok(read_dir) = fs::read_dir(&directory) else {
 +                continue;
 +            };
-+            if matches!(file_name, "libclang.so" | "libclang.dll" | "libclang.dylib")
-+                || file_name.starts_with("libclang.so.")
-+                || file_name.starts_with("libclang-")
-+            {
-+                if let Some(parent) = path.parent() {
-+                    return Some(parent.to_path_buf());
++
++            for entry in read_dir.filter_map(std::result::Result::ok) {
++                let path = entry.path();
++                if path.is_dir() {
++                    directories.push(path);
++                    continue;
++                }
++
++                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
++                    continue;
++                };
++                if matches!(file_name, "libclang.so" | "libclang.dll" | "libclang.dylib")
++                    || file_name.starts_with("libclang.so.")
++                    || file_name.starts_with("libclang-")
++                {
++                    if let Some(parent) = path.parent() {
++                        env::set_var("LIBCLANG_PATH", parent);
++                        return;
++                    }
 +                }
 +            }
 +        }
 +    }
-+
-+    None
 +}
