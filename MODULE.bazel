@@ -278,74 +278,6 @@ http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "ht
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
 
-http_archive(
-    name = "ninja_1.11.0_linux",
-    urls = [
-        "https://github.com/ninja-build/ninja/releases/download/v1.11.0/ninja-linux.zip",
-    ],
-    sha256 = "9726e730d5b8599f82654dc80265e64a10a8a817552c34153361ed0c017f9f02",
-    strip_prefix = "",
-    build_file_content = """\
-package(default_visibility = ["//visibility:public"])
-
-filegroup(
-    name = "ninja_bin",
-    srcs = ["ninja"],
-)
-""",
-)
-
-http_archive(
-    name = "ninja_1.12.1_linux_aarch64",
-    urls = [
-        "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux-aarch64.zip",
-    ],
-    sha256 = "5c25c6570b0155e95fce5918cb95f1ad9870df5768653afe128db822301a05a1",
-    strip_prefix = "",
-    build_file_content = """\
-package(default_visibility = ["//visibility:public"])
-
-filegroup(
-    name = "ninja_bin",
-    srcs = ["ninja"],
-)
-""",
-)
-
-http_archive(
-    name = "ninja_1.11.0_mac",
-    urls = [
-        "https://github.com/ninja-build/ninja/releases/download/v1.11.0/ninja-mac.zip",
-    ],
-    sha256 = "21915277db59756bfc61f6f281c1f5e3897760b63776fd3d360f77dd7364137f",
-    strip_prefix = "",
-    build_file_content = """\
-package(default_visibility = ["//visibility:public"])
-
-filegroup(
-    name = "ninja_bin",
-    srcs = ["ninja"],
-)
-""",
-)
-
-http_archive(
-    name = "ninja_1.11.0_win",
-    urls = [
-        "https://github.com/ninja-build/ninja/releases/download/v1.11.0/ninja-win.zip",
-    ],
-    sha256 = "d0ee3da143211aa447e750085876c9b9d7bcdd637ab5b2c5b41349c617f22f3b",
-    strip_prefix = "",
-    build_file_content = """\
-package(default_visibility = ["//visibility:public"])
-
-filegroup(
-    name = "ninja_bin",
-    srcs = ["ninja.exe"],
-)
-""",
-)
-
 new_local_repository(
     name = "v8_targets",
     build_file = "//third_party/v8:BUILD.bazel",
@@ -413,45 +345,6 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "meson", version = "1.5.1.bcr.1")
-
-crate.annotation(
-    build_script_tools = [
-        "@meson//:meson",
-        "@llvm-project//clang:libclang_interface_output",
-        "@llvm//:builtin_resource_dir",
-        "@ninja_1.11.0_linux//:ninja_bin",
-        "@ninja_1.12.1_linux_aarch64//:ninja_bin",
-        "@ninja_1.11.0_mac//:ninja_bin",
-        "@ninja_1.11.0_win//:ninja_bin",
-    ],
-    build_script_env = {
-        "BINDGEN_EXTRA_CLANG_ARGS": "-Xclang -internal-isystem -Xclang $(location @llvm//:builtin_resource_dir)/include",
-        "LIBCLANG_PATH": "$(location @llvm-project//clang:libclang_interface_output)",
-        "MESON": "$(execpath @meson//:meson)",
-    },
-    build_script_env_select = {
-        "aarch64-apple-darwin": "{\"NINJA_REAL\":\"$(execpath @ninja_1.12.1_linux_aarch64//:ninja_bin)\"}",
-        "x86_64-apple-darwin": "{\"NINJA_REAL\":\"$(execpath @ninja_1.12.1_linux_aarch64//:ninja_bin)\"}",
-        "aarch64-unknown-linux-gnu": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
-        "x86_64-unknown-linux-gnu": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
-        "aarch64-unknown-linux-musl": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
-        "x86_64-unknown-linux-musl": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
-        "aarch64-pc-windows-msvc": "{\"NINJA\":\"$(execpath @ninja_1.11.0_win//:ninja_bin)\"}",
-        "x86_64-pc-windows-msvc": "{\"NINJA\":\"$(execpath @ninja_1.11.0_win//:ninja_bin)\"}",
-        "aarch64-pc-windows-gnullvm": "{\"NINJA\":\"$(execpath @ninja_1.11.0_win//:ninja_bin)\"}",
-        "x86_64-pc-windows-gnullvm": "{\"NINJA\":\"$(execpath @ninja_1.11.0_win//:ninja_bin)\"}",
-    },
-    crate = "webrtc-audio-processing-sys",
-    gen_build_script = "on",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:webrtc-audio-processing-sys_meson_env.patch",
-        "//patches:webrtc-audio-processing-sys_logging_macos_sdk.patch",
-    ],
-)
-
-inject_repo(crate, "meson", "ninja_1.11.0_linux", "ninja_1.12.1_linux_aarch64", "ninja_1.11.0_mac", "ninja_1.11.0_win")
 bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
     module_name = "v8",

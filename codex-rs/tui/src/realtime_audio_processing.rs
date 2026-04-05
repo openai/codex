@@ -1,47 +1,40 @@
+use aec3::voip::VoipAec3;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 use tracing::warn;
-use webrtc_audio_processing::Config as AudioProcessingConfig;
-use webrtc_audio_processing::Processor;
-use webrtc_audio_processing::config::EchoCanceller;
-use webrtc_audio_processing::config::GainController;
-use webrtc_audio_processing::config::HighPassFilter;
-use webrtc_audio_processing::config::NoiseSuppression;
-use webrtc_audio_processing::config::NoiseSuppressionLevel;
-use webrtc_audio_processing::config::Pipeline;
 
 pub(crate) const AUDIO_PROCESSING_SAMPLE_RATE: u32 = 24_000;
 pub(crate) const AUDIO_PROCESSING_CHANNELS: u16 = 1;
 
+enum AudioProcessorCommand {
+    Capture(Vec<i16>),
+    Render(Vec<i16>),
+}
+
 #[derive(Clone)]
 pub(crate) struct RealtimeAudioProcessor {
-    processor: Arc<Processor>,
+    capture_rx: Arc<Mutex<Option<Receiver<Vec<i16>>>>>,
+    command_tx: Sender<AudioProcessorCommand>,
 }
 
 impl RealtimeAudioProcessor {
     pub(crate) fn new() -> Result<Self, String> {
-        let processor = Processor::new(AUDIO_PROCESSING_SAMPLE_RATE)
-            .map_err(|err| format!("failed to initialize realtime audio processor: {err}"))?;
-        processor.set_config(AudioProcessingConfig {
-            pipeline: Pipeline {
-                multi_channel_capture: false,
-                multi_channel_render: false,
-                ..Default::default()
-            },
-            echo_canceller: Some(EchoCanceller::Full {
-                stream_delay_ms: None,
-            }),
-            noise_suppression: Some(NoiseSuppression {
-                level: NoiseSuppressionLevel::High,
-                ..Default::default()
-            }),
-            gain_controller: Some(GainController::GainController2(Default::default())),
-            high_pass_filter: Some(HighPassFilter::default()),
-            ..Default::default()
-        });
-        processor.set_output_will_be_muted(true);
+        build_pipeline()?;
+
+        let (command_tx, command_rx) = mpsc::channel();
+        let (capture_tx, capture_rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("codex-realtime-aec3".to_string())
+            .spawn(move || run_processor_thread(command_rx, capture_tx))
+            .map_err(|err| format!("failed to spawn realtime audio processor: {err}"))?;
+
         Ok(Self {
-            processor: Arc::new(processor),
+            capture_rx: Arc::new(Mutex::new(Some(capture_rx))),
+            command_tx,
         })
     }
 
@@ -49,13 +42,21 @@ impl RealtimeAudioProcessor {
         &self,
         input_sample_rate: u32,
         input_channels: u16,
-    ) -> RealtimeCaptureAudioProcessor {
-        RealtimeCaptureAudioProcessor {
-            processor: self.processor.clone(),
+    ) -> Result<RealtimeCaptureAudioProcessor, String> {
+        let capture_rx = self
+            .capture_rx
+            .lock()
+            .ok()
+            .and_then(|mut capture_rx| capture_rx.take())
+            .ok_or_else(|| "realtime capture stage was already created".to_string())?;
+
+        Ok(RealtimeCaptureAudioProcessor {
+            capture_rx,
+            command_tx: self.command_tx.clone(),
             input_sample_rate,
             input_channels,
-            pending_samples: VecDeque::new(),
-        }
+            processed_samples: VecDeque::new(),
+        })
     }
 
     pub(crate) fn render_stage(
@@ -64,23 +65,19 @@ impl RealtimeAudioProcessor {
         output_channels: u16,
     ) -> RealtimeRenderAudioProcessor {
         RealtimeRenderAudioProcessor {
-            processor: self.processor.clone(),
+            command_tx: self.command_tx.clone(),
             output_sample_rate,
             output_channels,
-            pending_samples: VecDeque::new(),
         }
-    }
-
-    pub(crate) fn set_output_will_be_muted(&self, muted: bool) {
-        self.processor.set_output_will_be_muted(muted);
     }
 }
 
 pub(crate) struct RealtimeCaptureAudioProcessor {
-    processor: Arc<Processor>,
+    capture_rx: Receiver<Vec<i16>>,
+    command_tx: Sender<AudioProcessorCommand>,
     input_sample_rate: u32,
     input_channels: u16,
-    pending_samples: VecDeque<i16>,
+    processed_samples: VecDeque<i16>,
 }
 
 impl RealtimeCaptureAudioProcessor {
@@ -92,40 +89,37 @@ impl RealtimeCaptureAudioProcessor {
             AUDIO_PROCESSING_SAMPLE_RATE,
             AUDIO_PROCESSING_CHANNELS,
         );
-        self.pending_samples.extend(converted);
-
-        let mut processed = Vec::new();
-        while self.pending_samples.len() >= self.processor.num_samples_per_frame() {
-            let mut frame = self.pop_pending_frame();
-            if let Err(err) = self.processor.process_capture_frame([frame.as_mut_slice()]) {
-                warn!("failed to process realtime capture audio: {err}");
-                continue;
-            }
-            processed.extend(frame.into_iter().map(f32_to_i16));
+        if !converted.is_empty()
+            && let Err(err) = self
+                .command_tx
+                .send(AudioProcessorCommand::Capture(converted))
+        {
+            warn!("failed to queue realtime capture audio: {err}");
         }
-        processed
-    }
 
-    fn pop_pending_frame(&mut self) -> Vec<f32> {
-        self.pending_samples
-            .drain(..self.processor.num_samples_per_frame())
-            .map(i16_to_f32)
-            .collect()
+        loop {
+            match self.capture_rx.try_recv() {
+                Ok(processed) => self.processed_samples.extend(processed),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    warn!("realtime capture audio processor disconnected");
+                    break;
+                }
+            }
+        }
+
+        self.processed_samples.drain(..).collect()
     }
 }
 
 pub(crate) struct RealtimeRenderAudioProcessor {
-    processor: Arc<Processor>,
+    command_tx: Sender<AudioProcessorCommand>,
     output_sample_rate: u32,
     output_channels: u16,
-    pending_samples: VecDeque<i16>,
 }
 
 impl RealtimeRenderAudioProcessor {
     pub(crate) fn process_samples(&mut self, samples: &[i16]) {
-        self.processor
-            .set_output_will_be_muted(samples.iter().all(|sample| *sample == 0));
-
         let converted = convert_pcm16(
             samples,
             self.output_sample_rate,
@@ -133,22 +127,91 @@ impl RealtimeRenderAudioProcessor {
             AUDIO_PROCESSING_SAMPLE_RATE,
             AUDIO_PROCESSING_CHANNELS,
         );
-        self.pending_samples.extend(converted);
+        if !converted.is_empty()
+            && let Err(err) = self
+                .command_tx
+                .send(AudioProcessorCommand::Render(converted))
+        {
+            warn!("failed to queue realtime render audio: {err}");
+        }
+    }
+}
 
-        while self.pending_samples.len() >= self.processor.num_samples_per_frame() {
-            let mut frame = self.pop_pending_frame();
-            if let Err(err) = self.processor.process_render_frame([frame.as_mut_slice()]) {
-                warn!("failed to process realtime render audio: {err}");
+fn build_pipeline() -> Result<VoipAec3, String> {
+    VoipAec3::builder(
+        AUDIO_PROCESSING_SAMPLE_RATE as usize,
+        usize::from(AUDIO_PROCESSING_CHANNELS),
+        usize::from(AUDIO_PROCESSING_CHANNELS),
+    )
+    .enable_high_pass(false)
+    .enable_noise_suppression(false)
+    .build()
+    .map_err(|err| format!("failed to initialize realtime audio processor: {err}"))
+}
+
+fn run_processor_thread(command_rx: Receiver<AudioProcessorCommand>, capture_tx: Sender<Vec<i16>>) {
+    let mut pipeline = match build_pipeline() {
+        Ok(pipeline) => pipeline,
+        Err(err) => {
+            warn!("{err}");
+            return;
+        }
+    };
+    let capture_frame_len =
+        pipeline.capture_frame_samples() * usize::from(AUDIO_PROCESSING_CHANNELS);
+    let render_frame_len = pipeline.render_frame_samples() * usize::from(AUDIO_PROCESSING_CHANNELS);
+    let mut pending_capture = VecDeque::new();
+    let mut pending_render = VecDeque::new();
+
+    while let Ok(command) = command_rx.recv() {
+        match command {
+            AudioProcessorCommand::Capture(samples) => {
+                pending_capture.extend(samples);
+                while pending_capture.len() >= capture_frame_len {
+                    let capture_frame =
+                        drain_pending_frame(&mut pending_capture, capture_frame_len);
+                    let capture_frame = capture_frame
+                        .iter()
+                        .copied()
+                        .map(i16_to_f32)
+                        .collect::<Vec<_>>();
+                    let mut output = vec![0.0; capture_frame.len()];
+                    if let Err(err) = pipeline.process_capture_frame(
+                        &capture_frame,
+                        /*level_change*/ false,
+                        &mut output,
+                    ) {
+                        warn!("failed to process realtime capture audio: {err}");
+                        continue;
+                    }
+
+                    let processed = output.into_iter().map(f32_to_i16).collect::<Vec<_>>();
+                    if let Err(err) = capture_tx.send(processed) {
+                        warn!("failed to deliver realtime capture audio: {err}");
+                        return;
+                    }
+                }
+            }
+            AudioProcessorCommand::Render(samples) => {
+                pending_render.extend(samples);
+                while pending_render.len() >= render_frame_len {
+                    let render_frame = drain_pending_frame(&mut pending_render, render_frame_len);
+                    let render_frame = render_frame
+                        .iter()
+                        .copied()
+                        .map(i16_to_f32)
+                        .collect::<Vec<_>>();
+                    if let Err(err) = pipeline.handle_render_frame(&render_frame) {
+                        warn!("failed to process realtime render audio: {err}");
+                    }
+                }
             }
         }
     }
+}
 
-    fn pop_pending_frame(&mut self) -> Vec<f32> {
-        self.pending_samples
-            .drain(..self.processor.num_samples_per_frame())
-            .map(i16_to_f32)
-            .collect()
-    }
+fn drain_pending_frame(pending_samples: &mut VecDeque<i16>, frame_len: usize) -> Vec<i16> {
+    pending_samples.drain(..frame_len).collect()
 }
 
 pub(crate) fn convert_pcm16(
@@ -210,12 +273,10 @@ pub(crate) fn convert_pcm16(
     out
 }
 
-#[inline]
 fn i16_to_f32(sample: i16) -> f32 {
     (sample as f32) / (i16::MAX as f32)
 }
 
-#[inline]
 fn f32_to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }

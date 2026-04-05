@@ -1,4 +1,0 @@
-exports_files(
-    ["ninja_wrapper.sh"],
-    visibility = ["//visibility:public"],
-)

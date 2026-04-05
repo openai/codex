@@ -45,7 +45,7 @@ impl VoiceCapture {
             &device,
             &config,
             tx,
-            audio_processor.capture_stage(sample_rate, channels),
+            audio_processor.capture_stage(sample_rate, channels)?,
             last_peak.clone(),
         )?;
         stream
@@ -318,7 +318,6 @@ fn convert_u16_to_i16_and_peak(input: &[u16], out: &mut Vec<i16>) -> u16 {
 pub(crate) struct RealtimeAudioPlayer {
     _stream: cpal::Stream,
     queue: Arc<Mutex<VecDeque<i16>>>,
-    audio_processor: RealtimeAudioProcessor,
     output_sample_rate: u32,
     output_channels: u16,
 }
@@ -345,7 +344,6 @@ impl RealtimeAudioPlayer {
         Ok(Self {
             _stream: stream,
             queue,
-            audio_processor,
             output_sample_rate,
             output_channels,
         })
@@ -381,8 +379,6 @@ impl RealtimeAudioPlayer {
             .map_err(|_| "failed to lock output audio queue".to_string())?;
         // TODO(aibrahim): Cap or trim this queue if we observe producer bursts outrunning playback.
         guard.extend(converted);
-        drop(guard);
-        self.audio_processor.set_output_will_be_muted(false);
         Ok(())
     }
 
@@ -390,7 +386,6 @@ impl RealtimeAudioPlayer {
         if let Ok(mut guard) = self.queue.lock() {
             guard.clear();
         }
-        self.audio_processor.set_output_will_be_muted(true);
     }
 }
 
