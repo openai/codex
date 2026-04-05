@@ -126,3 +126,7 @@ pub(super) fn session_update_session(
         },
     }
 }
+
+pub(super) fn webrtc_intent() -> Option<&'static str> {
+    None
+}

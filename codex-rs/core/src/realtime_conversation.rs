@@ -14,14 +14,13 @@ use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebRtcClient;
+use codex_api::api_bridge::CoreAuthProvider;
 use codex_api::api_bridge::map_api_error;
 use codex_api::endpoint::realtime_websocket::RealtimeWebRtcEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebRtcWriter;
-use codex_app_server_protocol::AuthMode;
 use codex_login::CodexAuth;
+use codex_login::api_bridge::auth_provider_from_auth;
 use codex_login::default_client::default_headers;
-use codex_login::read_openai_api_key_from_env;
-use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -37,7 +36,6 @@ use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use http::HeaderMap;
 use http::HeaderValue;
-use http::header::AUTHORIZATION;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
@@ -157,6 +155,7 @@ impl RealtimeConversationManager {
     pub(crate) async fn start(
         &self,
         api_provider: ApiProvider,
+        api_auth: CoreAuthProvider,
         extra_headers: Option<HeaderMap>,
         session_config: RealtimeSessionConfig,
     ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
@@ -172,7 +171,7 @@ impl RealtimeConversationManager {
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
 
-        let client = RealtimeWebRtcClient::new(api_provider);
+        let client = RealtimeWebRtcClient::new(api_provider, api_auth);
         let connection = client
             .connect(
                 session_config,
@@ -444,6 +443,7 @@ pub(crate) async fn handle_start(
 
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
+    api_auth: CoreAuthProvider,
     extra_headers: Option<HeaderMap>,
     requested_session_id: Option<String>,
     version: RealtimeWsVersion,
@@ -461,8 +461,8 @@ async fn prepare_realtime_start(
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let auth = auth_manager.auth().await;
-    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
+    let api_auth = auth_provider_from_auth(auth.clone(), &provider)?;
+    let mut api_provider = provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
@@ -502,10 +502,10 @@ async fn prepare_realtime_start(
         event_parser,
         session_mode,
     };
-    let extra_headers =
-        realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
+    let extra_headers = realtime_request_headers(requested_session_id.as_deref())?;
     Ok(PreparedRealtimeConversationStart {
         api_provider,
+        api_auth,
         extra_headers,
         requested_session_id,
         version,
@@ -520,6 +520,7 @@ async fn handle_start_inner(
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
         api_provider,
+        api_auth,
         extra_headers,
         requested_session_id,
         version,
@@ -528,7 +529,7 @@ async fn handle_start_inner(
     info!("starting realtime conversation");
     let (events_rx, realtime_active) = sess
         .conversation
-        .start(api_provider, extra_headers, session_config)
+        .start(api_provider, api_auth, extra_headers, session_config)
         .await?;
 
     info!("realtime conversation started");
@@ -633,36 +634,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
 }
 
-fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
-    if let Some(api_key) = provider.api_key()? {
-        return Ok(api_key);
-    }
-
-    if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(token);
-    }
-
-    if let Some(api_key) = auth.and_then(CodexAuth::api_key) {
-        return Ok(api_key.to_string());
-    }
-
-    // TODO(aibrahim): Remove this temporary fallback once realtime auth no longer
-    // requires API key auth for ChatGPT/SIWC sessions.
-    if provider.is_openai()
-        && let Some(api_key) = read_openai_api_key_from_env()
-    {
-        return Ok(api_key);
-    }
-
-    Err(CodexErr::InvalidRequest(
-        "realtime conversation requires API key auth".to_string(),
-    ))
-}
-
-fn realtime_request_headers(
-    session_id: Option<&str>,
-    api_key: &str,
-) -> CodexResult<Option<HeaderMap>> {
+fn realtime_request_headers(session_id: Option<&str>) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
     if let Some(session_id) = session_id
@@ -670,11 +642,6 @@ fn realtime_request_headers(
     {
         headers.insert("x-session-id", session_id);
     }
-
-    let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
-        CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
-    })?;
-    headers.insert(AUTHORIZATION, auth_value);
 
     Ok(Some(headers))
 }
