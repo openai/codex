@@ -2077,16 +2077,16 @@ mod tests {
         let text = "你好世界";
         let mut t = ta_with(text);
 
-        t.set_cursor(text.len());
+        t.set_cursor(/*pos*/ text.len());
         assert_eq!(t.beginning_of_previous_word(), 9);
 
-        t.set_cursor(9);
+        t.set_cursor(/*pos*/ 9);
         assert_eq!(t.beginning_of_previous_word(), 6);
 
-        t.set_cursor(6);
+        t.set_cursor(/*pos*/ 6);
         assert_eq!(t.beginning_of_previous_word(), 3);
 
-        t.set_cursor(3);
+        t.set_cursor(/*pos*/ 3);
         assert_eq!(t.beginning_of_previous_word(), 0);
     }
 
@@ -2095,16 +2095,16 @@ mod tests {
         let text = "你好世界";
         let mut t = ta_with(text);
 
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         assert_eq!(t.end_of_next_word(), 3);
 
-        t.set_cursor(3);
+        t.set_cursor(/*pos*/ 3);
         assert_eq!(t.end_of_next_word(), 6);
 
-        t.set_cursor(6);
+        t.set_cursor(/*pos*/ 6);
         assert_eq!(t.end_of_next_word(), 9);
 
-        t.set_cursor(9);
+        t.set_cursor(/*pos*/ 9);
         assert_eq!(t.end_of_next_word(), 12);
     }
 
@@ -2113,19 +2113,19 @@ mod tests {
         let text = "hello你好";
         let mut t = ta_with(text);
 
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         assert_eq!(t.end_of_next_word(), 5);
 
-        t.set_cursor(5);
+        t.set_cursor(/*pos*/ 5);
         assert_eq!(t.end_of_next_word(), 8);
 
-        t.set_cursor(text.len());
+        t.set_cursor(/*pos*/ text.len());
         assert_eq!(t.beginning_of_previous_word(), 8);
 
-        t.set_cursor(8);
+        t.set_cursor(/*pos*/ 8);
         assert_eq!(t.beginning_of_previous_word(), 5);
 
-        t.set_cursor(5);
+        t.set_cursor(/*pos*/ 5);
         assert_eq!(t.beginning_of_previous_word(), 0);
     }
 
