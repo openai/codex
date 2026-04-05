@@ -451,7 +451,7 @@ crate.annotation(
     ],
 )
 
-inject_repo(crate, "meson", "ninja_1.11.0_linux", "ninja_1.12.1_linux_aarch64", "ninja_1.11.0_mac", "ninja_1.11.0_win", "llvm", "llvm-project")
+inject_repo(crate, "meson", "ninja_1.11.0_linux", "ninja_1.12.1_linux_aarch64", "ninja_1.11.0_mac", "ninja_1.11.0_win")
 bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
     module_name = "v8",
