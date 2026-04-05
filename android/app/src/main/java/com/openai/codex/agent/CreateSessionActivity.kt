@@ -94,6 +94,7 @@ class CreateSessionActivity : Activity() {
     private var uiActive = false
     private var selectedPackage: InstalledApp? = null
     private var targetLocked = false
+    private var agentAnchoredOnly = false
 
     private lateinit var promptInput: EditText
     private lateinit var packageSummary: TextView
@@ -193,12 +194,17 @@ class CreateSessionActivity : Activity() {
         existingSessionId = null
         selectedPackage = null
         targetLocked = false
+        agentAnchoredOnly = isAgentSessionLauncherIntent(intent)
         titleView.text = "New Session"
         statusView.visibility = View.GONE
         statusView.text = "Loading session…"
         startButton.isEnabled = true
         unlockTargetSelection()
         updatePackageSummary()
+        if (agentAnchoredOnly) {
+            titleView.text = "New Codex Session"
+            lockTargetSelection()
+        }
 
         existingSessionId = intent.getStringExtra(EXTRA_EXISTING_SESSION_ID)?.trim()?.ifEmpty { null }
         initialSettings = mergedWithPreferredDefaults(
@@ -448,7 +454,11 @@ class CreateSessionActivity : Activity() {
     private fun updatePackageSummary() {
         val app = selectedPackage
         if (app == null) {
-            packageSummary.text = "No target app selected. This will start an Agent-anchored session."
+            packageSummary.text = if (agentAnchoredOnly) {
+                "Codex will plan across apps and create child Genie sessions as needed."
+            } else {
+                "No target app selected. This will start an Agent-anchored session."
+            }
             packageSummary.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, null, null)
             return
         }
@@ -543,6 +553,12 @@ class CreateSessionActivity : Activity() {
                 !hasChildren &&
                 !it.targetPackage.isNullOrBlank()
         }
+    }
+
+    private fun isAgentSessionLauncherIntent(intent: Intent?): Boolean {
+        return intent?.action == Intent.ACTION_MAIN &&
+            intent.hasCategory(Intent.CATEGORY_LAUNCHER) &&
+            intent.getStringExtra(AgentManager.EXTRA_SESSION_ID).isNullOrBlank()
     }
 
     private fun updateSessionUiLease(sessionId: String?) {

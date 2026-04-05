@@ -140,9 +140,19 @@ class SessionPopupActivity : Activity() {
         snapshot: AgentSnapshot,
         sessionId: String,
     ): AgentSessionDetails? {
-        return snapshot.sessions.firstOrNull { session -> session.sessionId == sessionId }
+        val requestedSession = snapshot.sessions.firstOrNull { session -> session.sessionId == sessionId }
             ?: snapshot.selectedSession?.takeIf { session -> session.sessionId == sessionId }
             ?: snapshot.parentSession?.takeIf { session -> session.sessionId == sessionId }
+        if (requestedSession?.let(::isTopLevelAgentSession) == true) {
+            if (isQuestionSession(requestedSession) || isResultSession(requestedSession)) {
+                return requestedSession
+            }
+            return snapshot.sessions.firstOrNull { session ->
+                session.parentSessionId == requestedSession.sessionId &&
+                    isQuestionSession(session)
+            } ?: requestedSession
+        }
+        return requestedSession
     }
 
     private fun renderSession(session: AgentSessionDetails?) {
@@ -316,7 +326,7 @@ class SessionPopupActivity : Activity() {
             return
         }
         if (isTopLevelAgentSession(session)) {
-            cancelAgentSessionTree(
+            consumeAgentParentResultPresentation(
                 sessionId = session.sessionId,
                 okButton = okButton,
                 sendButton = sendButton,
@@ -497,8 +507,52 @@ class SessionPopupActivity : Activity() {
                     ).show()
                 }
             }.onSuccess {
+                val nextQuestionSession = runCatching {
+                    val topLevelSessionId = session.parentSessionId ?: session.sessionId
+                    resolvePopupSession(sessionController.loadSnapshot(topLevelSessionId), topLevelSessionId)
+                        ?.takeIf(::isQuestionSession)
+                }.getOrNull()
+                runOnUiThread {
+                    answerSubmissionInFlight = false
+                    if (nextQuestionSession != null) {
+                        renderSession(nextQuestionSession)
+                    } else {
+                        finish()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun consumeAgentParentResultPresentation(
+        sessionId: String,
+        okButton: Button,
+        sendButton: Button,
+    ) {
+        okButton.isEnabled = false
+        sendButton.isEnabled = false
+        thread(name = "CodexSessionPopupConsumeAgentParent-$sessionId") {
+            runCatching {
+                sessionController.consumeHomeSessionPresentation(sessionId)
+            }.onSuccess {
                 runOnUiThread {
                     finish()
+                }
+            }.onFailure { err ->
+                if (isUnknownSessionError(err)) {
+                    runOnUiThread {
+                        finish()
+                    }
+                    return@thread
+                }
+                runOnUiThread {
+                    okButton.isEnabled = true
+                    sendButton.isEnabled = true
+                    Toast.makeText(
+                        this,
+                        "Failed to clear session icon: ${err.message}",
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }
             }
         }

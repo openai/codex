@@ -124,41 +124,7 @@ class MainActivity : Activity() {
             openSessionDetail(sessionId)
             return
         }
-        if (shouldRouteLauncherIntentToActiveSession(intent)) {
-            routeLauncherIntentToActiveSession()
-            return
-        }
         maybeHandleDebugIntent(intent)
-    }
-
-    private fun shouldRouteLauncherIntentToActiveSession(intent: Intent?): Boolean {
-        if (intent == null) {
-            return false
-        }
-        if (
-            intent.action == ACTION_DEBUG_CANCEL_ALL_AGENT_SESSIONS ||
-            intent.action == ACTION_DEBUG_START_AGENT_SESSION
-        ) {
-            return false
-        }
-        return intent.action == Intent.ACTION_MAIN &&
-            intent.hasCategory(Intent.CATEGORY_LAUNCHER) &&
-            intent.getStringExtra(AgentManager.EXTRA_SESSION_ID).isNullOrBlank()
-    }
-
-    private fun routeLauncherIntentToActiveSession() {
-        thread {
-            val snapshot = runCatching { agentSessionController.loadSnapshot(null) }.getOrNull() ?: return@thread
-            val activeTopLevelSessions = SessionUiFormatter.topLevelSessions(snapshot)
-                .filterNot { isTerminalState(it.state) }
-            if (activeTopLevelSessions.size != 1) {
-                return@thread
-            }
-            val activeSessionId = activeTopLevelSessions.single().sessionId
-            runOnUiThread {
-                openSessionDetail(activeSessionId)
-            }
-        }
     }
 
     private fun maybeHandleDebugIntent(intent: Intent?) {

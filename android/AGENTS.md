@@ -146,6 +146,15 @@ stub SDK docs and the local refactor doc:
   - Codex Agent is an AGENT-role app, not a HOME-role surface, so its
     user-driven cancellation flows should still call `cancelSession(sessionId)`;
     `cancelHomeSession(sessionId)` is for Launcher/HOME callers
+- Direct AGENT parent sessions may also surface on HOME:
+  - `Codex` should be a launcher entrypoint that opens only the planner-session
+    prompt flow
+  - `Codex Manager` should remain the explicit admin/session-list entrypoint
+  - parent HOME icon taps should route through `HANDLE_SESSION` to the
+    per-session popup/detail flow rather than the management list
+  - parent result `Done` should call
+    `consumeHomeSessionPresentation(parentSessionId)` and leave the session
+    inspectable in Manager
 
 ## External reference implementations
 

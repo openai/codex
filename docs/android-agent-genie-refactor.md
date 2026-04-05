@@ -110,6 +110,19 @@ The current repo now contains these implementation slices:
   - pressing Send on a HOME result starts a fresh app-scoped continuation session
     with previous-result context, then consumes the completed HOME presentation
   - pressing Send on an AGENT result continues the direct parent session in place
+- Direct `ANCHOR_AGENT` parent sessions can now surface on HOME through the
+  framework-derived parent-session icon surface:
+  - Codex exposes two launcher entrypoints: `Codex Manager` for the
+    administrative session list/debugging UI and `Codex` for the direct
+    planner-session prompt flow
+  - the `Codex` launcher entrypoint opens only the planner-session prompt UI;
+    it does not route through the management list
+  - parent HOME icon taps route through `HANDLE_SESSION` and then into the same
+    popup/detail flow, with question states preferring the waiting child
+    question when the parent is the requested session
+  - pressing `Done` on a direct-parent result consumes only the parent HOME icon
+    via `consumeHomeSessionPresentation(parentSessionId)` and leaves the parent
+    session inspectable in `Codex Manager`
 - Codex Agent still uses `cancelSession(sessionId)` for user-driven cancellation
   because it is the AGENT-role app, not a HOME-role surface. The
   HOME-only `cancelHomeSession(sessionId)` API is reserved for Launcher/HOME
