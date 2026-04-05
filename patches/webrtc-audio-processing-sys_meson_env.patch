@@ -327,29 +327,27 @@ index 8578e92..7837fbf 100644
 +        let Some(tool_path) = env::var_os(tool_env).map(PathBuf::from) else {
 +            continue;
 +        };
-+        let tool_path = if tool_path.is_absolute() {
-+            tool_path
-+        } else if let Ok(current_dir) = env::current_dir() {
-+            let candidate = current_dir.join(&tool_path);
-+            if candidate.exists() {
-+                candidate
-+            } else if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)
-+            {
-+                let mut resolved = None;
-+                for ancestor in manifest_dir.ancestors() {
-+                    let candidate = ancestor.join(&tool_path);
-+                    if candidate.exists() {
-+                        resolved = Some(candidate);
-+                        break;
++        let mut tool_path = tool_path;
++        if !tool_path.is_absolute() {
++            let mut resolved = env::current_dir()
++                .ok()
++                .map(|current_dir| current_dir.join(&tool_path))
++                .filter(|candidate| candidate.exists());
++            if resolved.is_none() {
++                if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from) {
++                    for ancestor in manifest_dir.ancestors() {
++                        let candidate = ancestor.join(&tool_path);
++                        if candidate.exists() {
++                            resolved = Some(candidate);
++                            break;
++                        }
 +                    }
 +                }
-+                resolved.unwrap_or(tool_path)
-+            } else {
-+                tool_path
 +            }
-+        } else {
-+            tool_path
-+        };
++            if let Some(resolved_path) = resolved {
++                tool_path = resolved_path;
++            }
++        }
 +        let Some(tool_dir) = tool_path.parent() else {
 +            continue;
 +        };
