@@ -21,10 +21,9 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use http::HeaderMap;
 use http::HeaderValue;
 use interceptor::registry::Registry;
-use opus::Application;
-use opus::Channels;
-use opus::Decoder as OpusDecoder;
-use opus::Encoder as OpusEncoder;
+use opus_rs::Application;
+use opus_rs::OpusDecoder;
+use opus_rs::OpusEncoder;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -607,10 +606,7 @@ async fn connect_webrtc_transport(
         "realtime WebRTC session connected"
     );
 
-    let opus_encoder =
-        OpusEncoder::new(24_000, Channels::Mono, Application::Voip).map_err(|err| {
-            ApiError::Stream(format!("failed to initialize realtime Opus encoder: {err}"))
-        })?;
+    let opus_encoder = new_realtime_opus_encoder(Application::Voip)?;
 
     Ok((
         RealtimeWebRtcTransport {
@@ -742,7 +738,7 @@ async fn pump_remote_audio_track(
     track: Arc<TrackRemote>,
     tx_message: mpsc::UnboundedSender<Result<RealtimeTransportEvent, ApiError>>,
 ) {
-    let mut decoder = match OpusDecoder::new(24_000, Channels::Mono) {
+    let mut decoder = match new_realtime_opus_decoder() {
         Ok(decoder) => decoder,
         Err(err) => {
             let _ = tx_message.send(Err(ApiError::Stream(format!(
@@ -751,7 +747,7 @@ async fn pump_remote_audio_track(
             return;
         }
     };
-    let mut decoded = vec![0i16; OPUS_MAX_DECODED_SAMPLES_PER_CHANNEL];
+    let mut decoded = vec![0.0f32; OPUS_MAX_DECODED_SAMPLES_PER_CHANNEL];
 
     loop {
         let packet = match track.read_rtp().await {
@@ -767,9 +763,18 @@ async fn pump_remote_audio_track(
             continue;
         }
 
-        let samples_per_channel = match decoder.decode(&packet.payload, &mut decoded, false) {
+        let samples_per_channel = match decoder.decode(
+            &packet.payload,
+            OPUS_MAX_DECODED_SAMPLES_PER_CHANNEL,
+            &mut decoded,
+        ) {
             Ok(samples_per_channel) => samples_per_channel,
             Err(err) => {
+                warn!(
+                    %err,
+                    payload_len = packet.payload.len(),
+                    "failed to decode realtime Opus packet"
+                );
                 let _ = tx_message.send(Err(ApiError::Stream(format!(
                     "failed to decode realtime Opus packet: {err}"
                 ))));
@@ -782,7 +787,7 @@ async fn pump_remote_audio_track(
 
         let mut pcm_bytes = Vec::with_capacity(samples_per_channel * 2);
         for sample in &decoded[..samples_per_channel] {
-            pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+            pcm_bytes.extend_from_slice(&f32_to_i16(*sample).to_le_bytes());
         }
         let _ = tx_message.send(Ok(RealtimeTransportEvent::AudioOut(RealtimeAudioFrame {
             data: BASE64_STANDARD.encode(pcm_bytes),
@@ -862,13 +867,24 @@ impl RealtimeInputAudioEncoder {
 
         let mut samples = Vec::new();
         while self.pending_samples.len() >= REALTIME_AUDIO_PACKET_SAMPLES {
+            let frame: Vec<f32> = self.pending_samples[..REALTIME_AUDIO_PACKET_SAMPLES]
+                .iter()
+                .copied()
+                .map(i16_to_f32)
+                .collect();
             let encoded_len = self
                 .opus_encoder
                 .encode(
-                    &self.pending_samples[..REALTIME_AUDIO_PACKET_SAMPLES],
+                    &frame,
+                    REALTIME_AUDIO_PACKET_SAMPLES,
                     &mut self.encoded_packet,
                 )
                 .map_err(|err| {
+                    warn!(
+                        %err,
+                        pending_samples = self.pending_samples.len(),
+                        "failed to encode realtime input Opus"
+                    );
                     ApiError::Stream(format!("failed to encode realtime input Opus: {err}"))
                 })?;
             self.pending_samples.drain(..REALTIME_AUDIO_PACKET_SAMPLES);
@@ -881,6 +897,52 @@ impl RealtimeInputAudioEncoder {
 
         Ok(samples)
     }
+}
+
+fn new_realtime_opus_encoder(application: Application) -> Result<OpusEncoder, ApiError> {
+    let encoder = OpusEncoder::new(24_000, usize::from(REALTIME_AUDIO_CHANNELS), application)
+        .map_err(|err| {
+            warn!(
+                %err,
+                sample_rate = 24_000,
+                channels = REALTIME_AUDIO_CHANNELS,
+                "failed to initialize realtime Opus encoder"
+            );
+            ApiError::Stream(format!("failed to initialize realtime Opus encoder: {err}"))
+        })?;
+    debug!(
+        sample_rate = 24_000,
+        channels = REALTIME_AUDIO_CHANNELS,
+        "initialized realtime Opus encoder"
+    );
+    Ok(encoder)
+}
+
+fn new_realtime_opus_decoder() -> Result<OpusDecoder, ApiError> {
+    let decoder =
+        OpusDecoder::new(24_000, usize::from(REALTIME_AUDIO_CHANNELS)).map_err(|err| {
+            warn!(
+                %err,
+                sample_rate = 24_000,
+                channels = REALTIME_AUDIO_CHANNELS,
+                "failed to initialize realtime Opus decoder"
+            );
+            ApiError::Stream(format!("failed to initialize realtime Opus decoder: {err}"))
+        })?;
+    debug!(
+        sample_rate = 24_000,
+        channels = REALTIME_AUDIO_CHANNELS,
+        "initialized realtime Opus decoder"
+    );
+    Ok(decoder)
+}
+
+fn i16_to_f32(sample: i16) -> f32 {
+    (sample as f32) / (i16::MAX as f32)
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }
 
 #[cfg(test)]
@@ -959,8 +1021,7 @@ mod tests {
     #[test]
     fn input_audio_encoder_rejects_non_mono_24khz_audio() {
         let mut encoder = RealtimeInputAudioEncoder {
-            opus_encoder: OpusEncoder::new(24_000, Channels::Mono, Application::Audio)
-                .expect("encoder"),
+            opus_encoder: new_realtime_opus_encoder(Application::Audio).expect("encoder"),
             pending_samples: Vec::new(),
             encoded_packet: vec![0u8; OPUS_MAX_PACKET_BYTES],
         };

@@ -38,18 +38,6 @@ runs:
       shell: pwsh
       run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
 
-    - name: Install CMake for Bazel Rust build scripts (Linux)
-      if: runner.os == 'Linux'
-      shell: bash
-      run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
-
-    - name: Install CMake for Bazel Rust build scripts (macOS)
-      if: runner.os == 'macOS'
-      shell: bash
-      run: brew install cmake
-
     - name: Set up Bazel
       uses: bazelbuild/setup-bazelisk@v3
 

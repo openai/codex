@@ -15,7 +15,7 @@ codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 interceptor = { workspace = true }
-opus = { workspace = true }
+opus-rs = { workspace = true }
 reqwest = { workspace = true, features = ["multipart"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

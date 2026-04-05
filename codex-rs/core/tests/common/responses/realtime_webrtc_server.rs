@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use opus::Channels;
-use opus::Decoder as OpusDecoder;
+use opus_rs::OpusDecoder;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -15,6 +14,8 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tracing::debug;
+use tracing::warn;
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
@@ -290,17 +291,34 @@ async fn pump_remote_audio_track(
     track: Arc<TrackRemote>,
     tx_request: mpsc::UnboundedSender<Value>,
 ) {
-    let Ok(mut decoder) = OpusDecoder::new(24_000, Channels::Mono) else {
-        return;
+    let mut decoder = match OpusDecoder::new(24_000, usize::from(REALTIME_AUDIO_CHANNELS)) {
+        Ok(decoder) => decoder,
+        Err(err) => {
+            warn!(%err, "failed to initialize realtime Opus decoder in test server");
+            return;
+        }
     };
-    let mut decoded = vec![0i16; REALTIME_MAX_DECODED_SAMPLES_PER_CHANNEL];
+    debug!("initialized realtime Opus decoder in test server");
+    let mut decoded = vec![0.0f32; REALTIME_MAX_DECODED_SAMPLES_PER_CHANNEL];
 
     while let Ok((packet, _)) = track.read_rtp().await {
         if packet.payload.is_empty() {
             continue;
         }
-        let Ok(samples_per_channel) = decoder.decode(&packet.payload, &mut decoded, false) else {
-            return;
+        let samples_per_channel = match decoder.decode(
+            &packet.payload,
+            REALTIME_MAX_DECODED_SAMPLES_PER_CHANNEL,
+            &mut decoded,
+        ) {
+            Ok(samples_per_channel) => samples_per_channel,
+            Err(err) => {
+                warn!(
+                    %err,
+                    payload_len = packet.payload.len(),
+                    "failed to decode realtime Opus packet in test server"
+                );
+                return;
+            }
         };
         if samples_per_channel == 0 {
             continue;
@@ -308,7 +326,7 @@ async fn pump_remote_audio_track(
 
         let mut pcm_bytes = Vec::with_capacity(samples_per_channel * 2);
         for sample in &decoded[..samples_per_channel] {
-            pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+            pcm_bytes.extend_from_slice(&f32_to_i16(*sample).to_le_bytes());
         }
         let _ = tx_request.send(serde_json::json!({
             "type": "input_audio_buffer.append",
@@ -318,6 +336,10 @@ async fn pump_remote_audio_track(
             "samples_per_channel": samples_per_channel,
         }));
     }
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }
 
 async fn serve_scripted_requests(

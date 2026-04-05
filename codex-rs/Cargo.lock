@@ -785,17 +785,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "audiopus_sys"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62314a1546a2064e033665d658e88c620a62904be945f8147e6b16c3db9f8651"
-dependencies = [
- "cmake",
- "log",
- "pkg-config",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1472,7 +1461,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "interceptor",
- "opus",
+ "opus-rs",
  "pretty_assertions",
  "regex-lite",
  "reqwest",
@@ -3407,7 +3396,7 @@ dependencies = [
  "notify",
  "opentelemetry",
  "opentelemetry_sdk",
- "opus",
+ "opus-rs",
  "pretty_assertions",
  "regex-lite",
  "reqwest",
@@ -7329,12 +7318,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "opus"
-version = "0.3.1"
+name = "opus-rs"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d3809943dff6fbad5f0484449ea26bdb9cb7d8efdf26ed50d3c7f227f69eb5c"
+checksum = "f857fcc607bea70f9b073ad267e829080646b14c260ea5e43c48ba9fca8e7dd4"
 dependencies = [
- "audiopus_sys",
+ "num-complex",
+ "once_cell",
 ]
 
 [[package]]
