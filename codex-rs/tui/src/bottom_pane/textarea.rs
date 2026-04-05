@@ -1255,9 +1255,9 @@ impl TextArea {
         };
         let mut start = run_start + piece_start;
 
-        if piece.chars().all(|ch| is_word_separator(ch)) {
+        if piece.chars().all(is_word_separator) {
             while let Some((idx, piece)) = pieces.peek() {
-                if !piece.chars().all(|ch| is_word_separator(ch)) {
+                if !piece.chars().all(is_word_separator) {
                     break;
                 }
                 start = run_start + *idx;
@@ -1281,9 +1281,9 @@ impl TextArea {
         };
         let word_start = self.cursor_pos + first_non_ws + start;
         let mut end = word_start + piece.len();
-        if piece.chars().all(|ch| is_word_separator(ch)) {
+        if piece.chars().all(is_word_separator) {
             while let Some((idx, piece)) = pieces.peek() {
-                if !piece.chars().all(|ch| is_word_separator(ch)) {
+                if !piece.chars().all(is_word_separator) {
                     break;
                 }
                 end = self.cursor_pos + first_non_ws + *idx + piece.len();
