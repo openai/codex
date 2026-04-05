@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -151,6 +153,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
+use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -297,6 +300,83 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
+
+const ROOT_AGENT_PROMPT_FALLBACK: &str = include_str!("../root_agent_prompt.md");
+const ROOT_AGENT_WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../root_agent_watchdog_prompt.md");
+const SUBAGENT_PROMPT_FALLBACK: &str = include_str!("../subagent_prompt.md");
+const SUBAGENT_WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../subagent_watchdog_prompt.md");
+const WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../watchdog_agent_prompt.md");
+
+async fn load_agent_prompt_fallback(
+    codex_home: &Path,
+    fallback: &str,
+    override_filename: &str,
+) -> String {
+    let override_path = codex_home.join(override_filename);
+    if let Ok(contents) = fs::read_to_string(&override_path).await
+        && !contents.trim().is_empty()
+    {
+        return contents;
+    }
+
+    fallback.to_string()
+}
+
+async fn maybe_load_agent_prompt_fragment(
+    codex_home: &Path,
+    fallback: &str,
+    override_filename: &str,
+    enabled: bool,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    let fragment = load_agent_prompt_fallback(codex_home, fallback, override_filename).await;
+    if fragment.trim().is_empty() {
+        None
+    } else {
+        Some(fragment)
+    }
+}
+
+async fn load_root_agent_prompt(codex_home: &Path, include_watchdog: bool) -> String {
+    let mut prompt =
+        load_agent_prompt_fallback(codex_home, ROOT_AGENT_PROMPT_FALLBACK, "AGENTS.root.md").await;
+    if let Some(fragment) = maybe_load_agent_prompt_fragment(
+        codex_home,
+        ROOT_AGENT_WATCHDOG_PROMPT_FALLBACK,
+        "AGENTS.root.watchdog.md",
+        include_watchdog,
+    )
+    .await
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(fragment.trim());
+    }
+    prompt
+}
+
+pub(crate) async fn load_subagent_prompt(codex_home: &Path, include_watchdog: bool) -> String {
+    let mut prompt =
+        load_agent_prompt_fallback(codex_home, SUBAGENT_PROMPT_FALLBACK, "AGENTS.subagent.md")
+            .await;
+    if let Some(fragment) = maybe_load_agent_prompt_fragment(
+        codex_home,
+        SUBAGENT_WATCHDOG_PROMPT_FALLBACK,
+        "AGENTS.subagent.watchdog.md",
+        include_watchdog,
+    )
+    .await
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(fragment.trim());
+    }
+    prompt
+}
+
+pub(crate) async fn load_watchdog_prompt(codex_home: &Path) -> String {
+    load_agent_prompt_fallback(codex_home, WATCHDOG_PROMPT_FALLBACK, "AGENTS.watchdog.md").await
+}
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::tasks::GhostSnapshotTask;
@@ -562,6 +642,33 @@ impl Codex {
         let model = models_manager
             .get_default_model(&config.model, refresh_strategy)
             .await;
+        let role_prompt = if config.features.enabled(Feature::Collab)
+            && config.features.enabled(Feature::AgentPromptInjection)
+        {
+            match session_source {
+                SessionSource::SubAgent(_) => Some(
+                    load_subagent_prompt(
+                        &config.codex_home,
+                        config.features.enabled(Feature::AgentWatchdog),
+                    )
+                    .await,
+                ),
+                _ => Some(
+                    load_root_agent_prompt(
+                        &config.codex_home,
+                        config.features.enabled(Feature::AgentWatchdog),
+                    )
+                    .await,
+                ),
+            }
+        } else {
+            None
+        };
+        let developer_instructions = match (role_prompt, config.developer_instructions.clone()) {
+            (Some(prompt), Some(existing)) => Some(format!("{prompt}\n\n{existing}")),
+            (Some(prompt), None) => Some(prompt),
+            (None, existing) => existing,
+        };
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
@@ -618,7 +725,7 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
-            developer_instructions: config.developer_instructions.clone(),
+            developer_instructions,
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -824,6 +931,8 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    turn_used_agent_send_input: AtomicBool,
+    last_completed_turn_used_agent_send_input: AtomicBool,
 }
 
 #[derive(Clone, Debug)]
@@ -1982,6 +2091,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            turn_used_agent_send_input: AtomicBool::new(false),
+            last_completed_turn_used_agent_send_input: AtomicBool::new(false),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -2127,7 +2238,44 @@ impl Session {
         self.services.state_db.clone()
     }
 
-    /// Ensure rollout file writes are durably flushed.
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
+    }
+
+    pub(crate) async fn parent_thread_id(&self) -> Option<ThreadId> {
+        let state = self.state.lock().await;
+        match &state.session_configuration.session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) => Some(*parent_thread_id),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn mark_turn_used_agent_send_input(&self) {
+        self.turn_used_agent_send_input
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn reset_turn_agent_send_input_flag(&self) {
+        self.turn_used_agent_send_input
+            .store(false, Ordering::Release);
+    }
+
+    pub(crate) fn snapshot_agent_send_input_on_turn_complete(&self) {
+        let used_agent_send_input = self
+            .turn_used_agent_send_input
+            .swap(false, Ordering::AcqRel);
+        self.last_completed_turn_used_agent_send_input
+            .store(used_agent_send_input, Ordering::Release);
+    }
+
+    pub(crate) fn last_completed_turn_used_agent_send_input(&self) -> bool {
+        self.last_completed_turn_used_agent_send_input
+            .load(Ordering::Acquire)
+    }
+
+    /// Ensure all rollout writes are durably flushed.
     pub(crate) async fn flush_rollout(&self) {
         let recorder = {
             let guard = self.services.rollout.lock().await;

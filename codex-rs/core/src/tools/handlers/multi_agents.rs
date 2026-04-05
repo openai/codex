@@ -58,12 +58,16 @@ pub(crate) fn parse_agent_id_targets(
 }
 
 pub(crate) use close_agent::Handler as CloseAgentHandler;
+pub(crate) use compact_parent_context::Handler as CompactParentContextHandler;
+pub(crate) use list_agents::Handler as ListAgentsHandler;
 pub(crate) use resume_agent::Handler as ResumeAgentHandler;
 pub(crate) use send_input::Handler as SendInputHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
 
 pub mod close_agent;
+mod compact_parent_context;
+mod list_agents;
 mod resume_agent;
 mod send_input;
 mod spawn;
