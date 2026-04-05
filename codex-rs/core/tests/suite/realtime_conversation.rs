@@ -44,8 +44,14 @@ const MEMORY_PROMPT_PHRASE: &str =
 const REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR: &str =
     "CODEX_REALTIME_CONVERSATION_TEST_SUBPROCESS";
 
-fn realtime_pcm_silence_20ms_base64() -> String {
-    BASE64_STANDARD.encode([0u8; 960])
+fn realtime_pcm_test_tone_20ms_base64() -> String {
+    let pcm_bytes: Vec<u8> = (0..480)
+        .flat_map(|index| {
+            let sample = if index % 2 == 0 { 1024_i16 } else { -1024_i16 };
+            sample.to_le_bytes()
+        })
+        .collect();
+    BASE64_STANDARD.encode(pcm_bytes)
 }
 
 fn websocket_request_text(
@@ -214,7 +220,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: realtime_pcm_silence_20ms_base64(),
+                data: realtime_pcm_test_tone_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -433,7 +439,7 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: realtime_pcm_silence_20ms_base64(),
+                data: realtime_pcm_test_tone_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -632,7 +638,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: realtime_pcm_silence_20ms_base64(),
+                data: realtime_pcm_test_tone_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -1592,7 +1598,7 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: realtime_pcm_silence_20ms_base64(),
+                data: realtime_pcm_test_tone_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -2080,7 +2086,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: realtime_pcm_silence_20ms_base64(),
+                data: realtime_pcm_test_tone_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),

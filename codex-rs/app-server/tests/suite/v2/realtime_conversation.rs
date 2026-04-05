@@ -42,8 +42,14 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 
-fn realtime_pcm_silence_20ms_base64() -> String {
-    BASE64_STANDARD.encode([0u8; 960])
+fn realtime_pcm_test_tone_20ms_base64() -> String {
+    let pcm_bytes: Vec<u8> = (0..480)
+        .flat_map(|index| {
+            let sample = if index % 2 == 0 { 1024_i16 } else { -1024_i16 };
+            sample.to_le_bytes()
+        })
+        .collect();
+    BASE64_STANDARD.encode(pcm_bytes)
 }
 
 #[tokio::test]
@@ -161,7 +167,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         .send_thread_realtime_append_audio_request(ThreadRealtimeAppendAudioParams {
             thread_id: started.thread_id.clone(),
             audio: ThreadRealtimeAudioChunk {
-                data: realtime_pcm_silence_20ms_base64(),
+                data: realtime_pcm_test_tone_20ms_base64(),
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
