@@ -329,10 +329,13 @@ index 8578e92..7837fbf 100644
 +        };
 +        let mut tool_path = tool_path;
 +        if !tool_path.is_absolute() {
-+            let mut resolved = env::current_dir()
-+                .ok()
-+                .map(|current_dir| current_dir.join(&tool_path))
-+                .filter(|candidate| candidate.exists());
++            let mut resolved = None;
++            if let Ok(current_dir) = env::current_dir() {
++                let candidate = current_dir.join(&tool_path);
++                if candidate.exists() {
++                    resolved = Some(candidate);
++                }
++            }
 +            if resolved.is_none() {
 +                if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from) {
 +                    for ancestor in manifest_dir.ancestors() {
