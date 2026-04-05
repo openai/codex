@@ -29,10 +29,21 @@ use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordSegmentKind {
+    Whitespace,
+    Word,
+    Separator,
+}
 
-fn is_word_separator(ch: char) -> bool {
-    WORD_SEPARATORS.contains(ch)
+fn word_segment_kind(segment: &str) -> WordSegmentKind {
+    if segment.chars().all(char::is_whitespace) {
+        WordSegmentKind::Whitespace
+    } else if segment.chars().any(char::is_alphanumeric) {
+        WordSegmentKind::Word
+    } else {
+        WordSegmentKind::Separator
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1216,36 +1227,57 @@ impl TextArea {
         else {
             return 0;
         };
-        let is_separator = is_word_separator(ch);
-        let mut start = first_non_ws_idx;
-        for (idx, ch) in prefix[..first_non_ws_idx].char_indices().rev() {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
-                start = idx + ch.len_utf8();
-                break;
+        let run_start = prefix[..first_non_ws_idx]
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| ch.is_whitespace())
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+        let run_end = first_non_ws_idx + ch.len_utf8();
+        let mut segments = prefix[run_start..run_end]
+            .split_word_bound_indices()
+            .rev()
+            .peekable();
+        let Some((segment_start, segment)) = segments.next() else {
+            return run_start;
+        };
+        let mut start = run_start + segment_start;
+
+        if word_segment_kind(segment) == WordSegmentKind::Separator {
+            while let Some(&(idx, segment)) = segments.peek() {
+                if word_segment_kind(segment) != WordSegmentKind::Separator {
+                    break;
+                }
+                start = run_start + idx;
+                segments.next();
             }
-            start = idx;
         }
+
         self.adjust_pos_out_of_elements(start, /*prefer_start*/ true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
+        let suffix = &self.text[self.cursor_pos..];
+        let Some(first_non_ws) = suffix.find(|ch: char| !ch.is_whitespace()) else {
             return self.text.len();
         };
-        let word_start = self.cursor_pos + first_non_ws;
-        let mut iter = self.text[word_start..].char_indices();
-        let Some((_, first_ch)) = iter.next() else {
-            return word_start;
+        let run = &suffix[first_non_ws..];
+        let run = &run[..run.find(char::is_whitespace).unwrap_or(run.len())];
+        let mut segments = run.split_word_bound_indices().peekable();
+        let Some((start, segment)) = segments.next() else {
+            return self.cursor_pos + first_non_ws;
         };
-        let is_separator = is_word_separator(first_ch);
-        let mut end = self.text.len();
-        for (idx, ch) in iter {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
-                end = word_start + idx;
-                break;
+        let word_start = self.cursor_pos + first_non_ws + start;
+        let mut end = word_start + segment.len();
+        if word_segment_kind(segment) == WordSegmentKind::Separator {
+            while let Some(&(idx, segment)) = segments.peek() {
+                if word_segment_kind(segment) != WordSegmentKind::Separator {
+                    break;
+                }
+                end = self.cursor_pos + first_non_ws + idx + segment.len();
+                segments.next();
             }
         }
+
         self.adjust_pos_out_of_elements(end, /*prefer_start*/ false)
     }
 
@@ -2038,6 +2070,63 @@ mod tests {
         // If at end, end_of_next_word returns len
         t.set_cursor(t.text().len());
         assert_eq!(t.end_of_next_word(), t.text().len());
+    }
+
+    #[test]
+    fn word_navigation_cjk_each_char_is_boundary() {
+        let text = "你好世界";
+        let mut t = ta_with(text);
+
+        t.set_cursor(text.len());
+        assert_eq!(t.beginning_of_previous_word(), 9);
+
+        t.set_cursor(9);
+        assert_eq!(t.beginning_of_previous_word(), 6);
+
+        t.set_cursor(6);
+        assert_eq!(t.beginning_of_previous_word(), 3);
+
+        t.set_cursor(3);
+        assert_eq!(t.beginning_of_previous_word(), 0);
+    }
+
+    #[test]
+    fn word_navigation_cjk_forward() {
+        let text = "你好世界";
+        let mut t = ta_with(text);
+
+        t.set_cursor(0);
+        assert_eq!(t.end_of_next_word(), 3);
+
+        t.set_cursor(3);
+        assert_eq!(t.end_of_next_word(), 6);
+
+        t.set_cursor(6);
+        assert_eq!(t.end_of_next_word(), 9);
+
+        t.set_cursor(9);
+        assert_eq!(t.end_of_next_word(), 12);
+    }
+
+    #[test]
+    fn word_navigation_mixed_ascii_cjk() {
+        let text = "hello你好";
+        let mut t = ta_with(text);
+
+        t.set_cursor(0);
+        assert_eq!(t.end_of_next_word(), 5);
+
+        t.set_cursor(5);
+        assert_eq!(t.end_of_next_word(), 8);
+
+        t.set_cursor(text.len());
+        assert_eq!(t.beginning_of_previous_word(), 8);
+
+        t.set_cursor(8);
+        assert_eq!(t.beginning_of_previous_word(), 5);
+
+        t.set_cursor(5);
+        assert_eq!(t.beginning_of_previous_word(), 0);
     }
 
     #[test]
