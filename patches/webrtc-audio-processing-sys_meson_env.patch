@@ -1,5 +1,5 @@
 diff --git a/build.rs b/build.rs
-index 8578e9220a..320639f441 100644
+index 8578e9220a..98c59a0d7f 100644
 --- a/build.rs
 +++ b/build.rs
 @@ -1,10 +1,14 @@
@@ -174,19 +174,32 @@ index 8578e9220a..320639f441 100644
          let status = install
              .current_dir(&webrtc_build_dir)
              .arg("install")
-@@ -267,15 +399,16 @@ mod webrtc {
+@@ -267,15 +399,29 @@ mod webrtc {
  
      /// Extract defined (non-external) symbols from a static library using nm.
      fn get_defined_symbols(archive_path: &std::path::Path) -> Result<Vec<String>> {
 -        let output = Command::new("nm")
 +        let nm = determine_nm_path();
-+        let output = Command::new(&nm)
++        let output = match Command::new(&nm)
              .arg("--defined-only")
              .arg("--format=posix")
              .arg(archive_path)
              .output()
 -            .context("Failed to execute nm")?;
-+            .context(format!("Failed to execute {:?}", nm))?;
++        {
++            Ok(output) => output,
++            Err(error)
++                if cfg!(target_os = "macos")
++                    && error.kind() == std::io::ErrorKind::NotFound =>
++            {
++                println!(
++                    "cargo:warning=Skipping symbol prefixing because {:?} is unavailable",
++                    nm
++                );
++                return Ok(Vec::new());
++            }
++            Err(error) => return Err(error).context(format!("Failed to execute {:?}", nm)),
++        };
  
          if !output.status.success() {
 -            anyhow::bail!("nm failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -194,7 +207,7 @@ index 8578e9220a..320639f441 100644
          }
  
          let stdout = String::from_utf8_lossy(&output.stdout);
-@@ -461,3 +594,95 @@ fn determine_objcopy_path() -> Result<PathBuf> {
+@@ -461,3 +607,95 @@ fn determine_objcopy_path() -> Result<PathBuf> {
  
      Ok(objcopy)
  }
