@@ -23,6 +23,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use rmcp::model::ReadResourceRequestParams;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -122,6 +123,14 @@ impl CodexThread {
 
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
+    }
+
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        self.codex.session.dependency_env().await
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        self.codex.session.set_dependency_env(values).await;
     }
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {

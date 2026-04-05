@@ -259,6 +259,14 @@ client_request_definitions! {
         params: v2::ThreadUnsubscribeParams,
         response: v2::ThreadUnsubscribeResponse,
     },
+    ThreadCreateApiKeyStart => "thread/createApiKey/start" {
+        params: v2::ThreadCreateApiKeyStartParams,
+        response: v2::ThreadCreateApiKeyStartResponse,
+    },
+    ThreadCreateApiKeyFinish => "thread/createApiKey/finish" {
+        params: v2::ThreadCreateApiKeyFinishParams,
+        response: v2::ThreadCreateApiKeyFinishResponse,
+    },
     #[experimental("thread/increment_elicitation")]
     /// Increment the thread-local out-of-band elicitation counter.
     ///

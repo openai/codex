@@ -12,6 +12,7 @@ use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
+use crate::exec_env::apply_dependency_env;
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
 use crate::state::TaskKind;
@@ -124,16 +125,19 @@ pub(crate) async fn execute_user_shell_command(
     let use_login_shell = true;
     let session_shell = session.user_shell();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
-    let exec_env_map = create_env(
+    let mut explicit_env_overrides = turn_context.shell_environment_policy.r#set.clone();
+    let dependency_env = session.dependency_env().await;
+    let mut env = create_env(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
+    apply_dependency_env(&mut env, &mut explicit_env_overrides, &dependency_env);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
         turn_context.cwd.as_path(),
-        &turn_context.shell_environment_policy.r#set,
-        &exec_env_map,
+        &explicit_env_overrides,
+        &env,
     );
 
     let call_id = Uuid::new_v4().to_string();
@@ -161,7 +165,7 @@ pub(crate) async fn execute_user_shell_command(
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.to_path_buf(),
-        env: exec_env_map,
+        env,
         network: turn_context.network.clone(),
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
