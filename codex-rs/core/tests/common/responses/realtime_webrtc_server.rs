@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use opus_rs::OpusDecoder;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
@@ -285,6 +286,8 @@ async fn start_session(
 }
 
 async fn create_peer_connection() -> Option<Arc<RTCPeerConnection>> {
+    ensure_rustls_crypto_provider();
+
     let mut media_engine = MediaEngine::default();
     media_engine.register_default_codecs().ok()?;
     let registry = register_default_interceptors(Registry::new(), &mut media_engine).ok()?;

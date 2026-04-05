@@ -267,10 +267,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         server.handshakes()[1].header("authorization").as_deref(),
         Some("Bearer dummy")
     );
-    assert_eq!(
-        server.handshakes()[1].uri(),
-        "/v1/realtime/calls?intent=quicksilver&model=realtime-test-model"
-    );
+    assert_eq!(server.handshakes()[1].uri(), "/v1/realtime/calls");
     let mut request_types = [
         connection[1].body_json()["type"]
             .as_str()
