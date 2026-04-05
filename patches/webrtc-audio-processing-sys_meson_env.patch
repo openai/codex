@@ -1,5 +1,5 @@
 diff --git a/build.rs b/build.rs
-index 8578e92..bebd18e 100644
+index 8578e92..7837fbf 100644
 --- a/build.rs
 +++ b/build.rs
 @@ -1,10 +1,14 @@
@@ -210,7 +210,15 @@ index 8578e92..bebd18e 100644
          }
  
          let stdout = String::from_utf8_lossy(&output.stdout);
-@@ -461,3 +610,98 @@ fn determine_objcopy_path() -> Result<PathBuf> {
+@@ -400,6 +549,7 @@ fn main() -> Result<()> {
+     }
+ 
+     let binding_file = out_dir().join("bindings.rs");
++    maybe_set_libclang_path();
+     let mut builder = bindgen::Builder::default()
+         .header("src/wrapper.hpp")
+         .clang_args(&["-x", "c++", "-std=c++17", "-fparse-all-comments"])
+@@ -461,3 +611,123 @@ fn determine_objcopy_path() -> Result<PathBuf> {
  
      Ok(objcopy)
  }
@@ -308,4 +316,29 @@ index 8578e92..bebd18e 100644
 +    }
 +
 +    PathBuf::from("nm")
++}
++
++fn maybe_set_libclang_path() {
++    if env::var_os("LIBCLANG_PATH").is_some() {
++        return;
++    }
++
++    for tool_env in ["CC", "CXX"] {
++        let Some(tool_path) = env::var_os(tool_env).map(PathBuf::from) else {
++            continue;
++        };
++        let Some(tool_dir) = tool_path.parent() else {
++            continue;
++        };
++        let Some(tool_root) = tool_dir.parent() else {
++            continue;
++        };
++
++        for candidate in [tool_root.join("lib"), tool_root.join("lib64")] {
++            if candidate.exists() {
++                env::set_var("LIBCLANG_PATH", &candidate);
++                return;
++            }
++        }
++    }
 +}
