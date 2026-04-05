@@ -118,13 +118,6 @@ pub(crate) struct ContinueInBrowserState {
     auth_url: String,
 }
 
-impl ContinueInBrowserState {
-    #[cfg(test)]
-    pub(crate) fn new(login_id: String, auth_url: String) -> Self {
-        Self { login_id, auth_url }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct ContinueWithDeviceCodeState {
     request_id: String,

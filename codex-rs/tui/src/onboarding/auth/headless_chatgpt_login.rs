@@ -190,72 +190,14 @@ fn set_device_code_error_for_active_attempt(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use codex_app_server_client::AppServerRequestHandle;
-    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
-    use codex_app_server_client::InProcessAppServerClient;
-    use codex_app_server_client::InProcessClientStartArgs;
-    use codex_arg0::Arg0DispatchPaths;
-    use codex_cloud_requirements::cloud_requirements_loader_for_storage;
-    use codex_core::config::ConfigBuilder;
-    use codex_login::AuthCredentialsStoreMode;
-    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use std::sync::RwLock;
-    use tempfile::TempDir;
 
     fn pending_device_code_state(request_id: &str) -> Arc<RwLock<SignInState>> {
         Arc::new(RwLock::new(SignInState::ChatGptDeviceCode(
             ContinueWithDeviceCodeState::pending(request_id.to_string()),
         )))
-    }
-
-    async fn auth_widget_for_render() -> (AuthModeWidget, TempDir) {
-        let codex_home = TempDir::new().unwrap();
-        let codex_home_path = codex_home.path().to_path_buf();
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home_path.clone())
-            .build()
-            .await
-            .unwrap();
-        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
-            arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(config),
-            cli_overrides: Vec::new(),
-            loader_overrides: Default::default(),
-            cloud_requirements: cloud_requirements_loader_for_storage(
-                codex_home_path,
-                /*enable_codex_api_key_env*/ false,
-                AuthCredentialsStoreMode::File,
-                "https://chatgpt.com/backend-api/".to_string(),
-            ),
-            feedback: codex_feedback::CodexFeedback::new(),
-            config_warnings: Vec::new(),
-            session_source: SessionSource::Cli,
-            enable_codex_api_key_env: false,
-            client_name: "test".to_string(),
-            client_version: "test".to_string(),
-            experimental_api: true,
-            opt_out_notification_methods: Vec::new(),
-            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-        })
-        .await
-        .unwrap();
-
-        let widget = AuthModeWidget {
-            request_frame: crate::tui::FrameRequester::test_dummy(),
-            highlighted_mode: super::super::SignInOption::ChatGpt,
-            error: Arc::new(RwLock::new(None)),
-            sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-            login_status: crate::LoginStatus::NotAuthenticated,
-            app_server_request_handle: AppServerRequestHandle::InProcess(client.request_handle()),
-            forced_login_method: None,
-            animations_enabled: true,
-            animations_suppressed: std::cell::Cell::new(true),
-        };
-
-        (widget, codex_home)
     }
 
     #[test]
