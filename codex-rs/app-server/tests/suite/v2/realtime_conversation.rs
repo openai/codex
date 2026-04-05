@@ -3,6 +3,8 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -39,6 +41,10 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
+
+fn realtime_pcm_silence_20ms_base64() -> String {
+    BASE64_STANDARD.encode([0u8; 960])
+}
 
 #[tokio::test]
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
@@ -155,7 +161,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         .send_thread_realtime_append_audio_request(ThreadRealtimeAppendAudioParams {
             thread_id: started.thread_id.clone(),
             audio: ThreadRealtimeAudioChunk {
-                data: "BQYH".to_string(),
+                data: realtime_pcm_silence_20ms_base64(),
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),

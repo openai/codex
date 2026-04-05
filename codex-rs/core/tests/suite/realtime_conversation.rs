@@ -1,5 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
@@ -41,6 +43,11 @@ const MEMORY_PROMPT_PHRASE: &str =
     "You have access to a memory folder with guidance from prior runs.";
 const REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR: &str =
     "CODEX_REALTIME_CONVERSATION_TEST_SUBPROCESS";
+
+fn realtime_pcm_silence_20ms_base64() -> String {
+    BASE64_STANDARD.encode([0u8; 960])
+}
+
 fn websocket_request_text(
     request: &core_test_support::responses::WebSocketRequest,
 ) -> Option<String> {
@@ -207,7 +214,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: "AQID".to_string(),
+                data: realtime_pcm_silence_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -426,7 +433,7 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: "AQID".to_string(),
+                data: realtime_pcm_silence_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -625,7 +632,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: "AQID".to_string(),
+                data: realtime_pcm_silence_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -1585,7 +1592,7 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: "AQID".to_string(),
+                data: realtime_pcm_silence_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
@@ -2073,7 +2080,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
-                data: "AQID".to_string(),
+                data: realtime_pcm_silence_20ms_base64(),
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
