@@ -631,7 +631,7 @@ mod tests {
 
         let prompt = watchdog_helper_prompt(&config, ThreadId::default(), "ping").await;
         assert!(prompt.contains("# You are a Subagent"));
-        assert!(prompt.contains("Important: send watchdog check-in output with `send_input`"));
+        assert!(prompt.contains("Call `send_input`"));
         assert!(prompt.contains("Target agent id:"));
         assert!(prompt.ends_with("\n\nping"));
     }
