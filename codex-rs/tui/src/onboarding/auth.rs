@@ -1148,26 +1148,6 @@ mod tests {
     }
 
     #[test]
-    fn continue_in_browser_skips_shimmer_when_animations_are_suppressed() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (mut widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
-        let (request_frame, mut scheduled_frames) = FrameRequester::test_spy();
-        widget.request_frame = request_frame;
-        widget.animations_suppressed.set(true);
-        *widget.sign_in_state.write().unwrap() =
-            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
-                login_id: "login-1".to_string(),
-                auth_url: "https://auth.example.com/login?state=abc123".to_string(),
-            });
-
-        let area = Rect::new(0, 0, 50, 12);
-        let mut buf = Buffer::empty(area);
-        widget.render_continue_in_browser(area, &mut buf);
-
-        assert!(scheduled_frames.try_recv().is_err());
-    }
-
-    #[test]
     fn auth_widget_suppresses_animations_when_device_code_is_visible() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());

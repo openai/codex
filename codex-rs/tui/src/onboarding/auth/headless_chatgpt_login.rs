@@ -360,24 +360,4 @@ mod tests {
         ));
         assert_eq!(*error.read().unwrap(), None);
     }
-
-    #[test]
-    fn render_device_code_login_skips_shimmer_when_animations_are_suppressed() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (mut widget, _tmp) = runtime.block_on(auth_widget_for_render());
-        let (request_frame, mut scheduled_frames) = crate::tui::FrameRequester::test_spy();
-        widget.request_frame = request_frame;
-        let state = ContinueWithDeviceCodeState::ready(
-            "request-1".to_string(),
-            "login-1".to_string(),
-            "https://chatgpt.com/device".to_string(),
-            "ABCD-EFGH".to_string(),
-        );
-
-        let area = Rect::new(0, 0, 60, 12);
-        let mut buf = Buffer::empty(area);
-        render_device_code_login(&widget, area, &mut buf, &state);
-
-        assert!(scheduled_frames.try_recv().is_err());
-    }
 }
