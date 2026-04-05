@@ -1,7 +1,14 @@
+diff --git a/build.rs b/build.rs
+index 8578e92..e51138c 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -2,9 +2,9 @@
+@@ -1,10 +1,14 @@
+ use anyhow::{bail, Context, Result};
  use bindgen::callbacks::{AttributeInfo, DeriveInfo, ParseCallbacks};
++#[cfg(not(windows))]
++use std::os::unix::fs::symlink;
++#[cfg(windows)]
++use std::os::windows::fs::symlink_dir as symlink;
  use std::{
      env,
 -    fs::File,
@@ -12,25 +19,23 @@
      process::Command,
  };
  
-@@ -203,8 +203,97 @@
+@@ -203,8 +207,136 @@ mod webrtc {
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
 -        let mut meson = Command::new("meson");
 +        let meson_launcher = env::var_os("MESON").expect("MESON is set by Bazel");
-+        let cargo_manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
-+            .expect("CARGO_MANIFEST_DIR is set by Bazel");
++        let cargo_manifest_dir =
++            env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Bazel");
 +        let runfiles_dir = Path::new(&cargo_manifest_dir)
 +            .parent()
 +            .expect("CARGO_MANIFEST_DIR points inside a Bazel runfiles tree");
 +        let staged_meson = build_dir.join("meson");
-+        fs::copy(&meson_launcher, &staged_meson)
-+            .context("Failed to stage Meson launcher")?;
++        fs::copy(&meson_launcher, &staged_meson).context("Failed to stage Meson launcher")?;
 +        let mut meson_runfiles = staged_meson.as_os_str().to_owned();
 +        meson_runfiles.push(".runfiles");
 +        let _ = fs::remove_file(&meson_runfiles);
-+        std::os::unix::fs::symlink(runfiles_dir, &meson_runfiles)
-+            .context("Failed to link Meson runfiles")?;
++        symlink(runfiles_dir, &meson_runfiles).context("Failed to link Meson runfiles")?;
 +
 +        let mut meson = Command::new(staged_meson);
 +        let mut meson_cross_file = None;
@@ -45,9 +50,7 @@
 +                    .expect("TARGET triple has an operating system");
 +                let endian = match cpu_family {
 +                    "aarch64" | "x86_64" => "little",
-+                    _ => bail!(
-+                        "Unsupported TARGET architecture for Meson cross file: {cpu_family}"
-+                    ),
++                    _ => bail!("Unsupported TARGET architecture for Meson cross file: {cpu_family}"),
 +                };
 +                let cross_file = build_dir.join("meson-cross-file.ini");
 +                fs::write(
@@ -73,30 +76,72 @@
 +            }
 +        }
 +
-+        if let Ok(ldflags) = env::var("LDFLAGS") {
-+            let mut execroot = build_dir.clone();
-+            while execroot.file_name().map_or(true, |name| name != "bazel-out") {
-+                let had_parent = execroot.pop();
-+                assert!(had_parent, "OUT_DIR points inside bazel-out");
++        let mut ninja_launcher = env::var_os("NINJA");
++        if ninja_launcher.is_none() {
++            for candidate in ["ninja", "ninja-build"] {
++                let can_execute = Command::new(candidate)
++                    .arg("--version")
++                    .status()
++                    .map(|status| status.success())
++                    .unwrap_or(false);
++                if can_execute {
++                    ninja_launcher = Some(candidate.into());
++                    break;
++                }
 +            }
-+            let had_parent = execroot.pop();
-+            assert!(had_parent, "bazel-out has an execroot parent");
++        }
++        if let Some(ninja_real) = env::var_os("NINJA_REAL") {
++            let mut temp_dirs = Vec::new();
++            if let Some(dir) = env::var_os("CODEX_NINJA_TMPDIR") {
++                temp_dirs.push(PathBuf::from(dir));
++            }
++            temp_dirs.extend([
++                PathBuf::from("/private/var/tmp"),
++                PathBuf::from("/var/tmp"),
++                env::temp_dir(),
++                PathBuf::from("/tmp"),
++            ]);
++            if let Some(home) = env::var_os("HOME") {
++                temp_dirs.push(PathBuf::from(home));
++            }
++
++            let mut staged_ninja = None;
++            for (attempt, temp_dir) in temp_dirs.into_iter().enumerate() {
++                if !temp_dir.is_dir() {
++                    continue;
++                }
++
++                let stage_dir =
++                    temp_dir.join(format!("codex-ninja-{}-{attempt}", std::process::id()));
++                let _ = fs::remove_dir_all(&stage_dir);
++                if fs::create_dir_all(&stage_dir).is_err() {
++                    continue;
++                }
++
++                let candidate_ninja = stage_dir.join("ninja");
++                let stage_result =
++                    fs::copy(&ninja_real, &candidate_ninja).and_then(|_| ensure_executable(&candidate_ninja));
++                if stage_result.is_ok() {
++                    staged_ninja = Some(candidate_ninja.into_os_string());
++                    break;
++                }
++            }
++            ninja_launcher = staged_ninja.or_else(|| Some(ninja_real));
++        }
++        let ninja_launcher =
++            ninja_launcher.ok_or_else(|| anyhow::anyhow!("Failed to locate ninja launcher"))?;
++
++        if let Some(ldflags) = env::var("LDFLAGS").ok() {
++            let execroot = determine_execroot(runfiles_dir)?;
 +            let ldflags = ldflags
 +                .split_whitespace()
-+                .map(|arg| {
-+                    if let Some(path) = arg.strip_prefix("-L") {
-+                        if path.starts_with("bazel-out/")
-+                            || path.starts_with("external/")
-+                        {
-+                            return format!("-L{}/{}", execroot.display(), path);
-+                        }
-+                    }
-+                    if arg.starts_with("bazel-out/")
-+                        || arg.starts_with("external/")
-+                    {
-+                        format!("{}/{}", execroot.display(), arg)
++                .map(|token| {
++                    if let Some(path) = token.strip_prefix("-Lbazel-out") {
++                        format!("-L{}", execroot.join(format!("bazel-out{path}")).display())
++                    } else if token.starts_with("bazel-out") {
++                        execroot.join(token).display().to_string()
 +                    } else {
-+                        arg.to_string()
++                        token.to_owned()
 +                    }
 +                })
 +                .collect::<Vec<_>>()
@@ -104,6 +149,7 @@
 +            meson.env("LDFLAGS", ldflags);
 +        }
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
++        meson.env("NINJA", &ninja_launcher);
 +        if let Some(cross_file) = meson_cross_file {
 +            meson.arg("--cross-file");
 +            meson.arg(cross_file);
@@ -111,12 +157,11 @@
          meson.arg("--reconfigure");
  
          if cfg!(target_os = "macos") {
-@@ -221,14 +310,15 @@
+@@ -221,14 +353,14 @@ mod webrtc {
              .context("Failed to execute meson. Do you have it installed?")?;
          assert!(status.success(), "Command failed: {:?}", &meson);
  
 -        let mut ninja = Command::new("ninja");
-+        let ninja_launcher = env::var_os("NINJA").expect("NINJA is set by Bazel");
 +        let mut ninja = Command::new(ninja_launcher.clone());
          let status = ninja
              .current_dir(&webrtc_build_dir)
@@ -129,3 +174,88 @@
          let status = install
              .current_dir(&webrtc_build_dir)
              .arg("install")
+@@ -267,15 +399,16 @@ mod webrtc {
+ 
+     /// Extract defined (non-external) symbols from a static library using nm.
+     fn get_defined_symbols(archive_path: &std::path::Path) -> Result<Vec<String>> {
+-        let output = Command::new("nm")
++        let nm = determine_nm_path();
++        let output = Command::new(&nm)
+             .arg("--defined-only")
+             .arg("--format=posix")
+             .arg(archive_path)
+             .output()
+-            .context("Failed to execute nm")?;
++            .context(format!("Failed to execute {:?}", nm))?;
+ 
+         if !output.status.success() {
+-            anyhow::bail!("nm failed: {}", String::from_utf8_lossy(&output.stderr));
++            anyhow::bail!("{:?} failed: {}", nm, String::from_utf8_lossy(&output.stderr));
+         }
+ 
+         let stdout = String::from_utf8_lossy(&output.stdout);
+@@ -461,3 +594,64 @@ fn determine_objcopy_path() -> Result<PathBuf> {
+ 
+     Ok(objcopy)
+ }
++
++fn determine_execroot(path: &Path) -> Result<PathBuf> {
++    for ancestor in path.ancestors() {
++        if ancestor.file_name().and_then(|name| name.to_str()) == Some("bazel-out") {
++            return ancestor
++                .parent()
++                .map(Path::to_path_buf)
++                .context("bazel-out directory is missing its execroot parent");
++        }
++    }
++
++    env::current_dir().context("Failed to determine execroot")
++}
++
++#[cfg(not(windows))]
++fn ensure_executable(path: &Path) -> std::io::Result<()> {
++    use std::os::unix::fs::PermissionsExt;
++
++    let mut permissions = fs::metadata(path)?.permissions();
++    permissions.set_mode(0o755);
++    fs::set_permissions(path, permissions)
++}
++
++#[cfg(windows)]
++fn ensure_executable(_path: &Path) -> std::io::Result<()> {
++    Ok(())
++}
++
++fn determine_nm_path() -> PathBuf {
++    if let Some(nm) = env::var_os("NM") {
++        return nm.into();
++    }
++
++    for tool_env in ["AR", "CC", "CXX"] {
++        if let Some(tool_path) = env::var_os(tool_env) {
++            let tool_path = PathBuf::from(tool_path);
++            if let Some(file_name) = tool_path.file_name().and_then(|name| name.to_str()) {
++                let candidate_name = file_name.replace("llvm-ar", "llvm-nm");
++                if candidate_name != file_name {
++                    let candidate = tool_path.with_file_name(candidate_name);
++                    if candidate.exists() {
++                        return candidate;
++                    }
++                }
++            }
++        }
++    }
++
++    for candidate in ["llvm-nm", "nm"] {
++        if Command::new(candidate)
++            .arg("--version")
++            .status()
++            .map(|status| status.success())
++            .unwrap_or(false)
++        {
++            return PathBuf::from(candidate);
++        }
++    }
++
++    PathBuf::from("nm")
++}
