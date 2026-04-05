@@ -70,6 +70,32 @@ fn prompt_options(
     }
 }
 
+/// Builds an `McpInvocation` for a non-Codex-Apps server with no annotations,
+/// representing the scenario that triggered the regression in #15824.
+fn custom_mcp_invocation_without_annotations() -> McpInvocation {
+    McpInvocation {
+        server: "docs".to_string(),
+        tool: "search".to_string(),
+        arguments: Some(serde_json::json!({ "query": "approval regression" })),
+    }
+}
+
+/// Builds metadata whose `annotations` field is `Some(...)` but every hint inside
+/// is `None` — the "empty annotations" variant that stdio MCP servers commonly emit.
+fn custom_mcp_metadata_with_empty_annotations() -> McpToolApprovalMetadata {
+    McpToolApprovalMetadata {
+        annotations: Some(annotations(
+            /*read_only*/ None, /*destructive*/ None, /*open_world*/ None,
+        )),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        tool_title: Some("Search".to_string()),
+        tool_description: Some("Search docs".to_string()),
+        codex_apps_meta: None,
+    }
+}
+
 #[test]
 fn approval_required_when_read_only_false_and_destructive() {
     let annotations = annotations(Some(false), Some(true), /*open_world*/ None);
@@ -1482,6 +1508,163 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         "call-2-custom",
         &invocation,
         Some(&metadata),
+        AppToolApproval::Approve,
+    )
+    .await;
+
+    assert_eq!(
+        decision,
+        Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
+            "Tool call was cancelled because of safety risks: high-risk action".to_string(),
+        ))
+    );
+}
+
+#[tokio::test]
+async fn custom_auto_mode_skips_approval_when_annotations_are_missing_in_never_mode() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("test setup should allow updating approval policy");
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = custom_mcp_invocation_without_annotations();
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-custom-auto",
+        &invocation,
+        /*metadata*/ None,
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(decision, None);
+}
+
+#[tokio::test]
+async fn custom_auto_mode_skips_approval_when_annotations_are_missing_in_on_request_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_rx().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = custom_mcp_invocation_without_annotations();
+
+    let mut approval_task = {
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        tokio::spawn(async move {
+            maybe_request_mcp_tool_approval(
+                &session,
+                &turn_context,
+                "call-custom-auto-on-request",
+                &invocation,
+                /*metadata*/ None,
+                AppToolApproval::Auto,
+            )
+            .await
+        })
+    };
+
+    let decision = tokio::time::timeout(std::time::Duration::from_millis(200), &mut approval_task)
+        .await
+        .expect("custom MCP tools should not wait for approval when annotations are missing")
+        .expect("approval task should complete successfully");
+
+    assert_eq!(decision, None);
+}
+
+#[tokio::test]
+async fn custom_auto_mode_skips_approval_when_annotations_have_no_hints_in_on_request_mode() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_rx().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = custom_mcp_invocation_without_annotations();
+    let metadata = custom_mcp_metadata_with_empty_annotations();
+
+    let mut approval_task = {
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        tokio::spawn(async move {
+            maybe_request_mcp_tool_approval(
+                &session,
+                &turn_context,
+                "call-custom-auto-empty-annotations-on-request",
+                &invocation,
+                Some(&metadata),
+                AppToolApproval::Auto,
+            )
+            .await
+        })
+    };
+
+    let decision = tokio::time::timeout(std::time::Duration::from_millis(200), &mut approval_task)
+        .await
+        .expect("custom MCP tools with empty annotations should not wait for approval")
+        .expect("approval task should complete successfully");
+
+    assert_eq!(decision, None);
+}
+
+#[tokio::test]
+async fn custom_approve_mode_without_metadata_still_uses_arc_monitor() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/safety/arc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "outcome": "steer-model",
+            "short_reason": "needs approval",
+            "rationale": "high-risk action",
+            "risk_score": 96,
+            "risk_level": "critical",
+            "evidence": [{
+                "message": "search",
+                "why": "high-risk action",
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = server.uri();
+    turn_context.config = Arc::new(config);
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "docs".to_string(),
+        tool: "search".to_string(),
+        arguments: Some(serde_json::json!({ "query": "approval regression" })),
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-custom-approve-no-metadata",
+        &invocation,
+        /*metadata*/ None,
         AppToolApproval::Approve,
     )
     .await;
