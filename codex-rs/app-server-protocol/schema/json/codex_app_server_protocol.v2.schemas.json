@@ -5427,6 +5427,17 @@
             "null"
           ]
         },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerStatusDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Controls how much MCP inventory data to fetch for each server."
+        },
         "limit": {
           "description": "Optional page size; defaults to a server-defined value.",
           "format": "uint32",
@@ -5866,6 +5877,13 @@
         "tools"
       ],
       "type": "object"
+    },
+    "McpServerStatusDetail": {
+      "enum": [
+        "full",
+        "toolsAndAuthOnly"
+      ],
+      "type": "string"
     },
     "McpServerStatusUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
