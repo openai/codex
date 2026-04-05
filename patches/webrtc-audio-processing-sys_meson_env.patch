@@ -1,5 +1,5 @@
 diff --git a/build.rs b/build.rs
-index 8578e92..e51138c 100644
+index 8578e9220a..320639f441 100644
 --- a/build.rs
 +++ b/build.rs
 @@ -1,10 +1,14 @@
@@ -194,7 +194,7 @@ index 8578e92..e51138c 100644
          }
  
          let stdout = String::from_utf8_lossy(&output.stdout);
-@@ -461,3 +594,64 @@ fn determine_objcopy_path() -> Result<PathBuf> {
+@@ -461,3 +594,95 @@ fn determine_objcopy_path() -> Result<PathBuf> {
  
      Ok(objcopy)
  }
@@ -231,13 +231,44 @@ index 8578e92..e51138c 100644
 +        return nm.into();
 +    }
 +
++    #[cfg(target_os = "macos")]
++    {
++        let xcrun_output = Command::new("/usr/bin/xcrun")
++            .args(["--find", "llvm-nm"])
++            .output();
++        if let Ok(output) = xcrun_output {
++            if output.status.success() {
++                let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
++                if !path.is_empty() {
++                    return PathBuf::from(path);
++                }
++            }
++        }
++    }
++
 +    for tool_env in ["AR", "CC", "CXX"] {
 +        if let Some(tool_path) = env::var_os(tool_env) {
 +            let tool_path = PathBuf::from(tool_path);
++            if let Some(parent) = tool_path.parent() {
++                for candidate_name in ["llvm-nm", "nm"] {
++                    let candidate = parent.join(candidate_name);
++                    if candidate.exists() {
++                        return candidate;
++                    }
++                }
++            }
++
 +            if let Some(file_name) = tool_path.file_name().and_then(|name| name.to_str()) {
 +                let candidate_name = file_name.replace("llvm-ar", "llvm-nm");
 +                if candidate_name != file_name {
 +                    let candidate = tool_path.with_file_name(candidate_name);
++                    if candidate.exists() {
++                        return candidate;
++                    }
++                }
++
++                if file_name != "llvm-nm" {
++                    let candidate = tool_path.with_file_name("llvm-nm");
 +                    if candidate.exists() {
 +                        return candidate;
 +                    }
