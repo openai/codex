@@ -189,7 +189,7 @@ index 8578e9220a..98c59a0d7f 100644
 +        {
 +            Ok(output) => output,
 +            Err(error)
-+                if cfg!(target_os = "macos")
++                if target_is_macos()
 +                    && error.kind() == std::io::ErrorKind::NotFound =>
 +            {
 +                println!(
@@ -244,8 +244,7 @@ index 8578e9220a..98c59a0d7f 100644
 +        return nm.into();
 +    }
 +
-+    #[cfg(target_os = "macos")]
-+    {
++    if target_is_macos() {
 +        let xcrun_output = Command::new("/usr/bin/xcrun")
 +            .args(["--find", "llvm-nm"])
 +            .output();
@@ -302,4 +301,11 @@ index 8578e9220a..98c59a0d7f 100644
 +    }
 +
 +    PathBuf::from("nm")
++}
++
++fn target_is_macos() -> bool {
++    env::var("CARGO_CFG_TARGET_OS")
++        .map(|target_os| target_os == "macos")
++        .or_else(|_| env::var("TARGET").map(|target| target.contains("apple-darwin")))
++        .unwrap_or(false)
 +}
