@@ -46,6 +46,7 @@ impl SessionTask for RegularTask {
         // not wait on startup prewarm resolution.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: ctx.sub_id.clone(),
+            created_at: ctx.turn_timing_state.started_at_unix_secs().await,
             model_context_window: ctx.model_context_window(),
             collaboration_mode_kind: ctx.collaboration_mode.mode,
         });

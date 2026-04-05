@@ -101,6 +101,13 @@ pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionType {
+    Prompt,
+    PromptQueued,
+}
+
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Submission {
@@ -244,6 +251,19 @@ pub enum Op {
         final_output_json_schema: Option<Value>,
     },
 
+    /// Same transport shape as [`Op::UserInput`], but preserves submission
+    /// metadata for analytics.
+    UserInputWithMetadata {
+        /// User input items, see `InputItem`
+        items: Vec<UserInput>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
+        /// Metadata describing how the prompt was submitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission_type: Option<SubmissionType>,
+    },
+
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_thread::CodexThread`].
     UserTurn {
@@ -299,6 +319,10 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Metadata describing how the prompt was submitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission_type: Option<SubmissionType>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
@@ -579,6 +603,7 @@ impl Op {
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::UserInput { .. } => "user_input",
+            Self::UserInputWithMetadata { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
@@ -1864,11 +1889,23 @@ pub struct ContextCompactedEvent;
 pub struct TurnCompleteEvent {
     pub turn_id: String,
     pub last_agent_message: Option<String>,
+    /// Unix timestamp (in seconds) when the turn completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and completion in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
     pub turn_id: String,
+    /// Unix timestamp (in seconds) when the turn started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub created_at: Option<i64>,
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
     #[serde(default)]
@@ -2263,6 +2300,14 @@ pub enum InitialHistory {
 }
 
 impl InitialHistory {
+    pub fn scan_rollout_items(&self, mut predicate: impl FnMut(&RolloutItem) -> bool) -> bool {
+        match self {
+            InitialHistory::New => false,
+            InitialHistory::Resumed(resumed) => resumed.history.iter().any(&mut predicate),
+            InitialHistory::Forked(items) => items.iter().any(predicate),
+        }
+    }
+
     pub fn forked_from_id(&self) -> Option<ThreadId> {
         match self {
             InitialHistory::New => None,
@@ -3375,6 +3420,14 @@ pub struct Chunk {
 pub struct TurnAbortedEvent {
     pub turn_id: Option<String>,
     pub reason: TurnAbortReason,
+    /// Unix timestamp (in seconds) when the turn was aborted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and abort in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4543,7 +4596,9 @@ mod tests {
         }))?;
 
         match event {
-            EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) => {
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id, reason, ..
+            }) => {
                 assert_eq!(turn_id, None);
                 assert_eq!(reason, TurnAbortReason::Interrupted);
             }

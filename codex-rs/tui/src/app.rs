@@ -2231,6 +2231,7 @@ impl App {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                submission_type,
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
@@ -2313,6 +2314,7 @@ impl App {
                             *service_tier,
                             collaboration_mode.clone(),
                             *personality,
+                            *submission_type,
                             final_output_json_schema.clone(),
                         )
                         .await?;
@@ -9186,13 +9188,19 @@ guardian_approval = true
             items,
             status,
             error: None,
+            created_at: None,
+            completed_at: None,
+            duration_ms: None,
         }
     }
 
     fn turn_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
         ServerNotification::TurnStarted(TurnStartedNotification {
             thread_id: thread_id.to_string(),
-            turn: test_turn(turn_id, TurnStatus::InProgress, Vec::new()),
+            turn: Turn {
+                created_at: Some(0),
+                ..test_turn(turn_id, TurnStatus::InProgress, Vec::new())
+            },
         })
     }
 
@@ -9203,7 +9211,10 @@ guardian_approval = true
     ) -> ServerNotification {
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: thread_id.to_string(),
-            turn: test_turn(turn_id, status, Vec::new()),
+            turn: Turn {
+                completed_at: Some(0),
+                ..test_turn(turn_id, status, Vec::new())
+            },
         })
     }
 
@@ -10424,6 +10435,9 @@ guardian_approval = true
                         }],
                         status: TurnStatus::Completed,
                         error: None,
+                        created_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                     Turn {
                         id: "turn-2".to_string(),
@@ -10444,6 +10458,9 @@ guardian_approval = true
                         ],
                         status: TurnStatus::Completed,
                         error: None,
+                        created_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                 ],
                 events: Vec::new(),

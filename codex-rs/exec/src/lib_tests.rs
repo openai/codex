@@ -268,6 +268,9 @@ fn turn_items_for_thread_returns_matching_turn_items() {
                 }],
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
+                created_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
             codex_app_server_protocol::Turn {
                 id: "turn-2".to_string(),
@@ -277,6 +280,9 @@ fn turn_items_for_thread_returns_matching_turn_items() {
                 }],
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
+                created_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         ],
     };
