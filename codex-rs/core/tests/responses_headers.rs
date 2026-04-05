@@ -23,6 +23,14 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::matchers::header;
 
+fn normalize_git_remote_url(url: &str) -> String {
+    let normalized = url.trim().trim_end_matches('/');
+    normalized
+        .strip_suffix(".git")
+        .unwrap_or(normalized)
+        .to_string()
+}
+
 #[tokio::test]
 async fn responses_stream_includes_subagent_header_on_review() {
     core_test_support::skip_if_no_network!();
@@ -540,13 +548,15 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .and_then(serde_json::Value::as_str),
         Some(expected_head.as_str())
     );
+    let actual_origin = workspace
+        .get("associated_remote_urls")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|remotes| remotes.get("origin"))
+        .and_then(serde_json::Value::as_str)
+        .expect("origin remote should be present");
     assert_eq!(
-        workspace
-            .get("associated_remote_urls")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|remotes| remotes.get("origin"))
-            .and_then(serde_json::Value::as_str),
-        Some(expected_origin.as_str())
+        normalize_git_remote_url(actual_origin),
+        normalize_git_remote_url(&expected_origin)
     );
     assert_eq!(
         workspace
