@@ -676,6 +676,9 @@ mod tests {
                 items: Vec::new(),
                 status: TurnStatus::Completed,
                 error: None,
+                created_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         })
     }
