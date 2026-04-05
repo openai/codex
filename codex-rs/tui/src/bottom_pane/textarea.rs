@@ -29,21 +29,36 @@ use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WordSegmentKind {
-    Whitespace,
-    Word,
-    Separator,
+const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
+
+fn is_word_separator(ch: char) -> bool {
+    WORD_SEPARATORS.contains(ch)
 }
 
-fn word_segment_kind(segment: &str) -> WordSegmentKind {
-    if segment.chars().all(char::is_whitespace) {
-        WordSegmentKind::Whitespace
-    } else if segment.chars().any(char::is_alphanumeric) {
-        WordSegmentKind::Word
-    } else {
-        WordSegmentKind::Separator
+fn split_word_pieces(run: &str) -> Vec<(usize, &str)> {
+    let mut pieces = Vec::new();
+    for (segment_start, segment) in run.split_word_bound_indices() {
+        let mut piece_start = 0;
+        let mut chars = segment.char_indices();
+        let Some((_, first_char)) = chars.next() else {
+            continue;
+        };
+        let mut in_separator = is_word_separator(first_char);
+
+        for (idx, ch) in chars {
+            let is_separator = is_word_separator(ch);
+            if is_separator == in_separator {
+                continue;
+            }
+            pieces.push((segment_start + piece_start, &segment[piece_start..idx]));
+            piece_start = idx;
+            in_separator = is_separator;
+        }
+
+        pieces.push((segment_start + piece_start, &segment[piece_start..]));
     }
+
+    pieces
 }
 
 #[derive(Debug, Clone)]
@@ -1233,22 +1248,20 @@ impl TextArea {
             .find(|&(_, ch)| ch.is_whitespace())
             .map_or(0, |(idx, ch)| idx + ch.len_utf8());
         let run_end = first_non_ws_idx + ch.len_utf8();
-        let mut segments = prefix[run_start..run_end]
-            .split_word_bound_indices()
-            .rev()
-            .peekable();
-        let Some((segment_start, segment)) = segments.next() else {
+        let pieces = split_word_pieces(&prefix[run_start..run_end]);
+        let mut pieces = pieces.into_iter().rev().peekable();
+        let Some((piece_start, piece)) = pieces.next() else {
             return run_start;
         };
-        let mut start = run_start + segment_start;
+        let mut start = run_start + piece_start;
 
-        if word_segment_kind(segment) == WordSegmentKind::Separator {
-            while let Some(&(idx, segment)) = segments.peek() {
-                if word_segment_kind(segment) != WordSegmentKind::Separator {
+        if piece.chars().all(|ch| is_word_separator(ch)) {
+            while let Some((idx, piece)) = pieces.peek() {
+                if !piece.chars().all(|ch| is_word_separator(ch)) {
                     break;
                 }
-                start = run_start + idx;
-                segments.next();
+                start = run_start + *idx;
+                pieces.next();
             }
         }
 
@@ -1262,19 +1275,19 @@ impl TextArea {
         };
         let run = &suffix[first_non_ws..];
         let run = &run[..run.find(char::is_whitespace).unwrap_or(run.len())];
-        let mut segments = run.split_word_bound_indices().peekable();
-        let Some((start, segment)) = segments.next() else {
+        let mut pieces = split_word_pieces(run).into_iter().peekable();
+        let Some((start, piece)) = pieces.next() else {
             return self.cursor_pos + first_non_ws;
         };
         let word_start = self.cursor_pos + first_non_ws + start;
-        let mut end = word_start + segment.len();
-        if word_segment_kind(segment) == WordSegmentKind::Separator {
-            while let Some(&(idx, segment)) = segments.peek() {
-                if word_segment_kind(segment) != WordSegmentKind::Separator {
+        let mut end = word_start + piece.len();
+        if piece.chars().all(|ch| is_word_separator(ch)) {
+            while let Some((idx, piece)) = pieces.peek() {
+                if !piece.chars().all(|ch| is_word_separator(ch)) {
                     break;
                 }
-                end = self.cursor_pos + first_non_ws + idx + segment.len();
-                segments.next();
+                end = self.cursor_pos + first_non_ws + *idx + piece.len();
+                pieces.next();
             }
         }
 
@@ -2127,6 +2140,23 @@ mod tests {
 
         t.set_cursor(/*pos*/ 5);
         assert_eq!(t.beginning_of_previous_word(), 0);
+    }
+
+    #[test]
+    fn word_navigation_preserves_separator_breaks_within_unicode_segments() {
+        let mut t = ta_with("can't 32.3 foo.bar");
+
+        t.set_cursor(/*pos*/ 5);
+        assert_eq!(t.beginning_of_previous_word(), 4);
+
+        t.set_cursor(/*pos*/ 4);
+        assert_eq!(t.beginning_of_previous_word(), 3);
+
+        t.set_cursor(/*pos*/ 10);
+        assert_eq!(t.beginning_of_previous_word(), 9);
+
+        t.set_cursor(/*pos*/ 18);
+        assert_eq!(t.beginning_of_previous_word(), 15);
     }
 
     #[test]
