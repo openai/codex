@@ -1,4 +1,10 @@
 use crate::app_event_sender::AppEventSender;
+use crate::realtime_audio_processing::AUDIO_PROCESSING_CHANNELS;
+use crate::realtime_audio_processing::AUDIO_PROCESSING_SAMPLE_RATE;
+use crate::realtime_audio_processing::RealtimeAudioProcessor;
+use crate::realtime_audio_processing::RealtimeCaptureAudioProcessor;
+use crate::realtime_audio_processing::RealtimeRenderAudioProcessor;
+use crate::realtime_audio_processing::convert_pcm16;
 use base64::Engine;
 use codex_core::config::Config;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -23,7 +29,11 @@ pub struct VoiceCapture {
 }
 
 impl VoiceCapture {
-    pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
+    pub fn start_realtime(
+        config: &Config,
+        tx: AppEventSender,
+        audio_processor: RealtimeAudioProcessor,
+    ) -> Result<Self, String> {
         let (device, config) = select_realtime_input_device_and_config(config)?;
 
         let sample_rate = config.sample_rate().0;
@@ -34,9 +44,8 @@ impl VoiceCapture {
         let stream = build_realtime_input_stream(
             &device,
             &config,
-            sample_rate,
-            channels,
             tx,
+            audio_processor.capture_stage(sample_rate, channels),
             last_peak.clone(),
         )?;
         stream
@@ -138,50 +147,76 @@ fn select_realtime_input_device_and_config(
 fn build_realtime_input_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
-    sample_rate: u32,
-    channels: u16,
     tx: AppEventSender,
+    capture_processor: RealtimeCaptureAudioProcessor,
     last_peak: Arc<AtomicU16>,
 ) -> Result<cpal::Stream, String> {
     match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[f32], _| {
-                    let peak = peak_f32(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    let samples = input.iter().copied().map(f32_to_i16).collect::<Vec<_>>();
-                    send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        cpal::SampleFormat::I16 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[i16], _| {
-                    let peak = peak_i16(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    send_realtime_audio_chunk(&tx, input.to_vec(), sample_rate, channels);
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        cpal::SampleFormat::U16 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[u16], _| {
-                    let mut samples = Vec::with_capacity(input.len());
-                    let peak = convert_u16_to_i16_and_peak(input, &mut samples);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
+        cpal::SampleFormat::F32 => {
+            let mut capture_processor = capture_processor;
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[f32], _| {
+                        let peak = peak_f32(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        let samples = input.iter().copied().map(f32_to_i16).collect::<Vec<_>>();
+                        let samples = capture_processor.process_samples(&samples);
+                        send_realtime_audio_chunk(
+                            &tx,
+                            samples,
+                            AUDIO_PROCESSING_SAMPLE_RATE,
+                            AUDIO_PROCESSING_CHANNELS,
+                        );
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::I16 => {
+            let mut capture_processor = capture_processor;
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[i16], _| {
+                        let peak = peak_i16(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        let samples = capture_processor.process_samples(input);
+                        send_realtime_audio_chunk(
+                            &tx,
+                            samples,
+                            AUDIO_PROCESSING_SAMPLE_RATE,
+                            AUDIO_PROCESSING_CHANNELS,
+                        );
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::U16 => {
+            let mut capture_processor = capture_processor;
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[u16], _| {
+                        let mut samples = Vec::with_capacity(input.len());
+                        let peak = convert_u16_to_i16_and_peak(input, &mut samples);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        let samples = capture_processor.process_samples(&samples);
+                        send_realtime_audio_chunk(
+                            &tx,
+                            samples,
+                            AUDIO_PROCESSING_SAMPLE_RATE,
+                            AUDIO_PROCESSING_CHANNELS,
+                        );
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
         _ => Err("unsupported input sample format".to_string()),
     }
 }
@@ -283,24 +318,34 @@ fn convert_u16_to_i16_and_peak(input: &[u16], out: &mut Vec<i16>) -> u16 {
 pub(crate) struct RealtimeAudioPlayer {
     _stream: cpal::Stream,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    audio_processor: RealtimeAudioProcessor,
     output_sample_rate: u32,
     output_channels: u16,
 }
 
 impl RealtimeAudioPlayer {
-    pub(crate) fn start(config: &Config) -> Result<Self, String> {
+    pub(crate) fn start(
+        config: &Config,
+        audio_processor: RealtimeAudioProcessor,
+    ) -> Result<Self, String> {
         let (device, config) =
             crate::audio_device::select_configured_output_device_and_config(config)?;
         let output_sample_rate = config.sample_rate().0;
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));
-        let stream = build_output_stream(&device, &config, Arc::clone(&queue))?;
+        let stream = build_output_stream(
+            &device,
+            &config,
+            Arc::clone(&queue),
+            audio_processor.render_stage(output_sample_rate, output_channels),
+        )?;
         stream
             .play()
             .map_err(|e| format!("failed to start output stream: {e}"))?;
         Ok(Self {
             _stream: stream,
             queue,
+            audio_processor,
             output_sample_rate,
             output_channels,
         })
@@ -336,6 +381,8 @@ impl RealtimeAudioPlayer {
             .map_err(|_| "failed to lock output audio queue".to_string())?;
         // TODO(aibrahim): Cap or trim this queue if we observe producer bursts outrunning playback.
         guard.extend(converted);
+        drop(guard);
+        self.audio_processor.set_output_will_be_muted(false);
         Ok(())
     }
 
@@ -343,6 +390,7 @@ impl RealtimeAudioPlayer {
         if let Ok(mut guard) = self.queue.lock() {
             guard.clear();
         }
+        self.audio_processor.set_output_will_be_muted(true);
     }
 }
 
@@ -350,140 +398,94 @@ fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    render_processor: RealtimeRenderAudioProcessor,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [f32], _| fill_output_f32(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build f32 output stream: {e}")),
-        cpal::SampleFormat::I16 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [i16], _| fill_output_i16(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build i16 output stream: {e}")),
-        cpal::SampleFormat::U16 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [u16], _| fill_output_u16(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build u16 output stream: {e}")),
+        cpal::SampleFormat::F32 => {
+            let mut render_processor = render_processor;
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [f32], _| {
+                        fill_output_f32(output, &queue, &mut render_processor)
+                    },
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build f32 output stream: {e}"))
+        }
+        cpal::SampleFormat::I16 => {
+            let mut render_processor = render_processor;
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [i16], _| {
+                        fill_output_i16(output, &queue, &mut render_processor)
+                    },
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build i16 output stream: {e}"))
+        }
+        cpal::SampleFormat::U16 => {
+            let mut render_processor = render_processor;
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [u16], _| {
+                        fill_output_u16(output, &queue, &mut render_processor)
+                    },
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build u16 output stream: {e}"))
+        }
         other => Err(format!("unsupported output sample format: {other:?}")),
     }
 }
 
-fn fill_output_i16(output: &mut [i16], queue: &Arc<Mutex<VecDeque<i16>>>) {
-    if let Ok(mut guard) = queue.lock() {
-        for sample in output {
-            *sample = guard.pop_front().unwrap_or(0);
-        }
-        return;
-    }
-    output.fill(0);
+fn fill_output_i16(
+    output: &mut [i16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    render_processor: &mut RealtimeRenderAudioProcessor,
+) {
+    let samples = drain_output_samples(output.len(), queue);
+    output.copy_from_slice(&samples);
+    render_processor.process_samples(output);
 }
 
-fn fill_output_f32(output: &mut [f32], queue: &Arc<Mutex<VecDeque<i16>>>) {
-    if let Ok(mut guard) = queue.lock() {
-        for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
-            *sample = (v as f32) / (i16::MAX as f32);
-        }
-        return;
+fn fill_output_f32(
+    output: &mut [f32],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    render_processor: &mut RealtimeRenderAudioProcessor,
+) {
+    let samples = drain_output_samples(output.len(), queue);
+    for (output_sample, sample) in output.iter_mut().zip(samples.iter()) {
+        *output_sample = (*sample as f32) / (i16::MAX as f32);
     }
-    output.fill(0.0);
+    render_processor.process_samples(&samples);
 }
 
-fn fill_output_u16(output: &mut [u16], queue: &Arc<Mutex<VecDeque<i16>>>) {
-    if let Ok(mut guard) = queue.lock() {
-        for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
-            *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
-        }
-        return;
+fn fill_output_u16(
+    output: &mut [u16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    render_processor: &mut RealtimeRenderAudioProcessor,
+) {
+    let samples = drain_output_samples(output.len(), queue);
+    for (output_sample, sample) in output.iter_mut().zip(samples.iter()) {
+        *output_sample = (*sample as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
     }
-    output.fill(32768);
+    render_processor.process_samples(&samples);
 }
 
-fn convert_pcm16(
-    input: &[i16],
-    input_sample_rate: u32,
-    input_channels: u16,
-    output_sample_rate: u32,
-    output_channels: u16,
-) -> Vec<i16> {
-    if input.is_empty() || input_channels == 0 || output_channels == 0 {
-        return Vec::new();
-    }
-
-    let in_channels = input_channels as usize;
-    let out_channels = output_channels as usize;
-    let in_frames = input.len() / in_channels;
-    if in_frames == 0 {
-        return Vec::new();
-    }
-
-    let out_frames = if input_sample_rate == output_sample_rate {
-        in_frames
-    } else {
-        (((in_frames as u64) * (output_sample_rate as u64)) / (input_sample_rate as u64)).max(1)
-            as usize
+fn drain_output_samples(output_len: usize, queue: &Arc<Mutex<VecDeque<i16>>>) -> Vec<i16> {
+    let mut samples = vec![0; output_len];
+    let Ok(mut guard) = queue.lock() else {
+        return samples;
     };
-
-    let mut out = Vec::with_capacity(out_frames.saturating_mul(out_channels));
-    for out_frame_idx in 0..out_frames {
-        let src_frame_idx = if out_frames <= 1 || in_frames <= 1 {
-            0
-        } else {
-            ((out_frame_idx as u64) * ((in_frames - 1) as u64) / ((out_frames - 1) as u64)) as usize
-        };
-        let src_start = src_frame_idx.saturating_mul(in_channels);
-        let src = &input[src_start..src_start + in_channels];
-        match (in_channels, out_channels) {
-            (1, 1) => out.push(src[0]),
-            (1, n) => {
-                for _ in 0..n {
-                    out.push(src[0]);
-                }
-            }
-            (n, 1) if n >= 2 => {
-                let sum: i32 = src.iter().map(|s| *s as i32).sum();
-                out.push((sum / (n as i32)) as i16);
-            }
-            (n, m) if n == m => out.extend_from_slice(src),
-            (n, m) if n > m => out.extend_from_slice(&src[..m]),
-            (n, m) => {
-                out.extend_from_slice(src);
-                let last = *src.last().unwrap_or(&0);
-                for _ in n..m {
-                    out.push(last);
-                }
-            }
-        }
+    for sample in &mut samples {
+        *sample = guard.pop_front().unwrap_or(0);
     }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::convert_pcm16;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn convert_pcm16_downmixes_and_resamples_for_model_input() {
-        let input = vec![100, 300, 200, 400, 500, 700, 600, 800];
-        let converted = convert_pcm16(
-            &input, /*input_sample_rate*/ 48_000, /*input_channels*/ 2,
-            /*output_sample_rate*/ 24_000, /*output_channels*/ 1,
-        );
-        assert_eq!(converted, vec![200, 700]);
-    }
+    samples
 }

@@ -113,6 +113,7 @@ tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 cpal = "0.15"
+webrtc-audio-processing = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

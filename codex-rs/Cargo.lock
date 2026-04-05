@@ -791,6 +791,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "autotools"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef941527c41b0fc0dd48511a8154cd5fc7e29200a0ff8b7203c5d777dbc795cf"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "aws-lc-rs"
 version = "1.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2943,6 +2952,7 @@ dependencies = [
  "uuid",
  "vt100",
  "webbrowser",
+ "webrtc-audio-processing",
  "which 8.0.0",
  "windows-sys 0.52.0",
  "winsplit",
@@ -11877,6 +11887,37 @@ dependencies = [
  "webrtc-sctp",
  "webrtc-srtp",
  "webrtc-util",
+]
+
+[[package]]
+name = "webrtc-audio-processing"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31cc7cbf143d9c3de985b113ddc3fddb4a60c7746635a69114f94a5b5af8f42"
+dependencies = [
+ "webrtc-audio-processing-config",
+ "webrtc-audio-processing-sys",
+]
+
+[[package]]
+name = "webrtc-audio-processing-config"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb5a1fcf911c54bf3d0e022020f1626ae99add5728c65d345bacfbf3adbf2ef2"
+
+[[package]]
+name = "webrtc-audio-processing-sys"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbd9fcfbedf79b0c7bc0f627d4e9cd5efcb648dcfc271c15503194482b39b0e8"
+dependencies = [
+ "anyhow",
+ "autotools",
+ "bindgen",
+ "cc",
+ "fs_extra",
+ "pkg-config",
+ "regex",
 ]
 
 [[package]]

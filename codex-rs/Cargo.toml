@@ -352,6 +352,7 @@ vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 webrtc = "0.17.1"
+webrtc-audio-processing = { version = "~2.0", features = ["bundled"] }
 which = "8"
 wildmatch = "2.6.1"
 zip = "2.4.2"

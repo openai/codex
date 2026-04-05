@@ -19,6 +19,8 @@ exports_files([
     "v8_bazel_rules.patch",
     "v8_module_deps.patch",
     "v8_source_portability.patch",
+    "webrtc-audio-processing-sys_logging_macos_sdk.patch",
+    "webrtc-audio-processing-sys_meson_env.patch",
     "windows-link.patch",
     "zstd-sys_windows_msvc_include_dirs.patch",
 ])

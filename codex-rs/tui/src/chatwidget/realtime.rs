@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(not(target_os = "linux"))]
+use crate::realtime_audio_processing::RealtimeAudioProcessor;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -29,6 +31,8 @@ pub(super) struct RealtimeConversationUiState {
     pub(super) meter_placeholder_id: Option<String>,
     #[cfg(not(target_os = "linux"))]
     capture_stop_flag: Option<Arc<AtomicBool>>,
+    #[cfg(not(target_os = "linux"))]
+    audio_processor: Option<RealtimeAudioProcessor>,
     #[cfg(not(target_os = "linux"))]
     capture: Option<crate::voice::VoiceCapture>,
     #[cfg(not(target_os = "linux"))]
@@ -331,9 +335,26 @@ impl ChatWidget {
     fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeAudioFrame) {
         #[cfg(not(target_os = "linux"))]
         {
+            if !self.realtime_conversation.is_active() {
+                return;
+            }
             if self.realtime_conversation.audio_player.is_none() {
-                self.realtime_conversation.audio_player =
-                    crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
+                let Some(audio_processor) = self.realtime_conversation.audio_processor.clone()
+                else {
+                    self.fail_realtime_conversation(
+                        "Realtime audio processor was unavailable".to_string(),
+                    );
+                    return;
+                };
+                match crate::voice::RealtimeAudioPlayer::start(&self.config, audio_processor) {
+                    Ok(player) => self.realtime_conversation.audio_player = Some(player),
+                    Err(err) => {
+                        self.fail_realtime_conversation(format!(
+                            "Failed to start speaker output: {err}"
+                        ));
+                        return;
+                    }
+                }
             }
             if let Some(player) = &self.realtime_conversation.audio_player
                 && let Err(err) = player.enqueue_frame(frame)
@@ -367,12 +388,42 @@ impl ChatWidget {
         self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
         self.request_redraw();
 
+        let audio_processor = match RealtimeAudioProcessor::new() {
+            Ok(audio_processor) => audio_processor,
+            Err(err) => {
+                self.realtime_conversation.meter_placeholder_id = None;
+                self.remove_recording_meter_placeholder(&placeholder_id);
+                self.fail_realtime_conversation(format!(
+                    "Failed to start realtime audio processor: {err}"
+                ));
+                return;
+            }
+        };
+        self.realtime_conversation.audio_processor = Some(audio_processor.clone());
+
+        let audio_player =
+            match crate::voice::RealtimeAudioPlayer::start(&self.config, audio_processor.clone()) {
+                Ok(player) => player,
+                Err(err) => {
+                    self.realtime_conversation.audio_processor = None;
+                    self.realtime_conversation.meter_placeholder_id = None;
+                    self.remove_recording_meter_placeholder(&placeholder_id);
+                    self.fail_realtime_conversation(format!(
+                        "Failed to start speaker output: {err}"
+                    ));
+                    return;
+                }
+            };
+
         let capture = match crate::voice::VoiceCapture::start_realtime(
             &self.config,
             self.app_event_tx.clone(),
+            audio_processor,
         ) {
             Ok(capture) => capture,
             Err(err) => {
+                drop(audio_player);
+                self.realtime_conversation.audio_processor = None;
                 self.realtime_conversation.meter_placeholder_id = None;
                 self.remove_recording_meter_placeholder(&placeholder_id);
                 self.fail_realtime_conversation(format!(
@@ -389,10 +440,7 @@ impl ChatWidget {
 
         self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
         self.realtime_conversation.capture = Some(capture);
-        if self.realtime_conversation.audio_player.is_none() {
-            self.realtime_conversation.audio_player =
-                crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
-        }
+        self.realtime_conversation.audio_player = Some(audio_player);
 
         std::thread::spawn(move || {
             let mut meter = crate::voice::RecordingMeterState::new();
@@ -423,22 +471,9 @@ impl ChatWidget {
         }
 
         match kind {
-            RealtimeAudioDeviceKind::Microphone => {
-                self.stop_realtime_microphone();
+            RealtimeAudioDeviceKind::Microphone | RealtimeAudioDeviceKind::Speaker => {
+                self.stop_realtime_local_audio();
                 self.start_realtime_local_audio();
-            }
-            RealtimeAudioDeviceKind::Speaker => {
-                self.stop_realtime_speaker();
-                match crate::voice::RealtimeAudioPlayer::start(&self.config) {
-                    Ok(player) => {
-                        self.realtime_conversation.audio_player = Some(player);
-                    }
-                    Err(err) => {
-                        self.fail_realtime_conversation(format!(
-                            "Failed to start speaker output: {err}"
-                        ));
-                    }
-                }
             }
         }
         self.request_redraw();
@@ -453,6 +488,7 @@ impl ChatWidget {
     fn stop_realtime_local_audio(&mut self) {
         self.stop_realtime_microphone();
         self.stop_realtime_speaker();
+        self.realtime_conversation.audio_processor = None;
     }
 
     #[cfg(target_os = "linux")]
