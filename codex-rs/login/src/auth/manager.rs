@@ -1404,21 +1404,6 @@ impl AuthManager {
         ))
     }
 
-    pub fn shared_with_external_auth(
-        codex_home: PathBuf,
-        enable_codex_api_key_env: bool,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
-        external_auth: Arc<dyn ExternalAuth>,
-    ) -> Arc<Self> {
-        let manager = Self::shared(
-            codex_home,
-            enable_codex_api_key_env,
-            auth_credentials_store_mode,
-        );
-        manager.set_external_auth(external_auth);
-        manager
-    }
-
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
         UnauthorizedRecovery::new(Arc::clone(self))
     }

@@ -7,6 +7,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use codex_features::Feature;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -16,6 +17,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::auth_manager::auth_manager_from_config;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -28,6 +30,7 @@ use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
+use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
 use codex_analytics::AppServerRpcTransport;
@@ -42,7 +45,6 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
-use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
@@ -61,6 +63,7 @@ use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod app_server_tracing;
+mod auth_manager;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;
@@ -396,11 +399,8 @@ pub async fn run_main_with_transport(
                 }
             }
 
-            let auth_manager = AuthManager::shared(
-                config.codex_home.clone(),
-                /*enable_codex_api_key_env*/ false,
-                config.cli_auth_credentials_store_mode,
-            );
+            let auth_manager =
+                auth_manager_from_config(&config, /*enable_codex_api_key_env*/ false);
             cloud_requirements_loader(
                 auth_manager,
                 config.chatgpt_base_url,
@@ -502,13 +502,13 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = codex_state::StateRuntime::init(
+    let state_db = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
     )
     .await
-    .ok()
-    .map(log_db::start);
+    .ok();
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -551,6 +551,27 @@ pub async fn run_main_with_transport(
             .await?;
             transport_accept_handles.push(accept_handle);
         }
+        AppServerTransport::Off => {}
+    }
+
+    let auth_manager = auth_manager_from_config(&config, /*enable_codex_api_key_env*/ false);
+
+    if config.features.enabled(Feature::RemoteControl) {
+        let accept_handle = start_remote_control(
+            config.chatgpt_base_url.clone(),
+            state_db.clone(),
+            auth_manager.clone(),
+            transport_event_tx.clone(),
+            transport_shutdown_token.clone(),
+        )
+        .await?;
+        transport_accept_handles.push(accept_handle);
+    }
+    if transport_accept_handles.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "no transport configured; use --listen or enable remote control",
+        ));
     }
 
     let outbound_handle = tokio::spawn(async move {
@@ -625,7 +646,7 @@ pub async fn run_main_with_transport(
             log_db,
             config_warnings,
             session_source,
-            enable_codex_api_key_env: false,
+            auth_manager,
             rpc_transport: analytics_rpc_transport(transport),
         });
         let mut thread_created_rx = processor.thread_created_receiver();
@@ -853,7 +874,9 @@ pub async fn run_main_with_transport(
 fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTransport {
     match transport {
         AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
-        AppServerTransport::WebSocket { .. } => AppServerRpcTransport::Websocket,
+        AppServerTransport::WebSocket { .. } | AppServerTransport::Off => {
+            AppServerRpcTransport::Websocket
+        }
     }
 }
 

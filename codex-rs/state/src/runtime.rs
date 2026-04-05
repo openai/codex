@@ -54,6 +54,7 @@ mod agent_jobs;
 mod backfill;
 mod logs;
 mod memories;
+mod remote_control;
 #[cfg(test)]
 mod test_support;
 mod threads;

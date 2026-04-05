@@ -346,7 +346,7 @@ struct AppServerCommand {
     subcommand: Option<AppServerSubcommand>,
 
     /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `ws://IP:PORT`.
+    /// `ws://IP:PORT`, `off`.
     #[arg(
         long = "listen",
         value_name = "URL",
@@ -1991,6 +1991,12 @@ mod tests {
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
         );
+    }
+
+    #[test]
+    fn app_server_listen_off_parses() {
+        let app_server = app_server_from_args(["codex", "app-server", "--listen", "off"].as_ref());
+        assert_eq!(app_server.listen, codex_app_server::AppServerTransport::Off);
     }
 
     #[test]

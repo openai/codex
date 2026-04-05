@@ -1,8 +1,8 @@
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::forward_incoming_message;
+use super::next_connection_id;
 use super::serialize_outgoing_message;
-use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
@@ -20,7 +20,7 @@ pub(crate) async fn start_stdio_connection(
     transport_event_tx: mpsc::Sender<TransportEvent>,
     stdio_handles: &mut Vec<JoinHandle<()>>,
 ) -> IoResult<()> {
-    let connection_id = ConnectionId(0);
+    let connection_id = next_connection_id();
     let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
     transport_event_tx
