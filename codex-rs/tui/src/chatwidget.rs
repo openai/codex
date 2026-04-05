@@ -5767,7 +5767,7 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
-        let service_tier = self.config.service_tier.map(Some);
+        let service_tier = Some(self.config.service_tier);
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
