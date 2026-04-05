@@ -81,6 +81,7 @@ use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
@@ -245,9 +246,10 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_mcp::mcp::McpSnapshotDetail;
 use codex_mcp::mcp::auth::discover_supported_scopes;
 use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::collect_mcp_snapshot;
+use codex_mcp::mcp::collect_mcp_snapshot_with_detail;
 use codex_mcp::mcp::effective_mcp_servers;
 use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -5172,10 +5174,16 @@ impl CodexMessageProcessor {
         mcp_config: codex_mcp::mcp::McpConfig,
         auth: Option<CodexAuth>,
     ) {
-        let snapshot = collect_mcp_snapshot(
+        let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
+            McpServerStatusDetail::Full => McpSnapshotDetail::Full,
+            McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
+        };
+
+        let snapshot = collect_mcp_snapshot_with_detail(
             &mcp_config,
             auth.as_ref(),
             request_id.request_id.to_string(),
+            detail,
         )
         .await;
 
