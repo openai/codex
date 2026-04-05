@@ -49,8 +49,14 @@ use chrono::Local;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
+use codex_analytics::CodexTurnSteerEvent;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
+use codex_analytics::TrackEventsContext;
+use codex_analytics::TurnResolvedConfigFact;
+use codex_analytics::TurnSteerRejectionReason;
+use codex_analytics::TurnSteerResult;
+use codex_analytics::TurnSubmissionType;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -116,6 +122,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -185,6 +192,7 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::context_manager::is_user_turn_boundary;
 use crate::environment_context::EnvironmentContext;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -236,6 +244,32 @@ impl SteerInputError {
             },
         }
     }
+
+    fn to_turn_steer_rejection_reason(&self) -> TurnSteerRejectionReason {
+        match self {
+            Self::NoActiveTurn(_) => TurnSteerRejectionReason::NoActiveTurn,
+            Self::ExpectedTurnMismatch { .. } => TurnSteerRejectionReason::ExpectedTurnMismatch,
+            Self::ActiveTurnNotSteerable { turn_kind } => match turn_kind {
+                NonSteerableTurnKind::Review => TurnSteerRejectionReason::NonSteerableReview,
+                NonSteerableTurnKind::Compact => TurnSteerRejectionReason::NonSteerableCompact,
+            },
+            Self::EmptyInput => TurnSteerRejectionReason::EmptyInput,
+        }
+    }
+}
+
+struct AcceptedSteerInput {
+    turn_id: String,
+    tracking: TrackEventsContext,
+    expected_turn_id: String,
+    num_input_images: usize,
+}
+
+struct RejectedSteerInput {
+    error: SteerInputError,
+    tracking: TrackEventsContext,
+    expected_turn_id: Option<String>,
+    num_input_images: usize,
 }
 
 /// Notes from the previous real user turn.
@@ -430,6 +464,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
+    pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -484,6 +519,7 @@ impl Codex {
             user_shell_override,
             inherited_exec_policy,
             parent_trace: _,
+            analytics_events_client,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -670,6 +706,7 @@ impl Codex {
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
+            analytics_events_client,
         )
         .await
         .map_err(|e| {
@@ -809,6 +846,17 @@ pub(crate) fn session_loop_termination_from_handle(
     .shared()
 }
 
+fn initial_history_has_prior_user_turns(conversation_history: &InitialHistory) -> bool {
+    conversation_history.scan_rollout_items(rollout_item_is_user_turn_boundary)
+}
+
+fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(item) => is_user_turn_boundary(item),
+        _ => false,
+    }
+}
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
@@ -870,6 +918,7 @@ pub(crate) struct TurnContext {
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) submission_type: Option<SubmissionType>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
@@ -982,6 +1031,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
+            submission_type: self.submission_type,
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -1064,6 +1114,13 @@ impl TurnContext {
                 .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
                 .unwrap_or_default(),
         })
+    }
+}
+
+fn turn_submission_type(submission_type: SubmissionType) -> TurnSubmissionType {
+    match submission_type {
+        SubmissionType::Prompt => TurnSubmissionType::Default,
+        SubmissionType::PromptQueued => TurnSubmissionType::Queued,
     }
 }
 
@@ -1240,6 +1297,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) submission_type: Option<SubmissionType>,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -1408,6 +1466,7 @@ impl Session {
         network: Option<NetworkProxy>,
         environment: Arc<Environment>,
         sub_id: String,
+        submission_type: Option<SubmissionType>,
         js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
     ) -> TurnContext {
@@ -1471,6 +1530,7 @@ impl Session {
             current_date: Some(current_date),
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
+            submission_type,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
@@ -1517,6 +1577,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
+        analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1920,11 +1981,13 @@ impl Session {
             ),
             shell_zsh_path: config.zsh_path.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-            analytics_events_client: AnalyticsEventsClient::new(
-                Arc::clone(&auth_manager),
-                config.chatgpt_base_url.trim_end_matches('/').to_string(),
-                config.analytics_enabled,
-            ),
+            analytics_events_client: analytics_events_client.unwrap_or_else(|| {
+                AnalyticsEventsClient::new(
+                    Arc::clone(&auth_manager),
+                    config.chatgpt_base_url.trim_end_matches('/').to_string(),
+                    config.analytics_enabled,
+                )
+            }),
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
@@ -2238,6 +2301,11 @@ impl Session {
                 SessionSource::SubAgent(_)
             )
         };
+        let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
+        {
+            let mut state = self.state.lock().await;
+            state.set_next_turn_is_first(!has_prior_user_turns);
+        }
         match conversation_history {
             InitialHistory::New => {
                 // Defer initial context insertion until the first real turn starts so
@@ -2469,6 +2537,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                updates.submission_type,
                 sandbox_policy_changed,
             )
             .await)
@@ -2479,6 +2548,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        submission_type: Option<SubmissionType>,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
@@ -2544,6 +2614,7 @@ impl Session {
                 .map(StartedNetworkProxy::proxy),
             Arc::clone(&self.services.environment),
             sub_id,
+            submission_type,
             Arc::clone(&self.js_repl),
             skills_outcome,
         );
@@ -2656,6 +2727,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*submission_type*/ None,
             /*sandbox_policy_changed*/ false,
         )
         .await
@@ -4036,47 +4108,163 @@ impl Session {
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
-        if input.is_empty() {
-            return Err(SteerInputError::EmptyInput);
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        match self
+            .try_append_input_to_active_turn(input, expected_turn_id)
+            .await
+        {
+            Ok(accepted) => {
+                self.services.analytics_events_client.track_turn_steer(
+                    accepted.tracking,
+                    CodexTurnSteerEvent {
+                        expected_turn_id: Some(accepted.expected_turn_id),
+                        accepted_turn_id: Some(accepted.turn_id.clone()),
+                        num_input_images: accepted.num_input_images,
+                        result: TurnSteerResult::Accepted,
+                        rejection_reason: None,
+                        created_at,
+                    },
+                );
+                Ok(accepted.turn_id)
+            }
+            Err(rejected) => {
+                self.services.analytics_events_client.track_turn_steer(
+                    rejected.tracking,
+                    CodexTurnSteerEvent {
+                        expected_turn_id: rejected.expected_turn_id,
+                        accepted_turn_id: None,
+                        num_input_images: rejected.num_input_images,
+                        result: TurnSteerResult::Rejected,
+                        rejection_reason: Some(rejected.error.to_turn_steer_rejection_reason()),
+                        created_at,
+                    },
+                );
+                Err(rejected.error)
+            }
         }
+    }
+
+    async fn try_append_input_to_active_turn(
+        &self,
+        input: Vec<UserInput>,
+        expected_turn_id: Option<&str>,
+    ) -> Result<AcceptedSteerInput, RejectedSteerInput> {
+        let thread_id = self.conversation_id.to_string();
+        let fallback_tracking = || {
+            build_track_events_context(
+                String::new(),
+                thread_id.clone(),
+                expected_turn_id.unwrap_or_default().to_string(),
+            )
+        };
+
+        if input.is_empty() {
+            return Err(RejectedSteerInput {
+                error: SteerInputError::EmptyInput,
+                tracking: fallback_tracking(),
+                expected_turn_id: expected_turn_id.map(str::to_string),
+                num_input_images: 0,
+            });
+        }
+
+        let num_input_images = input
+            .iter()
+            .filter(|item| matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. }))
+            .count();
 
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
-            return Err(SteerInputError::NoActiveTurn(input));
+            return Err(RejectedSteerInput {
+                error: SteerInputError::NoActiveTurn(input),
+                tracking: fallback_tracking(),
+                expected_turn_id: expected_turn_id.map(str::to_string),
+                num_input_images,
+            });
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
-            return Err(SteerInputError::NoActiveTurn(input));
+        let Some((active_turn_id, task)) = active_turn.tasks.first() else {
+            return Err(RejectedSteerInput {
+                error: SteerInputError::NoActiveTurn(input),
+                tracking: fallback_tracking(),
+                expected_turn_id: expected_turn_id.map(str::to_string),
+                num_input_images,
+            });
         };
+        let active_turn_id = active_turn_id.clone();
+        let tracking = build_track_events_context(
+            task.turn_context.model_info.slug.clone(),
+            thread_id.clone(),
+            task.turn_context.sub_id.clone(),
+        );
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
         {
-            return Err(SteerInputError::ExpectedTurnMismatch {
-                expected: expected_turn_id.to_string(),
-                actual: active_turn_id.clone(),
+            return Err(RejectedSteerInput {
+                error: SteerInputError::ExpectedTurnMismatch {
+                    expected: expected_turn_id.to_string(),
+                    actual: active_turn_id,
+                },
+                tracking,
+                expected_turn_id: Some(expected_turn_id.to_string()),
+                num_input_images,
             });
         }
 
         match active_turn.tasks.first().map(|(_, task)| task.kind) {
             Some(crate::state::TaskKind::Regular) => {}
             Some(crate::state::TaskKind::Review) => {
-                return Err(SteerInputError::ActiveTurnNotSteerable {
-                    turn_kind: NonSteerableTurnKind::Review,
+                return Err(RejectedSteerInput {
+                    error: SteerInputError::ActiveTurnNotSteerable {
+                        turn_kind: NonSteerableTurnKind::Review,
+                    },
+                    tracking,
+                    expected_turn_id: expected_turn_id
+                        .map(str::to_string)
+                        .or(Some(active_turn_id)),
+                    num_input_images,
                 });
             }
             Some(crate::state::TaskKind::Compact) => {
-                return Err(SteerInputError::ActiveTurnNotSteerable {
-                    turn_kind: NonSteerableTurnKind::Compact,
+                return Err(RejectedSteerInput {
+                    error: SteerInputError::ActiveTurnNotSteerable {
+                        turn_kind: NonSteerableTurnKind::Compact,
+                    },
+                    tracking,
+                    expected_turn_id: expected_turn_id
+                        .map(str::to_string)
+                        .or(Some(active_turn_id)),
+                    num_input_images,
                 });
             }
-            None => return Err(SteerInputError::NoActiveTurn(input)),
+            None => {
+                return Err(RejectedSteerInput {
+                    error: SteerInputError::NoActiveTurn(input),
+                    tracking: fallback_tracking(),
+                    expected_turn_id: expected_turn_id.map(str::to_string),
+                    num_input_images,
+                });
+            }
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
         turn_state.accept_mailbox_delivery_for_current_turn();
-        Ok(active_turn_id.clone())
+        drop(turn_state);
+
+        let expected_turn_id = expected_turn_id
+            .map(str::to_string)
+            .unwrap_or_else(|| active_turn_id.clone());
+
+        Ok(AcceptedSteerInput {
+            turn_id: active_turn_id,
+            tracking,
+            expected_turn_id,
+            num_input_images,
+        })
     }
 
     /// Returns the input if there was no task running to inject into.
@@ -4580,7 +4768,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. } | Op::UserInputWithMetadata { .. } | Op::UserTurn { .. } => {
                     handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
@@ -4741,6 +4929,7 @@ fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
 
 /// Operation handlers
 mod handlers {
+    use crate::codex::RejectedSteerInput;
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
@@ -4838,6 +5027,7 @@ mod handlers {
                 items,
                 collaboration_mode,
                 personality,
+                submission_type,
             } => {
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
@@ -4864,9 +5054,22 @@ mod handlers {
                         personality,
                         app_server_client_name: None,
                         app_server_client_version: None,
+                        submission_type,
                     },
                 )
             }
+            Op::UserInputWithMetadata {
+                items,
+                final_output_json_schema,
+                submission_type,
+            } => (
+                items,
+                SessionSettingsUpdate {
+                    final_output_json_schema: Some(final_output_json_schema),
+                    submission_type,
+                    ..Default::default()
+                },
+            ),
             Op::UserInput {
                 items,
                 final_output_json_schema,
@@ -4887,11 +5090,14 @@ mod handlers {
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         match sess
-            .steer_input(items.clone(), /*expected_turn_id*/ None)
+            .try_append_input_to_active_turn(items.clone(), /*expected_turn_id*/ None)
             .await
         {
             Ok(_) => current_context.session_telemetry.user_prompt(&items),
-            Err(SteerInputError::NoActiveTurn(items)) => {
+            Err(RejectedSteerInput {
+                error: SteerInputError::NoActiveTurn(items),
+                ..
+            }) => {
                 current_context.session_telemetry.user_prompt(&items);
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
@@ -4902,10 +5108,10 @@ mod handlers {
                 )
                 .await;
             }
-            Err(err) => {
+            Err(RejectedSteerInput { error, .. }) => {
                 sess.send_event_raw(Event {
                     id: sub_id,
-                    msg: EventMsg::Error(err.to_error_event()),
+                    msg: EventMsg::Error(error.to_error_event()),
                 })
                 .await;
             }
@@ -5679,6 +5885,7 @@ async fn spawn_review_thread(
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
+        submission_type: None,
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
@@ -6005,6 +6212,8 @@ pub(crate) async fn run_turn(
             .await;
     }
 
+    track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
+
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
@@ -6289,6 +6498,47 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn track_turn_resolved_config_analytics(
+    sess: &Session,
+    turn_context: &TurnContext,
+    input: &[UserInput],
+) {
+    let is_first_turn = {
+        let mut state = sess.state.lock().await;
+        state.take_next_turn_is_first()
+    };
+    sess.services
+        .analytics_events_client
+        .track_turn_resolved_config(TurnResolvedConfigFact {
+            turn_id: turn_context.sub_id.clone(),
+            thread_id: sess.conversation_id.to_string(),
+            num_input_images: input
+                .iter()
+                .filter(|item| {
+                    matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
+                })
+                .count(),
+            submission_type: Some(
+                turn_context
+                    .submission_type
+                    .map(turn_submission_type)
+                    .unwrap_or(TurnSubmissionType::Default),
+            ),
+            model: turn_context.model_info.slug.clone(),
+            model_provider: turn_context.config.model_provider_id.clone(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            reasoning_effort: turn_context.reasoning_effort,
+            reasoning_summary: Some(turn_context.reasoning_summary),
+            service_tier: turn_context.config.service_tier,
+            approval_policy: turn_context.approval_policy.value(),
+            approvals_reviewer: turn_context.config.approvals_reviewer,
+            sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
+            collaboration_mode: turn_context.collaboration_mode.mode,
+            personality: turn_context.personality,
+            is_first_turn,
+        });
 }
 
 async fn run_pre_sampling_compact(
