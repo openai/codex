@@ -307,6 +307,11 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["model_provider"], "mock_provider");
     assert_eq!(event["event_params"]["sandbox_policy"], "read_only");
     assert_eq!(event["event_params"]["submission_type"], "default");
+    assert_eq!(event["event_params"]["ephemeral"], false);
+    assert_eq!(event["event_params"]["thread_source"], "user");
+    assert_eq!(event["event_params"]["initialization_mode"], "new");
+    assert_eq!(event["event_params"]["subagent_source"], serde_json::Value::Null);
+    assert_eq!(event["event_params"]["parent_thread_id"], serde_json::Value::Null);
     assert_eq!(event["event_params"]["num_input_images"], 1);
     assert_eq!(event["event_params"]["is_first_turn"], true);
     assert_eq!(event["event_params"]["status"], "completed");
