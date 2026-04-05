@@ -155,11 +155,6 @@ impl AppServerSession {
         }
     }
 
-    pub(crate) fn with_remote_cwd_override(mut self, remote_cwd_override: Option<PathBuf>) -> Self {
-        self.remote_cwd_override = remote_cwd_override;
-        self
-    }
-
     pub(crate) fn remote_cwd_override(&self) -> Option<&std::path::Path> {
         self.remote_cwd_override.as_deref()
     }
