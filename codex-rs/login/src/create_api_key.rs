@@ -10,6 +10,7 @@ use url::Url;
 
 use crate::oauth_callback_server::AuthorizationCodeServer;
 use crate::oauth_callback_server::PortConflictStrategy;
+use crate::oauth_callback_server::ShutdownHandle;
 use crate::oauth_callback_server::start_authorization_code_server;
 use crate::pkce::PkceCodes;
 
@@ -27,8 +28,8 @@ const USER_AGENT: &str = "Codex-Create-API-Key/1.0";
 const PROJECT_API_KEY_NAME: &str = "Codex CLI";
 const PROJECT_POLL_INTERVAL_SECONDS: u64 = 10;
 const PROJECT_POLL_TIMEOUT_SECONDS: u64 = 60;
-const OAUTH_TIMEOUT_SECONDS: u64 = 15 * 60;
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
+pub const CREATE_API_KEY_OAUTH_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CreateApiKeyOptions {
@@ -65,14 +66,14 @@ impl PendingCreateApiKey {
         self.callback_server.open_browser()
     }
 
-    pub fn shutdown(&self) {
-        self.callback_server.shutdown();
+    pub fn shutdown_handle(&self) -> ShutdownHandle {
+        self.callback_server.shutdown_handle.clone()
     }
 
     pub async fn finish(self) -> Result<CreatedApiKey, CreateApiKeyError> {
         let code = self
             .callback_server
-            .wait_for_code(Duration::from_secs(OAUTH_TIMEOUT_SECONDS))
+            .wait_for_code(CREATE_API_KEY_OAUTH_TIMEOUT)
             .await
             .map_err(|err| CreateApiKeyError::message(err.to_string()))?;
         create_api_key_from_authorization_code(

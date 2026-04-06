@@ -243,6 +243,7 @@ use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
+use codex_login::CREATE_API_KEY_OAUTH_TIMEOUT;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::PendingCreateApiKey;
@@ -319,6 +320,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -374,7 +376,12 @@ enum ActiveLogin {
 }
 
 struct ActiveCreateApiKey {
+    flow_id: Uuid,
     thread_id: ThreadId,
+    started_at: Instant,
+    auth_url: String,
+    callback_port: u16,
+    shutdown_handle: ShutdownHandle,
     pending: Option<PendingCreateApiKey>,
 }
 
@@ -421,9 +428,7 @@ impl Drop for ActiveLogin {
 
 impl Drop for ActiveCreateApiKey {
     fn drop(&mut self) {
-        if let Some(pending) = self.pending.as_ref() {
-            pending.shutdown();
-        }
+        self.shutdown_handle.shutdown();
     }
 }
 
@@ -2772,6 +2777,29 @@ impl CodexMessageProcessor {
             return;
         }
 
+        // If a previous client started this flow and never called finish, do not
+        // try to bind fixed port 5000 until the old callback server is dropped.
+        let existing_response = {
+            let mut active_create_api_key = self.active_create_api_key.lock().await;
+            if let Some(active) = active_create_api_key.as_ref()
+                && active.thread_id == thread_uuid
+                && active.started_at.elapsed() < CREATE_API_KEY_OAUTH_TIMEOUT
+                && active.pending.is_some()
+            {
+                Some(ThreadCreateApiKeyStartResponse::Started {
+                    auth_url: active.auth_url.clone(),
+                    callback_port: active.callback_port,
+                })
+            } else {
+                drop(active_create_api_key.take());
+                None
+            }
+        };
+        if let Some(response) = existing_response {
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
         let pending = match start_create_api_key() {
             Ok(pending) => pending,
             Err(err) => {
@@ -2785,13 +2813,32 @@ impl CodexMessageProcessor {
         };
         let auth_url = pending.auth_url().to_string();
         let callback_port = pending.callback_port();
+        let shutdown_handle = pending.shutdown_handle();
+        let flow_id = Uuid::new_v4();
 
         let mut active_create_api_key = self.active_create_api_key.lock().await;
         *active_create_api_key = Some(ActiveCreateApiKey {
+            flow_id,
             thread_id: thread_uuid,
+            started_at: Instant::now(),
+            auth_url: auth_url.clone(),
+            callback_port,
+            shutdown_handle,
             pending: Some(pending),
         });
         drop(active_create_api_key);
+
+        let active_create_api_key = Arc::clone(&self.active_create_api_key);
+        tokio::spawn(async move {
+            tokio::time::sleep(CREATE_API_KEY_OAUTH_TIMEOUT).await;
+            let mut active_create_api_key = active_create_api_key.lock().await;
+            if active_create_api_key
+                .as_ref()
+                .is_some_and(|active| active.flow_id == flow_id)
+            {
+                drop(active_create_api_key.take());
+            }
+        });
 
         self.outgoing
             .send_response(
@@ -2819,7 +2866,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let pending = {
+        let (flow_id, pending) = {
             let mut active_create_api_key = self.active_create_api_key.lock().await;
             let Some(mut active) = active_create_api_key.take() else {
                 drop(active_create_api_key);
@@ -2846,6 +2893,7 @@ impl CodexMessageProcessor {
             }
 
             let Some(pending) = active.pending.take() else {
+                *active_create_api_key = Some(active);
                 drop(active_create_api_key);
                 self.outgoing
                     .send_error(
@@ -2862,14 +2910,32 @@ impl CodexMessageProcessor {
                 return;
             };
 
-            pending
+            // Keep an active marker while finish waits so a later start request
+            // can cancel/restart this flow instead of failing on port 5000.
+            let flow_id = active.flow_id;
+            *active_create_api_key = Some(active);
+            (flow_id, pending)
         };
 
         let outgoing = Arc::clone(&self.outgoing);
+        let active_create_api_key = Arc::clone(&self.active_create_api_key);
         tokio::spawn(async move {
             let result = pending.finish().await;
+            let flow_was_active = {
+                let mut active_create_api_key = active_create_api_key.lock().await;
+                if active_create_api_key
+                    .as_ref()
+                    .is_some_and(|active| active.flow_id == flow_id)
+                {
+                    drop(active_create_api_key.take());
+                    true
+                } else {
+                    false
+                }
+            };
+
             match result {
-                Ok(created) => {
+                Ok(created) if flow_was_active => {
                     let response = ThreadCreateApiKeyFinishResponse {
                         organization_id: created.organization_id,
                         organization_title: created.organization_title,
@@ -2884,6 +2950,18 @@ impl CodexMessageProcessor {
                         )]))
                         .await;
                     outgoing.send_response(request_id, response).await;
+                }
+                Ok(_) => {
+                    outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: "API key creation was cancelled.".to_string(),
+                                data: None,
+                            },
+                        )
+                        .await;
                 }
                 Err(err) => {
                     outgoing

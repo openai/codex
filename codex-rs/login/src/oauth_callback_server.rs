@@ -53,7 +53,7 @@ pub(crate) struct AuthorizationCodeServer {
     pub redirect_uri: String,
     code_verifier: String,
     server_handle: tokio::task::JoinHandle<io::Result<String>>,
-    shutdown_handle: ShutdownHandle,
+    pub(crate) shutdown_handle: ShutdownHandle,
 }
 
 impl AuthorizationCodeServer {
@@ -63,10 +63,6 @@ impl AuthorizationCodeServer {
 
     pub fn code_verifier(&self) -> &str {
         &self.code_verifier
-    }
-
-    pub(crate) fn shutdown(&self) {
-        self.shutdown_handle.shutdown();
     }
 
     pub async fn wait_for_code(self, timeout: Duration) -> io::Result<String> {
