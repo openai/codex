@@ -320,22 +320,6 @@ impl AppServerSession {
         started_thread_from_start_response(response, config).await
     }
 
-    pub(crate) async fn start_ephemeral_thread(&mut self, config: &Config) -> Result<Thread> {
-        let request_id = self.next_request_id();
-        let mut params = thread_start_params_from_config(
-            config,
-            self.thread_params_mode(),
-            self.remote_cwd_override.as_deref(),
-        );
-        params.ephemeral = Some(true);
-        let response: ThreadStartResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadStart { request_id, params })
-            .await
-            .wrap_err("thread/start failed for ephemeral TUI session")?;
-        Ok(response.thread)
-    }
-
     pub(crate) async fn resume_thread(
         &mut self,
         config: Config,
