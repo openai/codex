@@ -236,12 +236,13 @@ impl Environment {
             None
         };
 
-        let exec_backend: Arc<dyn ExecBackend> = match &mode {
-            EnvironmentMode::Remote { .. } => Arc::new(RemoteProcess::new(
-                remote_exec_server_client
-                    .clone()
-                    .expect("remote mode should have an exec-server client"),
-            )),
+        let exec_backend: Arc<dyn ExecBackend> = match (&mode, remote_exec_server_client.clone()) {
+            (EnvironmentMode::Remote { .. }, Some(client)) => Arc::new(RemoteProcess::new(client)),
+            (EnvironmentMode::Remote { .. }, None) => {
+                return Err(ExecServerError::Protocol(
+                    "remote mode should have an exec-server client".to_string(),
+                ));
+            }
             EnvironmentMode::Local => {
                 let local_process = LocalProcess::default();
                 local_process
@@ -292,14 +293,15 @@ impl Environment {
     }
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
-        match &self.mode {
-            EnvironmentMode::Remote { .. } => Arc::new(RemoteFileSystem::new(
-                self.remote_exec_server_client
-                    .clone()
-                    .expect("remote mode should have an exec-server client"),
-            )),
-            EnvironmentMode::Local => Arc::new(LocalFileSystem),
-            EnvironmentMode::Disabled => Arc::new(DisabledFileSystem),
+        match (&self.mode, self.remote_exec_server_client.clone()) {
+            (EnvironmentMode::Remote { .. }, Some(client)) => {
+                Arc::new(RemoteFileSystem::new(client))
+            }
+            (EnvironmentMode::Remote { .. }, None) => {
+                panic!("remote mode should have an exec-server client")
+            }
+            (EnvironmentMode::Local, _) => Arc::new(LocalFileSystem),
+            (EnvironmentMode::Disabled, _) => Arc::new(DisabledFileSystem),
         }
     }
 }
