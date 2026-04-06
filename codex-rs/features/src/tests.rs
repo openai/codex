@@ -166,6 +166,12 @@ fn image_detail_original_feature_is_under_development() {
 }
 
 #[test]
+fn remote_control_is_under_development() {
+    assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::RemoteControl.default_enabled(), false);
+}
+
+#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));

@@ -481,19 +481,6 @@ impl CodexMessageProcessor {
         self.thread_manager.skills_manager().clear_cache();
     }
 
-    pub(crate) async fn maybe_start_plugin_startup_tasks_for_latest_config(&self) {
-        match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => self
-                .thread_manager
-                .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(
-                    &config,
-                    self.thread_manager.auth_manager(),
-                ),
-            Err(err) => warn!("failed to load latest config for plugin startup tasks: {err:?}"),
-        }
-    }
-
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
@@ -2755,24 +2742,6 @@ impl CodexMessageProcessor {
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
             state_db_ctx = get_state_db(&self.config).await;
-        }
-        if state_db_ctx.is_none() {
-            match StateRuntime::init(
-                self.config.sqlite_home.clone(),
-                self.config.model_provider_id.clone(),
-            )
-            .await
-            {
-                Ok(ctx) => {
-                    state_db_ctx = Some(ctx);
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to initialize state db for thread metadata update at {}: {err}",
-                        self.config.sqlite_home.display()
-                    );
-                }
-            }
         }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
@@ -5990,6 +5959,7 @@ impl CodexMessageProcessor {
             force_remote_sync,
         } = params;
         let roots = cwds.unwrap_or_default();
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
