@@ -45,6 +45,7 @@ pub(crate) enum ThreadListenerCommand {
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
+    pub(crate) started_at: Option<i64>,
     pub(crate) file_change_started: HashSet<String>,
     pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
@@ -110,8 +111,13 @@ impl ThreadState {
     }
 
     pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {
+        if let EventMsg::TurnStarted(payload) = event {
+            self.turn_summary.started_at = payload.started_at;
+        }
         self.current_turn_history.handle_event(event);
-        if !self.current_turn_history.has_active_turn() {
+        if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
+            && !self.current_turn_history.has_active_turn()
+        {
             self.current_turn_history.reset();
         }
     }

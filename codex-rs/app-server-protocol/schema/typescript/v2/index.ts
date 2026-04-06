@@ -181,6 +181,7 @@ export type { McpServerOauthLoginResponse } from "./McpServerOauthLoginResponse"
 export type { McpServerRefreshResponse } from "./McpServerRefreshResponse";
 export type { McpServerStartupState } from "./McpServerStartupState";
 export type { McpServerStatus } from "./McpServerStatus";
+export type { McpServerStatusDetail } from "./McpServerStatusDetail";
 export type { McpServerStatusUpdatedNotification } from "./McpServerStatusUpdatedNotification";
 export type { McpToolCallError } from "./McpToolCallError";
 export type { McpToolCallProgressNotification } from "./McpToolCallProgressNotification";

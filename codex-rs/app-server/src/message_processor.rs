@@ -965,7 +965,7 @@ impl MessageProcessor {
     ) {
         match result {
             Ok(response) => {
-                self.codex_message_processor.handle_config_mutation().await;
+                self.codex_message_processor.handle_config_mutation();
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
