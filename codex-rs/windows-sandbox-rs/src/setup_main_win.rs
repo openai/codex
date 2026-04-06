@@ -33,8 +33,10 @@ use codex_windows_sandbox::write_setup_error_report;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::ffi::c_void;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
@@ -243,6 +245,43 @@ fn read_mask_allows_or_log(
             Ok(false)
         }
     }
+}
+
+fn collect_write_acl_targets(root: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
+    let mut targets = Vec::new();
+    if !root.exists() {
+        return Ok(targets);
+    }
+
+    if !recursive {
+        targets.push(root.to_path_buf());
+        return Ok(targets);
+    }
+
+    let mut queue = VecDeque::from([root.to_path_buf()]);
+    let mut seen = HashSet::new();
+    while let Some(path) = queue.pop_front() {
+        let canonical = canonicalize_path(&path);
+        if !seen.insert(canonical) {
+            continue;
+        }
+        targets.push(path.clone());
+
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("stat write root descendant {}", path.display()))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        for entry in
+            fs::read_dir(&path).with_context(|| format!("read write root {}", path.display()))?
+        {
+            let entry = entry.with_context(|| format!("iterate write root {}", path.display()))?;
+            queue.push_back(entry.path());
+        }
+    }
+
+    Ok(targets)
 }
 
 fn lock_sandbox_dir(
@@ -642,9 +681,10 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
-    let mut grant_tasks: Vec<PathBuf> = Vec::new();
+    let mut grant_tasks: Vec<(PathBuf, bool)> = Vec::new();
 
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
+    let mut seen_grant_targets: HashSet<PathBuf> = HashSet::new();
     let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
 
     for root in &payload.write_roots {
@@ -658,7 +698,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             )?;
             continue;
         }
-        let mut need_grant = false;
         let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
         let cap_label = if is_command_cwd {
             "workspace_cap"
@@ -670,50 +709,85 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         } else {
             cap_psid
         };
-        for (label, psid) in [
-            ("sandbox_group", sandbox_group_psid),
-            (cap_label, cap_psid_for_root),
-        ] {
-            let has =
-                match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
+        let repair_descendants = !refresh_only;
+        let targets = match collect_write_acl_targets(root, repair_descendants) {
+            Ok(targets) => targets,
+            Err(err) => {
+                refresh_errors.push(format!(
+                    "enumerate write root descendants failed on {}: {}",
+                    root.display(),
+                    err
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "enumerate write root descendants failed on {}: {}; continuing",
+                        root.display(),
+                        err
+                    ),
+                )?;
+                vec![root.clone()]
+            }
+        };
+
+        for target in targets {
+            let target_key = canonicalize_path(&target);
+            if !seen_grant_targets.insert(target_key) {
+                continue;
+            }
+
+            let mut need_grant = false;
+            for (label, psid) in [
+                ("sandbox_group", sandbox_group_psid),
+                (cap_label, cap_psid_for_root),
+            ] {
+                let has = match path_mask_allows(
+                    &target,
+                    &[psid],
+                    write_mask,
+                    /*require_all_bits*/ true,
+                ) {
                     Ok(h) => h,
                     Err(e) => {
                         refresh_errors.push(format!(
                             "write mask check failed on {} for {label}: {}",
-                            root.display(),
+                            target.display(),
                             e
                         ));
                         log_line(
                             log,
                             &format!(
                                 "write mask check failed on {} for {label}: {}; continuing",
-                                root.display(),
+                                target.display(),
                                 e
                             ),
                         )?;
                         false
                     }
                 };
-            if !has {
-                need_grant = true;
+                if !has {
+                    need_grant = true;
+                }
             }
-        }
-        if need_grant {
+
+            if !need_grant {
+                continue;
+            }
+
             log_line(
                 log,
                 &format!(
                     "granting write ACE to {} for sandbox group and capability SID",
-                    root.display()
+                    target.display()
                 ),
             )?;
-            grant_tasks.push(root.clone());
+            grant_tasks.push((target, is_command_cwd));
         }
     }
 
     let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
     std::thread::scope(|scope| {
-        for root in grant_tasks {
-            let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
+        for (root, is_command_cwd) in grant_tasks {
             let sid_strings = if is_command_cwd {
                 vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
             } else {
