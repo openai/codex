@@ -98,10 +98,10 @@ impl CodexThread {
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
-        client_metadata: Option<HashMap<String, String>>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.codex
-            .steer_input(input, expected_turn_id, client_metadata)
+            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
             .await
     }
 

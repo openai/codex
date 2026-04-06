@@ -14842,16 +14842,6 @@
             ],
             "description": "Override where approval requests are routed for review on this turn and subsequent turns."
           },
-          "clientMetadata": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "Optional turn-scoped Responses API client metadata.",
-            "type": [
-              "object",
-              "null"
-            ]
-          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -14990,16 +14980,6 @@
       "TurnSteerParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "clientMetadata": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "Optional turn-scoped Responses API client metadata.",
-            "type": [
-              "object",
-              "null"
-            ]
-          },
           "expectedTurnId": {
             "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
             "type": "string"

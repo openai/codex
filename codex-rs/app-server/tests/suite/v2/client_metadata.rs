@@ -67,7 +67,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            client_metadata: Some(client_metadata.clone()),
+            responsesapi_client_metadata: Some(client_metadata.clone()),
             ..Default::default()
         })
         .await?;
@@ -162,7 +162,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
                 text: "Run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
-            client_metadata: Some(start_metadata.clone()),
+            responsesapi_client_metadata: Some(start_metadata.clone()),
             cwd: Some(workdir.clone()),
             ..Default::default()
         })
@@ -193,7 +193,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
                 text: "Focus on the failure".to_string(),
                 text_elements: Vec::new(),
             }],
-            client_metadata: Some(steer_metadata.clone()),
+            responsesapi_client_metadata: Some(steer_metadata.clone()),
             expected_turn_id: turn_id.clone(),
         })
         .await?;
@@ -287,7 +287,7 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            client_metadata: Some(client_metadata),
+            responsesapi_client_metadata: Some(client_metadata),
             ..Default::default()
         })
         .await?;

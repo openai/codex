@@ -165,16 +165,6 @@
     }
   },
   "properties": {
-    "clientMetadata": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "description": "Optional turn-scoped Responses API client metadata.",
-      "type": [
-        "object",
-        "null"
-      ]
-    },
     "expectedTurnId": {
       "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
       "type": "string"

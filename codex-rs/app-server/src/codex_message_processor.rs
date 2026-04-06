@@ -6649,10 +6649,10 @@ impl CodexMessageProcessor {
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::UserInputWithClientMetadata {
+                Op::UserInput {
                     items: mapped_items,
                     final_output_json_schema: params.output_schema,
-                    client_metadata: params.client_metadata,
+                    responsesapi_client_metadata: params.responsesapi_client_metadata,
                 },
             )
             .await;
@@ -6736,7 +6736,7 @@ impl CodexMessageProcessor {
             .steer_input(
                 mapped_items,
                 Some(&params.expected_turn_id),
-                params.client_metadata,
+                params.responsesapi_client_metadata,
             )
             .await
         {

@@ -98,7 +98,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         &sandbox_policy,
         WindowsSandboxLevel::Disabled,
     );
-    state.set_client_metadata(HashMap::from([
+    state.set_responsesapi_client_metadata(HashMap::from([
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
         ("session_id".to_string(), "client-supplied".to_string()),
     ]));

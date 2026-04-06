@@ -13,9 +13,6 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
- * Optional turn-scoped Responses API client metadata.
- */
-clientMetadata?: { [key in string]?: string } | null, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**

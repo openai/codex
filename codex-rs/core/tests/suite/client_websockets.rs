@@ -1003,6 +1003,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .expect("submission should succeed while emitting usage limit error events");
@@ -1088,6 +1089,7 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .expect("submission should succeed while emitting invalid request events");
