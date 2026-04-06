@@ -2,20 +2,30 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use codex_app_server_protocol::CodexAvatarAdminAwardGrantParams;
 use codex_app_server_protocol::CodexAvatarAdminCapabilitiesReadResponse;
+use codex_app_server_protocol::CodexAvatarAdminProofDropGrantParams;
+use codex_app_server_protocol::CodexAvatarBoxOddsBucket;
+use codex_app_server_protocol::CodexAvatarBoxRules;
 use codex_app_server_protocol::CodexAvatarDefinition;
 use codex_app_server_protocol::CodexAvatarEquipParams;
 use codex_app_server_protocol::CodexAvatarInventoryReadResponse;
 use codex_app_server_protocol::CodexAvatarOwnership;
+use codex_app_server_protocol::CodexAvatarPityState;
 use codex_app_server_protocol::CodexAvatarRarity;
+use codex_app_server_protocol::CodexAvatarRevealAward;
 use codex_app_server_protocol::CodexAvatarStatus;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_backend_client::Client as BackendClient;
 use codex_backend_client::CodexAvatarAdminAwardGrantRequest as BackendAvatarAdminAwardGrantRequest;
 use codex_backend_client::CodexAvatarAdminCapabilitiesResponse as BackendAvatarAdminCapabilitiesResponse;
+use codex_backend_client::CodexAvatarAdminProofDropGrantRequest as BackendAvatarAdminProofDropGrantRequest;
+use codex_backend_client::CodexAvatarBoxOddsBucket as BackendAvatarBoxOddsBucket;
+use codex_backend_client::CodexAvatarBoxRules as BackendAvatarBoxRules;
 use codex_backend_client::CodexAvatarDefinition as BackendAvatarDefinition;
 use codex_backend_client::CodexAvatarInventoryResponse as BackendAvatarInventoryResponse;
 use codex_backend_client::CodexAvatarOwnership as BackendAvatarOwnership;
+use codex_backend_client::CodexAvatarPityState as BackendAvatarPityState;
 use codex_backend_client::CodexAvatarRarity as BackendAvatarRarity;
+use codex_backend_client::CodexAvatarRevealAward as BackendAvatarRevealAward;
 use codex_backend_client::CodexAvatarStatus as BackendAvatarStatus;
 use codex_backend_client::RequestError;
 use codex_core::AuthManager;
@@ -66,6 +76,26 @@ pub(crate) async fn grant_admin_avatar_award(
         })
         .await
         .map_err(|err| backend_avatar_error("grant avatar award", err))?;
+    Ok(map_avatar_inventory_response(response))
+}
+
+pub(crate) async fn grant_admin_avatar_proof_drop(
+    auth_manager: &AuthManager,
+    chatgpt_base_url: &str,
+    params: CodexAvatarAdminProofDropGrantParams,
+) -> Result<CodexAvatarInventoryReadResponse, JSONRPCErrorError> {
+    let client = avatar_backend_client(auth_manager, chatgpt_base_url).await?;
+    let response = client
+        .grant_admin_avatar_proof_drop(BackendAvatarAdminProofDropGrantRequest {
+            account_user_id: params.account_user_id,
+            award_id: params.award_id,
+            source_type: params.source_type,
+            source_ref: params.source_ref,
+            awarded_at: params.awarded_at,
+            source_summary: params.source_summary,
+        })
+        .await
+        .map_err(|err| backend_avatar_error("grant proof-drop box", err))?;
     Ok(map_avatar_inventory_response(response))
 }
 
@@ -152,10 +182,14 @@ fn map_avatar_inventory_response(
             .map(map_avatar_ownership)
             .collect(),
         equipped_avatar_id: response.equipped_avatar_id,
-        equipped_at: response.equipped_at,
+        box_rules: map_avatar_box_rules(response.box_rules),
+        pity_state: map_avatar_pity_state(response.pity_state),
+        pending_reveal_awards: response
+            .pending_reveal_awards
+            .into_iter()
+            .map(map_avatar_reveal_award)
+            .collect(),
         updated_at: response.updated_at,
-        synced_at: response.synced_at,
-        catalog_version: response.catalog_version,
     }
 }
 
@@ -164,13 +198,59 @@ fn map_avatar_admin_capabilities_response(
 ) -> CodexAvatarAdminCapabilitiesReadResponse {
     CodexAvatarAdminCapabilitiesReadResponse {
         can_grant_awards: response.can_grant_awards,
+        can_grant_proof_drop_boxes: response.can_grant_proof_drop_boxes,
+    }
+}
+
+fn map_avatar_box_rules(rules: BackendAvatarBoxRules) -> CodexAvatarBoxRules {
+    CodexAvatarBoxRules {
+        ruleset_version: rules.ruleset_version,
+        odds_table_version: rules.odds_table_version,
+        rare_or_better_pity_threshold: rules.rare_or_better_pity_threshold,
+        legendary_pity_threshold: rules.legendary_pity_threshold,
+        guaranteed_new_threshold: rules.guaranteed_new_threshold,
+        odds: rules
+            .odds
+            .into_iter()
+            .map(map_avatar_box_odds_bucket)
+            .collect(),
+    }
+}
+
+fn map_avatar_box_odds_bucket(bucket: BackendAvatarBoxOddsBucket) -> CodexAvatarBoxOddsBucket {
+    CodexAvatarBoxOddsBucket {
+        bucket_id: bucket.bucket_id,
+        label: bucket.label,
+        probability_percent: bucket.probability_percent,
+    }
+}
+
+fn map_avatar_pity_state(pity_state: BackendAvatarPityState) -> CodexAvatarPityState {
+    CodexAvatarPityState {
+        rolls_since_rare_or_better: pity_state.rolls_since_rare_or_better,
+        rolls_since_legendary: pity_state.rolls_since_legendary,
+        non_new_outcome_streak: pity_state.non_new_outcome_streak,
+        guaranteed_new_available: pity_state.guaranteed_new_available,
+    }
+}
+
+fn map_avatar_reveal_award(award: BackendAvatarRevealAward) -> CodexAvatarRevealAward {
+    CodexAvatarRevealAward {
+        award_id: award.award_id,
+        awarded_at: award.awarded_at,
+        source_type: award.source_type,
+        source_ref: award.source_ref,
+        source_summary: award.source_summary,
+        outcome_kind: award.outcome_kind,
+        outcome_avatar_id: award.outcome_avatar_id,
+        metadata_json: award.metadata_json,
+        pity_state_after: map_avatar_pity_state(award.pity_state_after),
     }
 }
 
 fn map_avatar_definition(definition: BackendAvatarDefinition) -> CodexAvatarDefinition {
     CodexAvatarDefinition {
         avatar_id: definition.avatar_id,
-        slug: definition.slug,
         display_name: definition.display_name,
         description: definition.description,
         rarity: match definition.rarity {
@@ -186,8 +266,12 @@ fn map_avatar_definition(definition: BackendAvatarDefinition) -> CodexAvatarDefi
             BackendAvatarStatus::Retired => CodexAvatarStatus::Retired,
         },
         sort_order: definition.sort_order,
-        created_at: definition.created_at,
-        updated_at: definition.updated_at,
+        collection_name: definition.collection_name,
+        collection_description: definition.collection_description,
+        lore: definition.lore,
+        accent_class_name: definition.accent_class_name,
+        silhouette_glow_class_name: definition.silhouette_glow_class_name,
+        is_progress_visible: definition.is_progress_visible,
     }
 }
 
@@ -195,8 +279,6 @@ fn map_avatar_ownership(ownership: BackendAvatarOwnership) -> CodexAvatarOwnersh
     CodexAvatarOwnership {
         account_user_id: ownership.account_user_id,
         avatar_id: ownership.avatar_id,
-        first_unlocked_at: ownership.first_unlocked_at,
-        last_awarded_at: ownership.last_awarded_at,
         source_summary: ownership.source_summary,
     }
 }

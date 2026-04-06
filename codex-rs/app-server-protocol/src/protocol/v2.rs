@@ -1761,15 +1761,18 @@ pub enum CodexAvatarRarity {
 #[ts(export_to = "v2/")]
 pub struct CodexAvatarDefinition {
     pub avatar_id: String,
-    pub slug: String,
     pub display_name: String,
     pub description: String,
     pub rarity: CodexAvatarRarity,
     pub asset_ref: String,
     pub status: CodexAvatarStatus,
     pub sort_order: i64,
-    pub created_at: i64,
-    pub updated_at: i64,
+    pub collection_name: String,
+    pub collection_description: String,
+    pub lore: String,
+    pub accent_class_name: String,
+    pub silhouette_glow_class_name: String,
+    pub is_progress_visible: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -1778,8 +1781,6 @@ pub struct CodexAvatarDefinition {
 pub struct CodexAvatarOwnership {
     pub account_user_id: String,
     pub avatar_id: String,
-    pub first_unlocked_at: i64,
-    pub last_awarded_at: i64,
     pub source_summary: Option<String>,
 }
 
@@ -1830,6 +1831,21 @@ pub struct CodexAvatarAdminAwardGrantParams {
     pub source_summary: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarAdminProofDropGrantParams {
+    pub account_user_id: String,
+    pub award_id: String,
+    pub source_type: String,
+    #[ts(optional = nullable)]
+    pub source_ref: Option<String>,
+    #[ts(optional = nullable)]
+    pub awarded_at: Option<i64>,
+    #[ts(optional = nullable)]
+    pub source_summary: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1840,6 +1856,53 @@ pub struct CodexAvatarAdminCapabilitiesReadParams {}
 #[ts(export_to = "v2/")]
 pub struct CodexAvatarAdminCapabilitiesReadResponse {
     pub can_grant_awards: bool,
+    pub can_grant_proof_drop_boxes: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarBoxOddsBucket {
+    pub bucket_id: String,
+    pub label: String,
+    pub probability_percent: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarPityState {
+    pub rolls_since_rare_or_better: i64,
+    pub rolls_since_legendary: i64,
+    pub non_new_outcome_streak: i64,
+    pub guaranteed_new_available: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarBoxRules {
+    pub ruleset_version: String,
+    pub odds_table_version: String,
+    pub rare_or_better_pity_threshold: i64,
+    pub legendary_pity_threshold: i64,
+    pub guaranteed_new_threshold: i64,
+    pub odds: Vec<CodexAvatarBoxOddsBucket>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodexAvatarRevealAward {
+    pub award_id: String,
+    pub awarded_at: i64,
+    pub source_type: String,
+    pub source_ref: Option<String>,
+    pub source_summary: Option<String>,
+    pub outcome_kind: String,
+    pub outcome_avatar_id: Option<String>,
+    pub metadata_json: Option<String>,
+    pub pity_state_after: CodexAvatarPityState,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -1850,10 +1913,10 @@ pub struct CodexAvatarInventoryReadResponse {
     pub avatar_definitions: Vec<CodexAvatarDefinition>,
     pub owned_avatars: Vec<CodexAvatarOwnership>,
     pub equipped_avatar_id: String,
-    pub equipped_at: i64,
+    pub box_rules: CodexAvatarBoxRules,
+    pub pity_state: CodexAvatarPityState,
+    pub pending_reveal_awards: Vec<CodexAvatarRevealAward>,
     pub updated_at: i64,
-    pub synced_at: i64,
-    pub catalog_version: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]

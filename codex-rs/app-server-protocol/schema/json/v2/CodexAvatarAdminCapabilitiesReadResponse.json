@@ -3,10 +3,14 @@
   "properties": {
     "canGrantAwards": {
       "type": "boolean"
+    },
+    "canGrantProofDropBoxes": {
+      "type": "boolean"
     }
   },
   "required": [
-    "canGrantAwards"
+    "canGrantAwards",
+    "canGrantProofDropBoxes"
   ],
   "title": "CodexAvatarAdminCapabilitiesReadResponse",
   "type": "object"

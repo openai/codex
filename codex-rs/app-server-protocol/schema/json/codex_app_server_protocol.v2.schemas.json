@@ -1973,6 +1973,30 @@
             },
             "method": {
               "enum": [
+                "avatar/admin/proof-drop"
+              ],
+              "title": "Avatar/admin/proofDropRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CodexAvatarAdminProofDropGrantParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Avatar/admin/proofDropRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "avatar/admin/capabilities/read"
               ],
               "title": "Avatar/admin/capabilities/readRequestMethod",
@@ -2374,25 +2398,131 @@
       "properties": {
         "canGrantAwards": {
           "type": "boolean"
+        },
+        "canGrantProofDropBoxes": {
+          "type": "boolean"
         }
       },
       "required": [
-        "canGrantAwards"
+        "canGrantAwards",
+        "canGrantProofDropBoxes"
       ],
       "title": "CodexAvatarAdminCapabilitiesReadResponse",
       "type": "object"
     },
+    "CodexAvatarAdminProofDropGrantParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accountUserId": {
+          "type": "string"
+        },
+        "awardId": {
+          "type": "string"
+        },
+        "awardedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sourceRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSummary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountUserId",
+        "awardId",
+        "sourceType"
+      ],
+      "title": "CodexAvatarAdminProofDropGrantParams",
+      "type": "object"
+    },
+    "CodexAvatarBoxOddsBucket": {
+      "properties": {
+        "bucketId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "probabilityPercent": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bucketId",
+        "label",
+        "probabilityPercent"
+      ],
+      "type": "object"
+    },
+    "CodexAvatarBoxRules": {
+      "properties": {
+        "guaranteedNewThreshold": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "legendaryPityThreshold": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "odds": {
+          "items": {
+            "$ref": "#/definitions/CodexAvatarBoxOddsBucket"
+          },
+          "type": "array"
+        },
+        "oddsTableVersion": {
+          "type": "string"
+        },
+        "rareOrBetterPityThreshold": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "rulesetVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "guaranteedNewThreshold",
+        "legendaryPityThreshold",
+        "odds",
+        "oddsTableVersion",
+        "rareOrBetterPityThreshold",
+        "rulesetVersion"
+      ],
+      "type": "object"
+    },
     "CodexAvatarDefinition": {
       "properties": {
+        "accentClassName": {
+          "type": "string"
+        },
         "assetRef": {
           "type": "string"
         },
         "avatarId": {
           "type": "string"
         },
-        "createdAt": {
-          "format": "int64",
-          "type": "integer"
+        "collectionDescription": {
+          "type": "string"
+        },
+        "collectionName": {
+          "type": "string"
         },
         "description": {
           "type": "string"
@@ -2400,10 +2530,16 @@
         "displayName": {
           "type": "string"
         },
+        "isProgressVisible": {
+          "type": "boolean"
+        },
+        "lore": {
+          "type": "string"
+        },
         "rarity": {
           "$ref": "#/definitions/CodexAvatarRarity"
         },
-        "slug": {
+        "silhouetteGlowClassName": {
           "type": "string"
         },
         "sortOrder": {
@@ -2412,23 +2548,22 @@
         },
         "status": {
           "$ref": "#/definitions/CodexAvatarStatus"
-        },
-        "updatedAt": {
-          "format": "int64",
-          "type": "integer"
         }
       },
       "required": [
+        "accentClassName",
         "assetRef",
         "avatarId",
-        "createdAt",
+        "collectionDescription",
+        "collectionName",
         "description",
         "displayName",
+        "isProgressVisible",
+        "lore",
         "rarity",
-        "slug",
+        "silhouetteGlowClassName",
         "sortOrder",
-        "status",
-        "updatedAt"
+        "status"
       ],
       "type": "object"
     },
@@ -2462,16 +2597,8 @@
           },
           "type": "array"
         },
-        "catalogVersion": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "equippedAt": {
-          "format": "int64",
-          "type": "integer"
+        "boxRules": {
+          "$ref": "#/definitions/CodexAvatarBoxRules"
         },
         "equippedAvatarId": {
           "type": "string"
@@ -2482,9 +2609,14 @@
           },
           "type": "array"
         },
-        "syncedAt": {
-          "format": "int64",
-          "type": "integer"
+        "pendingRevealAwards": {
+          "items": {
+            "$ref": "#/definitions/CodexAvatarRevealAward"
+          },
+          "type": "array"
+        },
+        "pityState": {
+          "$ref": "#/definitions/CodexAvatarPityState"
         },
         "updatedAt": {
           "format": "int64",
@@ -2494,10 +2626,11 @@
       "required": [
         "accountUserId",
         "avatarDefinitions",
-        "equippedAt",
+        "boxRules",
         "equippedAvatarId",
         "ownedAvatars",
-        "syncedAt",
+        "pendingRevealAwards",
+        "pityState",
         "updatedAt"
       ],
       "title": "CodexAvatarInventoryReadResponse",
@@ -2511,14 +2644,6 @@
         "avatarId": {
           "type": "string"
         },
-        "firstUnlockedAt": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "lastAwardedAt": {
-          "format": "int64",
-          "type": "integer"
-        },
         "sourceSummary": {
           "type": [
             "string",
@@ -2528,9 +2653,33 @@
       },
       "required": [
         "accountUserId",
-        "avatarId",
-        "firstUnlockedAt",
-        "lastAwardedAt"
+        "avatarId"
+      ],
+      "type": "object"
+    },
+    "CodexAvatarPityState": {
+      "properties": {
+        "guaranteedNewAvailable": {
+          "type": "boolean"
+        },
+        "nonNewOutcomeStreak": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "rollsSinceLegendary": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "rollsSinceRareOrBetter": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "guaranteedNewAvailable",
+        "nonNewOutcomeStreak",
+        "rollsSinceLegendary",
+        "rollsSinceRareOrBetter"
       ],
       "type": "object"
     },
@@ -2542,6 +2691,58 @@
         "legendary"
       ],
       "type": "string"
+    },
+    "CodexAvatarRevealAward": {
+      "properties": {
+        "awardId": {
+          "type": "string"
+        },
+        "awardedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "metadataJson": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcomeAvatarId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcomeKind": {
+          "type": "string"
+        },
+        "pityStateAfter": {
+          "$ref": "#/definitions/CodexAvatarPityState"
+        },
+        "sourceRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSummary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "awardId",
+        "awardedAt",
+        "outcomeKind",
+        "pityStateAfter",
+        "sourceType"
+      ],
+      "type": "object"
     },
     "CodexAvatarStatus": {
       "enum": [

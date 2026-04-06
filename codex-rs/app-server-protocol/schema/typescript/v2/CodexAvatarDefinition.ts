@@ -4,4 +4,4 @@
 import type { CodexAvatarRarity } from "./CodexAvatarRarity";
 import type { CodexAvatarStatus } from "./CodexAvatarStatus";
 
-export type CodexAvatarDefinition = { avatarId: string, slug: string, displayName: string, description: string, rarity: CodexAvatarRarity, assetRef: string, status: CodexAvatarStatus, sortOrder: bigint, createdAt: bigint, updatedAt: bigint, };
+export type CodexAvatarDefinition = { avatarId: string, displayName: string, description: string, rarity: CodexAvatarRarity, assetRef: string, status: CodexAvatarStatus, sortOrder: bigint, collectionName: string, collectionDescription: string, lore: string, accentClassName: string, silhouetteGlowClassName: string, isProgressVisible: boolean, };

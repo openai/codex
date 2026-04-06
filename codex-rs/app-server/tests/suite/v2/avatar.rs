@@ -5,11 +5,16 @@ use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::CodexAvatarAdminAwardGrantParams;
 use codex_app_server_protocol::CodexAvatarAdminCapabilitiesReadResponse;
+use codex_app_server_protocol::CodexAvatarAdminProofDropGrantParams;
+use codex_app_server_protocol::CodexAvatarBoxOddsBucket;
+use codex_app_server_protocol::CodexAvatarBoxRules;
 use codex_app_server_protocol::CodexAvatarDefinition;
 use codex_app_server_protocol::CodexAvatarEquipParams;
 use codex_app_server_protocol::CodexAvatarInventoryReadResponse;
 use codex_app_server_protocol::CodexAvatarOwnership;
+use codex_app_server_protocol::CodexAvatarPityState;
 use codex_app_server_protocol::CodexAvatarRarity;
+use codex_app_server_protocol::CodexAvatarRevealAward;
 use codex_app_server_protocol::CodexAvatarStatus;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -275,6 +280,65 @@ async fn avatar_admin_award_forwards_request_and_returns_target_user_snapshot() 
 }
 
 #[tokio::test]
+async fn avatar_admin_proof_drop_forwards_request_and_returns_reveal_snapshot() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let server = MockServer::start().await;
+    write_chatgpt_base_url(codex_home.path(), &server.uri())?;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/avatars/admin/proof-drop"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .and(body_json(json!({
+            "accountUserId": "target-user-456",
+            "awardId": "proof-drop-1",
+            "sourceType": "proof-drop-box",
+            "sourceRef": "support-ticket-1",
+            "awardedAt": 123,
+            "sourceSummary": "Manual proof-drop box"
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(snapshot_json_with_reveal("prism", "target-user-456")),
+        )
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_avatar_admin_proof_drop_request(CodexAvatarAdminProofDropGrantParams {
+            account_user_id: "target-user-456".to_string(),
+            award_id: "proof-drop-1".to_string(),
+            source_type: "proof-drop-box".to_string(),
+            source_ref: Some("support-ticket-1".to_string()),
+            awarded_at: Some(123),
+            source_summary: Some("Manual proof-drop box".to_string()),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: CodexAvatarInventoryReadResponse = to_response(response)?;
+
+    assert_eq!(
+        received,
+        expected_snapshot_with_reveal("prism", "target-user-456")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn avatar_admin_award_forwards_backend_permission_error() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_chatgpt_auth(
@@ -342,6 +406,7 @@ async fn avatar_admin_capabilities_read_returns_backend_capability_flags() -> Re
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "canGrantAwards": true,
+            "canGrantProofDropBoxes": true,
         })))
         .mount(&server)
         .await;
@@ -361,6 +426,7 @@ async fn avatar_admin_capabilities_read_returns_backend_capability_flags() -> Re
         received,
         CodexAvatarAdminCapabilitiesReadResponse {
             can_grant_awards: true,
+            can_grant_proof_drop_boxes: true,
         }
     );
     Ok(())
@@ -383,55 +449,127 @@ fn snapshot_json_for_user(equipped_avatar_id: &str, account_user_id: &str) -> Va
         "avatarDefinitions": [
             {
                 "avatarId": "clippy",
-                "slug": "clippy",
                 "displayName": "Clippy",
                 "description": "The default Codex paperclip avatar",
                 "rarity": "common",
                 "assetRef": "builtin:clippy",
                 "status": "active",
                 "sortOrder": 0,
-                "createdAt": 0,
-                "updatedAt": 0,
+                "collectionName": "Desktop Set",
+                "collectionDescription": "Classic office companions.",
+                "lore": "Helpful and persistent.",
+                "accentClassName": "bg-slate-100 text-slate-950",
+                "silhouetteGlowClassName": "bg-slate-300/45",
+                "isProgressVisible": true,
             },
             {
                 "avatarId": "prism",
-                "slug": "prism",
                 "displayName": "Prism",
                 "description": "A shiny earnable avatar",
                 "rarity": "rare",
                 "assetRef": "builtin:prism",
                 "status": "hidden",
                 "sortOrder": 10,
-                "createdAt": 1000,
-                "updatedAt": 2000,
+                "collectionName": "Prism Set",
+                "collectionDescription": "Light-bent mascots.",
+                "lore": "Glows softly.",
+                "accentClassName": "bg-violet-100 text-violet-950",
+                "silhouetteGlowClassName": "bg-violet-300/45",
+                "isProgressVisible": true,
             }
         ],
         "ownedAvatars": [
             {
                 "accountUserId": account_user_id,
                 "avatarId": "clippy",
-                "firstUnlockedAt": 100,
-                "lastAwardedAt": 100,
                 "sourceSummary": "Default avatar",
             },
             {
                 "accountUserId": account_user_id,
                 "avatarId": "prism",
-                "firstUnlockedAt": 200,
-                "lastAwardedAt": 300,
                 "sourceSummary": "Quest reward",
             }
         ],
         "equippedAvatarId": equipped_avatar_id,
-        "equippedAt": 400,
+        "boxRules": box_rules_json(),
+        "pityState": pity_state_json(),
+        "pendingRevealAwards": [],
         "updatedAt": 500,
-        "syncedAt": 600,
-        "catalogVersion": 700,
+    })
+}
+
+fn snapshot_json_with_reveal(equipped_avatar_id: &str, account_user_id: &str) -> Value {
+    let mut snapshot = snapshot_json_for_user(equipped_avatar_id, account_user_id);
+    snapshot["pendingRevealAwards"] = json!([reveal_award_json()]);
+    snapshot
+}
+
+fn box_rules_json() -> Value {
+    json!({
+        "rulesetVersion": "signal-seasons-v1",
+        "oddsTableVersion": "signal-seasons-v1",
+        "rareOrBetterPityThreshold": 10,
+        "legendaryPityThreshold": 40,
+        "guaranteedNewThreshold": 6,
+        "odds": [
+            {
+                "bucketId": "common",
+                "label": "Common",
+                "probabilityPercent": 63,
+            },
+            {
+                "bucketId": "rare",
+                "label": "Rare",
+                "probabilityPercent": 26,
+            },
+            {
+                "bucketId": "legendary",
+                "label": "Legendary",
+                "probabilityPercent": 1,
+            },
+            {
+                "bucketId": "no_drop",
+                "label": "No drop",
+                "probabilityPercent": 10,
+            },
+        ],
+    })
+}
+
+fn pity_state_json() -> Value {
+    json!({
+        "rollsSinceRareOrBetter": 1,
+        "rollsSinceLegendary": 8,
+        "nonNewOutcomeStreak": 0,
+        "guaranteedNewAvailable": true,
+    })
+}
+
+fn reveal_award_json() -> Value {
+    json!({
+        "awardId": "proof-drop-1",
+        "awardedAt": 123,
+        "sourceType": "proof-drop-box",
+        "sourceRef": "support-ticket-1",
+        "sourceSummary": "Manual proof-drop box",
+        "outcomeKind": "unlock",
+        "outcomeAvatarId": "prism",
+        "metadataJson": "{\"revealable\":true}",
+        "pityStateAfter": pity_state_json(),
     })
 }
 
 fn expected_snapshot(equipped_avatar_id: &str) -> CodexAvatarInventoryReadResponse {
     expected_snapshot_for_user(equipped_avatar_id, "account-123")
+}
+
+fn expected_snapshot_with_reveal(
+    equipped_avatar_id: &str,
+    account_user_id: &str,
+) -> CodexAvatarInventoryReadResponse {
+    let mut snapshot = expected_snapshot_for_user(equipped_avatar_id, account_user_id);
+    snapshot.pending_reveal_awards = vec![expected_reveal_award()];
+    snapshot
 }
 
 fn expected_snapshot_for_user(
@@ -443,49 +581,106 @@ fn expected_snapshot_for_user(
         avatar_definitions: vec![
             CodexAvatarDefinition {
                 avatar_id: "clippy".to_string(),
-                slug: "clippy".to_string(),
                 display_name: "Clippy".to_string(),
                 description: "The default Codex paperclip avatar".to_string(),
                 rarity: CodexAvatarRarity::Common,
                 asset_ref: "builtin:clippy".to_string(),
                 status: CodexAvatarStatus::Active,
                 sort_order: 0,
-                created_at: 0,
-                updated_at: 0,
+                collection_name: "Desktop Set".to_string(),
+                collection_description: "Classic office companions.".to_string(),
+                lore: "Helpful and persistent.".to_string(),
+                accent_class_name: "bg-slate-100 text-slate-950".to_string(),
+                silhouette_glow_class_name: "bg-slate-300/45".to_string(),
+                is_progress_visible: true,
             },
             CodexAvatarDefinition {
                 avatar_id: "prism".to_string(),
-                slug: "prism".to_string(),
                 display_name: "Prism".to_string(),
                 description: "A shiny earnable avatar".to_string(),
                 rarity: CodexAvatarRarity::Rare,
                 asset_ref: "builtin:prism".to_string(),
                 status: CodexAvatarStatus::Hidden,
                 sort_order: 10,
-                created_at: 1000,
-                updated_at: 2000,
+                collection_name: "Prism Set".to_string(),
+                collection_description: "Light-bent mascots.".to_string(),
+                lore: "Glows softly.".to_string(),
+                accent_class_name: "bg-violet-100 text-violet-950".to_string(),
+                silhouette_glow_class_name: "bg-violet-300/45".to_string(),
+                is_progress_visible: true,
             },
         ],
         owned_avatars: vec![
             CodexAvatarOwnership {
                 account_user_id: account_user_id.to_string(),
                 avatar_id: "clippy".to_string(),
-                first_unlocked_at: 100,
-                last_awarded_at: 100,
                 source_summary: Some("Default avatar".to_string()),
             },
             CodexAvatarOwnership {
                 account_user_id: account_user_id.to_string(),
                 avatar_id: "prism".to_string(),
-                first_unlocked_at: 200,
-                last_awarded_at: 300,
                 source_summary: Some("Quest reward".to_string()),
             },
         ],
         equipped_avatar_id: equipped_avatar_id.to_string(),
-        equipped_at: 400,
+        box_rules: expected_box_rules(),
+        pity_state: expected_pity_state(),
+        pending_reveal_awards: Vec::new(),
         updated_at: 500,
-        synced_at: 600,
-        catalog_version: Some(700),
+    }
+}
+
+fn expected_box_rules() -> CodexAvatarBoxRules {
+    CodexAvatarBoxRules {
+        ruleset_version: "signal-seasons-v1".to_string(),
+        odds_table_version: "signal-seasons-v1".to_string(),
+        rare_or_better_pity_threshold: 10,
+        legendary_pity_threshold: 40,
+        guaranteed_new_threshold: 6,
+        odds: vec![
+            CodexAvatarBoxOddsBucket {
+                bucket_id: "common".to_string(),
+                label: "Common".to_string(),
+                probability_percent: 63,
+            },
+            CodexAvatarBoxOddsBucket {
+                bucket_id: "rare".to_string(),
+                label: "Rare".to_string(),
+                probability_percent: 26,
+            },
+            CodexAvatarBoxOddsBucket {
+                bucket_id: "legendary".to_string(),
+                label: "Legendary".to_string(),
+                probability_percent: 1,
+            },
+            CodexAvatarBoxOddsBucket {
+                bucket_id: "no_drop".to_string(),
+                label: "No drop".to_string(),
+                probability_percent: 10,
+            },
+        ],
+    }
+}
+
+fn expected_pity_state() -> CodexAvatarPityState {
+    CodexAvatarPityState {
+        rolls_since_rare_or_better: 1,
+        rolls_since_legendary: 8,
+        non_new_outcome_streak: 0,
+        guaranteed_new_available: true,
+    }
+}
+
+fn expected_reveal_award() -> CodexAvatarRevealAward {
+    CodexAvatarRevealAward {
+        award_id: "proof-drop-1".to_string(),
+        awarded_at: 123,
+        source_type: "proof-drop-box".to_string(),
+        source_ref: Some("support-ticket-1".to_string()),
+        source_summary: Some("Manual proof-drop box".to_string()),
+        outcome_kind: "unlock".to_string(),
+        outcome_avatar_id: Some("prism".to_string()),
+        metadata_json: Some("{\"revealable\":true}".to_string()),
+        pity_state_after: expected_pity_state(),
     }
 }

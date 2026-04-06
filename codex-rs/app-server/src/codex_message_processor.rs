@@ -35,6 +35,7 @@ use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexAvatarAdminAwardGrantParams;
+use codex_app_server_protocol::CodexAvatarAdminProofDropGrantParams;
 use codex_app_server_protocol::CodexAvatarEquipParams;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollaborationModeListParams;
@@ -922,6 +923,10 @@ impl CodexMessageProcessor {
                 self.avatar_admin_award(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::AvatarAdminProofDrop { request_id, params } => {
+                self.avatar_admin_proof_drop(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::AvatarAdminCapabilitiesRead {
                 request_id,
                 params: _,
@@ -1743,6 +1748,27 @@ impl CodexMessageProcessor {
         params: CodexAvatarAdminAwardGrantParams,
     ) {
         match avatar_rpc::grant_admin_avatar_award(
+            &self.auth_manager,
+            &self.config.chatgpt_base_url,
+            params,
+        )
+        .await
+        {
+            Ok(response) => {
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn avatar_admin_proof_drop(
+        &self,
+        request_id: ConnectionRequestId,
+        params: CodexAvatarAdminProofDropGrantParams,
+    ) {
+        match avatar_rpc::grant_admin_avatar_proof_drop(
             &self.auth_manager,
             &self.config.chatgpt_base_url,
             params,

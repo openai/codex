@@ -204,6 +204,44 @@
     "CodexAvatarAdminCapabilitiesReadParams": {
       "type": "object"
     },
+    "CodexAvatarAdminProofDropGrantParams": {
+      "properties": {
+        "accountUserId": {
+          "type": "string"
+        },
+        "awardId": {
+          "type": "string"
+        },
+        "awardedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sourceRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSummary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountUserId",
+        "awardId",
+        "sourceType"
+      ],
+      "type": "object"
+    },
     "CodexAvatarEquipParams": {
       "properties": {
         "avatarId": {
@@ -4679,6 +4717,30 @@
         "params"
       ],
       "title": "Avatar/admin/awardRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "avatar/admin/proof-drop"
+          ],
+          "title": "Avatar/admin/proofDropRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CodexAvatarAdminProofDropGrantParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Avatar/admin/proofDropRequest",
       "type": "object"
     },
     {

@@ -1,6 +1,7 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::CodexAvatarAdminAwardGrantRequest;
 use crate::types::CodexAvatarAdminCapabilitiesResponse;
+use crate::types::CodexAvatarAdminProofDropGrantRequest;
 use crate::types::CodexAvatarEquipRequest;
 use crate::types::CodexAvatarInventoryResponse;
 use crate::types::ConfigFileResponse;
@@ -309,6 +310,29 @@ impl Client {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/avatars/admin/awards", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/avatars/admin/awards", self.base_url),
+        };
+        let req = self
+            .http
+            .post(&url)
+            .headers(self.headers())
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(&request_body);
+        let (body, ct) = self.exec_request_detailed(req, "POST", &url).await?;
+        self.decode_json::<CodexAvatarInventoryResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
+    }
+
+    pub async fn grant_admin_avatar_proof_drop(
+        &self,
+        request_body: CodexAvatarAdminProofDropGrantRequest,
+    ) -> std::result::Result<CodexAvatarInventoryResponse, RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => {
+                format!("{}/api/codex/avatars/admin/proof-drop", self.base_url)
+            }
+            PathStyle::ChatGptApi => {
+                format!("{}/wham/avatars/admin/proof-drop", self.base_url)
+            }
         };
         let req = self
             .http

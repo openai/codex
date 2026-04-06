@@ -16,6 +16,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::CodexAvatarAdminAwardGrantParams;
+use codex_app_server_protocol::CodexAvatarAdminProofDropGrantParams;
 use codex_app_server_protocol::CodexAvatarEquipParams;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CommandExecParams;
@@ -320,6 +321,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("avatar/admin/award", params).await
+    }
+
+    /// Send an `avatar/admin/proof-drop` JSON-RPC request.
+    pub async fn send_avatar_admin_proof_drop_request(
+        &mut self,
+        params: CodexAvatarAdminProofDropGrantParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("avatar/admin/proof-drop", params).await
     }
 
     /// Send an `avatar/admin/capabilities/read` JSON-RPC request.

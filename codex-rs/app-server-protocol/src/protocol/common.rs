@@ -500,6 +500,11 @@ client_request_definitions! {
         response: v2::CodexAvatarInventoryReadResponse,
     },
 
+    AvatarAdminProofDrop => "avatar/admin/proof-drop" {
+        params: v2::CodexAvatarAdminProofDropGrantParams,
+        response: v2::CodexAvatarInventoryReadResponse,
+    },
+
     AvatarAdminCapabilitiesRead => "avatar/admin/capabilities/read" {
         params: v2::CodexAvatarAdminCapabilitiesReadParams,
         response: v2::CodexAvatarAdminCapabilitiesReadResponse,
@@ -1613,15 +1618,46 @@ mod tests {
     }
 
     #[test]
+    fn serialize_avatar_admin_proof_drop() -> Result<()> {
+        let request = ClientRequest::AvatarAdminProofDrop {
+            request_id: RequestId::Integer(10),
+            params: v2::CodexAvatarAdminProofDropGrantParams {
+                account_user_id: "target-user-123".to_string(),
+                award_id: "proof-drop-1".to_string(),
+                source_type: "proof-drop-box".to_string(),
+                source_ref: Some("support-ticket-1".to_string()),
+                awarded_at: Some(123),
+                source_summary: Some("Manual proof-drop box".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "avatar/admin/proof-drop",
+                "id": 10,
+                "params": {
+                    "accountUserId": "target-user-123",
+                    "awardId": "proof-drop-1",
+                    "sourceType": "proof-drop-box",
+                    "sourceRef": "support-ticket-1",
+                    "awardedAt": 123,
+                    "sourceSummary": "Manual proof-drop box"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_avatar_admin_capabilities_read() -> Result<()> {
         let request = ClientRequest::AvatarAdminCapabilitiesRead {
-            request_id: RequestId::Integer(10),
+            request_id: RequestId::Integer(11),
             params: v2::CodexAvatarAdminCapabilitiesReadParams::default(),
         };
         assert_eq!(
             json!({
                 "method": "avatar/admin/capabilities/read",
-                "id": 10,
+                "id": 11,
                 "params": {}
             }),
             serde_json::to_value(&request)?,
