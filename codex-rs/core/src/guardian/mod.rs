@@ -62,7 +62,7 @@ pub(crate) struct GuardianAssessment {
 #[cfg(test)]
 use approval_request::format_guardian_action_pretty;
 #[cfg(test)]
-use approval_request::guardian_assessment_action_value;
+use approval_request::guardian_assessment_action;
 #[cfg(test)]
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]

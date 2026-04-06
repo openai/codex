@@ -48,7 +48,7 @@ fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
         .cloned()
         .or_else(|| env::var("PATH").ok())
         .unwrap_or_default();
-    let parts: Vec<String> = existing.split(';').map(|s| s.to_string()).collect();
+    let parts: Vec<String> = existing.split(';').map(ToString::to_string).collect();
     if parts
         .first()
         .map(|p| p.eq_ignore_ascii_case(prefix))
@@ -74,7 +74,7 @@ fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
     let exts: Vec<String> = default
         .split(';')
         .filter(|e| !e.is_empty())
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .collect();
     let exts_norm: Vec<String> = exts.iter().map(|e| e.to_ascii_uppercase()).collect();
     let want = [".BAT", ".CMD"];
@@ -110,7 +110,7 @@ fn ensure_denybin(tools: &[&str], denybin_dir: Option<&Path>) -> Result<PathBuf>
     fs::create_dir_all(&base)?;
     for tool in tools {
         for ext in [".bat", ".cmd"] {
-            let path = base.join(format!("{}{}", tool, ext));
+            let path = base.join(format!("{tool}{ext}"));
             if !path.exists() {
                 let mut f = File::create(&path)?;
                 f.write_all(b"@echo off\\r\\nexit /b 1\\r\\n")?;
@@ -162,7 +162,7 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     let base = ensure_denybin(&["ssh", "scp"], /*denybin_dir*/ None)?;
     for tool in ["curl", "wget"] {
         for ext in [".bat", ".cmd"] {
-            let p = base.join(format!("{}{}", tool, ext));
+            let p = base.join(format!("{tool}{ext}"));
             if p.exists() {
                 let _ = fs::remove_file(&p);
             }

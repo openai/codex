@@ -1,0 +1,14 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -154,6 +154,9 @@ cc_library(
+     ],
+     copts = select({
+-        "@platforms//os:windows": [],
++        "@platforms//os:windows": [
++            "-fno-stack-protector",
++            "-mno-stack-arg-probe",
++        ],
+         "//conditions:default": ["-std=c99"],
+     }),
+     defines = select({

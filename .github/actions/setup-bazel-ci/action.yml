@@ -9,9 +9,9 @@ inputs:
     required: false
     default: "false"
 outputs:
-  cache-hit:
-    description: Whether the Bazel repository cache key was restored exactly.
-    value: ${{ steps.cache_bazel_repository_restore.outputs.cache-hit }}
+  repository-cache-path:
+    description: Filesystem path used for the Bazel repository cache.
+    value: ${{ steps.configure_bazel_repository_cache.outputs.repository-cache-path }}
 
 runs:
   using: composite
@@ -41,17 +41,16 @@ runs:
     - name: Set up Bazel
       uses: bazelbuild/setup-bazelisk@v3
 
-    # Restore bazel repository cache so we don't have to redownload all the external dependencies
-    # on every CI run.
-    - name: Restore bazel repository cache
-      id: cache_bazel_repository_restore
-      uses: actions/cache/restore@v5
-      with:
-        path: |
-          ~/.cache/bazel-repo-cache
-        key: bazel-cache-${{ inputs.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
-        restore-keys: |
-          bazel-cache-${{ inputs.target }}
+    - name: Configure Bazel repository cache
+      id: configure_bazel_repository_cache
+      shell: pwsh
+      run: |
+        # Keep the repository cache under HOME on all runners. Windows `D:\a`
+        # cache paths match `.bazelrc`, but `actions/cache/restore` currently
+        # returns HTTP 400 for that path in the Windows clippy job.
+        $repositoryCachePath = Join-Path $HOME '.cache/bazel-repo-cache'
+        "repository-cache-path=$repositoryCachePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "BAZEL_REPOSITORY_CACHE=$repositoryCachePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Configure Bazel output root (Windows)
       if: runner.os == 'Windows'
@@ -65,10 +64,6 @@ runs:
         $repoContentsCache = Join-Path $env:RUNNER_TEMP "bazel-repo-contents-cache-$env:GITHUB_RUN_ID-$env:GITHUB_JOB"
         "BAZEL_OUTPUT_USER_ROOT=$bazelOutputUserRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "BAZEL_REPO_CONTENTS_CACHE=$repoContentsCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        if (-not $hasDDrive) {
-          $repositoryCache = Join-Path $env:USERPROFILE '.cache\bazel-repo-cache'
-          "BAZEL_REPOSITORY_CACHE=$repositoryCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        }
 
     - name: Expose MSVC SDK environment (Windows)
       if: runner.os == 'Windows'

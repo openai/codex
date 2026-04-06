@@ -6,7 +6,10 @@ use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(version)]
+#[command(
+    version,
+    override_usage = "codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]"
+)]
 pub struct Cli {
     /// Action to perform. If omitted, runs a new non-interactive session.
     #[command(subcommand)]
@@ -44,7 +47,7 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (--sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,
 
@@ -256,60 +259,5 @@ pub enum Color {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn resume_parses_prompt_after_global_flags() {
-        const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
-        let cli = Cli::parse_from([
-            "codex-exec",
-            "resume",
-            "--last",
-            "--json",
-            "--model",
-            "gpt-5.2-codex",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--skip-git-repo-check",
-            "--ephemeral",
-            PROMPT,
-        ]);
-
-        assert!(cli.ephemeral);
-        let Some(Command::Resume(args)) = cli.command else {
-            panic!("expected resume command");
-        };
-        let effective_prompt = args.prompt.clone().or_else(|| {
-            if args.last {
-                args.session_id.clone()
-            } else {
-                None
-            }
-        });
-        assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
-    }
-
-    #[test]
-    fn resume_accepts_output_last_message_flag_after_subcommand() {
-        const PROMPT: &str = "echo resume-with-output-file";
-        let cli = Cli::parse_from([
-            "codex-exec",
-            "resume",
-            "session-123",
-            "-o",
-            "/tmp/resume-output.md",
-            PROMPT,
-        ]);
-
-        assert_eq!(
-            cli.last_message_file,
-            Some(PathBuf::from("/tmp/resume-output.md"))
-        );
-        let Some(Command::Resume(args)) = cli.command else {
-            panic!("expected resume command");
-        };
-        assert_eq!(args.session_id.as_deref(), Some("session-123"));
-        assert_eq!(args.prompt.as_deref(), Some(PROMPT));
-    }
-}
+#[path = "cli_tests.rs"]
+mod tests;

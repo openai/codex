@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
 use crate::agent::role::DEFAULT_ROLE_NAME;
@@ -9,7 +10,6 @@ use crate::agent::next_thread_spawn_depth;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
     type Output = SpawnAgentResult;
 
@@ -90,6 +90,7 @@ impl ToolHandler for Handler {
                 )?),
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                    fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
                 },
             )
             .await

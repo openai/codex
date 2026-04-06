@@ -6,7 +6,6 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::LoaderOverrides;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -115,14 +114,8 @@ fn external_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
 
 async fn test_config() -> (TempDir, Config) {
     let home = TempDir::new().expect("create temp dir");
-    let config = ConfigBuilder::default()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(home.path().to_path_buf())
-        .loader_overrides(LoaderOverrides {
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(String::new()),
-            ..LoaderOverrides::default()
-        })
         .build()
         .await
         .expect("load default test config");

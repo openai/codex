@@ -1,12 +1,12 @@
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
-use crate::protocol::FileChange;
-use crate::protocol::FileSystemSandboxPolicy;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::FileSystemSandboxPolicy;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

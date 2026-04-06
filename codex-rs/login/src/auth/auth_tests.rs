@@ -2,16 +2,19 @@ use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
-use crate::token_data::KnownPlan as InternalKnownPlan;
-use crate::token_data::PlanType as InternalPlanType;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::KnownPlan as InternalKnownPlan;
+use codex_protocol::auth::PlanType as InternalPlanType;
 
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -105,7 +108,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
     .unwrap()
     .unwrap();
     assert_eq!(None, auth.api_key());
-    assert_eq!(crate::AuthMode::Chatgpt, auth.auth_mode());
+    assert_eq!(AuthMode::Chatgpt, auth.auth_mode());
     assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-12345"));
 
     let auth_dot_json = auth
@@ -155,7 +158,7 @@ async fn loads_api_key_from_auth_json() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(auth.auth_mode(), crate::AuthMode::ApiKey);
+    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
 
     assert!(auth.get_token_data().is_err());
@@ -252,6 +255,225 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
 }
 
+#[test]
+fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
+    let err = AuthDotJson::from_external_tokens(&ExternalAuthTokens::access_token_only(
+        "test-access-token",
+    ))
+    .expect_err("bearer-only external auth should not seed ChatGPT auth");
+
+    assert_eq!(
+        err.to_string(),
+        "external auth tokens are missing ChatGPT metadata"
+    );
+}
+
+#[tokio::test]
+async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
+    let script = ProviderAuthScript::new(&["provider-token", "next-token"]).unwrap();
+    let manager = AuthManager::external_bearer_only(script.auth_config());
+
+    let first = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    let second = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+
+    assert_eq!(first.as_deref(), Some("provider-token"));
+    assert_eq!(second.as_deref(), Some("provider-token"));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
+    assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ApiKey));
+}
+
+#[tokio::test]
+async fn external_bearer_only_auth_manager_disables_auto_refresh_when_interval_is_zero() {
+    let script = ProviderAuthScript::new(&["provider-token", "next-token"]).unwrap();
+    let mut auth_config = script.auth_config();
+    auth_config.refresh_interval_ms = 0;
+    let manager = AuthManager::external_bearer_only(auth_config);
+
+    let first = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    let second = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+
+    assert_eq!(first.as_deref(), Some("provider-token"));
+    assert_eq!(second.as_deref(), Some("provider-token"));
+}
+
+#[tokio::test]
+async fn external_bearer_only_auth_manager_returns_none_when_command_fails() {
+    let script = ProviderAuthScript::new_failing().unwrap();
+    let manager = AuthManager::external_bearer_only(script.auth_config());
+
+    assert_eq!(manager.auth().await, None);
+}
+
+#[tokio::test]
+async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
+    let script = ProviderAuthScript::new(&["provider-token", "refreshed-provider-token"]).unwrap();
+    let mut auth_config = script.auth_config();
+    auth_config.refresh_interval_ms = 0;
+    let manager = AuthManager::external_bearer_only(auth_config);
+    let initial_token = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    let mut recovery = manager.unauthorized_recovery();
+
+    assert!(recovery.has_next());
+    assert_eq!(recovery.mode_name(), "external");
+    assert_eq!(recovery.step_name(), "external_refresh");
+
+    let result = recovery
+        .next()
+        .await
+        .expect("external refresh should succeed");
+
+    assert_eq!(result.auth_state_changed(), Some(true));
+    let refreshed_token = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    assert_eq!(initial_token.as_deref(), Some("provider-token"));
+    assert_eq!(refreshed_token.as_deref(), Some("refreshed-provider-token"));
+}
+
+struct ProviderAuthScript {
+    tempdir: TempDir,
+    command: String,
+    args: Vec<String>,
+}
+
+impl ProviderAuthScript {
+    fn new(tokens: &[&str]) -> std::io::Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+        let token_file = tempdir.path().join("tokens.txt");
+        // `cmd.exe`'s `set /p` treats LF-only input as one line, so use CRLF on Windows.
+        let token_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
+        let mut token_file_contents = String::new();
+        for token in tokens {
+            token_file_contents.push_str(token);
+            token_file_contents.push_str(token_line_ending);
+        }
+        std::fs::write(&token_file, token_file_contents)?;
+
+        #[cfg(unix)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("print-token.sh");
+            std::fs::write(
+                &script_path,
+                r#"#!/bin/sh
+first_line=$(sed -n '1p' tokens.txt)
+printf '%s\n' "$first_line"
+tail -n +2 tokens.txt > tokens.next
+mv tokens.next tokens.txt
+"#,
+            )?;
+            let mut permissions = std::fs::metadata(&script_path)?.permissions();
+            {
+                use std::os::unix::fs::PermissionsExt;
+                permissions.set_mode(0o755);
+            }
+            std::fs::set_permissions(&script_path, permissions)?;
+            ("./print-token.sh".to_string(), Vec::new())
+        };
+
+        #[cfg(windows)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("print-token.cmd");
+            std::fs::write(
+                &script_path,
+                r#"@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+set "first_line="
+<tokens.txt set /p "first_line="
+if not defined first_line exit /b 1
+setlocal EnableDelayedExpansion
+echo(!first_line!
+endlocal
+more +1 tokens.txt > tokens.next
+move /y tokens.next tokens.txt >nul
+"#,
+            )?;
+            (
+                "cmd.exe".to_string(),
+                vec![
+                    "/d".to_string(),
+                    "/s".to_string(),
+                    "/c".to_string(),
+                    ".\\print-token.cmd".to_string(),
+                ],
+            )
+        };
+
+        Ok(Self {
+            tempdir,
+            command,
+            args,
+        })
+    }
+
+    fn new_failing() -> std::io::Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+
+        #[cfg(unix)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("fail.sh");
+            std::fs::write(
+                &script_path,
+                r#"#!/bin/sh
+exit 1
+"#,
+            )?;
+            let mut permissions = std::fs::metadata(&script_path)?.permissions();
+            {
+                use std::os::unix::fs::PermissionsExt;
+                permissions.set_mode(0o755);
+            }
+            std::fs::set_permissions(&script_path, permissions)?;
+            ("./fail.sh".to_string(), Vec::new())
+        };
+
+        #[cfg(windows)]
+        let (command, args) = (
+            "cmd.exe".to_string(),
+            vec![
+                "/d".to_string(),
+                "/s".to_string(),
+                "/c".to_string(),
+                "exit /b 1".to_string(),
+            ],
+        );
+
+        Ok(Self {
+            tempdir,
+            command,
+            args,
+        })
+    }
+
+    fn auth_config(&self) -> ModelProviderAuthInfo {
+        serde_json::from_value(json!({
+            "command": self.command,
+            "args": self.args,
+            // Process startup can be slow on loaded Windows CI workers, so leave enough slack to
+            // avoid turning these auth-cache assertions into a process-launch timing test.
+            "timeout_ms": 10_000,
+            "refresh_interval_ms": 60000,
+            "cwd": self.tempdir.path(),
+        }))
+        .expect("provider auth config should deserialize")
+    }
+}
+
 struct AuthFileParams {
     openai_api_key: Option<String>,
     chatgpt_plan_type: Option<String>,
@@ -259,42 +481,8 @@ struct AuthFileParams {
 }
 
 fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
+    let fake_jwt = fake_jwt_for_auth_file_params(&params)?;
     let auth_file = get_auth_file(codex_home);
-    // Create a minimal valid JWT for the id_token field.
-    #[derive(Serialize)]
-    struct Header {
-        alg: &'static str,
-        typ: &'static str,
-    }
-    let header = Header {
-        alg: "none",
-        typ: "JWT",
-    };
-    let mut auth_payload = serde_json::json!({
-        "chatgpt_user_id": "user-12345",
-        "user_id": "user-12345",
-    });
-
-    if let Some(chatgpt_plan_type) = params.chatgpt_plan_type {
-        auth_payload["chatgpt_plan_type"] = serde_json::Value::String(chatgpt_plan_type);
-    }
-
-    if let Some(chatgpt_account_id) = params.chatgpt_account_id {
-        let org_value = serde_json::Value::String(chatgpt_account_id);
-        auth_payload["chatgpt_account_id"] = org_value;
-    }
-
-    let payload = serde_json::json!({
-        "email": "user@example.com",
-        "email_verified": true,
-        "https://api.openai.com/auth": auth_payload,
-    });
-    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
-    let header_b64 = b64(&serde_json::to_vec(&header)?);
-    let payload_b64 = b64(&serde_json::to_vec(&payload)?);
-    let signature_b64 = b64(b"sig");
-    let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
-
     let auth_json_data = json!({
         "OPENAI_API_KEY": params.openai_api_key,
         "tokens": {
@@ -307,6 +495,42 @@ fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result
     let auth_json = serde_json::to_string_pretty(&auth_json_data)?;
     std::fs::write(auth_file, auth_json)?;
     Ok(fake_jwt)
+}
+
+fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<String> {
+    #[derive(Serialize)]
+    struct Header {
+        alg: &'static str,
+        typ: &'static str,
+    }
+
+    let header = Header {
+        alg: "none",
+        typ: "JWT",
+    };
+    let mut auth_payload = serde_json::json!({
+        "chatgpt_user_id": "user-12345",
+        "user_id": "user-12345",
+    });
+
+    if let Some(chatgpt_plan_type) = params.chatgpt_plan_type.as_ref() {
+        auth_payload["chatgpt_plan_type"] = serde_json::Value::String(chatgpt_plan_type.clone());
+    }
+
+    if let Some(chatgpt_account_id) = params.chatgpt_account_id.as_ref() {
+        auth_payload["chatgpt_account_id"] = serde_json::Value::String(chatgpt_account_id.clone());
+    }
+
+    let payload = serde_json::json!({
+        "email": "user@example.com",
+        "email_verified": true,
+        "https://api.openai.com/auth": auth_payload,
+    });
+    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let header_b64 = b64(&serde_json::to_vec(&header)?);
+    let payload_b64 = b64(&serde_json::to_vec(&payload)?);
+    let signature_b64 = b64(b"sig");
+    Ok(format!("{header_b64}.{payload_b64}.{signature_b64}"))
 }
 
 async fn build_config(

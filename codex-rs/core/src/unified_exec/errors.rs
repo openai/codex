@@ -1,4 +1,4 @@
-use crate::exec::ExecToolCallOutput;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -3,13 +3,16 @@ use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::FeedbackCategory;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::ThreadSessionState;
+use crate::app_server_session::app_server_rate_limit_snapshots_to_core;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -55,6 +58,9 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
@@ -76,21 +82,21 @@ use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_config::types::ApprovalsReviewer;
+use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::types::ApprovalsReviewer;
-use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::message_history;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
@@ -108,6 +114,7 @@ use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
@@ -227,16 +234,6 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
         },
         _ => None,
     }
-}
-
-fn convert_via_json<T, U>(value: T) -> Option<U>
-where
-    T: serde::Serialize,
-    U: serde::de::DeserializeOwned,
-{
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn default_exec_approval_decisions(
@@ -469,8 +466,10 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
-fn emit_system_bwrap_warning(app_event_tx: &AppEventSender) {
-    let Some(message) = codex_core::config::system_bwrap_warning() else {
+fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
+    let Some(message) =
+        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    else {
         return;
     };
 
@@ -498,6 +497,15 @@ enum ThreadBufferedEvent {
     Notification(ServerNotification),
     Request(ServerRequest),
     HistoryEntryResponse(GetHistoryEntryResponseEvent),
+    FeedbackSubmission(FeedbackThreadEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FeedbackThreadEvent {
+    category: FeedbackCategory,
+    include_logs: bool,
+    feedback_audience: FeedbackAudience,
+    result: Result<String, String>,
 }
 
 #[derive(Debug)]
@@ -519,6 +527,7 @@ impl ThreadEventStore {
             ThreadBufferedEvent::Request(_)
                 | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
                 | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
+                | ThreadBufferedEvent::FeedbackSubmission(_)
         )
     }
 
@@ -623,7 +632,8 @@ impl ThreadEventStore {
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
-                    | ThreadBufferedEvent::HistoryEntryResponse(_) => true,
+                    | ThreadBufferedEvent::HistoryEntryResponse(_)
+                    | ThreadBufferedEvent::FeedbackSubmission(_) => true,
                 })
                 .cloned()
                 .collect(),
@@ -1026,11 +1036,35 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
     .then_some(turn_error)
 }
 
-fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
-    let TypedRequestError::Server { source, .. } = error else {
-        return false;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActiveTurnSteerRace {
+    Missing,
+    ExpectedTurnMismatch { actual_turn_id: String },
+}
+
+fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRace> {
+    let TypedRequestError::Server { method, source } = error else {
+        return None;
     };
-    source.message == "no active turn to steer"
+    if method != "turn/steer" {
+        return None;
+    }
+    if source.message == "no active turn to steer" {
+        return Some(ActiveTurnSteerRace::Missing);
+    }
+
+    // App-server steer mismatches mean our cached active turn id is stale, but the response
+    // includes the server's current active turn so we can resynchronize and retry once.
+    let mismatch_prefix = "expected active turn id `";
+    let mismatch_separator = "` but found `";
+    let actual_turn_id = source
+        .message
+        .strip_prefix(mismatch_prefix)?
+        .split_once(mismatch_separator)?
+        .1
+        .strip_suffix('`')?
+        .to_string();
+    Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
 impl App {
@@ -1050,7 +1084,6 @@ impl App {
             model_catalog: self.model_catalog.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
-            feedback_audience: self.feedback_audience,
             status_account_display: self.chat_widget.status_account_display().cloned(),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
@@ -1682,11 +1715,8 @@ impl App {
                 let network_approval_context = params
                     .network_approval_context
                     .clone()
-                    .and_then(convert_via_json);
-                let additional_permissions = params
-                    .additional_permissions
-                    .clone()
-                    .and_then(convert_via_json);
+                    .map(network_approval_context_to_core);
+                let additional_permissions = params.additional_permissions.clone().map(Into::into);
                 let proposed_execpolicy_amendment = params
                     .proposed_execpolicy_amendment
                     .clone()
@@ -1781,10 +1811,7 @@ impl App {
                     thread_label,
                     call_id: params.item_id.clone(),
                     reason: params.reason.clone(),
-                    permissions: serde_json::from_value(
-                        serde_json::to_value(&params.permissions).ok()?,
-                    )
-                    .ok()?,
+                    permissions: params.permissions.clone().into(),
                 }),
             ),
             _ => None,
@@ -1857,6 +1884,17 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+        });
+    }
+
+    fn refresh_rate_limits(&mut self, app_server: &AppServerSession, request_id: u64) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_account_rate_limits(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::RateLimitsLoaded { request_id, result });
         });
     }
 
@@ -1936,6 +1974,124 @@ impl App {
                 result,
             });
         });
+    }
+
+    fn submit_feedback(
+        &mut self,
+        app_server: &AppServerSession,
+        category: FeedbackCategory,
+        reason: Option<String>,
+        include_logs: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        let origin_thread_id = self.chat_widget.thread_id();
+        let rollout_path = if include_logs {
+            self.chat_widget.rollout_path()
+        } else {
+            None
+        };
+        let params = build_feedback_upload_params(
+            origin_thread_id,
+            rollout_path,
+            category,
+            reason,
+            include_logs,
+        );
+        tokio::spawn(async move {
+            let result = fetch_feedback_upload(request_handle, params)
+                .await
+                .map(|response| response.thread_id)
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::FeedbackSubmitted {
+                origin_thread_id,
+                category,
+                include_logs,
+                result,
+            });
+        });
+    }
+
+    fn handle_feedback_thread_event(&mut self, event: FeedbackThreadEvent) {
+        match event.result {
+            Ok(thread_id) => {
+                self.chat_widget
+                    .add_to_history(crate::bottom_pane::feedback_success_cell(
+                        event.category,
+                        event.include_logs,
+                        &thread_id,
+                        event.feedback_audience,
+                    ))
+            }
+            Err(err) => self
+                .chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to upload feedback: {err}"
+                ))),
+        }
+    }
+
+    async fn enqueue_thread_feedback_event(
+        &mut self,
+        thread_id: ThreadId,
+        event: FeedbackThreadEvent,
+    ) {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard
+                .buffer
+                .push_back(ThreadBufferedEvent::FeedbackSubmission(event.clone()));
+            if guard.buffer.len() > guard.capacity
+                && let Some(removed) = guard.buffer.pop_front()
+                && let ThreadBufferedEvent::Request(request) = &removed
+            {
+                guard
+                    .pending_interactive_replay
+                    .note_evicted_server_request(request);
+            }
+            guard.active
+        };
+
+        if should_send {
+            match sender.try_send(ThreadBufferedEvent::FeedbackSubmission(event)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
+        }
+    }
+
+    async fn handle_feedback_submitted(
+        &mut self,
+        origin_thread_id: Option<ThreadId>,
+        category: FeedbackCategory,
+        include_logs: bool,
+        result: Result<String, String>,
+    ) {
+        let event = FeedbackThreadEvent {
+            category,
+            include_logs,
+            feedback_audience: self.feedback_audience,
+            result,
+        };
+        if let Some(thread_id) = origin_thread_id {
+            self.enqueue_thread_feedback_event(thread_id, event).await;
+        } else {
+            self.handle_feedback_thread_event(event);
+        }
     }
 
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
@@ -2053,7 +2209,7 @@ impl App {
         match op.view() {
             AppCommandView::Interrupt => {
                 let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await else {
-                    return Ok(false);
+                    return Ok(true);
                 };
                 app_server.turn_interrupt(thread_id, turn_id).await?;
                 Ok(true)
@@ -2074,25 +2230,65 @@ impl App {
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                    match app_server
-                        .turn_steer(thread_id, turn_id, items.to_vec())
-                        .await
-                    {
-                        Ok(_) => return Ok(true),
-                        Err(error) => {
-                            if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
-                                if !self.chat_widget.enqueue_rejected_steer() {
-                                    self.chat_widget.add_error_message(turn_error.message);
+                    let mut steer_turn_id = turn_id;
+                    let mut retried_after_turn_mismatch = false;
+                    loop {
+                        match app_server
+                            .turn_steer(thread_id, steer_turn_id.clone(), items.to_vec())
+                            .await
+                        {
+                            Ok(_) => return Ok(true),
+                            Err(error) => {
+                                if let Some(turn_error) =
+                                    active_turn_not_steerable_turn_error(&error)
+                                {
+                                    if !self.chat_widget.enqueue_rejected_steer() {
+                                        self.chat_widget.add_error_message(turn_error.message);
+                                    }
+                                    return Ok(true);
                                 }
-                                return Ok(true);
-                            } else if active_turn_missing_steer_error(&error) {
-                                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-                                    let mut store = channel.store.lock().await;
-                                    store.clear_active_turn_id();
+                                match active_turn_steer_race(&error) {
+                                    Some(ActiveTurnSteerRace::Missing) => {
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.clear_active_turn_id();
+                                        }
+                                        should_start_turn = true;
+                                        break;
+                                    }
+                                    Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                                        actual_turn_id,
+                                    }) if !retried_after_turn_mismatch
+                                        && actual_turn_id != steer_turn_id =>
+                                    {
+                                        // Review flows can swap the active turn before the TUI
+                                        // processes the corresponding notification. Retry once with
+                                        // the server-reported turn id so non-steerable review turns
+                                        // still fall through to the existing queueing behavior.
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.active_turn_id = Some(actual_turn_id.clone());
+                                        }
+                                        steer_turn_id = actual_turn_id;
+                                        retried_after_turn_mismatch = true;
+                                    }
+                                    Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                                        actual_turn_id,
+                                    }) => {
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.active_turn_id = Some(actual_turn_id);
+                                        }
+                                        return Err(error.into());
+                                    }
+                                    None => return Err(error.into()),
                                 }
-                                should_start_turn = true;
-                            } else {
-                                return Err(error.into());
                             }
                         }
                     }
@@ -2531,6 +2727,9 @@ impl App {
                 ThreadBufferedEvent::HistoryEntryResponse(event) => {
                     self.enqueue_thread_history_entry_response(thread_id, event)
                         .await?;
+                }
+                ThreadBufferedEvent::FeedbackSubmission(event) => {
+                    self.enqueue_thread_feedback_event(thread_id, event).await;
                 }
             }
         }
@@ -3363,7 +3562,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
-        emit_system_bwrap_warning(&app_event_tx);
+        emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -3413,7 +3612,7 @@ impl App {
             /*account_id*/ None,
             bootstrap.account_email.clone(),
             auth_mode,
-            codex_core::default_client::originator().value,
+            codex_login::default_client::originator().value,
             config.otel.log_user_prompt,
             user_agent(),
             SessionSource::Cli,
@@ -3453,7 +3652,6 @@ impl App {
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
                     model: Some(model.clone()),
@@ -3488,7 +3686,6 @@ impl App {
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
@@ -3528,7 +3725,6 @@ impl App {
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
@@ -4229,9 +4425,23 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            AppEvent::RefreshRateLimits { request_id } => {
+                self.refresh_rate_limits(app_server, request_id);
             }
+            AppEvent::RateLimitsLoaded { request_id, result } => match result {
+                Ok(snapshots) => {
+                    for snapshot in snapshots {
+                        self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                    }
+                    self.chat_widget
+                        .finish_status_rate_limit_refresh(request_id);
+                }
+                Err(err) => {
+                    tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+                    self.chat_widget
+                        .finish_status_rate_limit_refresh(request_id);
+                }
+            },
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -4288,6 +4498,22 @@ impl App {
             }
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
+            }
+            AppEvent::SubmitFeedback {
+                category,
+                reason,
+                include_logs,
+            } => {
+                self.submit_feedback(app_server, category, reason, include_logs);
+            }
+            AppEvent::FeedbackSubmitted {
+                origin_thread_id,
+                category,
+                include_logs,
+                result,
+            } => {
+                self.handle_feedback_submitted(origin_thread_id, category, include_logs, result)
+                    .await;
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
@@ -5380,6 +5606,9 @@ impl App {
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
             }
+            ThreadBufferedEvent::FeedbackSubmission(event) => {
+                self.handle_feedback_thread_event(event);
+            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -5396,6 +5625,9 @@ impl App {
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
+            }
+            ThreadBufferedEvent::FeedbackSubmission(event) => {
+                self.handle_feedback_thread_event(event);
             }
         }
     }
@@ -5800,6 +6032,21 @@ async fn fetch_all_mcp_server_statuses(
     Ok(statuses)
 }
 
+async fn fetch_account_rate_limits(
+    request_handle: AppServerRequestHandle,
+) -> Result<Vec<RateLimitSnapshot>> {
+    let request_id = RequestId::String(format!("account-rate-limits-{}", Uuid::new_v4()));
+    let response: GetAccountRateLimitsResponse = request_handle
+        .request_typed(ClientRequest::GetAccountRateLimits {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/rateLimits/read failed in TUI")?;
+
+    Ok(app_server_rate_limit_snapshots_to_core(response))
+}
+
 async fn fetch_plugins_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
@@ -5863,6 +6110,38 @@ async fn fetch_plugin_uninstall(
         })
         .await
         .wrap_err("plugin/uninstall failed in TUI")
+}
+
+fn build_feedback_upload_params(
+    origin_thread_id: Option<ThreadId>,
+    rollout_path: Option<PathBuf>,
+    category: FeedbackCategory,
+    reason: Option<String>,
+    include_logs: bool,
+) -> FeedbackUploadParams {
+    let extra_log_files = if include_logs {
+        rollout_path.map(|rollout_path| vec![rollout_path])
+    } else {
+        None
+    };
+    FeedbackUploadParams {
+        classification: crate::bottom_pane::feedback_classification(category).to_string(),
+        reason,
+        thread_id: origin_thread_id.map(|thread_id| thread_id.to_string()),
+        include_logs,
+        extra_log_files,
+    }
+}
+
+async fn fetch_feedback_upload(
+    request_handle: AppServerRequestHandle,
+    params: FeedbackUploadParams,
+) -> Result<FeedbackUploadResponse> {
+    let request_id = RequestId::String(format!("feedback-upload-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::FeedbackUpload { request_id, params })
+        .await
+        .wrap_err("feedback/upload failed in TUI")
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the
@@ -5932,6 +6211,7 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -5953,6 +6233,7 @@ mod tests {
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
     use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
+    use codex_app_server_protocol::PermissionsRequestApprovalParams;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -5969,9 +6250,9 @@ mod tests {
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
+    use codex_config::types::ModelAvailabilityNuxConfig;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::config::types::ModelAvailabilityNuxConfig;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
@@ -5979,6 +6260,7 @@ mod tests {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -5994,8 +6276,10 @@ mod tests {
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use codex_protocol::request_permissions::RequestPermissionProfile;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -6005,6 +6289,10 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
     use tokio::time;
+
+    fn test_absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -6262,7 +6550,6 @@ mod tests {
             model_catalog: app.model_catalog.clone(),
             feedback: codex_feedback::CodexFeedback::new(),
             is_first_run: false,
-            feedback_audience: app.feedback_audience,
             status_account_display: None,
             initial_plan_type: None,
             model: Some(model),
@@ -8083,13 +8370,16 @@ guardian_approval = true
         };
         params.network_approval_context = Some(AppServerNetworkApprovalContext {
             host: "example.com".to_string(),
-            protocol: AppServerNetworkApprovalProtocol::Https,
+            protocol: AppServerNetworkApprovalProtocol::Socks5Tcp,
         });
         params.additional_permissions = Some(AdditionalPermissionProfile {
             network: Some(AdditionalNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: None,
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                write: Some(vec![test_absolute_path("/tmp/write")]),
+            }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
             host: "example.com".to_string(),
@@ -8112,7 +8402,7 @@ guardian_approval = true
             network_approval_context,
             Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
-                protocol: NetworkApprovalProtocol::Https,
+                protocol: NetworkApprovalProtocol::Socks5Tcp,
             })
         );
         assert_eq!(
@@ -8121,7 +8411,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: None,
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                    write: Some(vec![test_absolute_path("/tmp/write")]),
+                }),
             })
         );
         assert_eq!(
@@ -8172,6 +8465,53 @@ guardian_approval = true
                 "-lc".to_string(),
                 script.to_string(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_permissions_approval_preserves_file_system_permissions() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let request = ServerRequest::PermissionsRequestApproval {
+            request_id: AppServerRequestId::Integer(7),
+            params: PermissionsRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-approval".to_string(),
+                item_id: "call-approval".to_string(),
+                reason: Some("Need access to .git".to_string()),
+                permissions: codex_app_server_protocol::RequestPermissionProfile {
+                    network: Some(AdditionalNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    file_system: Some(AdditionalFileSystemPermissions {
+                        read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                        write: Some(vec![test_absolute_path("/tmp/write")]),
+                    }),
+                },
+            },
+        };
+
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
+            permissions,
+            ..
+        })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected permissions approval request");
+        };
+
+        assert_eq!(
+            permissions,
+            RequestPermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                    write: Some(vec![test_absolute_path("/tmp/write")]),
+                }),
+            }
         );
     }
 
@@ -8297,6 +8637,7 @@ guardian_approval = true
             ServerNotification::ThreadStarted(ThreadStartedNotification {
                 thread: Thread {
                     id: agent_thread_id.to_string(),
+                    forked_from_id: None,
                     preview: "agent thread".to_string(),
                     ephemeral: false,
                     model_provider: "agent-provider".to_string(),
@@ -8377,6 +8718,7 @@ guardian_approval = true
             ServerNotification::ThreadStarted(ThreadStartedNotification {
                 thread: Thread {
                     id: agent_thread_id.to_string(),
+                    forked_from_id: None,
                     preview: "agent thread".to_string(),
                     ephemeral: false,
                     model_provider: "agent-provider".to_string(),
@@ -9096,6 +9438,132 @@ guardian_approval = true
         );
     }
 
+    #[test]
+    fn build_feedback_upload_params_includes_thread_id_and_rollout_path() {
+        let thread_id = ThreadId::new();
+        let rollout_path = PathBuf::from("/tmp/rollout.jsonl");
+
+        let params = build_feedback_upload_params(
+            Some(thread_id),
+            Some(rollout_path.clone()),
+            FeedbackCategory::SafetyCheck,
+            Some("needs follow-up".to_string()),
+            /*include_logs*/ true,
+        );
+
+        assert_eq!(params.classification, "safety_check");
+        assert_eq!(params.reason, Some("needs follow-up".to_string()));
+        assert_eq!(params.thread_id, Some(thread_id.to_string()));
+        assert_eq!(params.include_logs, true);
+        assert_eq!(params.extra_log_files, Some(vec![rollout_path]));
+    }
+
+    #[test]
+    fn build_feedback_upload_params_omits_rollout_path_without_logs() {
+        let params = build_feedback_upload_params(
+            /*origin_thread_id*/ None,
+            Some(PathBuf::from("/tmp/rollout.jsonl")),
+            FeedbackCategory::GoodResult,
+            /*reason*/ None,
+            /*include_logs*/ false,
+        );
+
+        assert_eq!(params.classification, "good_result");
+        assert_eq!(params.reason, None);
+        assert_eq!(params.thread_id, None);
+        assert_eq!(params.include_logs, false);
+        assert_eq!(params.extra_log_files, None);
+    }
+
+    #[tokio::test]
+    async fn feedback_submission_without_thread_emits_error_history_cell() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.handle_feedback_submitted(
+            /*origin_thread_id*/ None,
+            FeedbackCategory::Bug,
+            /*include_logs*/ true,
+            Err("boom".to_string()),
+        )
+        .await;
+
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected feedback error history cell, saw {other:?}"),
+        };
+        assert_eq!(
+            lines_to_single_string(&cell.display_lines(/*width*/ 120)),
+            "■ Failed to upload feedback: boom"
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_submission_for_inactive_thread_replays_into_origin_thread() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let origin_thread_id = ThreadId::new();
+        let active_thread_id = ThreadId::new();
+        let origin_session = test_thread_session(origin_thread_id, PathBuf::from("/tmp/origin"));
+        let active_session = test_thread_session(active_thread_id, PathBuf::from("/tmp/active"));
+        app.thread_event_channels.insert(
+            origin_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                origin_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.thread_event_channels.insert(
+            active_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                active_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.activate_thread_channel(active_thread_id).await;
+        app.chat_widget.handle_thread_session(active_session);
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_feedback_submitted(
+            Some(origin_thread_id),
+            FeedbackCategory::Bug,
+            /*include_logs*/ true,
+            Ok("uploaded-thread".to_string()),
+        )
+        .await;
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
+
+        let snapshot = {
+            let channel = app
+                .thread_event_channels
+                .get(&origin_thread_id)
+                .expect("origin thread channel should exist");
+            let store = channel.store.lock().await;
+            assert!(matches!(
+                store.buffer.back(),
+                Some(ThreadBufferedEvent::FeedbackSubmission(_))
+            ));
+            store.snapshot()
+        };
+
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+        let mut rendered_cells = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+            }
+        }
+        assert!(rendered_cells.iter().any(|cell| {
+            cell.contains("• Feedback uploaded. Please open an issue using the following URL:")
+                && cell.contains("uploaded-thread")
+        }));
+    }
+
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -9303,7 +9771,7 @@ guardian_approval = true
     }
 
     #[test]
-    fn active_turn_missing_steer_error_detects_stale_turn_race() {
+    fn active_turn_steer_race_detects_missing_active_turn() {
         let error = TypedRequestError::Server {
             method: "turn/steer".to_string(),
             source: JSONRPCErrorError {
@@ -9313,8 +9781,31 @@ guardian_approval = true
             },
         };
 
-        assert!(active_turn_missing_steer_error(&error));
+        assert_eq!(
+            active_turn_steer_race(&error),
+            Some(ActiveTurnSteerRace::Missing)
+        );
         assert_eq!(active_turn_not_steerable_turn_error(&error), None);
+    }
+
+    #[test]
+    fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: "expected active turn id `turn-expected` but found `turn-actual`"
+                    .to_string(),
+                data: None,
+            },
+        };
+
+        assert_eq!(
+            active_turn_steer_race(&error),
+            Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                actual_turn_id: "turn-actual".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -10001,7 +10492,6 @@ guardian_approval = true
             model_catalog: app.model_catalog.clone(),
             feedback: app.feedback.clone(),
             is_first_run: false,
-            feedback_audience: app.feedback_audience,
             status_account_display: app.chat_widget.status_account_display().cloned(),
             initial_plan_type: app.chat_widget.current_plan_type(),
             model: Some(app.chat_widget.current_model().to_string()),
@@ -10190,6 +10680,7 @@ guardian_approval = true
             &ThreadRollbackResponse {
                 thread: Thread {
                     id: thread_id.to_string(),
+                    forked_from_id: None,
                     preview: String::new(),
                     ephemeral: false,
                     model_provider: "openai".to_string(),
@@ -10305,6 +10796,24 @@ guardian_approval = true
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn interrupt_without_active_turn_is_treated_as_handled() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let op = AppCommand::interrupt();
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            .await
+            .expect("interrupt submission should not fail");
+
+        assert_eq!(handled, true);
     }
 
     #[tokio::test]

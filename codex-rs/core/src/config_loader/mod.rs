@@ -11,6 +11,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -730,6 +731,11 @@ fn normalize_project_trust_lookup_key(key: String) -> String {
         key
     }
 }
+/// Convert the path to the canonical trust key we store and compare against.
+/// On Windows this also normalizes case so alias paths still match.
+pub fn project_trust_key(project_path: &Path) -> String {
+    normalized_project_trust_key(project_path)
+}
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
 /// `toml::Value` with the same shape but with paths resolved.
@@ -921,6 +927,7 @@ async fn load_project_layers(
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<ApprovalsReviewer>,
     sandbox_mode: Option<SandboxMode>,
 }
 
@@ -930,10 +937,14 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
 
         let LegacyManagedConfigToml {
             approval_policy,
+            approvals_reviewer,
             sandbox_mode,
         } = legacy;
         if let Some(approval_policy) = approval_policy {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
+        }
+        if let Some(approvals_reviewer) = approvals_reviewer {
+            config_requirements_toml.allowed_approvals_reviewers = Some(vec![approvals_reviewer]);
         }
         if let Some(sandbox_mode) = sandbox_mode {
             let required_mode: SandboxModeRequirement = sandbox_mode.into();
@@ -998,6 +1009,7 @@ foo = "xyzzy"
     fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
         };
 
@@ -1009,6 +1021,22 @@ foo = "xyzzy"
                 SandboxModeRequirement::ReadOnly,
                 SandboxModeRequirement::WorkspaceWrite
             ])
+        );
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_includes_approvals_reviewer() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            sandbox_mode: None,
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_approvals_reviewers,
+            Some(vec![ApprovalsReviewer::GuardianSubagent])
         );
     }
 

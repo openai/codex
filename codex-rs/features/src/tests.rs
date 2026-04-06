@@ -127,6 +127,12 @@ fn tool_search_is_under_development_and_disabled_by_default() {
 }
 
 #[test]
+fn general_analytics_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::GeneralAnalytics.default_enabled(), false);
+}
+
+#[test]
 fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
     assert_eq!(
         feature_for_key("use_legacy_landlock"),

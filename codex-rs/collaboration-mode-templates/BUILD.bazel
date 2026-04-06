@@ -1,0 +1,12 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "collaboration-mode-templates",
+    crate_name = "codex_collaboration_mode_templates",
+    compile_data = glob(["templates/*.md"]),
+)
+
+exports_files(
+    glob(["templates/*.md"]),
+    visibility = ["//visibility:public"],
+)

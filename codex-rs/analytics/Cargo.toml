@@ -18,6 +18,7 @@ codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+os_info = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha1 = { workspace = true }
 tokio = { workspace = true, features = [

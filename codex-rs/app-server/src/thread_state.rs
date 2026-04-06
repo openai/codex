@@ -16,6 +16,7 @@ use std::sync::Weak;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tracing::error;
 
 type PendingInterruptQueue = Vec<(
     ConnectionRequestId,
@@ -113,6 +114,38 @@ impl ThreadState {
         if !self.current_turn_history.has_active_turn() {
             self.current_turn_history.reset();
         }
+    }
+}
+
+pub(crate) async fn resolve_server_request_on_thread_listener(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    request_id: RequestId,
+) {
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let listener_command_tx = {
+        let state = thread_state.lock().await;
+        state.listener_command_tx()
+    };
+    let Some(listener_command_tx) = listener_command_tx else {
+        error!("failed to remove pending client request: thread listener is not running");
+        return;
+    };
+
+    if listener_command_tx
+        .send(ThreadListenerCommand::ResolveServerRequest {
+            request_id,
+            completion_tx,
+        })
+        .is_err()
+    {
+        error!(
+            "failed to remove pending client request: thread listener command channel is closed"
+        );
+        return;
+    }
+
+    if let Err(err) = completion_rx.await {
+        error!("failed to remove pending client request: {err}");
     }
 }
 

@@ -480,7 +480,7 @@ pub fn main() -> Result<()> {
         let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
         return Err(err);
     }
-    let log_dir_owned = log_dir.map(|p| p.to_path_buf());
+    let log_dir_owned = log_dir.map(Path::to_path_buf);
     let out_thread = spawn_output_reader(
         Arc::clone(&pipe_write),
         stdout_handle,

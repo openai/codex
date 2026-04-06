@@ -1,4 +1,4 @@
-use crate::config::types::McpServerConfig;
+use codex_config::types::McpServerConfig;
 
 mod discoverable;
 mod injection;
