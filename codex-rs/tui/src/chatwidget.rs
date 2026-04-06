@@ -43,6 +43,7 @@ use url::Url;
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
@@ -76,6 +77,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::GuardianApprovalReviewAction;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerStartupState;
@@ -90,12 +92,12 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_chatgpt::connectors;
+use codex_config::types::ApprovalsReviewer;
+use codex_config::types::Notifications;
+use codex_config::types::WindowsSandboxModeToml;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
-use codex_core::config::types::ApprovalsReviewer;
-use codex_core::config::types::Notifications;
-use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
 use codex_core::plugins::PluginsManager;
@@ -168,6 +170,7 @@ use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 #[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
@@ -774,7 +777,7 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
-    // Final-answer agent message observed during the active turn. App-server turn completion
+    // Latest agent message observed during the active turn. App-server turn completion
     // notifications do not repeat this payload, so we promote it when the turn completes.
     pending_turn_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
@@ -1281,16 +1284,6 @@ fn thread_session_state_to_legacy_event(
     }
 }
 
-fn convert_via_json<T, U>(value: T) -> Option<U>
-where
-    T: serde::Serialize,
-    U: serde::de::DeserializeOwned,
-{
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| serde_json::from_value(value).ok())
-}
-
 fn hook_output_entry_from_notification(
     entry: codex_app_server_protocol::HookOutputEntry,
 ) -> codex_protocol::protocol::HookOutputEntry {
@@ -1369,8 +1362,8 @@ fn exec_approval_request_from_params(
         reason: params.reason,
         network_approval_context: params
             .network_approval_context
-            .and_then(convert_via_json),
-        additional_permissions: params.additional_permissions.and_then(convert_via_json),
+            .map(network_approval_context_to_core),
+        additional_permissions: params.additional_permissions.map(Into::into),
         turn_id: params.turn_id,
         approval_id: params.approval_id,
         proposed_execpolicy_amendment: params
@@ -1557,10 +1550,7 @@ fn request_permissions_from_params(
         turn_id: params.turn_id,
         call_id: params.item_id,
         reason: params.reason,
-        permissions: serde_json::from_value(
-            serde_json::to_value(params.permissions).unwrap_or(serde_json::Value::Null),
-        )
-        .unwrap_or_default(),
+        permissions: params.permissions.into(),
     }
 }
 
@@ -3264,85 +3254,53 @@ impl ChatWidget {
     /// render the final approved/denied history cell when guardian returns a
     /// decision.
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
-        // Guardian emits a compact JSON action payload; map the stable fields we
-        // care about into a short footer/history summary without depending on
-        // the full raw JSON shape in the rest of the widget.
-        let guardian_action_summary = |action: &serde_json::Value| {
-            let tool = action.get("tool").and_then(serde_json::Value::as_str)?;
-            match tool {
-                "shell" | "exec_command" => match action.get("command") {
-                    Some(serde_json::Value::String(command)) => Some(command.clone()),
-                    Some(serde_json::Value::Array(command)) => {
-                        let args = command
-                            .iter()
-                            .map(serde_json::Value::as_str)
-                            .collect::<Option<Vec<_>>>()?;
-                        shlex::try_join(args.iter().copied())
-                            .ok()
-                            .or_else(|| Some(args.join(" ")))
-                    }
-                    _ => None,
-                },
-                "apply_patch" => {
-                    let files = action
-                        .get("files")
-                        .and_then(serde_json::Value::as_array)
-                        .map(|files| {
-                            files
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let change_count = action
-                        .get("change_count")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(files.len() as u64);
-                    Some(if files.len() == 1 {
-                        format!("apply_patch touching {}", files[0])
-                    } else {
-                        format!(
-                            "apply_patch touching {change_count} changes across {} files",
-                            files.len()
-                        )
-                    })
-                }
-                "network_access" => action
-                    .get("target")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|target| format!("network access to {target}")),
-                "mcp_tool_call" => {
-                    let tool_name = action
-                        .get("tool_name")
-                        .and_then(serde_json::Value::as_str)?;
-                    let label = action
-                        .get("connector_name")
-                        .and_then(serde_json::Value::as_str)
-                        .or_else(|| action.get("server").and_then(serde_json::Value::as_str))
-                        .unwrap_or("unknown server");
-                    Some(format!("MCP {tool_name} on {label}"))
-                }
-                _ => None,
+        let guardian_action_summary = |action: &GuardianAssessmentAction| match action {
+            GuardianAssessmentAction::Command { command, .. } => Some(command.clone()),
+            GuardianAssessmentAction::Execve { program, argv, .. } => {
+                let command = if argv.is_empty() {
+                    vec![program.clone()]
+                } else {
+                    argv.clone()
+                };
+                shlex::try_join(command.iter().map(String::as_str))
+                    .ok()
+                    .or_else(|| Some(command.join(" ")))
+            }
+            GuardianAssessmentAction::ApplyPatch { files, .. } => Some(if files.len() == 1 {
+                format!("apply_patch touching {}", files[0].display())
+            } else {
+                format!("apply_patch touching {} files", files.len())
+            }),
+            GuardianAssessmentAction::NetworkAccess { target, .. } => {
+                Some(format!("network access to {target}"))
+            }
+            GuardianAssessmentAction::McpToolCall {
+                server,
+                tool_name,
+                connector_name,
+                ..
+            } => {
+                let label = connector_name.as_deref().unwrap_or(server.as_str());
+                Some(format!("MCP {tool_name} on {label}"))
             }
         };
-        let guardian_command = |action: &serde_json::Value| match action.get("command") {
-            Some(serde_json::Value::Array(command)) => Some(
-                command
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>(),
-            )
-            .filter(|command| !command.is_empty()),
-            Some(serde_json::Value::String(command)) => shlex::split(command)
+        let guardian_command = |action: &GuardianAssessmentAction| match action {
+            GuardianAssessmentAction::Command { command, .. } => shlex::split(command)
                 .filter(|command| !command.is_empty())
                 .or_else(|| Some(vec![command.clone()])),
-            _ => None,
+            GuardianAssessmentAction::Execve { program, argv, .. } => Some(if argv.is_empty() {
+                vec![program.clone()]
+            } else {
+                argv.clone()
+            })
+            .filter(|command| !command.is_empty()),
+            GuardianAssessmentAction::ApplyPatch { .. }
+            | GuardianAssessmentAction::NetworkAccess { .. }
+            | GuardianAssessmentAction::McpToolCall { .. } => None,
         };
 
         if ev.status == GuardianAssessmentStatus::InProgress
-            && let Some(action) = ev.action.as_ref()
-            && let Some(detail) = guardian_action_summary(action)
+            && let Some(detail) = guardian_action_summary(&ev.action)
         {
             // In-progress assessments own the live footer state while the
             // review is pending. Parallel reviews are aggregated into one
@@ -3384,20 +3342,16 @@ impl ChatWidget {
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
-            let Some(action) = ev.action else {
-                return;
-            };
-
-            let cell = if let Some(command) = guardian_command(&action) {
+            let cell = if let Some(command) = guardian_command(&ev.action) {
                 history_cell::new_approval_decision_cell(
                     command,
                     codex_protocol::protocol::ReviewDecision::Approved,
                     history_cell::ApprovalDecisionActor::Guardian,
                 )
-            } else if let Some(summary) = guardian_action_summary(&action) {
+            } else if let Some(summary) = guardian_action_summary(&ev.action) {
                 history_cell::new_guardian_approved_action_request(summary)
             } else {
-                let summary = serde_json::to_string(&action)
+                let summary = serde_json::to_string(&ev.action)
                     .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
                 history_cell::new_guardian_approved_action_request(summary)
             };
@@ -3410,66 +3364,33 @@ impl ChatWidget {
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
-        let Some(action) = ev.action else {
-            return;
-        };
-
-        let tool = action.get("tool").and_then(serde_json::Value::as_str);
-        let cell = if let Some(command) = guardian_command(&action) {
+        let cell = if let Some(command) = guardian_command(&ev.action) {
             history_cell::new_approval_decision_cell(
                 command,
                 codex_protocol::protocol::ReviewDecision::Denied,
                 history_cell::ApprovalDecisionActor::Guardian,
             )
         } else {
-            match tool {
-                Some("apply_patch") => {
-                    let files = action
-                        .get("files")
-                        .and_then(serde_json::Value::as_array)
-                        .map(|files| {
-                            files
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let change_count = action
-                        .get("change_count")
-                        .and_then(serde_json::Value::as_u64)
-                        .and_then(|count| usize::try_from(count).ok())
-                        .unwrap_or(files.len());
-                    history_cell::new_guardian_denied_patch_request(files, change_count)
+            match &ev.action {
+                GuardianAssessmentAction::ApplyPatch { files, .. } => {
+                    let files = files
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>();
+                    history_cell::new_guardian_denied_patch_request(files)
                 }
-                Some("mcp_tool_call") => {
-                    let server = action
-                        .get("server")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown server");
-                    let tool_name = action
-                        .get("tool_name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown tool");
-                    history_cell::new_guardian_denied_action_request(format!(
-                        "codex to call MCP tool {server}.{tool_name}"
-                    ))
-                }
-                Some("network_access") => {
-                    let target = action
-                        .get("target")
-                        .and_then(serde_json::Value::as_str)
-                        .or_else(|| action.get("host").and_then(serde_json::Value::as_str))
-                        .unwrap_or("network target");
+                GuardianAssessmentAction::McpToolCall {
+                    server, tool_name, ..
+                } => history_cell::new_guardian_denied_action_request(format!(
+                    "codex to call MCP tool {server}.{tool_name}"
+                )),
+                GuardianAssessmentAction::NetworkAccess { target, .. } => {
                     history_cell::new_guardian_denied_action_request(format!(
                         "codex to access {target}"
                     ))
                 }
-                _ => {
-                    let summary = serde_json::to_string(&action)
-                        .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
-                    history_cell::new_guardian_denied_action_request(summary)
-                }
+                GuardianAssessmentAction::Command { .. } => unreachable!(),
+                GuardianAssessmentAction::Execve { .. } => unreachable!(),
             }
         };
 
@@ -4120,10 +4041,7 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
         );
-        if self.agent_turn_running
-            && !message.is_empty()
-            && matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
-        {
+        if self.agent_turn_running && !message.is_empty() {
             self.pending_turn_copyable_output = Some(message.clone());
         }
         self.pending_status_indicator_restore = match item.phase {
@@ -4288,6 +4206,7 @@ impl ChatWidget {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (ev.command.clone(), ev.parsed_cmd.clone(), ev.source),
         };
+        let parsed = self.annotate_skill_reads_in_parsed_cmd(parsed);
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
         let end_target = match self.active_cell.as_ref() {
@@ -4507,11 +4426,12 @@ impl ChatWidget {
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.bottom_pane.ensure_status_indicator();
+        let parsed_cmd = self.annotate_skill_reads_in_parsed_cmd(ev.parsed_cmd.clone());
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
                 command: ev.command.clone(),
-                parsed_cmd: ev.parsed_cmd.clone(),
+                parsed_cmd: parsed_cmd.clone(),
                 source: ev.source,
             },
         );
@@ -4544,7 +4464,7 @@ impl ChatWidget {
             && let Some(new_exec) = cell.with_added_call(
                 ev.call_id.clone(),
                 ev.command.clone(),
-                ev.parsed_cmd.clone(),
+                parsed_cmd.clone(),
                 ev.source,
                 interaction_input.clone(),
             )
@@ -4557,7 +4477,7 @@ impl ChatWidget {
             self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
-                ev.parsed_cmd,
+                parsed_cmd,
                 ev.source,
                 interaction_input,
                 self.config.animations,
@@ -5270,7 +5190,7 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_core::auth::logout(
+                if let Err(e) = codex_login::logout(
                     &self.config.codex_home,
                     self.config.cli_auth_credentials_store_mode,
                 ) {
@@ -5849,7 +5769,7 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
-        let service_tier = self.config.service_tier.map(Some);
+        let service_tier = Some(self.config.service_tier);
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
@@ -6793,7 +6713,7 @@ impl ChatWidget {
         id: String,
         turn_id: String,
         review: codex_app_server_protocol::GuardianApprovalReview,
-        action: Option<serde_json::Value>,
+        action: GuardianApprovalReviewAction,
     ) {
         self.on_guardian_assessment(GuardianAssessmentEvent {
             id,
@@ -6825,7 +6745,7 @@ impl ChatWidget {
                 }
             }),
             rationale: review.rationale,
-            action,
+            action: action.into(),
         });
     }
 

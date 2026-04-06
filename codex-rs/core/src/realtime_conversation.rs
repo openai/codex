@@ -1,12 +1,6 @@
-use crate::CodexAuth;
-use crate::api_bridge::map_api_error;
-use crate::auth::read_openai_api_key_from_env;
 use crate::codex::Session;
 use crate::config::RealtimeWsMode;
 use crate::config::RealtimeWsVersion;
-use crate::default_client::default_headers;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -20,8 +14,16 @@ use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
+use codex_api::api_bridge::map_api_error;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
+use codex_app_server_protocol::AuthMode;
+use codex_login::CodexAuth;
+use codex_login::default_client::default_headers;
+use codex_login::read_openai_api_key_from_env;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -459,7 +461,7 @@ async fn prepare_realtime_start(
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let auth = auth_manager.auth().await;
     let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-    let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
+    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
@@ -630,10 +632,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
 }
 
-fn realtime_api_key(
-    auth: Option<&CodexAuth>,
-    provider: &crate::ModelProviderInfo,
-) -> CodexResult<String> {
+fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
     if let Some(api_key) = provider.api_key()? {
         return Ok(api_key);
     }

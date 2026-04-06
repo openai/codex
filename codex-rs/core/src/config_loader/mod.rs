@@ -559,7 +559,7 @@ impl ProjectTrustDecision {
 
 impl ProjectTrustContext {
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
-        let dir_key = dir.as_path().to_string_lossy().to_string();
+        let dir_key = project_trust_key(dir.as_path());
         if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
             return ProjectTrustDecision {
                 trust_level: Some(trust_level),
@@ -647,15 +647,17 @@ async fn project_trust_context(
     let project_root = find_project_root(cwd, project_root_markers).await?;
     let projects = project_trust_config.projects.unwrap_or_default();
 
-    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let project_root_key = project_trust_key(project_root.as_path());
     let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
-    let repo_root_key = repo_root
-        .as_ref()
-        .map(|root| root.to_string_lossy().to_string());
+    let repo_root_key = repo_root.as_ref().map(|root| project_trust_key(root));
 
     let projects_trust = projects
         .into_iter()
-        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
+        .filter_map(|(key, project)| {
+            project
+                .trust_level
+                .map(|trust_level| (project_trust_key(Path::new(&key)), trust_level))
+        })
         .collect();
 
     Ok(ProjectTrustContext {
@@ -665,6 +667,16 @@ async fn project_trust_context(
         projects_trust,
         user_config_file: user_config_file.clone(),
     })
+}
+
+/// Canonicalize the path and convert it to a string to be used as a key in the
+/// projects trust map. On Windows, strips UNC, when possible, to try to ensure
+/// that different paths that point to the same location have the same key.
+pub fn project_trust_key(project_path: &Path) -> String {
+    normalize_path(project_path)
+        .unwrap_or_else(|_| project_path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,

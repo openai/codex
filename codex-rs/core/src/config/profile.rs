@@ -4,10 +4,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::ToolsToml;
-use crate::config::types::ApprovalsReviewer;
-use crate::config::types::Personality;
-use crate::config::types::WindowsToml;
-use crate::protocol::AskForApproval;
+use codex_config::types::ApprovalsReviewer;
+use codex_config::types::Personality;
+use codex_config::types::WindowsToml;
 use codex_features::FeaturesToml;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -15,6 +14,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
 
 /// Collection of common configuration options that a user can define as a unit
 /// in `config.toml`.
@@ -49,12 +49,15 @@ pub struct ConfigProfile {
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub include_apply_patch_tool: Option<bool>,
+    pub include_permissions_instructions: Option<bool>,
+    pub include_apps_instructions: Option<bool>,
+    pub include_environment_context: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub tools_view_image: Option<bool>,
     pub tools: Option<ToolsToml>,
     pub web_search: Option<WebSearchMode>,
-    pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
+    pub analytics: Option<codex_config::types::AnalyticsConfigToml>,
     #[serde(default)]
     pub windows: Option<WindowsToml>,
     /// Optional feature toggles scoped to this profile.

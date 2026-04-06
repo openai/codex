@@ -8,6 +8,7 @@ pub use events::AppServerRpcTransport;
 pub use facts::AppInvocation;
 pub use facts::InvocationType;
 pub use facts::SkillInvocation;
+pub use facts::SubAgentThreadStartedInput;
 pub use facts::TrackEventsContext;
 pub use facts::build_track_events_context;
 

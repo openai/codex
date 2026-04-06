@@ -46,8 +46,8 @@ install:
 # --no-fail-fast is important to ensure all tests are run.
 #
 # Run `cargo install cargo-nextest` if you don't have it installed.
-# Prefer this for routine local runs; use explicit `cargo test --all-features`
-# only when you specifically need full feature coverage.
+# Prefer this for routine local runs. Workspace crate features are banned, so
+# there should be no need to add `--all-features`.
 test:
     cargo nextest run --no-fail-fast
 
@@ -69,8 +69,9 @@ bazel-lock-check:
 bazel-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
 
+[no-cd]
 bazel-clippy:
-    bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
+    bazel_targets="$(./scripts/list-bazel-clippy-targets.sh)" && bazel build --config=clippy -- ${bazel_targets}
 
 [no-cd]
 bazel-argument-comment-lint:

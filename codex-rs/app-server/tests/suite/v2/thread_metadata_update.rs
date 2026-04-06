@@ -19,10 +19,10 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
-use codex_core::state_db::reconcile_rollout;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as RolloutGitInfo;
+use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -216,6 +216,59 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -
         Some(GitInfo {
             sha: None,
             branch: Some("feature/stored-thread".to_string()),
+            origin_url: None,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_metadata_update_repairs_stored_thread_before_backfill_completes() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let _state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+
+    let preview = "Stored thread preview before backfill";
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-30-00",
+        "2025-01-05T12:30:00Z",
+        preview,
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread_id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some(Some("feature/pending-backfill".to_string())),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    let update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+    let ThreadMetadataUpdateResponse { thread: updated } =
+        to_response::<ThreadMetadataUpdateResponse>(update_resp)?;
+
+    assert_eq!(updated.id, thread_id);
+    assert_eq!(updated.preview, preview);
+    assert_eq!(
+        updated.git_info,
+        Some(GitInfo {
+            sha: None,
+            branch: Some("feature/pending-backfill".to_string()),
             origin_url: None,
         })
     );

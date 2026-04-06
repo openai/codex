@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_models_manager::bundled_models_response;
 use serde_json::Value as JsonValue;
 use tempfile::tempdir;
 use tokio::select;
@@ -19,9 +20,7 @@ async fn resume_startup_does_not_consume_model_availability_nux_count() -> Resul
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex_home = tempdir()?;
 
-    let source_catalog_path = codex_utils_cargo_bin::find_resource!("../core/models.json")?;
-    let source_catalog = std::fs::read_to_string(&source_catalog_path)?;
-    let mut source_catalog: JsonValue = serde_json::from_str(&source_catalog)?;
+    let mut source_catalog: JsonValue = serde_json::to_value(bundled_models_response()?)?;
     let models = source_catalog
         .get_mut("models")
         .and_then(JsonValue::as_array_mut)
@@ -92,7 +91,6 @@ trust_level = "trusted"
         .env("CODEX_HOME", codex_home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture_path)
-        .env("OPENAI_BASE_URL", "http://unused.local")
         .output()
         .context("failed to execute codex exec")?;
     anyhow::ensure!(

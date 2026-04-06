@@ -1,5 +1,5 @@
 use crate::config::ConfigToml;
-use crate::config::types::RawMcpServerConfig;
+use codex_config::types::RawMcpServerConfig;
 use codex_features::FEATURES;
 use codex_features::legacy_feature_keys;
 use schemars::r#gen::SchemaGenerator;

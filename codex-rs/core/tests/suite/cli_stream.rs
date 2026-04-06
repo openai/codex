@@ -1,6 +1,6 @@
 use assert_cmd::Command as AssertCommand;
-use codex_core::auth::CODEX_API_KEY_ENV_VAR;
 use codex_git_utils::collect_git_info;
+use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_protocol::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
@@ -87,40 +87,6 @@ async fn responses_mode_stream_cli() {
     // );
     // assert!(page.items[0].thread_id.is_some(), "missing thread_id");
     // assert!(page.items[0].created_at.is_some(), "missing created_at");
-}
-
-/// Ensures `OPENAI_BASE_URL` still works as a deprecated fallback.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_mode_stream_cli_supports_openai_base_url_env_fallback() {
-    skip_if_no_network!();
-
-    let server = MockServer::start().await;
-    let repo_root = repo_root();
-    let sse = responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_assistant_message("msg-1", "hi"),
-        responses::ev_completed("resp-1"),
-    ]);
-    let resp_mock = responses::mount_sse_once(&server, sse).await;
-
-    let home = TempDir::new().unwrap();
-    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
-    let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
-    cmd.arg("exec")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(&repo_root)
-        .arg("hello?");
-    cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-
-    let request = resp_mock.single_request();
-    assert_eq!(request.path(), "/v1/responses");
 }
 
 /// Ensures `openai_base_url` config override routes built-in openai provider requests.
@@ -275,8 +241,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
+        .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
     println!("Status: {}", output.status);

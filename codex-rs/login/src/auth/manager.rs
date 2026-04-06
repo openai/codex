@@ -14,26 +14,27 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use tokio::sync::Mutex as AsyncMutex;
 
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
-use crate::auth::error::RefreshTokenFailedError;
-use crate::auth::error::RefreshTokenFailedReason;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::create_client;
-use crate::token_data::KnownPlan as InternalKnownPlan;
-use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::KnownPlan as InternalKnownPlan;
+use codex_protocol::auth::PlanType as InternalPlanType;
+use codex_protocol::auth::RefreshTokenFailedError;
+use codex_protocol::auth::RefreshTokenFailedReason;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -149,7 +150,7 @@ pub struct ExternalAuthRefreshContext {
 /// credentials on demand via `refresh()`.
 pub trait ExternalAuth: Send + Sync {
     /// Indicates which top-level auth mode this external provider supplies.
-    fn auth_mode(&self) -> crate::AuthMode;
+    fn auth_mode(&self) -> AuthMode;
 
     /// Returns cached or immediately available auth, if this provider can resolve it synchronously
     /// from the caller's perspective.
@@ -226,10 +227,10 @@ impl CodexAuth {
         )
     }
 
-    pub fn auth_mode(&self) -> crate::AuthMode {
+    pub fn auth_mode(&self) -> AuthMode {
         match self {
-            Self::ApiKey(_) => crate::AuthMode::ApiKey,
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => crate::AuthMode::Chatgpt,
+            Self::ApiKey(_) => AuthMode::ApiKey,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
         }
     }
 
@@ -242,11 +243,11 @@ impl CodexAuth {
     }
 
     pub fn is_api_key_auth(&self) -> bool {
-        self.auth_mode() == crate::AuthMode::ApiKey
+        self.auth_mode() == AuthMode::ApiKey
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        self.auth_mode() == crate::AuthMode::Chatgpt
+        self.auth_mode() == AuthMode::Chatgpt
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
@@ -503,15 +504,15 @@ pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
 
     if let Some(required_method) = config.forced_login_method {
         let method_violation = match (required_method, auth.auth_mode()) {
-            (ForcedLoginMethod::Api, crate::AuthMode::ApiKey) => None,
-            (ForcedLoginMethod::Chatgpt, crate::AuthMode::Chatgpt)
-            | (ForcedLoginMethod::Chatgpt, crate::AuthMode::ChatgptAuthTokens) => None,
-            (ForcedLoginMethod::Api, crate::AuthMode::Chatgpt)
-            | (ForcedLoginMethod::Api, crate::AuthMode::ChatgptAuthTokens) => Some(
+            (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
+            (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt)
+            | (ForcedLoginMethod::Chatgpt, AuthMode::ChatgptAuthTokens) => None,
+            (ForcedLoginMethod::Api, AuthMode::Chatgpt)
+            | (ForcedLoginMethod::Api, AuthMode::ChatgptAuthTokens) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
-            (ForcedLoginMethod::Chatgpt, crate::AuthMode::ApiKey) => Some(
+            (ForcedLoginMethod::Chatgpt, AuthMode::ApiKey) => Some(
                 "ChatGPT login is required, but an API key is currently being used. Logging out."
                     .to_string(),
             ),
@@ -1429,14 +1430,14 @@ impl AuthManager {
             .and_then(|guard| guard.as_ref().cloned())
     }
 
-    fn external_auth_mode(&self) -> Option<crate::AuthMode> {
+    fn external_auth_mode(&self) -> Option<AuthMode> {
         self.external_auth()
             .as_ref()
             .map(|external_auth| external_auth.auth_mode())
     }
 
     fn has_external_api_key_auth(&self) -> bool {
-        self.external_auth_mode() == Some(crate::AuthMode::ApiKey)
+        self.external_auth_mode() == Some(AuthMode::ApiKey)
     }
 
     async fn resolve_external_api_key_auth(&self) -> Option<CodexAuth> {
@@ -1550,9 +1551,9 @@ impl AuthManager {
         self.auth_cached().as_ref().map(CodexAuth::api_auth_mode)
     }
 
-    pub fn auth_mode(&self) -> Option<crate::AuthMode> {
+    pub fn auth_mode(&self) -> Option<AuthMode> {
         if self.has_external_api_key_auth() {
-            return Some(crate::AuthMode::ApiKey);
+            return Some(AuthMode::ApiKey);
         }
         self.auth_cached().as_ref().map(CodexAuth::auth_mode)
     }
@@ -1602,7 +1603,7 @@ impl AuthManager {
             .refresh(context)
             .await
             .map_err(RefreshTokenError::Transient)?;
-        if external_auth.auth_mode() == crate::AuthMode::ApiKey {
+        if external_auth.auth_mode() == AuthMode::ApiKey {
             return Ok(());
         }
         let Some(chatgpt_metadata) = refreshed.chatgpt_metadata() else {
