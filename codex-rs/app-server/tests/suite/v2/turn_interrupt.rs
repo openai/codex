@@ -168,7 +168,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         "call_sleep_approval",
     )?])
     .await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(&codex_home, &server.uri(), "untrusted", "read-only")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -190,7 +190,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
-                text: "run sleep".to_string(),
+                text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory),
@@ -264,6 +264,7 @@ fn create_config_toml(
     codex_home: &std::path::Path,
     server_uri: &str,
     approval_policy: &str,
+    sandbox_mode: &str,
 ) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
@@ -272,7 +273,7 @@ fn create_config_toml(
             r#"
 model = "mock-model"
 approval_policy = "{approval_policy}"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "{sandbox_mode}"
 
 model_provider = "mock_provider"
 

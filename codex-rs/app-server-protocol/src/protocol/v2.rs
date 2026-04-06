@@ -1949,6 +1949,18 @@ pub struct ListMcpServerStatusParams {
     /// Optional page size; defaults to a server-defined value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// Controls how much MCP inventory data to fetch for each server.
+    /// Defaults to `Full` when omitted.
+    #[ts(optional = nullable)]
+    pub detail: Option<McpServerStatusDetail>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum McpServerStatusDetail {
+    Full,
+    ToolsAndAuthOnly,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
