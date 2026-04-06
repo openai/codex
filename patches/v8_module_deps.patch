@@ -42,11 +42,12 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +    urls = ["https://github.com/fastfloat/fast_float/archive/refs/tags/v8.0.2.tar.gz"],
 +)
 +
-+git_repository(
++http_archive(
 +    name = "simdutf",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["simdutf.cpp"],\n    hdrs = ["simdutf.h"],\n    copts = ["-std=c++20"],\n    include_prefix = "third_party/simdutf",\n    visibility = ["//visibility:public"],\n)\n',
-+    commit = "93b35aec29256f705c97f675fe4623578bd7a395",
-+    remote = "https://chromium.googlesource.com/chromium/src/third_party/simdutf",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf_headers",\n    hdrs = glob(["include/**/*.h"]),\n    include_prefix = "third_party/simdutf",\n    strip_include_prefix = "include",\n)\n\ncc_library(\n    name = "simdutf",\n    srcs = ["src/simdutf.cpp"],\n    textual_hdrs = glob(["src/**/*.cpp", "src/**/*.h"], exclude = ["src/simdutf.cpp"]),\n    copts = select({\n        "@platforms//os:windows": ["/std:c++20"],\n        "//conditions:default": ["-std=c++20"],\n    }),\n    includes = ["include", "src"],\n    deps = [":simdutf_headers"],\n    visibility = ["//visibility:public"],\n)\n',
++    sha256 = "0180de81a1dd48a87b8c0442ffa81734f3db91a7350914107a449935124e3c6f",
++    strip_prefix = "simdutf-7.7.0",
++    urls = ["https://github.com/simdutf/simdutf/archive/refs/tags/v7.7.0.tar.gz"],
 +)
 +
 +git_repository(
