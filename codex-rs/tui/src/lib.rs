@@ -1258,6 +1258,7 @@ async fn run_ratatui_app(
             cli.resume_show_all,
             cli.resume_include_non_interactive,
             app_server,
+            None,
         )
         .await?
         {

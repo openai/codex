@@ -1,0 +1,7 @@
+---
+source: tui/src/app.rs
+expression: rendered
+---
+Token usage: total=12 input=10 output=2
+To continue this session, run codex resume my-session
+Previous session available via /resume.

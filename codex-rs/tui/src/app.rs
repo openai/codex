@@ -45,13 +45,16 @@ use crate::pager_overlay::Overlay;
 use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
+use crate::resume_picker::PreferredSession;
 use crate::resume_picker::SessionSelection;
+use crate::resume_picker::SessionTarget;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use chrono::Utc;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
@@ -324,6 +327,29 @@ fn session_summary(
         usage_line,
         resume_command,
     })
+}
+
+fn session_transition_history_lines(
+    summary: Option<SessionSummary>,
+    include_resume_picker_hint: bool,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(summary) = summary {
+        lines.push(summary.usage_line.into());
+        if let Some(command) = summary.resume_command {
+            let spans = vec!["To continue this session, run ".into(), command.cyan()];
+            lines.push(spans.into());
+        }
+    }
+    if include_resume_picker_hint {
+        let spans = vec![
+            "Previous session available via ".into(),
+            "/resume".magenta(),
+            ".".into(),
+        ];
+        lines.push(spans.into());
+    }
+    lines
 }
 
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
@@ -1002,6 +1028,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    last_displaced_session: Option<PreferredSession>,
 }
 
 #[derive(Default)]
@@ -3263,6 +3290,24 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    fn displaced_session_for_resume(&self) -> Option<PreferredSession> {
+        let thread_id = self.chat_widget.thread_id()?;
+        let thread_name = self.chat_widget.thread_name();
+        let path = self
+            .chat_widget
+            .rollout_path()
+            .filter(|path| !path.as_os_str().is_empty());
+        Some(PreferredSession {
+            target: SessionTarget { path, thread_id },
+            preview: thread_name
+                .clone()
+                .unwrap_or_else(|| String::from("Previous session")),
+            thread_name,
+            cwd: Some(self.config.cwd.to_path_buf()),
+            updated_at: Utc::now(),
+        })
+    }
+
     async fn start_fresh_session_with_summary_hint(
         &mut self,
         tui: &mut tui::Tui,
@@ -3297,12 +3342,11 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to attach to fresh app-server thread: {err}"
                     ));
-                } else if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
-                    if let Some(command) = summary.resume_command {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
-                    }
+                } else if summary.is_some() || self.last_displaced_session.is_some() {
+                    let lines = session_transition_history_lines(
+                        summary,
+                        self.last_displaced_session.is_some(),
+                    );
                     self.chat_widget.add_plain_history_lines(lines);
                 }
             }
@@ -3791,6 +3835,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            last_displaced_session: None,
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4012,10 +4057,12 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
+                self.last_displaced_session = self.displaced_session_for_resume();
                 self.start_fresh_session_with_summary_hint(tui, app_server)
                     .await;
             }
             AppEvent::ClearUi => {
+                self.last_displaced_session = self.displaced_session_for_resume();
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
@@ -4049,6 +4096,7 @@ impl App {
                     /*show_all*/ false,
                     /*include_non_interactive*/ false,
                     picker_app_server,
+                    self.last_displaced_session.clone(),
                 )
                 .await?
                 {
@@ -4110,16 +4158,10 @@ impl App {
                                     .await
                                 {
                                     Ok(()) => {
-                                        if let Some(summary) = summary {
-                                            let mut lines: Vec<Line<'static>> =
-                                                vec![summary.usage_line.clone().into()];
-                                            if let Some(command) = summary.resume_command {
-                                                let spans = vec![
-                                                    "To continue this session, run ".into(),
-                                                    command.cyan(),
-                                                ];
-                                                lines.push(spans.into());
-                                            }
+                                        self.last_displaced_session = None;
+                                        let lines =
+                                            session_transition_history_lines(summary, false);
+                                        if !lines.is_empty() {
                                             self.chat_widget.add_plain_history_lines(lines);
                                         }
                                     }
@@ -4170,16 +4212,9 @@ impl App {
                                 .await
                             {
                                 Ok(()) => {
-                                    if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> =
-                                            vec![summary.usage_line.clone().into()];
-                                        if let Some(command) = summary.resume_command {
-                                            let spans = vec![
-                                                "To continue this session, run ".into(),
-                                                command.cyan(),
-                                            ];
-                                            lines.push(spans.into());
-                                        }
+                                    self.last_displaced_session = None;
+                                    let lines = session_transition_history_lines(summary, false);
+                                    if !lines.is_empty() {
                                         self.chat_widget.add_plain_history_lines(lines);
                                     }
                                 }
@@ -9100,6 +9135,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            last_displaced_session: None,
         }
     }
 
@@ -9154,6 +9190,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                last_displaced_session: None,
             },
             rx,
             op_rx,
@@ -10925,5 +10962,70 @@ guardian_approval = true
             summary.resume_command,
             Some("codex resume my-session".to_string())
         );
+    }
+
+    #[test]
+    fn session_transition_history_lines_include_resume_picker_hint() {
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 2,
+            total_tokens: 12,
+            ..Default::default()
+        };
+        let thread_id =
+            ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
+        let summary =
+            session_summary(usage, Some(thread_id), Some("my-session".to_string())).expect("line");
+        let rendered = session_transition_history_lines(Some(summary), /*include_hint*/ true)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!(
+            "session_transition_history_lines_with_resume_picker_hint",
+            rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn displaced_session_for_resume_captures_current_thread_metadata() {
+        let mut app = make_test_app().await;
+        let thread_id =
+            ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
+        let rollout_path =
+            PathBuf::from("/tmp/sessions/123e4567-e89b-12d3-a456-426614174000.jsonl");
+        app.config.cwd = PathBuf::from("/tmp/project").abs();
+        app.chat_widget.handle_thread_session(ThreadSessionState {
+            thread_id,
+            forked_from_id: None,
+            thread_name: Some(String::from("saved-session")),
+            model: String::from("gpt-test"),
+            model_provider_id: String::from("test-provider"),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            network_proxy: None,
+            rollout_path: Some(rollout_path.clone()),
+        });
+
+        let displaced = app
+            .displaced_session_for_resume()
+            .expect("current thread should be captured");
+        assert_eq!(displaced.target.thread_id, thread_id);
+        assert_eq!(displaced.target.path, Some(rollout_path));
+        assert_eq!(displaced.thread_name, Some(String::from("saved-session")));
+        assert_eq!(displaced.preview, String::from("saved-session"));
+        assert_eq!(displaced.cwd, Some(PathBuf::from("/tmp/project")));
     }
 }
