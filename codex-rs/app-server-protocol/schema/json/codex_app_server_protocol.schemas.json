@@ -3561,40 +3561,40 @@
           "properties": {
             "method": {
               "enum": [
-                "thread/job/updated"
+                "thread/alarm/updated"
               ],
-              "title": "Thread/job/updatedNotificationMethod",
+              "title": "Thread/alarm/updatedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ThreadJobUpdatedNotification"
+              "$ref": "#/definitions/v2/ThreadAlarmUpdatedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Thread/job/updatedNotification",
+          "title": "Thread/alarm/updatedNotification",
           "type": "object"
         },
         {
           "properties": {
             "method": {
               "enum": [
-                "thread/job/fired"
+                "thread/alarm/fired"
               ],
-              "title": "Thread/job/firedNotificationMethod",
+              "title": "Thread/alarm/firedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ThreadJobFiredNotification"
+              "$ref": "#/definitions/v2/ThreadAlarmFiredNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Thread/job/firedNotification",
+          "title": "Thread/alarm/firedNotification",
           "type": "object"
         },
         {
@@ -4966,6 +4966,13 @@
         "type": "object"
       },
       "AgentPath": {
+        "type": "string"
+      },
+      "AlarmDelivery": {
+        "enum": [
+          "after-turn",
+          "steer-current-turn"
+        ],
         "type": "string"
       },
       "AnalyticsConfig": {
@@ -12130,6 +12137,89 @@
         ],
         "type": "string"
       },
+      "ThreadAlarm": {
+        "properties": {
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cronExpression": {
+            "type": "string"
+          },
+          "delivery": {
+            "$ref": "#/definitions/v2/AlarmDelivery"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastRunAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "nextRunAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "runOnce": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "createdAt",
+          "cronExpression",
+          "delivery",
+          "id",
+          "prompt",
+          "runOnce"
+        ],
+        "type": "object"
+      },
+      "ThreadAlarmFiredNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "alarm": {
+            "$ref": "#/definitions/v2/ThreadAlarm"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alarm",
+          "threadId"
+        ],
+        "title": "ThreadAlarmFiredNotification",
+        "type": "object"
+      },
+      "ThreadAlarmUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "alarms": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadAlarm"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alarms",
+          "threadId"
+        ],
+        "title": "ThreadAlarmUpdatedNotification",
+        "type": "object"
+      },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12999,85 +13089,6 @@
             "type": "object"
           }
         ]
-      },
-      "ThreadJob": {
-        "properties": {
-          "createdAt": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "cronExpression": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "lastRunAt": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "nextRunAt": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "prompt": {
-            "type": "string"
-          },
-          "runOnce": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "createdAt",
-          "cronExpression",
-          "id",
-          "prompt",
-          "runOnce"
-        ],
-        "type": "object"
-      },
-      "ThreadJobFiredNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "job": {
-            "$ref": "#/definitions/v2/ThreadJob"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "job",
-          "threadId"
-        ],
-        "title": "ThreadJobFiredNotification",
-        "type": "object"
-      },
-      "ThreadJobUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "jobs": {
-            "items": {
-              "$ref": "#/definitions/v2/ThreadJob"
-            },
-            "type": "array"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "jobs",
-          "threadId"
-        ],
-        "title": "ThreadJobUpdatedNotification",
-        "type": "object"
       },
       "ThreadListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

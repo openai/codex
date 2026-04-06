@@ -272,8 +272,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_job_scheduler_command_enabled(&mut self, enabled: bool) {
-        self.composer.set_job_scheduler_command_enabled(enabled);
+    pub fn set_alarm_scheduler_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_alarm_scheduler_command_enabled(enabled);
         self.request_redraw();
     }
 

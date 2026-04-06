@@ -23,6 +23,7 @@ use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::AlarmDelivery as ApiAlarmDelivery;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -110,6 +111,13 @@ use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAlarm as ApiThreadAlarm;
+use codex_app_server_protocol::ThreadAlarmCreateParams;
+use codex_app_server_protocol::ThreadAlarmCreateResponse;
+use codex_app_server_protocol::ThreadAlarmDeleteParams;
+use codex_app_server_protocol::ThreadAlarmDeleteResponse;
+use codex_app_server_protocol::ThreadAlarmListParams;
+use codex_app_server_protocol::ThreadAlarmListResponse;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
@@ -125,13 +133,6 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadJob as ApiThreadJob;
-use codex_app_server_protocol::ThreadJobCreateParams;
-use codex_app_server_protocol::ThreadJobCreateResponse;
-use codex_app_server_protocol::ThreadJobDeleteParams;
-use codex_app_server_protocol::ThreadJobDeleteResponse;
-use codex_app_server_protocol::ThreadJobListParams;
-use codex_app_server_protocol::ThreadJobListResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -778,16 +779,16 @@ impl CodexMessageProcessor {
                 self.thread_read(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::ThreadJobCreate { request_id, params } => {
-                self.thread_job_create(to_connection_request_id(request_id), params)
+            ClientRequest::ThreadAlarmCreate { request_id, params } => {
+                self.thread_alarm_create(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::ThreadJobDelete { request_id, params } => {
-                self.thread_job_delete(to_connection_request_id(request_id), params)
+            ClientRequest::ThreadAlarmDelete { request_id, params } => {
+                self.thread_alarm_delete(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::ThreadJobList { request_id, params } => {
-                self.thread_job_list(to_connection_request_id(request_id), params)
+            ClientRequest::ThreadAlarmList { request_id, params } => {
+                self.thread_alarm_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
@@ -3053,7 +3054,7 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
-            tokio::fs::rename(&canonical_rollout_path, &restored_path)
+            rename_rollout_with_alarm_sidecar(&canonical_rollout_path, &restored_path)
                 .await
                 .map_err(|err| JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
@@ -3593,30 +3594,36 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn thread_job_create(
+    async fn thread_alarm_create(
         &mut self,
         request_id: ConnectionRequestId,
-        params: ThreadJobCreateParams,
+        params: ThreadAlarmCreateParams,
     ) {
-        let ThreadJobCreateParams {
+        let ThreadAlarmCreateParams {
             thread_id,
             cron_expression,
             prompt,
             run_once,
+            delivery,
         } = params;
-        let Some(thread) = self.load_job_thread(request_id.clone(), &thread_id).await else {
+        let Some(thread) = self.load_alarm_thread(request_id.clone(), &thread_id).await else {
             return;
         };
         match thread
-            .create_job(cron_expression, prompt, run_once.unwrap_or(false))
+            .create_alarm(
+                cron_expression,
+                prompt,
+                run_once.unwrap_or(false),
+                alarm_delivery_to_core(delivery),
+            )
             .await
         {
-            Ok(job) => {
+            Ok(alarm) => {
                 self.outgoing
                     .send_response(
                         request_id,
-                        ThreadJobCreateResponse {
-                            job: api_thread_job_from_core(job),
+                        ThreadAlarmCreateResponse {
+                            alarm: api_thread_alarm_from_core(alarm),
                         },
                     )
                     .await;
@@ -3625,42 +3632,48 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_job_delete(
+    async fn thread_alarm_delete(
         &mut self,
         request_id: ConnectionRequestId,
-        params: ThreadJobDeleteParams,
+        params: ThreadAlarmDeleteParams,
     ) {
-        let ThreadJobDeleteParams { thread_id, id } = params;
-        let Some(thread) = self.load_job_thread(request_id.clone(), &thread_id).await else {
+        let ThreadAlarmDeleteParams { thread_id, id } = params;
+        let Some(thread) = self.load_alarm_thread(request_id.clone(), &thread_id).await else {
             return;
         };
-        let deleted = thread.delete_job(&id).await;
+        let deleted = match thread.delete_alarm(&id).await {
+            Ok(deleted) => deleted,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, err).await;
+                return;
+            }
+        };
         self.outgoing
-            .send_response(request_id, ThreadJobDeleteResponse { deleted })
+            .send_response(request_id, ThreadAlarmDeleteResponse { deleted })
             .await;
     }
 
-    async fn thread_job_list(
+    async fn thread_alarm_list(
         &mut self,
         request_id: ConnectionRequestId,
-        params: ThreadJobListParams,
+        params: ThreadAlarmListParams,
     ) {
-        let ThreadJobListParams { thread_id } = params;
-        let Some(thread) = self.load_job_thread(request_id.clone(), &thread_id).await else {
+        let ThreadAlarmListParams { thread_id } = params;
+        let Some(thread) = self.load_alarm_thread(request_id.clone(), &thread_id).await else {
             return;
         };
         let data = thread
-            .list_jobs()
+            .list_alarms()
             .await
             .into_iter()
-            .map(api_thread_job_from_core)
+            .map(api_thread_alarm_from_core)
             .collect();
         self.outgoing
-            .send_response(request_id, ThreadJobListResponse { data })
+            .send_response(request_id, ThreadAlarmListResponse { data })
             .await;
     }
 
-    async fn load_job_thread(
+    async fn load_alarm_thread(
         &mut self,
         request_id: ConnectionRequestId,
         thread_id: &str,
@@ -3672,10 +3685,10 @@ impl CodexMessageProcessor {
                 return None;
             }
         };
-        if !thread.enabled(Feature::JobScheduler) {
+        if !thread.enabled(Feature::AlarmScheduler) {
             self.send_invalid_request_error(
                 request_id,
-                format!("thread {thread_id} does not support job scheduling"),
+                format!("thread {thread_id} does not support alarm scheduling"),
             )
             .await;
             return None;
@@ -5532,7 +5545,7 @@ impl CodexMessageProcessor {
                 .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
-            tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
+            rename_rollout_with_alarm_sidecar(&canonical_rollout_path, &archived_path).await?;
             if let Some(ctx) = state_db_ctx {
                 let _ = ctx
                     .mark_archived(thread_id, archived_path.as_path(), Utc::now())
@@ -7690,6 +7703,21 @@ impl CodexMessageProcessor {
     }
 }
 
+async fn rename_rollout_with_alarm_sidecar(from: &Path, to: &Path) -> std::io::Result<()> {
+    tokio::fs::rename(from, to).await?;
+
+    let from_sidecar = codex_core::alarms::alarm_sidecar_path_for_rollout(from);
+    let to_sidecar = codex_core::alarms::alarm_sidecar_path_for_rollout(to);
+    match tokio::fs::rename(&from_sidecar, &to_sidecar).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => {
+            let _ = tokio::fs::rename(to, from).await;
+            Err(err)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_thread_listener_command(
     conversation_id: ThreadId,
@@ -8774,12 +8802,27 @@ fn build_thread_from_snapshot(
     }
 }
 
-fn api_thread_job_from_core(value: codex_core::jobs::ThreadJob) -> ApiThreadJob {
-    ApiThreadJob {
+fn alarm_delivery_to_core(value: ApiAlarmDelivery) -> codex_core::alarms::AlarmDelivery {
+    match value {
+        ApiAlarmDelivery::AfterTurn => codex_core::alarms::AlarmDelivery::AfterTurn,
+        ApiAlarmDelivery::SteerCurrentTurn => codex_core::alarms::AlarmDelivery::SteerCurrentTurn,
+    }
+}
+
+fn api_alarm_delivery_from_core(value: codex_core::alarms::AlarmDelivery) -> ApiAlarmDelivery {
+    match value {
+        codex_core::alarms::AlarmDelivery::AfterTurn => ApiAlarmDelivery::AfterTurn,
+        codex_core::alarms::AlarmDelivery::SteerCurrentTurn => ApiAlarmDelivery::SteerCurrentTurn,
+    }
+}
+
+fn api_thread_alarm_from_core(value: codex_core::alarms::ThreadAlarm) -> ApiThreadAlarm {
+    ApiThreadAlarm {
         id: value.id,
         cron_expression: value.cron_expression,
         prompt: value.prompt,
         run_once: value.run_once,
+        delivery: api_alarm_delivery_from_core(value.delivery),
         created_at: value.created_at,
         next_run_at: value.next_run_at,
         last_run_at: value.last_run_at,

@@ -7,9 +7,9 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
-use crate::tools::handlers::JobCreateHandler;
-use crate::tools::handlers::JobDeleteHandler;
-use crate::tools::handlers::JobListHandler;
+use crate::tools::handlers::AlarmCreateHandler;
+use crate::tools::handlers::AlarmDeleteHandler;
+use crate::tools::handlers::AlarmListHandler;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
@@ -49,14 +49,14 @@ use codex_tools::ToolSuggestEntry;
 use codex_tools::ViewImageToolOptions;
 use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::augment_tool_spec_for_code_mode;
+use codex_tools::create_alarm_create_tool;
+use codex_tools::create_alarm_delete_tool;
+use codex_tools::create_alarm_list_tool;
 use codex_tools::create_assign_task_tool;
 use codex_tools::create_close_agent_tool_v1;
 use codex_tools::create_close_agent_tool_v2;
 use codex_tools::create_code_mode_tool;
 use codex_tools::create_exec_command_tool;
-use codex_tools::create_job_create_tool;
-use codex_tools::create_job_delete_tool;
-use codex_tools::create_job_list_tool;
 use codex_tools::create_js_repl_reset_tool;
 use codex_tools::create_js_repl_tool;
 use codex_tools::create_list_agents_tool;
@@ -173,7 +173,7 @@ pub(crate) struct ToolsConfig {
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
     pub request_user_input: bool,
-    pub job_scheduler: bool,
+    pub alarm_scheduler: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -224,7 +224,7 @@ impl ToolsConfig {
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
-        let include_job_scheduler = features.enabled(Feature::JobScheduler);
+        let include_alarm_scheduler = features.enabled(Feature::AlarmScheduler);
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
@@ -309,7 +309,7 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
             request_user_input: include_request_user_input,
-            job_scheduler: include_job_scheduler,
+            alarm_scheduler: include_alarm_scheduler,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -635,28 +635,28 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("request_permissions", request_permissions_handler);
     }
 
-    if config.job_scheduler {
+    if config.alarm_scheduler {
         push_tool_spec(
             &mut builder,
-            create_job_create_tool(),
+            create_alarm_create_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
-            create_job_delete_tool(),
+            create_alarm_delete_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
-            create_job_list_tool(),
+            create_alarm_list_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        builder.register_handler("JobCreate", Arc::new(JobCreateHandler));
-        builder.register_handler("JobDelete", Arc::new(JobDeleteHandler));
-        builder.register_handler("JobList", Arc::new(JobListHandler));
+        builder.register_handler("AlarmCreate", Arc::new(AlarmCreateHandler));
+        builder.register_handler("AlarmDelete", Arc::new(AlarmDeleteHandler));
+        builder.register_handler("AlarmList", Arc::new(AlarmListHandler));
     }
 
     if config.search_tool

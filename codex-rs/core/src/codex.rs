@@ -246,6 +246,19 @@ use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
+use crate::alarms::ALARM_FIRED_BACKGROUND_EVENT_PREFIX;
+use crate::alarms::ALARM_UPDATED_BACKGROUND_EVENT_PREFIX;
+use crate::alarms::AlarmDelivery;
+use crate::alarms::AlarmSchedule;
+use crate::alarms::AlarmTimerSpec;
+use crate::alarms::AlarmsState;
+use crate::alarms::ClaimedAlarm;
+use crate::alarms::CreateAlarm;
+use crate::alarms::PersistedAlarm;
+use crate::alarms::ThreadAlarm;
+use crate::alarms::alarm_prompt_input_item;
+use crate::alarms::load_alarm_sidecar;
+use crate::alarms::write_alarm_sidecar;
 use crate::build_skill_injections;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
@@ -262,14 +275,6 @@ use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
 use crate::instructions::UserInstructions;
-use crate::jobs::ClaimedJob;
-use crate::jobs::JOB_FIRED_BACKGROUND_EVENT_PREFIX;
-use crate::jobs::JOB_UPDATED_BACKGROUND_EVENT_PREFIX;
-use crate::jobs::JobTurnContext;
-use crate::jobs::JobsState;
-use crate::jobs::ThreadJob;
-use crate::jobs::job_prompt_input_item;
-use crate::jobs::job_turn_developer_instructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::auth::compute_auth_statuses;
@@ -820,14 +825,14 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-    /// Prevents concurrent job timers from claiming multiple jobs before a
+    /// Prevents concurrent alarm timers from claiming multiple alarms before a
     /// newly started turn becomes the active turn.
-    job_start_in_progress: Mutex<bool>,
+    alarm_start_in_progress: Mutex<bool>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
-    jobs: Mutex<JobsState>,
-    job_timers_cancellation_token: CancellationToken,
+    alarms: Mutex<AlarmsState>,
+    alarm_timers_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -836,7 +841,7 @@ pub(crate) struct Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.job_timers_cancellation_token.cancel();
+        self.alarm_timers_cancellation_token.cancel();
     }
 }
 
@@ -878,7 +883,6 @@ pub(crate) struct TurnContext {
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
-    pub(crate) job_context: Option<JobTurnContext>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
@@ -987,7 +991,6 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
-            job_context: self.job_context.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
@@ -1454,7 +1457,6 @@ impl Session {
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            job_context: None,
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
@@ -1948,12 +1950,12 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
-            job_start_in_progress: Mutex::new(false),
+            alarm_start_in_progress: Mutex::new(false),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
-            jobs: Mutex::new(JobsState::default()),
-            job_timers_cancellation_token: CancellationToken::new(),
+            alarms: Mutex::new(AlarmsState::default()),
+            alarm_timers_cancellation_token: CancellationToken::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -1963,6 +1965,7 @@ impl Session {
             let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
         }
+        sess.restore_alarms_from_sidecar().await;
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
@@ -2441,7 +2444,6 @@ impl Session {
                 session_configuration,
                 updates.final_output_json_schema,
                 sandbox_policy_changed,
-                /*job_context*/ None,
             )
             .await)
     }
@@ -2452,7 +2454,6 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         sandbox_policy_changed: bool,
-        job_context: Option<JobTurnContext>,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         self.services
@@ -2525,7 +2526,6 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
-        turn_context.job_context = job_context;
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
@@ -2631,175 +2631,304 @@ impl Session {
             session_configuration,
             /*final_output_json_schema*/ None,
             /*sandbox_policy_changed*/ false,
-            /*job_context*/ None,
         )
         .await
     }
 
-    pub(crate) async fn new_job_turn_with_sub_id(
-        &self,
-        sub_id: String,
-        job_context: JobTurnContext,
-    ) -> Arc<TurnContext> {
-        let session_configuration = {
-            let state = self.state.lock().await;
-            state.session_configuration.clone()
-        };
-        self.new_turn_from_configuration(
-            sub_id,
-            session_configuration,
-            /*final_output_json_schema*/ None,
-            /*sandbox_policy_changed*/ false,
-            Some(job_context),
-        )
-        .await
+    pub(crate) async fn list_alarms(&self) -> Vec<ThreadAlarm> {
+        self.alarms.lock().await.list_alarms()
     }
 
-    pub(crate) async fn list_jobs(&self) -> Vec<ThreadJob> {
-        self.jobs.lock().await.list_jobs()
-    }
-
-    pub(crate) async fn create_job(
+    pub(crate) async fn create_alarm(
         self: &Arc<Self>,
         cron_expression: String,
         prompt: String,
         run_once: bool,
-    ) -> Result<ThreadJob, String> {
-        let schedule = crate::jobs::JobSchedule::parse(&cron_expression)?;
-        let timer_cancel = matches!(schedule, crate::jobs::JobSchedule::EverySeconds(_))
-            .then(CancellationToken::new);
+        delivery: AlarmDelivery,
+    ) -> Result<ThreadAlarm, String> {
+        self.ensure_rollout_materialized().await;
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return Err("alarms require a persisted rollout path for restoration".to_string());
+        };
+
+        let schedule = AlarmSchedule::parse(&cron_expression)?;
+        let timer_cancel =
+            matches!(schedule, AlarmSchedule::EverySeconds(_)).then(CancellationToken::new);
         let id = uuid::Uuid::new_v4().to_string();
-        let job = {
-            let mut jobs = self.jobs.lock().await;
-            jobs.create_job(
-                id.clone(),
-                cron_expression,
-                prompt,
-                run_once,
-                Utc::now(),
+        let alarm = {
+            let mut alarms = self.alarms.lock().await;
+            alarms.create_alarm(
+                CreateAlarm {
+                    id: id.clone(),
+                    cron_expression,
+                    prompt,
+                    run_once,
+                    delivery,
+                    now: Utc::now(),
+                },
                 timer_cancel.clone(),
             )?
         };
-        if let (crate::jobs::JobSchedule::EverySeconds(seconds), Some(cancel)) =
-            (schedule, timer_cancel)
-        {
-            self.spawn_job_timer(id, seconds, cancel);
-        }
-        self.emit_job_updated_notification().await;
-        self.maybe_start_pending_job().await;
-        Ok(job)
-    }
-
-    pub(crate) async fn delete_job(&self, id: &str) -> bool {
-        let deleted = self.jobs.lock().await.delete_job(id);
-        if deleted {
-            self.emit_job_updated_notification().await;
-        }
-        deleted
-    }
-
-    pub(crate) async fn mark_after_turn_jobs_due(&self) {
-        self.jobs.lock().await.mark_after_turn_jobs_due();
-    }
-
-    pub(crate) async fn maybe_start_pending_job(self: &Arc<Self>) {
-        let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
-            || self.has_trigger_turn_mailbox_items().await;
-        let Some(ClaimedJob {
-            job,
-            context,
-            deleted_run_once_job,
-        }) = ({
-            let mut job_start_in_progress = self.job_start_in_progress.lock().await;
-            let mut active_turn = self.active_turn.lock().await;
-            if *job_start_in_progress || active_turn.is_some() || has_pending_turn_inputs {
-                None
-            } else {
-                let claimed = self.jobs.lock().await.claim_next_job(Utc::now());
-                if claimed.is_some() {
-                    *job_start_in_progress = true;
-                    *active_turn = Some(ActiveTurn::default());
-                }
-                claimed
+        if let Err(err) = self.persist_alarms_to_rollout_sidecar(&rollout_path).await {
+            if let Some(runtime) = self.alarms.lock().await.remove_alarm(&id) {
+                AlarmsState::cancel_runtime(&runtime);
             }
-        })
+            return Err(err);
+        }
+
+        if let (AlarmSchedule::EverySeconds(seconds), Some(cancel)) = (schedule, timer_cancel) {
+            self.spawn_alarm_timer(
+                id,
+                AlarmTimerSpec {
+                    seconds,
+                    initial_delay: std::time::Duration::from_secs(seconds),
+                },
+                cancel,
+            );
+        }
+        self.emit_alarm_updated_notification().await;
+        self.maybe_start_pending_alarm().await;
+        Ok(alarm)
+    }
+
+    pub(crate) async fn delete_alarm(&self, id: &str) -> Result<bool, String> {
+        let Some(runtime) = self.alarms.lock().await.remove_alarm(id) else {
+            return Ok(false);
+        };
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            self.alarms.lock().await.restore_runtime(runtime);
+            return Err("alarms require a persisted rollout path for restoration".to_string());
+        };
+        if let Err(err) = self.persist_alarms_to_rollout_sidecar(&rollout_path).await {
+            self.alarms.lock().await.restore_runtime(runtime);
+            return Err(err);
+        }
+        AlarmsState::cancel_runtime(&runtime);
+        self.emit_alarm_updated_notification().await;
+        Ok(true)
+    }
+
+    pub(crate) async fn mark_after_turn_alarms_due(&self) {
+        let changed = self.alarms.lock().await.mark_after_turn_alarms_due();
+        if changed {
+            self.persist_alarms_sidecar_best_effort().await;
+        }
+    }
+
+    pub(crate) async fn maybe_start_pending_alarm(self: &Arc<Self>) {
+        let Some(ClaimedAlarm {
+            alarm,
+            context,
+            deleted_run_once_alarm,
+        }) = self.claim_next_alarm_for_delivery().await
         else {
             return;
         };
-        self.emit_job_fired_notification(&job).await;
-        if deleted_run_once_job {
-            self.emit_job_updated_notification().await;
+
+        self.emit_alarm_fired_notification(&alarm).await;
+        if deleted_run_once_alarm {
+            self.emit_alarm_updated_notification().await;
         }
-        self.queue_response_items_for_next_turn(vec![job_prompt_input_item(&context)])
-            .await;
-        let turn_context = self
-            .new_job_turn_with_sub_id(uuid::Uuid::new_v4().to_string(), context)
-            .await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        let session = Arc::clone(self);
-        let result = tokio::task::spawn_blocking(move || {
-            futures::executor::block_on(session.start_task(
-                turn_context,
-                Vec::new(),
-                crate::tasks::RegularTask::new(),
-            ));
-        })
-        .await;
-        *self.job_start_in_progress.lock().await = false;
-        if let Err(err) = result {
-            warn!("failed to start job turn: {err}");
+        self.persist_alarms_sidecar_best_effort().await;
+
+        let input_item = alarm_prompt_input_item(&context);
+        match context.delivery {
+            AlarmDelivery::SteerCurrentTurn => {
+                if !self.inject_alarm_into_active_turn(input_item.clone()).await {
+                    self.queue_response_items_for_next_turn(vec![input_item])
+                        .await;
+                    self.maybe_start_turn_for_pending_work().await;
+                }
+            }
+            AlarmDelivery::AfterTurn => {
+                self.queue_response_items_for_next_turn(vec![input_item])
+                    .await;
+                self.maybe_start_turn_for_pending_work().await;
+            }
         }
+        *self.alarm_start_in_progress.lock().await = false;
     }
 
-    fn spawn_job_timer(
+    async fn claim_next_alarm_for_delivery(self: &Arc<Self>) -> Option<ClaimedAlarm> {
+        let mut alarm_start_in_progress = self.alarm_start_in_progress.lock().await;
+        if *alarm_start_in_progress {
+            return None;
+        }
+        *alarm_start_in_progress = true;
+        drop(alarm_start_in_progress);
+
+        let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await;
+
+        let (has_active_turn, active_turn_is_regular) = {
+            let active_turn = self.active_turn.lock().await;
+            let has_active_turn = active_turn.is_some();
+            let active_turn_is_regular = active_turn
+                .as_ref()
+                .and_then(|turn| turn.tasks.first())
+                .is_some_and(|(_, task)| matches!(task.kind, crate::state::TaskKind::Regular));
+            (has_active_turn, active_turn_is_regular)
+        };
+        let can_after_turn = !has_active_turn && !has_pending_turn_inputs;
+        let claimed = self.alarms.lock().await.claim_next_alarm(
+            Utc::now(),
+            can_after_turn,
+            active_turn_is_regular,
+        );
+        if claimed.is_none() {
+            *self.alarm_start_in_progress.lock().await = false;
+        }
+        claimed
+    }
+
+    async fn inject_alarm_into_active_turn(&self, item: ResponseInputItem) -> bool {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            let Some(active_turn) = active.as_ref() else {
+                return false;
+            };
+
+            match active_turn.tasks.first().map(|(_, task)| task.kind) {
+                Some(crate::state::TaskKind::Regular) => Arc::clone(&active_turn.turn_state),
+                Some(crate::state::TaskKind::Review | crate::state::TaskKind::Compact) | None => {
+                    return false;
+                }
+            }
+        };
+
+        let mut turn_state = turn_state.lock().await;
+        turn_state.push_pending_input(item);
+        true
+    }
+
+    fn spawn_alarm_timer(
         self: &Arc<Self>,
         id: String,
-        seconds: u64,
+        timer_spec: AlarmTimerSpec,
         cancellation_token: CancellationToken,
     ) {
         let weak = Arc::downgrade(self);
-        let session_cancel = self.job_timers_cancellation_token.clone();
+        let session_cancel = self.alarm_timers_cancellation_token.clone();
         tokio::spawn(async move {
+            let mut delay = timer_spec.initial_delay;
             loop {
                 tokio::select! {
                     _ = session_cancel.cancelled() => break,
                     _ = cancellation_token.cancelled() => break,
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {}
+                    _ = tokio::time::sleep(delay) => {}
                 }
                 let Some(session) = weak.upgrade() else {
                     break;
                 };
-                session.jobs.lock().await.mark_job_due(&id, Utc::now());
-                session.maybe_start_pending_job().await;
+                let changed = session.alarms.lock().await.mark_alarm_due(&id, Utc::now());
+                if changed {
+                    session.persist_alarms_sidecar_best_effort().await;
+                }
+                session.maybe_start_pending_alarm().await;
+                delay = std::time::Duration::from_secs(timer_spec.seconds);
             }
         });
     }
 
-    async fn emit_job_updated_notification(&self) {
-        let jobs = self.list_jobs().await;
-        let Ok(payload) = serde_json::to_string(&jobs) else {
-            warn!("failed to serialize job update payload");
+    async fn persist_alarms_to_rollout_sidecar(&self, rollout_path: &Path) -> Result<(), String> {
+        let alarms = self.alarms.lock().await.persisted_alarms();
+        write_alarm_sidecar(rollout_path, &alarms).await
+    }
+
+    async fn persist_alarms_sidecar_best_effort(&self) {
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return;
+        };
+        if let Err(err) = self.persist_alarms_to_rollout_sidecar(&rollout_path).await {
+            warn!("failed to persist alarms sidecar: {err}");
+        }
+    }
+
+    async fn restore_alarms_from_sidecar(self: &Arc<Self>) {
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return;
+        };
+        let persisted = match load_alarm_sidecar(&rollout_path).await {
+            Ok(persisted) => persisted,
+            Err(err) => {
+                warn!("{err}");
+                return;
+            }
+        };
+        if persisted.is_empty() {
+            return;
+        }
+
+        let mut normalized = Vec::<PersistedAlarm>::new();
+        for persisted_alarm in persisted {
+            let schedule = match AlarmSchedule::parse(&persisted_alarm.alarm.cron_expression) {
+                Ok(schedule) => schedule,
+                Err(err) => {
+                    warn!(
+                        "skipping invalid persisted alarm {}: {err}",
+                        persisted_alarm.alarm.id
+                    );
+                    continue;
+                }
+            };
+            let timer_cancel =
+                matches!(schedule, AlarmSchedule::EverySeconds(_)).then(CancellationToken::new);
+            let timer_spec = {
+                let mut alarms = self.alarms.lock().await;
+                match alarms.restore_alarm(
+                    persisted_alarm.clone(),
+                    Utc::now(),
+                    timer_cancel.clone(),
+                ) {
+                    Ok(timer_spec) => {
+                        normalized = alarms.persisted_alarms();
+                        timer_spec
+                    }
+                    Err(err) => {
+                        warn!(
+                            "skipping invalid persisted alarm {}: {err}",
+                            persisted_alarm.alarm.id
+                        );
+                        continue;
+                    }
+                }
+            };
+            if let (Some(timer_spec), Some(cancel)) = (timer_spec, timer_cancel) {
+                self.spawn_alarm_timer(persisted_alarm.alarm.id.clone(), timer_spec, cancel);
+            }
+        }
+
+        if let Err(err) = write_alarm_sidecar(&rollout_path, &normalized).await {
+            warn!("failed to rewrite normalized alarm sidecar: {err}");
+        }
+        self.emit_alarm_updated_notification().await;
+        self.maybe_start_pending_alarm().await;
+    }
+
+    async fn emit_alarm_updated_notification(&self) {
+        let alarms = self.list_alarms().await;
+        let Ok(payload) = serde_json::to_string(&alarms) else {
+            warn!("failed to serialize alarm update payload");
             return;
         };
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
-                message: format!("{JOB_UPDATED_BACKGROUND_EVENT_PREFIX}{payload}"),
+                message: format!("{ALARM_UPDATED_BACKGROUND_EVENT_PREFIX}{payload}"),
             }),
         })
         .await;
     }
 
-    async fn emit_job_fired_notification(&self, job: &ThreadJob) {
-        let Ok(payload) = serde_json::to_string(job) else {
-            warn!("failed to serialize job fired payload");
+    async fn emit_alarm_fired_notification(&self, alarm: &ThreadAlarm) {
+        let Ok(payload) = serde_json::to_string(alarm) else {
+            warn!("failed to serialize alarm fired payload");
             return;
         };
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
-                message: format!("{JOB_FIRED_BACKGROUND_EVENT_PREFIX}{payload}"),
+                message: format!("{ALARM_FIRED_BACKGROUND_EVENT_PREFIX}{payload}"),
             }),
         })
         .await;
@@ -3788,9 +3917,6 @@ impl Session {
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
         {
             developer_sections.push(developer_instructions.to_string());
-        }
-        if let Some(job_context) = turn_context.job_context.as_ref() {
-            developer_sections.push(job_turn_developer_instructions(job_context));
         }
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
@@ -5737,7 +5863,6 @@ async fn spawn_review_thread(
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
-        job_context: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),

@@ -317,20 +317,20 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
-    #[experimental("thread/job/create")]
-    ThreadJobCreate => "thread/job/create" {
-        params: v2::ThreadJobCreateParams,
-        response: v2::ThreadJobCreateResponse,
+    #[experimental("thread/alarm/create")]
+    ThreadAlarmCreate => "thread/alarm/create" {
+        params: v2::ThreadAlarmCreateParams,
+        response: v2::ThreadAlarmCreateResponse,
     },
-    #[experimental("thread/job/delete")]
-    ThreadJobDelete => "thread/job/delete" {
-        params: v2::ThreadJobDeleteParams,
-        response: v2::ThreadJobDeleteResponse,
+    #[experimental("thread/alarm/delete")]
+    ThreadAlarmDelete => "thread/alarm/delete" {
+        params: v2::ThreadAlarmDeleteParams,
+        response: v2::ThreadAlarmDeleteResponse,
     },
-    #[experimental("thread/job/list")]
-    ThreadJobList => "thread/job/list" {
-        params: v2::ThreadJobListParams,
-        response: v2::ThreadJobListResponse,
+    #[experimental("thread/alarm/list")]
+    ThreadAlarmList => "thread/alarm/list" {
+        params: v2::ThreadAlarmListParams,
+        response: v2::ThreadAlarmListResponse,
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
@@ -933,10 +933,10 @@ server_notification_definitions! {
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
-    #[experimental("thread/job/updated")]
-    ThreadJobUpdated => "thread/job/updated" (v2::ThreadJobUpdatedNotification),
-    #[experimental("thread/job/fired")]
-    ThreadJobFired => "thread/job/fired" (v2::ThreadJobFiredNotification),
+    #[experimental("thread/alarm/updated")]
+    ThreadAlarmUpdated => "thread/alarm/updated" (v2::ThreadAlarmUpdatedNotification),
+    #[experimental("thread/alarm/fired")]
+    ThreadAlarmFired => "thread/alarm/fired" (v2::ThreadAlarmFiredNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),

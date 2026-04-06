@@ -1,11 +1,12 @@
-//! Built-in tool handlers for thread-local runtime job management.
+//! Built-in tool handlers for thread-local persistent alarm management.
 //!
-//! These handlers bridge `JobCreate`, `JobDelete`, and `JobList` tool calls
-//! onto the current thread session's in-memory job registry.
+//! These handlers bridge `AlarmCreate`, `AlarmDelete`, and `AlarmList` tool
+//! calls onto the current thread session's alarm registry.
 
 use async_trait::async_trait;
 use serde::Deserialize;
 
+use crate::alarms::AlarmDelivery;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -15,21 +16,22 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
 #[derive(Deserialize)]
-struct JobCreateArgs {
+struct AlarmCreateArgs {
     cron_expression: String,
     prompt: String,
     run_once: Option<bool>,
+    delivery: AlarmDelivery,
 }
 
 #[derive(Deserialize)]
-struct JobDeleteArgs {
+struct AlarmDeleteArgs {
     id: String,
 }
 
-pub struct JobCreateHandler;
+pub struct AlarmCreateHandler;
 
 #[async_trait]
-impl ToolHandler for JobCreateHandler {
+impl ToolHandler for AlarmCreateHandler {
     type Output = FunctionToolOutput;
 
     fn kind(&self) -> ToolKind {
@@ -39,30 +41,31 @@ impl ToolHandler for JobCreateHandler {
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolPayload::Function { arguments } = invocation.payload else {
             return Err(FunctionCallError::RespondToModel(
-                "JobCreate received unsupported payload".to_string(),
+                "AlarmCreate received unsupported payload".to_string(),
             ));
         };
-        let args: JobCreateArgs = parse_arguments(&arguments)?;
-        let job = invocation
+        let args: AlarmCreateArgs = parse_arguments(&arguments)?;
+        let alarm = invocation
             .session
-            .create_job(
+            .create_alarm(
                 args.cron_expression,
                 args.prompt,
                 args.run_once.unwrap_or(false),
+                args.delivery,
             )
             .await
             .map_err(FunctionCallError::RespondToModel)?;
-        let content = serde_json::to_string(&job).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize JobCreate response: {err}"))
+        let content = serde_json::to_string(&alarm).map_err(|err| {
+            FunctionCallError::Fatal(format!("failed to serialize AlarmCreate response: {err}"))
         })?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 
-pub struct JobDeleteHandler;
+pub struct AlarmDeleteHandler;
 
 #[async_trait]
-impl ToolHandler for JobDeleteHandler {
+impl ToolHandler for AlarmDeleteHandler {
     type Output = FunctionToolOutput;
 
     fn kind(&self) -> ToolKind {
@@ -72,20 +75,24 @@ impl ToolHandler for JobDeleteHandler {
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolPayload::Function { arguments } = invocation.payload else {
             return Err(FunctionCallError::RespondToModel(
-                "JobDelete received unsupported payload".to_string(),
+                "AlarmDelete received unsupported payload".to_string(),
             ));
         };
-        let args: JobDeleteArgs = parse_arguments(&arguments)?;
-        let deleted = invocation.session.delete_job(&args.id).await;
+        let args: AlarmDeleteArgs = parse_arguments(&arguments)?;
+        let deleted = invocation
+            .session
+            .delete_alarm(&args.id)
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
         let content = serde_json::json!({ "deleted": deleted }).to_string();
         Ok(FunctionToolOutput::from_text(content, Some(deleted)))
     }
 }
 
-pub struct JobListHandler;
+pub struct AlarmListHandler;
 
 #[async_trait]
-impl ToolHandler for JobListHandler {
+impl ToolHandler for AlarmListHandler {
     type Output = FunctionToolOutput;
 
     fn kind(&self) -> ToolKind {
@@ -97,13 +104,13 @@ impl ToolHandler for JobListHandler {
             ToolPayload::Function { .. } => {}
             _ => {
                 return Err(FunctionCallError::RespondToModel(
-                    "JobList received unsupported payload".to_string(),
+                    "AlarmList received unsupported payload".to_string(),
                 ));
             }
         }
-        let jobs = invocation.session.list_jobs().await;
-        let content = serde_json::to_string(&jobs).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize JobList response: {err}"))
+        let alarms = invocation.session.list_alarms().await;
+        let content = serde_json::to_string(&alarms).map_err(|err| {
+            FunctionCallError::Fatal(format!("failed to serialize AlarmList response: {err}"))
         })?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }

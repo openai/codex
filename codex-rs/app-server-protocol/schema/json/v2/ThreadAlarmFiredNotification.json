@@ -1,7 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "ThreadJob": {
+    "AlarmDelivery": {
+      "enum": [
+        "after-turn",
+        "steer-current-turn"
+      ],
+      "type": "string"
+    },
+    "ThreadAlarm": {
       "properties": {
         "createdAt": {
           "format": "int64",
@@ -9,6 +16,9 @@
         },
         "cronExpression": {
           "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/definitions/AlarmDelivery"
         },
         "id": {
           "type": "string"
@@ -37,6 +47,7 @@
       "required": [
         "createdAt",
         "cronExpression",
+        "delivery",
         "id",
         "prompt",
         "runOnce"
@@ -45,20 +56,17 @@
     }
   },
   "properties": {
-    "jobs": {
-      "items": {
-        "$ref": "#/definitions/ThreadJob"
-      },
-      "type": "array"
+    "alarm": {
+      "$ref": "#/definitions/ThreadAlarm"
     },
     "threadId": {
       "type": "string"
     }
   },
   "required": [
-    "jobs",
+    "alarm",
     "threadId"
   ],
-  "title": "ThreadJobUpdatedNotification",
+  "title": "ThreadAlarmFiredNotification",
   "type": "object"
 }

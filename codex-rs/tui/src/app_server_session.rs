@@ -6,6 +6,7 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AlarmDelivery;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -24,19 +25,19 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAlarm;
+use codex_app_server_protocol::ThreadAlarmCreateParams;
+use codex_app_server_protocol::ThreadAlarmCreateResponse;
+use codex_app_server_protocol::ThreadAlarmDeleteParams;
+use codex_app_server_protocol::ThreadAlarmDeleteResponse;
+use codex_app_server_protocol::ThreadAlarmListParams;
+use codex_app_server_protocol::ThreadAlarmListResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
-use codex_app_server_protocol::ThreadJob;
-use codex_app_server_protocol::ThreadJobCreateParams;
-use codex_app_server_protocol::ThreadJobCreateResponse;
-use codex_app_server_protocol::ThreadJobDeleteParams;
-use codex_app_server_protocol::ThreadJobDeleteResponse;
-use codex_app_server_protocol::ThreadJobListParams;
-use codex_app_server_protocol::ThreadJobListResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -412,62 +413,67 @@ impl AppServerSession {
         Ok(response.thread)
     }
 
-    pub(crate) async fn thread_job_create(
+    pub(crate) async fn thread_alarm_create(
         &mut self,
         thread_id: ThreadId,
         cron_expression: String,
         prompt: String,
         run_once: Option<bool>,
-    ) -> Result<ThreadJob> {
+        delivery: AlarmDelivery,
+    ) -> Result<ThreadAlarm> {
         let request_id = self.next_request_id();
-        let response: ThreadJobCreateResponse = self
+        let response: ThreadAlarmCreateResponse = self
             .client
-            .request_typed(ClientRequest::ThreadJobCreate {
+            .request_typed(ClientRequest::ThreadAlarmCreate {
                 request_id,
-                params: ThreadJobCreateParams {
+                params: ThreadAlarmCreateParams {
                     thread_id: thread_id.to_string(),
                     cron_expression,
                     prompt,
                     run_once,
+                    delivery,
                 },
             })
             .await
-            .wrap_err("thread/job/create failed in TUI")?;
-        Ok(response.job)
+            .wrap_err("thread/alarm/create failed in TUI")?;
+        Ok(response.alarm)
     }
 
-    pub(crate) async fn thread_job_delete(
+    pub(crate) async fn thread_alarm_delete(
         &mut self,
         thread_id: ThreadId,
         id: String,
     ) -> Result<bool> {
         let request_id = self.next_request_id();
-        let response: ThreadJobDeleteResponse = self
+        let response: ThreadAlarmDeleteResponse = self
             .client
-            .request_typed(ClientRequest::ThreadJobDelete {
+            .request_typed(ClientRequest::ThreadAlarmDelete {
                 request_id,
-                params: ThreadJobDeleteParams {
+                params: ThreadAlarmDeleteParams {
                     thread_id: thread_id.to_string(),
                     id,
                 },
             })
             .await
-            .wrap_err("thread/job/delete failed in TUI")?;
+            .wrap_err("thread/alarm/delete failed in TUI")?;
         Ok(response.deleted)
     }
 
-    pub(crate) async fn thread_job_list(&mut self, thread_id: ThreadId) -> Result<Vec<ThreadJob>> {
+    pub(crate) async fn thread_alarm_list(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<Vec<ThreadAlarm>> {
         let request_id = self.next_request_id();
-        let response: ThreadJobListResponse = self
+        let response: ThreadAlarmListResponse = self
             .client
-            .request_typed(ClientRequest::ThreadJobList {
+            .request_typed(ClientRequest::ThreadAlarmList {
                 request_id,
-                params: ThreadJobListParams {
+                params: ThreadAlarmListParams {
                     thread_id: thread_id.to_string(),
                 },
             })
             .await
-            .wrap_err("thread/job/list failed in TUI")?;
+            .wrap_err("thread/alarm/list failed in TUI")?;
         Ok(response.data)
     }
 

@@ -144,11 +144,11 @@ Example with notification opt-out:
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
-- `thread/job/create` — create a runtime-only job on a loaded thread; accepts `cronExpression`, `prompt`, and optional `runOnce`, returns the created job, and requires the experimental feature flag `job_scheduler` to be enabled for that thread.
-- `thread/job/delete` — delete one runtime-only job from a loaded thread by id; returns `{}` and requires `job_scheduler`.
-- `thread/job/list` — list runtime-only jobs for a loaded thread; returns `{ data }` and requires `job_scheduler`.
-- `thread/job/updated` — notification emitted when a loaded thread’s job list changes, including run-once jobs deleting themselves after execution.
-- `thread/job/fired` — notification emitted when a thread job fires and starts a synthetic follow-on turn.
+- `thread/alarm/create` — create a runtime alarm on a loaded thread; accepts `cronExpression`, `prompt`, `delivery`, and optional `runOnce`, returns the created alarm, and requires the experimental feature flag `alarm_scheduler` to be enabled for that thread.
+- `thread/alarm/delete` — delete one runtime alarm from a loaded thread by id; returns `{ deleted }` and requires `alarm_scheduler`.
+- `thread/alarm/list` — list runtime alarms for a loaded thread; returns `{ data }` and requires `alarm_scheduler`.
+- `thread/alarm/updated` — notification emitted when a loaded thread’s alarm list changes, including run-once alarms deleting themselves after execution or alarms restored from disk.
+- `thread/alarm/fired` — notification emitted when a thread alarm fires, either for a synthetic follow-on turn or a same-turn steer delivery.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.

@@ -94,6 +94,7 @@ mod audio_device {
         ))
     }
 }
+mod alarm_scheduler;
 mod bottom_pane;
 mod chatwidget;
 mod cli;
@@ -113,7 +114,6 @@ mod frames;
 mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
-mod job_scheduler;
 mod key_hint;
 mod line_truncation;
 pub mod live_wrap;

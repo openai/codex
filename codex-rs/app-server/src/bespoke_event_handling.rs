@@ -78,10 +78,10 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
+use codex_app_server_protocol::ThreadAlarm;
+use codex_app_server_protocol::ThreadAlarmFiredNotification;
+use codex_app_server_protocol::ThreadAlarmUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadJob;
-use codex_app_server_protocol::ThreadJobFiredNotification;
-use codex_app_server_protocol::ThreadJobUpdatedNotification;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
@@ -109,9 +109,9 @@ use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_app_server_protocol::convert_patch_changes;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::alarms::ALARM_FIRED_BACKGROUND_EVENT_PREFIX;
+use codex_core::alarms::ALARM_UPDATED_BACKGROUND_EVENT_PREFIX;
 use codex_core::find_thread_name_by_id;
-use codex_core::jobs::JOB_FIRED_BACKGROUND_EVENT_PREFIX;
-use codex_core::jobs::JOB_UPDATED_BACKGROUND_EVENT_PREFIX;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
@@ -256,12 +256,20 @@ fn guardian_auto_approval_review_notification(
     }
 }
 
-fn thread_job_from_core(value: codex_core::jobs::ThreadJob) -> ThreadJob {
-    ThreadJob {
+fn thread_alarm_from_core(value: codex_core::alarms::ThreadAlarm) -> ThreadAlarm {
+    ThreadAlarm {
         id: value.id,
         cron_expression: value.cron_expression,
         prompt: value.prompt,
         run_once: value.run_once,
+        delivery: match value.delivery {
+            codex_core::alarms::AlarmDelivery::AfterTurn => {
+                codex_app_server_protocol::AlarmDelivery::AfterTurn
+            }
+            codex_core::alarms::AlarmDelivery::SteerCurrentTurn => {
+                codex_app_server_protocol::AlarmDelivery::SteerCurrentTurn
+            }
+        },
         created_at: value.created_at,
         next_run_at: value.next_run_at,
         last_run_at: value.last_run_at,
@@ -1329,27 +1337,28 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::BackgroundEvent(event) => {
             if let Some(payload) = event
                 .message
-                .strip_prefix(JOB_UPDATED_BACKGROUND_EVENT_PREFIX)
-                && let Ok(jobs) = serde_json::from_str::<Vec<codex_core::jobs::ThreadJob>>(payload)
+                .strip_prefix(ALARM_UPDATED_BACKGROUND_EVENT_PREFIX)
+                && let Ok(alarms) =
+                    serde_json::from_str::<Vec<codex_core::alarms::ThreadAlarm>>(payload)
             {
-                let notification = ThreadJobUpdatedNotification {
+                let notification = ThreadAlarmUpdatedNotification {
                     thread_id: conversation_id.to_string(),
-                    jobs: jobs.into_iter().map(thread_job_from_core).collect(),
+                    alarms: alarms.into_iter().map(thread_alarm_from_core).collect(),
                 };
                 outgoing
-                    .send_server_notification(ServerNotification::ThreadJobUpdated(notification))
+                    .send_server_notification(ServerNotification::ThreadAlarmUpdated(notification))
                     .await;
             } else if let Some(payload) = event
                 .message
-                .strip_prefix(JOB_FIRED_BACKGROUND_EVENT_PREFIX)
-                && let Ok(job) = serde_json::from_str::<codex_core::jobs::ThreadJob>(payload)
+                .strip_prefix(ALARM_FIRED_BACKGROUND_EVENT_PREFIX)
+                && let Ok(alarm) = serde_json::from_str::<codex_core::alarms::ThreadAlarm>(payload)
             {
-                let notification = ThreadJobFiredNotification {
+                let notification = ThreadAlarmFiredNotification {
                     thread_id: conversation_id.to_string(),
-                    job: thread_job_from_core(job),
+                    alarm: thread_alarm_from_core(alarm),
                 };
                 outgoing
-                    .send_server_notification(ServerNotification::ThreadJobFired(notification))
+                    .send_server_notification(ServerNotification::ThreadAlarmFired(notification))
                     .await;
             }
         }

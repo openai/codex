@@ -453,17 +453,16 @@ impl Session {
             last_agent_message,
         });
         self.send_event(turn_context.as_ref(), event).await;
-        self.mark_after_turn_jobs_due().await;
-        self.maybe_start_pending_job().await;
-
-        if should_clear_active_turn {
-            let session = Arc::clone(self);
-            let _scheduler = tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(async move {
+        let session = Arc::clone(self);
+        let _scheduler = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                session.mark_after_turn_alarms_due().await;
+                session.maybe_start_pending_alarm().await;
+                if should_clear_active_turn {
                     session.maybe_start_turn_for_pending_work().await;
-                });
+                }
             });
-        }
+        });
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {

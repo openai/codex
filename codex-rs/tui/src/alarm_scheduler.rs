@@ -1,6 +1,7 @@
 use crate::AppServerTarget;
 use crate::start_app_server_for_picker;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::AlarmDelivery;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_core::config::Config;
@@ -10,22 +11,24 @@ use serde_json::json;
 use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParsedJobSpec {
+pub(crate) struct ParsedAlarmSpec {
     pub(crate) cron_expression: String,
     pub(crate) prompt: String,
     pub(crate) run_once: Option<bool>,
+    pub(crate) delivery: AlarmDelivery,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ParsedJobSpecResponse {
+struct ParsedAlarmSpecResponse {
     cron_expression: String,
     prompt: String,
     run_once: Option<bool>,
+    delivery: AlarmDelivery,
 }
 
-impl ParsedJobSpecResponse {
-    fn into_parsed(self) -> std::result::Result<ParsedJobSpec, String> {
+impl ParsedAlarmSpecResponse {
+    fn into_parsed(self) -> std::result::Result<ParsedAlarmSpec, String> {
         let cron_expression = self.cron_expression.trim().to_string();
         let prompt = self.prompt.trim().to_string();
         if cron_expression.is_empty() {
@@ -34,19 +37,20 @@ impl ParsedJobSpecResponse {
         if prompt.is_empty() {
             return Err("Could not determine a prompt from /loop input.".to_string());
         }
-        Ok(ParsedJobSpec {
+        Ok(ParsedAlarmSpec {
             cron_expression,
             prompt,
             run_once: self.run_once,
+            delivery: self.delivery,
         })
     }
 }
 
-pub(crate) async fn parse_job_spec(
+pub(crate) async fn parse_alarm_spec(
     config: Config,
     target: AppServerTarget,
     spec: String,
-) -> std::result::Result<ParsedJobSpec, String> {
+) -> std::result::Result<ParsedAlarmSpec, String> {
     let mut app_server = start_app_server_for_picker(&config, &target)
         .await
         .map_err(|err| format!("Failed to start parser session: {err}"))?;
@@ -61,16 +65,17 @@ pub(crate) async fn parse_job_spec(
             "properties": {
                 "cronExpression": { "type": "string" },
                 "prompt": { "type": "string" },
-                "runOnce": { "type": ["boolean", "null"] }
+                "runOnce": { "type": ["boolean", "null"] },
+                "delivery": { "type": "string" }
             },
-            "required": ["cronExpression", "prompt", "runOnce"],
+            "required": ["cronExpression", "prompt", "runOnce", "delivery"],
             "additionalProperties": false
         });
 
         let parser_prompt = format!(
             "{}\n{}",
             concat!(
-                "Convert the user's /loop spec into JSON with keys cronExpression, prompt, and runOnce.\n",
+                "Convert the user's /loop spec into JSON with keys cronExpression, prompt, runOnce, and delivery.\n",
                 "Only emit valid JSON matching the schema.\n",
                 "Supported cronExpression values for this client are:\n",
                 "- @after-turn\n",
@@ -80,7 +85,9 @@ pub(crate) async fn parse_job_spec(
                 "- @every <N>d\n",
                 "Use @after-turn when no explicit interval is present.\n",
                 "Set runOnce to true only when the user clearly asked for a one-shot run.\n",
-                "Keep stop conditions and job intent inside prompt.\n",
+                "Set delivery to `steer-current-turn` only when the user clearly asked for the alarm to be delivered during the current turn or as a steer.\n",
+                "Otherwise set delivery to `after-turn`.\n",
+                "Keep stop conditions and alarm intent inside prompt.\n",
                 "If the schedule request is unsupported by the allowed cronExpression formats, return an empty cronExpression.\n",
                 "User spec:"
             ),
@@ -139,7 +146,7 @@ pub(crate) async fn parse_job_spec(
 
         let response =
             final_message.ok_or_else(|| "The /loop parser returned no output.".to_string())?;
-        let parsed: ParsedJobSpecResponse = serde_json::from_str(&response)
+        let parsed: ParsedAlarmSpecResponse = serde_json::from_str(&response)
             .map_err(|err| format!("Invalid /loop parser JSON: {err}"))?;
         parsed.into_parsed()
     }
@@ -152,7 +159,22 @@ pub(crate) async fn parse_job_spec(
     result
 }
 
-pub(crate) fn format_job_summary(cron_expression: &str, run_once: bool, prompt: &str) -> String {
+pub(crate) fn format_alarm_summary(
+    cron_expression: &str,
+    run_once: bool,
+    delivery: AlarmDelivery,
+    prompt: &str,
+) -> String {
     let mode = if run_once { "one-shot" } else { "recurring" };
-    format!("{cron_expression} ({mode}) -> {prompt}")
+    format!(
+        "{cron_expression} ({mode}, {}) -> {prompt}",
+        delivery_str(delivery)
+    )
+}
+
+fn delivery_str(delivery: AlarmDelivery) -> &'static str {
+    match delivery {
+        AlarmDelivery::AfterTurn => "after-turn",
+        AlarmDelivery::SteerCurrentTurn => "steer-current-turn",
+    }
 }

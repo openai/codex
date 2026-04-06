@@ -1,3 +1,5 @@
+use crate::alarm_scheduler::format_alarm_summary;
+use crate::alarm_scheduler::parse_alarm_spec;
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
@@ -32,8 +34,6 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
-use crate::job_scheduler::format_job_summary;
-use crate::job_scheduler::parse_job_spec;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -1971,7 +1971,7 @@ impl App {
         });
     }
 
-    fn parse_thread_job_spec(&mut self, thread_id: ThreadId, spec: String) {
+    fn parse_thread_alarm_spec(&mut self, thread_id: ThreadId, spec: String) {
         let config = self.config.clone();
         let target = match self.remote_app_server_url.clone() {
             Some(websocket_url) => crate::AppServerTarget::Remote {
@@ -1982,8 +1982,8 @@ impl App {
         };
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = parse_job_spec(config, target, spec.clone()).await;
-            app_event_tx.send(AppEvent::ThreadJobSpecParsed {
+            let result = parse_alarm_spec(config, target, spec.clone()).await;
+            app_event_tx.send(AppEvent::ThreadAlarmSpecParsed {
                 thread_id,
                 spec,
                 result,
@@ -3298,11 +3298,11 @@ impl App {
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
-        if self.config.features.enabled(Feature::JobScheduler) {
-            match app_server.thread_job_list(thread_id).await {
-                Ok(jobs) => self.chat_widget.on_thread_jobs_updated(jobs),
+        if self.config.features.enabled(Feature::AlarmScheduler) {
+            match app_server.thread_alarm_list(thread_id).await {
+                Ok(alarms) => self.chat_widget.on_thread_alarms_updated(alarms),
                 Err(err) => {
-                    tracing::warn!(%err, "failed to load thread jobs while attaching thread");
+                    tracing::warn!(%err, "failed to load thread alarms while attaching thread");
                 }
             }
         }
@@ -4184,44 +4184,49 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OpenThreadJobs { thread_id } => {
-                match app_server.thread_job_list(thread_id).await {
-                    Ok(jobs) => {
+            AppEvent::OpenThreadAlarms { thread_id } => {
+                match app_server.thread_alarm_list(thread_id).await {
+                    Ok(alarms) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
-                            self.chat_widget.open_thread_jobs_popup(thread_id, jobs);
+                            self.chat_widget.open_thread_alarms_popup(thread_id, alarms);
                         }
                     }
                     Err(err) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
                             self.chat_widget
-                                .add_error_message(format!("Failed to load thread jobs: {err}"));
+                                .add_error_message(format!("Failed to load thread alarms: {err}"));
                         }
                     }
                 }
             }
-            AppEvent::CreateThreadJobFromSpec { thread_id, spec } => {
-                self.parse_thread_job_spec(thread_id, spec);
+            AppEvent::CreateThreadAlarmFromSpec { thread_id, spec } => {
+                self.parse_thread_alarm_spec(thread_id, spec);
             }
-            AppEvent::ThreadJobSpecParsed {
+            AppEvent::ThreadAlarmSpecParsed {
                 thread_id,
                 spec,
                 result,
             } => match result {
                 Ok(parsed) => match app_server
-                    .thread_job_create(
+                    .thread_alarm_create(
                         thread_id,
                         parsed.cron_expression.clone(),
                         parsed.prompt.clone(),
                         parsed.run_once,
+                        parsed.delivery,
                     )
                     .await
                 {
-                    Ok(job) => {
+                    Ok(alarm) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
-                            let summary =
-                                format_job_summary(&job.cron_expression, job.run_once, &job.prompt);
+                            let summary = format_alarm_summary(
+                                &alarm.cron_expression,
+                                alarm.run_once,
+                                alarm.delivery,
+                                &alarm.prompt,
+                            );
                             self.chat_widget.add_info_message(
-                                format!("Created thread job from `/loop {spec}`."),
+                                format!("Created thread alarm from `/loop {spec}`."),
                                 Some(summary),
                             );
                         }
@@ -4229,7 +4234,7 @@ impl App {
                     Err(err) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
                             self.chat_widget
-                                .add_error_message(format!("Failed to create thread job: {err}"));
+                                .add_error_message(format!("Failed to create thread alarm: {err}"));
                         }
                     }
                 },
@@ -4240,12 +4245,12 @@ impl App {
                     }
                 }
             },
-            AppEvent::DeleteThreadJob { thread_id, id } => {
-                match app_server.thread_job_delete(thread_id, id.clone()).await {
+            AppEvent::DeleteThreadAlarm { thread_id, id } => {
+                match app_server.thread_alarm_delete(thread_id, id.clone()).await {
                     Ok(true) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
                             self.chat_widget.add_info_message(
-                                format!("Deleted thread job `{id}`."),
+                                format!("Deleted thread alarm `{id}`."),
                                 /*hint*/ None,
                             );
                         }
@@ -4253,13 +4258,13 @@ impl App {
                     Ok(false) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
                             self.chat_widget
-                                .add_error_message(format!("No thread job matched `{id}`."));
+                                .add_error_message(format!("No thread alarm matched `{id}`."));
                         }
                     }
                     Err(err) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to delete thread job `{id}`: {err}"
+                                "Failed to delete thread alarm `{id}`: {err}"
                             ));
                         }
                     }

@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/jobs.rs
+expression: popup
+---
+  Thread alarms
+  Review an alarm, then press Enter to delete it.
+
+› 1. @after-turn  Give me a random animal name.
+                  Press Enter to delete this alarm.
+
+  Press enter to confirm or esc to go back

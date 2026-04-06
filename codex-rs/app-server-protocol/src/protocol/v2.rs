@@ -3149,14 +3149,23 @@ pub struct ThreadReadResponse {
     pub thread: Thread,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum AlarmDelivery {
+    AfterTurn,
+    SteerCurrentTurn,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJob {
+pub struct ThreadAlarm {
     pub id: String,
     pub cron_expression: String,
     pub prompt: String,
     pub run_once: bool,
+    pub delivery: AlarmDelivery,
     #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number | null")]
@@ -3168,25 +3177,26 @@ pub struct ThreadJob {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobCreateParams {
+pub struct ThreadAlarmCreateParams {
     pub thread_id: String,
     pub cron_expression: String,
     pub prompt: String,
     #[ts(optional = nullable)]
     pub run_once: Option<bool>,
+    pub delivery: AlarmDelivery,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobCreateResponse {
-    pub job: ThreadJob,
+pub struct ThreadAlarmCreateResponse {
+    pub alarm: ThreadAlarm,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobDeleteParams {
+pub struct ThreadAlarmDeleteParams {
     pub thread_id: String,
     pub id: String,
 }
@@ -3194,38 +3204,38 @@ pub struct ThreadJobDeleteParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobDeleteResponse {
+pub struct ThreadAlarmDeleteResponse {
     pub deleted: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobListParams {
+pub struct ThreadAlarmListParams {
     pub thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobListResponse {
-    pub data: Vec<ThreadJob>,
+pub struct ThreadAlarmListResponse {
+    pub data: Vec<ThreadAlarm>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobUpdatedNotification {
+pub struct ThreadAlarmUpdatedNotification {
     pub thread_id: String,
-    pub jobs: Vec<ThreadJob>,
+    pub alarms: Vec<ThreadAlarm>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadJobFiredNotification {
+pub struct ThreadAlarmFiredNotification {
     pub thread_id: String,
-    pub job: ThreadJob,
+    pub alarm: ThreadAlarm,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

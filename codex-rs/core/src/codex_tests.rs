@@ -1,5 +1,7 @@
 use super::*;
 use crate::CodexAuth;
+use crate::alarms::AlarmDelivery;
+use crate::alarms::AlarmsState;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -12,7 +14,6 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
-use crate::jobs::JobsState;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
@@ -2749,12 +2750,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
-        job_start_in_progress: Mutex::new(false),
+        alarm_start_in_progress: Mutex::new(false),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
-        jobs: Mutex::new(JobsState::default()),
-        job_timers_cancellation_token: CancellationToken::new(),
+        alarms: Mutex::new(AlarmsState::default()),
+        alarm_timers_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3595,12 +3596,12 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
-        job_start_in_progress: Mutex::new(false),
+        alarm_start_in_progress: Mutex::new(false),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
-        jobs: Mutex::new(JobsState::default()),
-        job_timers_cancellation_token: CancellationToken::new(),
+        alarms: Mutex::new(AlarmsState::default()),
+        alarm_timers_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3621,9 +3622,9 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn dropping_session_cancels_job_timers() {
+async fn dropping_session_cancels_alarm_timers() {
     let (session, _, _) = make_session_and_context_with_rx().await;
-    let cancel_token = session.job_timers_cancellation_token.clone();
+    let cancel_token = session.alarm_timers_cancellation_token.clone();
 
     drop(session);
 
@@ -3631,41 +3632,52 @@ async fn dropping_session_cancels_job_timers() {
 }
 
 #[tokio::test]
-async fn maybe_start_pending_job_claims_only_one_job_while_start_is_in_progress() {
+async fn maybe_start_pending_alarm_claims_only_one_alarm_while_start_is_in_progress() {
     let (session, _, _) = make_session_and_context_with_rx().await;
     let now = chrono::Utc::now();
     {
-        let mut jobs = session.jobs.lock().await;
-        jobs.create_job(
-            "job-1".to_string(),
-            crate::jobs::AFTER_TURN_CRON_EXPRESSION.to_string(),
-            "first".to_string(),
-            /*run_once*/ false,
-            now,
-            /*timer_cancel*/ None,
-        )
-        .expect("first job should be created");
-        jobs.create_job(
-            "job-2".to_string(),
-            crate::jobs::AFTER_TURN_CRON_EXPRESSION.to_string(),
-            "second".to_string(),
-            /*run_once*/ false,
-            now,
-            /*timer_cancel*/ None,
-        )
-        .expect("second job should be created");
+        let mut alarms = session.alarms.lock().await;
+        alarms
+            .create_alarm(
+                crate::alarms::CreateAlarm {
+                    id: "alarm-1".to_string(),
+                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    prompt: "first".to_string(),
+                    run_once: false,
+                    delivery: AlarmDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("first alarm should be created");
+        alarms
+            .create_alarm(
+                crate::alarms::CreateAlarm {
+                    id: "alarm-2".to_string(),
+                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    prompt: "second".to_string(),
+                    run_once: false,
+                    delivery: AlarmDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("second alarm should be created");
     }
 
     let first = Arc::clone(&session);
     let second = Arc::clone(&session);
     tokio::join!(
-        first.maybe_start_pending_job(),
-        second.maybe_start_pending_job()
+        first.maybe_start_pending_alarm(),
+        second.maybe_start_pending_alarm()
     );
 
-    let jobs = session.jobs.lock().await.list_jobs();
+    let alarms = session.alarms.lock().await.list_alarms();
     assert_eq!(
-        jobs.iter().filter(|job| job.last_run_at.is_some()).count(),
+        alarms
+            .iter()
+            .filter(|alarm| alarm.last_run_at.is_some())
+            .count(),
         1
     );
 }

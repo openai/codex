@@ -3,9 +3,9 @@
 
 mod agent_job_tool;
 mod agent_tool;
+mod alarm_tool;
 mod code_mode;
 mod dynamic_tool;
-mod job_tool;
 mod js_repl_tool;
 mod json_schema;
 mod local_tool;
@@ -34,14 +34,14 @@ pub use agent_tool::create_spawn_agent_tool_v1;
 pub use agent_tool::create_spawn_agent_tool_v2;
 pub use agent_tool::create_wait_agent_tool_v1;
 pub use agent_tool::create_wait_agent_tool_v2;
+pub use alarm_tool::create_alarm_create_tool;
+pub use alarm_tool::create_alarm_delete_tool;
+pub use alarm_tool::create_alarm_list_tool;
 pub use code_mode::augment_tool_spec_for_code_mode;
 pub use code_mode::create_code_mode_tool;
 pub use code_mode::create_wait_tool;
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
 pub use dynamic_tool::parse_dynamic_tool;
-pub use job_tool::create_job_create_tool;
-pub use job_tool::create_job_delete_tool;
-pub use job_tool::create_job_list_tool;
 pub use js_repl_tool::create_js_repl_reset_tool;
 pub use js_repl_tool::create_js_repl_tool;
 pub use json_schema::AdditionalProperties;
