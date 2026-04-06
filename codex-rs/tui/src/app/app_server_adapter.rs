@@ -1255,6 +1255,7 @@ mod tests {
     fn replays_command_execution_items_from_thread_snapshots() {
         let thread = Thread {
             id: "019cee8c-b993-7e33-88c0-014d4e62612d".to_string(),
+            forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
             model_provider: "openai".to_string(),
@@ -1421,6 +1422,7 @@ mod tests {
         let events = thread_snapshot_events(
             &Thread {
                 id: thread_id.to_string(),
+                forked_from_id: None,
                 preview: "hello".to_string(),
                 ephemeral: false,
                 model_provider: "openai".to_string(),

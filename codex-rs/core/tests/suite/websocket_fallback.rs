@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_model_provider_info::WireApi;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -43,7 +44,7 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config.model_provider.wire_api = WireApi::Responses;
             config.model_provider.supports_websockets = true;
             // If we don't treat 426 specially, the sampling loop would retry the WebSocket
             // handshake before switching to the HTTP transport.
@@ -89,7 +90,7 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config.model_provider.wire_api = WireApi::Responses;
             config.model_provider.supports_websockets = true;
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
@@ -134,7 +135,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config.model_provider.wire_api = WireApi::Responses;
             config.model_provider.supports_websockets = true;
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
@@ -210,7 +211,7 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config.model_provider.wire_api = WireApi::Responses;
             config.model_provider.supports_websockets = true;
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);

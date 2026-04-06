@@ -25,7 +25,6 @@ use tokio::time::sleep;
 use wiremock::MockServer;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
-const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
 const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
@@ -36,6 +35,7 @@ const REQUESTED_MODEL: &str = "gpt-5.1";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 const ROLE_MODEL: &str = "gpt-5.1-codex-max";
 const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
+const SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS: &str = "You are a newly spawned agent in a team of agents collaborating to complete a task. You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. You are responsible for returning the response to your assigned task in the final channel. When you give your response, the contents of your response in the final channel will be immediately delivered back to your parent agent. The prior conversation history was forked from your parent agent. Treat the next user message as your assigned task, and use the forked history only as background context.";
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     let is_zstd = req
@@ -372,8 +372,7 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
             .unwrap_or_default()
             .into_iter()
             .find(|request| {
-                body_contains(request, CHILD_PROMPT)
-                    && body_contains(request, FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)
+                body_contains(request, CHILD_PROMPT) && !body_contains(request, SPAWN_CALL_ID)
             })
         {
             break request;
@@ -384,30 +383,7 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
         sleep(Duration::from_millis(10)).await;
     };
     assert!(body_contains(&child_request, TURN_0_FORK_PROMPT));
-    assert!(body_contains(&child_request, "seeded"));
-
-    let child_body = child_request
-        .body_json::<serde_json::Value>()
-        .expect("forked child request body should be json");
-    let function_call_output = child_body["input"]
-        .as_array()
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item["type"].as_str() == Some("function_call_output")
-                    && item["call_id"].as_str() == Some(SPAWN_CALL_ID)
-            })
-        })
-        .unwrap_or_else(|| panic!("expected forked child request to include spawn_agent output"));
-    let (content, success) = match &function_call_output["output"] {
-        serde_json::Value::String(text) => (Some(text.as_str()), None),
-        serde_json::Value::Object(output) => (
-            output.get("content").and_then(serde_json::Value::as_str),
-            output.get("success").and_then(serde_json::Value::as_bool),
-        ),
-        _ => (None, None),
-    };
-    assert_eq!(content, Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE));
-    assert_ne!(success, Some(false));
+    assert!(!body_contains(&child_request, SPAWN_CALL_ID));
 
     Ok(())
 }
@@ -434,6 +410,99 @@ async fn spawn_agent_requested_model_and_reasoning_override_inherited_settings_w
         child_snapshot.reasoning_effort,
         Some(REQUESTED_REASONING_EFFORT)
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "worker",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let _child_request_log = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    let _turn1_followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+        config.developer_instructions = Some("Parent developer instructions.".to_string());
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|request| {
+                body_contains(request, CHILD_PROMPT)
+                    && body_contains(request, "<spawned_agent_context>")
+                    && body_contains(request, SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS)
+                    && !body_contains(request, SPAWN_CALL_ID)
+            })
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for spawned child request with developer context");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert!(body_contains(
+        &child_request,
+        "Parent developer instructions."
+    ));
+    assert!(body_contains(&child_request, "<spawned_agent_context>"));
+    assert!(body_contains(
+        &child_request,
+        SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS
+    ));
+    assert!(body_contains(&child_request, CHILD_PROMPT));
 
     Ok(())
 }

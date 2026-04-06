@@ -3,7 +3,6 @@
 //! These handlers bridge `AlarmCreate`, `AlarmDelete`, and `AlarmList` tool
 //! calls onto the current thread session's alarm registry.
 
-use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::alarms::AlarmDelivery;
@@ -30,7 +29,6 @@ struct AlarmDeleteArgs {
 
 pub struct AlarmCreateHandler;
 
-#[async_trait]
 impl ToolHandler for AlarmCreateHandler {
     type Output = FunctionToolOutput;
 
@@ -64,7 +62,6 @@ impl ToolHandler for AlarmCreateHandler {
 
 pub struct AlarmDeleteHandler;
 
-#[async_trait]
 impl ToolHandler for AlarmDeleteHandler {
     type Output = FunctionToolOutput;
 
@@ -91,7 +88,6 @@ impl ToolHandler for AlarmDeleteHandler {
 
 pub struct AlarmListHandler;
 
-#[async_trait]
 impl ToolHandler for AlarmListHandler {
     type Output = FunctionToolOutput;
 

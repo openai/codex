@@ -134,7 +134,6 @@ describe("CodexExec", () => {
       expect(spawnEnv.CODEX_HOME).toBe("/tmp/codex-home");
       expect(spawnEnv.CUSTOM_ENV).toBe("custom");
       expect(spawnEnv.CODEX_ENV_SHOULD_NOT_LEAK).toBeUndefined();
-      expect(spawnEnv.OPENAI_BASE_URL).toBeUndefined();
       expect(spawnEnv.CODEX_API_KEY).toBe("test");
       expect(spawnEnv.CODEX_INTERNAL_ORIGINATOR_OVERRIDE).toBeDefined();
       expect(commandArgs).toContain("--config");

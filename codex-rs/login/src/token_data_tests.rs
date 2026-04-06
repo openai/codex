@@ -1,6 +1,7 @@
 use super::*;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_protocol::auth::KnownPlan;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 

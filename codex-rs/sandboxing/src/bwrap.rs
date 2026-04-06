@@ -1,10 +1,22 @@
+use codex_protocol::protocol::SandboxPolicy;
 use std::path::Path;
 use std::path::PathBuf;
 
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 
-pub fn system_bwrap_warning() -> Option<String> {
+pub fn system_bwrap_warning(sandbox_policy: &SandboxPolicy) -> Option<String> {
+    if !should_warn_about_system_bwrap(sandbox_policy) {
+        return None;
+    }
+
     system_bwrap_warning_for_lookup(find_system_bwrap_in_path())
+}
+
+fn should_warn_about_system_bwrap(sandbox_policy: &SandboxPolicy) -> bool {
+    !matches!(
+        sandbox_policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    )
 }
 
 fn system_bwrap_warning_for_lookup(system_bwrap_path: Option<PathBuf>) -> Option<String> {

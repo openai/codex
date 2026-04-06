@@ -1,6 +1,7 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use async_trait::async_trait;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
@@ -16,7 +17,6 @@ use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
-use codex_core::AnalyticsEventsClient;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigService;
@@ -366,6 +366,12 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .map(codex_app_server_protocol::AskForApproval::from)
                 .collect()
         }),
+        allowed_approvals_reviewers: requirements.allowed_approvals_reviewers.map(|reviewers| {
+            reviewers
+                .into_iter()
+                .map(codex_app_server_protocol::ApprovalsReviewer::from)
+                .collect()
+        }),
         allowed_sandbox_modes: requirements.allowed_sandbox_modes.map(|modes| {
             modes
                 .into_iter()
@@ -510,15 +516,16 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::AnalyticsEventsClient;
-    use codex_core::AuthManager;
-    use codex_core::CodexAuth;
+    use codex_analytics::AnalyticsEventsClient;
     use codex_core::config_loader::NetworkDomainPermissionToml as CoreNetworkDomainPermissionToml;
     use codex_core::config_loader::NetworkDomainPermissionsToml as CoreNetworkDomainPermissionsToml;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_core::config_loader::NetworkUnixSocketPermissionToml as CoreNetworkUnixSocketPermissionToml;
     use codex_core::config_loader::NetworkUnixSocketPermissionsToml as CoreNetworkUnixSocketPermissionsToml;
     use codex_features::Feature;
+    use codex_login::AuthManager;
+    use codex_login::CodexAuth;
+    use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -544,6 +551,10 @@ mod tests {
             allowed_approval_policies: Some(vec![
                 CoreAskForApproval::Never,
                 CoreAskForApproval::OnRequest,
+            ]),
+            allowed_approvals_reviewers: Some(vec![
+                CoreApprovalsReviewer::User,
+                CoreApprovalsReviewer::GuardianSubagent,
             ]),
             allowed_sandbox_modes: Some(vec![
                 CoreSandboxModeRequirement::ReadOnly,
@@ -603,6 +614,13 @@ mod tests {
             ])
         );
         assert_eq!(
+            mapped.allowed_approvals_reviewers,
+            Some(vec![
+                codex_app_server_protocol::ApprovalsReviewer::User,
+                codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
+            ])
+        );
+        assert_eq!(
             mapped.allowed_sandbox_modes,
             Some(vec![SandboxMode::ReadOnly]),
         );
@@ -651,6 +669,7 @@ mod tests {
     fn map_requirements_toml_to_api_omits_unix_socket_none_entries_from_legacy_network_fields() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
             guardian_developer_instructions: None,
@@ -707,6 +726,7 @@ mod tests {
     fn map_requirements_toml_to_api_normalizes_allowed_web_search_modes() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_developer_instructions: None,

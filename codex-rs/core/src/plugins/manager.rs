@@ -26,17 +26,13 @@ use super::store::PluginInstallResult as StorePluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
 use super::sync_openai_plugins_repo;
-use crate::AuthManager;
 use crate::SkillMetadata;
-use crate::auth::CodexAuth;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::ConfigService;
 use crate::config::ConfigServiceError;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::types::McpServerConfig;
-use crate::config::types::PluginConfig;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
@@ -46,7 +42,11 @@ use crate::loader::load_skills_from_roots;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
+use codex_config::types::McpServerConfig;
+use codex_config::types::PluginConfig;
 use codex_features::Feature;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -719,6 +719,7 @@ impl PluginsManager {
             ));
         }
 
+        let mut missing_remote_plugins = Vec::<String>::new();
         let mut remote_installed_plugin_names = HashSet::<String>::new();
         for plugin in remote_plugins {
             if plugin.marketplace_name != marketplace_name {
@@ -727,11 +728,7 @@ impl PluginsManager {
                 });
             }
             if !local_plugin_names.contains(&plugin.name) {
-                warn!(
-                    plugin = plugin.name,
-                    marketplace = %marketplace_name,
-                    "ignoring remote plugin missing from local marketplace during sync"
-                );
+                missing_remote_plugins.push(plugin.name);
                 continue;
             }
             // For now, sync treats remote `enabled = false` as uninstall rather than a distinct
@@ -753,6 +750,19 @@ impl PluginsManager {
         let mut result = RemotePluginSyncResult::default();
         let remote_plugin_count = remote_installed_plugin_names.len();
         let local_plugin_count = local_plugins.len();
+        if !missing_remote_plugins.is_empty() {
+            let sample_missing_plugins = missing_remote_plugins
+                .iter()
+                .take(10)
+                .cloned()
+                .collect::<Vec<_>>();
+            warn!(
+                marketplace = %marketplace_name,
+                missing_remote_plugin_count = missing_remote_plugins.len(),
+                missing_remote_plugin_examples = ?sample_missing_plugins,
+                "ignoring remote plugins missing from local marketplace during sync"
+            );
+        }
 
         for (
             plugin_name,

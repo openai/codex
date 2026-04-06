@@ -9,6 +9,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_ALLOW_CROSS");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR");
+    println!("cargo:rerun-if-env-changed=CODEX_SKIP_VENDORED_BWRAP");
 
     // Rebuild if the vendored bwrap sources change.
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
@@ -31,7 +32,7 @@ fn main() {
     );
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os != "linux" {
+    if target_os != "linux" || env::var_os("CODEX_SKIP_VENDORED_BWRAP").is_some() {
         return;
     }
 

@@ -1,5 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 40
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {

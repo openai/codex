@@ -111,6 +111,7 @@ mod tests {
     fn test_thread(thread_id: ThreadId, source: SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
             model_provider: "openai".to_string(),

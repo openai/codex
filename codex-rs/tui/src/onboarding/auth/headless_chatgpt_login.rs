@@ -3,7 +3,7 @@
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
-use codex_core::auth::CLIENT_ID;
+use codex_login::CLIENT_ID;
 use codex_login::ServerOptions;
 use codex_login::complete_device_code_login;
 use codex_login::request_device_code;

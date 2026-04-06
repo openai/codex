@@ -32,7 +32,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 
-use codex_core::config::types::ApprovalsReviewer;
+use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
@@ -338,10 +338,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Persist the selected realtime microphone or speaker to top-level config.
-    #[cfg_attr(
-        any(target_os = "linux", not(feature = "voice-input")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     PersistRealtimeAudioDeviceSelection {
         kind: RealtimeAudioDeviceKind,
         name: Option<String>,

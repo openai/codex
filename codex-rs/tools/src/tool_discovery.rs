@@ -1,17 +1,40 @@
 use crate::JsonSchema;
+use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
+use crate::ToolSearchOutputTool;
 use crate::ToolSpec;
+use crate::mcp_tool_to_deferred_responses_api_tool;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
 const TUI_CLIENT_NAME: &str = "codex-tui";
+pub const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+pub const TOOL_SEARCH_DEFAULT_LIMIT: usize = 8;
+pub const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSearchAppInfo {
     pub name: String,
     pub description: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolSearchAppSource<'a> {
+    pub server_name: &'a str,
+    pub connector_name: Option<&'a str>,
+    pub connector_description: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToolSearchResultSource<'a> {
+    pub tool_namespace: &'a str,
+    pub tool_name: &'a str,
+    pub tool: &'a rmcp::model::Tool,
+    pub connector_name: Option<&'a str>,
+    pub connector_description: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -164,7 +187,7 @@ pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: u
     };
 
     let description = format!(
-        "# Apps (Connectors) tool discovery\n\nSearches over apps/connectors tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to all the tools of the following apps/connectors:\n{app_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required tools and load them for the apps mentioned above. For the apps mentioned above, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates` for tool discovery."
+        "# Apps (Connectors) tool discovery\n\nSearches over apps/connectors tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to all the tools of the following apps/connectors:\n{app_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required tools and load them for the apps mentioned above. For the apps mentioned above, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates` for tool discovery."
     );
 
     ToolSpec::ToolSearch {
@@ -176,6 +199,75 @@ pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: u
             additional_properties: Some(false.into()),
         },
     }
+}
+
+pub fn collect_tool_search_output_tools<'a>(
+    tool_sources: impl IntoIterator<Item = ToolSearchResultSource<'a>>,
+) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
+    let grouped = tool_sources.into_iter().fold(
+        BTreeMap::<&'a str, Vec<ToolSearchResultSource<'a>>>::new(),
+        |mut grouped, tool| {
+            grouped.entry(tool.tool_namespace).or_default().push(tool);
+            grouped
+        },
+    );
+
+    let mut results = Vec::with_capacity(grouped.len());
+    for (tool_namespace, tools) in grouped {
+        let Some(first_tool) = tools.first() else {
+            continue;
+        };
+
+        let description = first_tool
+            .connector_description
+            .map(str::to_string)
+            .or_else(|| {
+                first_tool
+                    .connector_name
+                    .map(str::trim)
+                    .filter(|connector_name| !connector_name.is_empty())
+                    .map(|connector_name| format!("Tools for working with {connector_name}."))
+            });
+
+        let tools = tools
+            .iter()
+            .map(|tool| {
+                mcp_tool_to_deferred_responses_api_tool(tool.tool_name.to_string(), tool.tool)
+                    .map(ResponsesApiNamespaceTool::Function)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        results.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+            name: tool_namespace.to_string(),
+            description: description.unwrap_or_default(),
+            tools,
+        }));
+    }
+
+    Ok(results)
+}
+
+pub fn collect_tool_search_app_infos<'a>(
+    app_tools: impl IntoIterator<Item = ToolSearchAppSource<'a>>,
+    codex_apps_server_name: &str,
+) -> Vec<ToolSearchAppInfo> {
+    app_tools
+        .into_iter()
+        .filter(|tool| tool.server_name == codex_apps_server_name)
+        .filter_map(|tool| {
+            let name = tool
+                .connector_name
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())?
+                .to_string();
+            let description = tool
+                .connector_description
+                .map(str::trim)
+                .filter(|connector_description| !connector_description.is_empty())
+                .map(str::to_string);
+            Some(ToolSearchAppInfo { name, description })
+        })
+        .collect()
 }
 
 pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> ToolSpec {
@@ -223,11 +315,11 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
 
     let discoverable_tools = format_discoverable_tools(discoverable_tools);
     let description = format!(
-        "# Tool suggestion discovery\n\nSuggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin, when the user clearly wants a capability that is not currently available in the active `tools` list.\n\nUse this ONLY when:\n- You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means.\n- For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely.\n- For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself. Do not suggest a plugin just because one of its connectors or capabilities seems relevant.\n\nTool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.\n\nDiscoverable tools:\n{discoverable_tools}\n\nWorkflow:\n\n1. Ensure all possible means have been exhausted to find an existing available tool but none of them matches the request intent.\n2. Match the user's request against the discoverable tools list above. Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard.\n3. If one tool clearly fits, call `tool_suggest` with:\n   - `tool_type`: `connector` or `plugin`\n   - `action_type`: `install` or `enable`\n   - `tool_id`: exact id from the discoverable tools list above\n   - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request\n4. After the suggestion flow completes:\n   - if the user finished the install or enable flow, continue by searching again or using the newly available tool\n   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it."
+        "# Tool suggestion discovery\n\nSuggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin, when the user clearly wants a capability that is not currently available in the active `tools` list.\n\nUse this ONLY when:\n- You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `{TOOL_SEARCH_TOOL_NAME}` (if available) and other means.\n- For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely.\n- For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself. Do not suggest a plugin just because one of its connectors or capabilities seems relevant.\n\nTool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.\n\nDiscoverable tools:\n{discoverable_tools}\n\nWorkflow:\n\n1. Ensure all possible means have been exhausted to find an existing available tool but none of them matches the request intent.\n2. Match the user's request against the discoverable tools list above. Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard.\n3. If one tool clearly fits, call `{TOOL_SUGGEST_TOOL_NAME}` with:\n   - `tool_type`: `connector` or `plugin`\n   - `action_type`: `install` or `enable`\n   - `tool_id`: exact id from the discoverable tools list above\n   - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request\n4. After the suggestion flow completes:\n   - if the user finished the install or enable flow, continue by searching again or using the newly available tool\n   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it."
     );
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "tool_suggest".to_string(),
+        name: TOOL_SUGGEST_TOOL_NAME.to_string(),
         description,
         strict: false,
         defer_loading: None,
@@ -243,6 +335,34 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
         },
         output_schema: None,
     })
+}
+
+pub fn collect_tool_suggest_entries(
+    discoverable_tools: &[DiscoverableTool],
+) -> Vec<ToolSuggestEntry> {
+    discoverable_tools
+        .iter()
+        .map(|tool| match tool {
+            DiscoverableTool::Connector(connector) => ToolSuggestEntry {
+                id: connector.id.clone(),
+                name: connector.name.clone(),
+                description: connector.description.clone(),
+                tool_type: DiscoverableToolType::Connector,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            },
+            DiscoverableTool::Plugin(plugin) => ToolSuggestEntry {
+                id: plugin.id.clone(),
+                name: plugin.name.clone(),
+                description: plugin.description.clone(),
+                tool_type: DiscoverableToolType::Plugin,
+                has_skills: plugin.has_skills,
+                mcp_server_names: plugin.mcp_server_names.clone(),
+                app_connector_ids: plugin.app_connector_ids.clone(),
+            },
+        })
+        .collect()
 }
 
 fn format_discoverable_tools(discoverable_tools: &[ToolSuggestEntry]) -> String {

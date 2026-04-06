@@ -5,14 +5,14 @@ The workflows in this directory are split so that pull requests get fast, review
 ## Pull Requests
 
 - `bazel.yml` is the main pre-merge verification path for Rust code.
-  It runs Bazel `test` and Bazel `clippy` on the supported Bazel targets.
+  It runs Bazel `test` and Bazel `clippy` on the supported Bazel targets,
+  including the generated Rust test binaries needed to lint inline `#[cfg(test)]`
+  code.
 - `rust-ci.yml` keeps the Cargo-native PR checks intentionally small:
   - `cargo fmt --check`
   - `cargo shear`
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
-
-The PR workflow still keeps the Linux lint lane on the default-targets-only invocation for now, but the released linter runs on Linux, macOS, and Windows before merge.
 
 ## Post-Merge On `main`
 

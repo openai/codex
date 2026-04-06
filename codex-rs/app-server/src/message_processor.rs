@@ -20,7 +20,10 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
 use async_trait::async_trait;
+use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::AppListUpdatedNotification;
+use codex_app_server_protocol::AuthMode as LoginAuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
@@ -55,27 +58,24 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
-use codex_core::AnalyticsEventsClient;
-use codex_core::AppServerRpcTransport;
-use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
-use codex_core::default_client::SetOriginatorError;
-use codex_core::default_client::USER_AGENT_SUFFIX;
-use codex_core::default_client::get_codex_user_agent;
-use codex_core::default_client::set_default_client_residency_requirement;
-use codex_core::default_client::set_default_originator;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
-use codex_login::AuthMode as LoginAuthMode;
+use codex_login::AuthManager;
 use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
 use codex_login::auth::ExternalAuthTokens;
+use codex_login::default_client::SetOriginatorError;
+use codex_login::default_client::USER_AGENT_SUFFIX;
+use codex_login::default_client::get_codex_user_agent;
+use codex_login::default_client::set_default_client_residency_requirement;
+use codex_login::default_client::set_default_originator;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -193,7 +193,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
-    pub(crate) enable_codex_api_key_env: bool,
+    pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) rpc_transport: AppServerRpcTransport,
 }
 
@@ -213,17 +213,12 @@ impl MessageProcessor {
             log_db,
             config_warnings,
             session_source,
-            enable_codex_api_key_env,
+            auth_manager,
             rpc_transport,
         } = args;
-        let auth_manager = AuthManager::shared_with_external_auth(
-            config.codex_home.clone(),
-            enable_codex_api_key_env,
-            config.cli_auth_credentials_store_mode,
-            Arc::new(ExternalAuthRefreshBridge {
-                outgoing: outgoing.clone(),
-            }),
-        );
+        auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
+            outgoing: outgoing.clone(),
+        }));
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -235,7 +230,6 @@ impl MessageProcessor {
             },
             environment_manager,
         ));
-        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         let analytics_events_client = AnalyticsEventsClient::new(
             Arc::clone(&auth_manager),
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
@@ -850,6 +844,7 @@ impl MessageProcessor {
                         connection_id,
                         other,
                         session.app_server_client_name.clone(),
+                        session.client_version.clone(),
                         request_context,
                     )
                     .boxed()

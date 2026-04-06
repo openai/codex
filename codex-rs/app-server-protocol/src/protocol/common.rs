@@ -1326,6 +1326,7 @@ mod tests {
             response: v2::ThreadStartResponse {
                 thread: v2::Thread {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    forked_from_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
                     model_provider: "openai".to_string(),
@@ -1362,6 +1363,7 @@ mod tests {
                 "response": {
                     "thread": {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "forkedFromId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
                         "modelProvider": "openai",
