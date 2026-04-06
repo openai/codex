@@ -419,6 +419,55 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
+async fn slash_context_requests_default_breakdown_via_app_server() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Context);
+
+    assert!(active_blob(&chat).contains("Loading context breakdown"));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchContextWindowBreakdown { verbose: false })
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_context_verbose_requests_expanded_breakdown_via_app_server() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Context, "verbose".to_string(), Vec::new());
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchContextWindowBreakdown { verbose: true })
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_context_rejects_unknown_inline_args() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Context, "everything".to_string(), Vec::new());
+
+    let event = rx
+        .try_recv()
+        .expect("expected /context usage error for unknown args");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(
+                rendered.contains("Usage: /context [verbose]"),
+                "expected /context usage error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_memory_update_reports_stubbed_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

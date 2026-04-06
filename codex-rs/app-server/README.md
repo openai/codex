@@ -139,6 +139,7 @@ Example with notification opt-out:
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/context/read` — read an approximate semantic breakdown of the current model-visible context for a loaded thread. Pass `verbose: true` to return one row per contributing fragment/item instead of merged summary rows. Unloaded threads are rejected because this endpoint describes live in-memory context, not rollout history.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
@@ -361,6 +362,30 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
 { "id": 23, "result": {
     "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
+```
+
+### Example: Read live context-window usage
+
+Use `thread/context/read` to fetch an approximate, sectioned breakdown of the current model-visible context for a loaded thread. The response groups usage into `Built-in`, `AGENTS.md`, `Skills`, `Runtime context`, and `Conversation`, with token counts derived from Codex's current byte-based estimator.
+
+```json
+{ "method": "thread/context/read", "id": 24, "params": { "threadId": "thr_123" } }
+{ "id": 24, "result": {
+    "context": {
+      "modelContextWindow": 272000,
+      "totalTokens": 18420,
+      "sections": [
+        {
+          "label": "Conversation",
+          "tokens": 12300,
+          "details": [
+            { "label": "Tool output", "tokens": 6200 },
+            { "label": "User message", "tokens": 2400 }
+          ]
+        }
+      ]
+    }
 } }
 ```
 

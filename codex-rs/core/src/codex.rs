@@ -184,6 +184,7 @@ use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
+use crate::context_manager::ContextWindowBreakdown;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::environment_context::EnvironmentContext;
 use codex_config::CONFIG_TOML_FILE;
@@ -2186,6 +2187,24 @@ impl Session {
     pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
         let state = self.state.lock().await;
         state.history.get_total_token_usage_breakdown()
+    }
+
+    pub(crate) async fn get_context_window_breakdown(
+        &self,
+        verbose: bool,
+    ) -> ContextWindowBreakdown {
+        let state = self.state.lock().await;
+        let base_instructions = BaseInstructions {
+            text: state.session_configuration.base_instructions.clone(),
+        };
+        let model_context_window = state
+            .token_info()
+            .and_then(|info| info.model_context_window);
+        state.history.get_context_window_breakdown(
+            &base_instructions,
+            model_context_window,
+            verbose,
+        )
     }
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {

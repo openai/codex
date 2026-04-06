@@ -1,0 +1,21 @@
+---
+source: tui/src/context_window.rs
+assertion_line: 429
+expression: render_lines(&cell.display_lines(80))
+---
+/context
+
+Context map
+  ~20,000 tokens used of ~200,000 tokens (10.0%), ~180,000 tokens remaining.
+  window▕████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏
+  used  ▕████████████████████████████████████████████▏
+
+  ■ Skills 60.0%
+  ■ Conversation 40.0%
+
+  ■ Skills        ~12,000 tokens   60.0% of used
+    ██████████ Implicit skills catalog (42 skills) (~12,000 tokens)
+
+  ■ Conversation   ~8,000 tokens   40.0% of used
+    ██████░░░░ Tool output (~5,000 tokens)
+    ███░░░░░░░ User message (~3,000 tokens)

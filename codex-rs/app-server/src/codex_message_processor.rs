@@ -121,6 +121,11 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadContextReadParams;
+use codex_app_server_protocol::ThreadContextReadResponse;
+use codex_app_server_protocol::ThreadContextWindowBreakdown;
+use codex_app_server_protocol::ThreadContextWindowDetail;
+use codex_app_server_protocol::ThreadContextWindowSection;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -764,6 +769,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadContextRead { request_id, params } => {
+                self.thread_context_read(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
@@ -3663,6 +3672,57 @@ impl CodexMessageProcessor {
             has_live_in_progress_turn,
         );
         let response = ThreadReadResponse { thread };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_context_read(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadContextReadParams,
+    ) {
+        let ThreadContextReadParams { thread_id, verbose } = params;
+
+        let thread_uuid = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let Ok(loaded_thread) = self.thread_manager.get_thread(thread_uuid).await else {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread not loaded: {thread_uuid}"),
+            )
+            .await;
+            return;
+        };
+
+        let context = loaded_thread.context_window_breakdown(verbose).await;
+        let response = ThreadContextReadResponse {
+            context: ThreadContextWindowBreakdown {
+                model_context_window: context.model_context_window,
+                total_tokens: context.total_tokens,
+                sections: context
+                    .sections
+                    .into_iter()
+                    .map(|section| ThreadContextWindowSection {
+                        label: section.label,
+                        tokens: section.tokens,
+                        details: section
+                            .details
+                            .into_iter()
+                            .map(|detail| ThreadContextWindowDetail {
+                                label: detail.label,
+                                tokens: detail.tokens,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 

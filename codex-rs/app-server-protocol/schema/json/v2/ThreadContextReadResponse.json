@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadContextWindowBreakdown": {
+      "properties": {
+        "modelContextWindow": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/definitions/ThreadContextWindowSection"
+          },
+          "type": "array"
+        },
+        "totalTokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sections",
+        "totalTokens"
+      ],
+      "type": "object"
+    },
+    "ThreadContextWindowDetail": {
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "tokens"
+      ],
+      "type": "object"
+    },
+    "ThreadContextWindowSection": {
+      "properties": {
+        "details": {
+          "items": {
+            "$ref": "#/definitions/ThreadContextWindowDetail"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "details",
+        "label",
+        "tokens"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "context": {
+      "$ref": "#/definitions/ThreadContextWindowBreakdown"
+    }
+  },
+  "required": [
+    "context"
+  ],
+  "title": "ThreadContextReadResponse",
+  "type": "object"
+}

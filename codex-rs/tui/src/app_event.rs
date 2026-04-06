@@ -16,6 +16,7 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::ThreadContextWindowBreakdown;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -262,6 +263,17 @@ pub(crate) enum AppEvent {
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
+    },
+
+    /// Fetch the current thread's context-window breakdown via app-server.
+    FetchContextWindowBreakdown {
+        verbose: bool,
+    },
+
+    /// Result of fetching the current thread's context-window breakdown.
+    ContextWindowBreakdownLoaded {
+        thread_id: ThreadId,
+        result: Result<ThreadContextWindowBreakdown, String>,
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
