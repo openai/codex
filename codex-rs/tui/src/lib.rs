@@ -992,9 +992,8 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
-    let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
-        && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+    let should_prompt_windows_sandbox_nux_at_startup =
+        should_prompt_windows_sandbox_nux_at_startup(&config, trust_decision_was_made);
 
     let Cli {
         prompt,
@@ -1301,6 +1300,20 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     login_status == LoginStatus::NotAuthenticated
 }
 
+fn should_prompt_windows_sandbox_nux_at_startup(
+    config: &Config,
+    trust_decision_was_made: bool,
+) -> bool {
+    cfg!(target_os = "windows")
+        && trust_decision_was_made
+        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
+        && !matches!(
+            config.permissions.sandbox_policy.get(),
+            codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1364,6 +1377,27 @@ mod tests {
         }
         Ok(())
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn windows_skips_sandbox_nux_for_danger_full_access() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.set_windows_sandbox_enabled(/*value*/ false);
+        config
+            .permissions
+            .sandbox_policy
+            .set(codex_protocol::protocol::SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
+
+        let should_prompt = should_prompt_windows_sandbox_nux_at_startup(&config, true);
+        assert!(
+            !should_prompt,
+            "Danger full access should skip the Windows sandbox setup prompt"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
         use codex_protocol::config_types::TrustLevel;
