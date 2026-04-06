@@ -1,0 +1,162 @@
+# One-off build for validating Codex CLI macOS signing and notarization.
+# Run this in the GitHub UI with "Run workflow", or with the CLI:
+# gh workflow run one-off-mac-notarization [--ref <your branch>] [-f target=aarch64-apple-darwin]
+# Omitting the ref will run the workflow on the default branch.
+
+name: one-off-mac-notarization
+run-name: One-off Codex CLI macOS Notarization
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        description: "macOS target to build"
+        required: false
+        default: "all"
+        options:
+          - "all"
+          - "aarch64-apple-darwin"
+          - "x86_64-apple-darwin"
+      sign-dmg:
+        type: boolean
+        description: "Build, sign, notarize, and staple the DMG"
+        required: false
+        default: true
+  push:
+    branches:
+      - release/codex/mac/one-off-notarization
+
+permissions:
+  contents: read
+
+jobs:
+  macos-notarization:
+    name: Build and notarize - ${{ matrix.target }}
+    runs-on: macos-15-xlarge
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_PROFILE_RELEASE_LTO: thin
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.target != 'all') && format('["{0}"]', inputs.target) || '["aarch64-apple-darwin","x86_64-apple-darwin"]') }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Print runner specs
+        shell: bash
+        run: |
+          set -euo pipefail
+          total_ram="$(sysctl -n hw.memsize | awk '{printf "%.1f GiB\n", $1 / 1024 / 1024 / 1024}')"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
+          echo "Hardware model: $(sysctl -n hw.model)"
+          echo "CPU architecture: $(uname -m)"
+          echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+          echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cargo build
+        shell: bash
+        run: cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
+
+      - name: Sign and notarize macOS binaries
+        uses: ./.github/actions/macos-code-sign
+        with:
+          target: ${{ matrix.target }}
+          sign-binaries: "true"
+          sign-dmg: "false"
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
+      - name: Build macOS DMG
+        if: ${{ github.event_name == 'push' || inputs.sign-dmg }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dmg_root="${RUNNER_TEMP}/codex-dmg-root"
+          volname="Codex (${target})"
+          dmg_path="${release_dir}/codex-${target}.dmg"
+
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+
+          cp "${release_dir}/codex" "${dmg_root}/codex"
+          cp "${release_dir}/codex-responses-api-proxy" "${dmg_root}/codex-responses-api-proxy"
+
+          rm -f "$dmg_path"
+          hdiutil create \
+            -volname "$volname" \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+
+      - name: Sign and notarize macOS DMG
+        if: ${{ github.event_name == 'push' || inputs.sign-dmg }}
+        uses: ./.github/actions/macos-code-sign
+        with:
+          target: ${{ matrix.target }}
+          sign-binaries: "false"
+          sign-dmg: "true"
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
+      - name: Validate signed artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+
+          codesign --verify --strict --verbose=2 "${release_dir}/codex"
+          codesign --verify --strict --verbose=2 "${release_dir}/codex-responses-api-proxy"
+
+          dmg_path="${release_dir}/codex-${target}.dmg"
+          if [[ -f "$dmg_path" ]]; then
+            xcrun stapler validate "$dmg_path"
+          fi
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dest="dist/${target}"
+          mkdir -p "$dest"
+
+          cp "${release_dir}/codex" "$dest/codex-${target}"
+          cp "${release_dir}/codex-responses-api-proxy" "$dest/codex-responses-api-proxy-${target}"
+
+          dmg_path="${release_dir}/codex-${target}.dmg"
+          if [[ -f "$dmg_path" ]]; then
+            cp "$dmg_path" "$dest/codex-${target}.dmg"
+          fi
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: one-off-mac-notarization-${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*
