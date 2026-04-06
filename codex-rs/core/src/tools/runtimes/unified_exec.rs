@@ -102,6 +102,13 @@ fn build_remote_exec_sandbox_config(attempt: &SandboxAttempt<'_>) -> Option<Sand
     })
 }
 
+fn should_remote_exec_server_build_sandbox(
+    has_additional_permissions: bool,
+    has_network_proxy: bool,
+) -> bool {
+    !has_additional_permissions && !has_network_proxy
+}
+
 impl<'a> UnifiedExecRuntime<'a> {
     /// Creates a runtime bound to the shared unified-exec process manager.
     pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
@@ -240,7 +247,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         }
         // Remote exec-server now owns sandbox argv construction, so this branch
         // keeps sending raw command data until we collapse the launch APIs.
-        if ctx.turn.environment.exec_server_url().is_some() {
+        if ctx.turn.environment.exec_server_url().is_some()
+            && should_remote_exec_server_build_sandbox(
+                req.additional_permissions.is_some(),
+                req.network.is_some(),
+            )
+        {
             let exec_params = codex_exec_server::ExecParams {
                 process_id: req.process_id.to_string().into(),
                 argv: command,
@@ -348,5 +360,31 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
                 other => ToolError::Rejected(other.to_string()),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_remote_exec_server_build_sandbox;
+
+    #[test]
+    fn remote_exec_server_builds_sandbox_for_simple_requests() {
+        assert!(should_remote_exec_server_build_sandbox(
+            /*has_additional_permissions*/ false, /*has_network_proxy*/ false,
+        ));
+    }
+
+    #[test]
+    fn remote_exec_server_falls_back_for_requests_with_additional_permissions() {
+        assert!(!should_remote_exec_server_build_sandbox(
+            /*has_additional_permissions*/ true, /*has_network_proxy*/ false,
+        ));
+    }
+
+    #[test]
+    fn remote_exec_server_falls_back_for_requests_with_network_proxy() {
+        assert!(!should_remote_exec_server_build_sandbox(
+            /*has_additional_permissions*/ false, /*has_network_proxy*/ true,
+        ));
     }
 }
