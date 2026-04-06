@@ -32,19 +32,21 @@ setup_remote_env() {
     return 1
   fi
 
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "cargo is required to build codex-exec-server" >&2
-    return 1
-  fi
+  if [[ "${CODEX_TEST_REMOTE_ENV_SKIP_EXEC_SERVER_BUILD:-0}" != "1" ]]; then
+    if ! command -v cargo >/dev/null 2>&1; then
+      echo "cargo is required to build codex-exec-server" >&2
+      return 1
+    fi
 
-  (
-    cd "${REPO_ROOT}/codex-rs"
-    cargo build -p codex-exec-server --bin codex-exec-server
-  )
+    (
+      cd "${REPO_ROOT}/codex-rs"
+      cargo build -p codex-exec-server --bin codex-exec-server
+    )
 
-  if [[ ! -f "${codex_exec_server_binary_path}" ]]; then
-    echo "codex-exec-server binary not found at ${codex_exec_server_binary_path}" >&2
-    return 1
+    if [[ ! -f "${codex_exec_server_binary_path}" ]]; then
+      echo "codex-exec-server binary not found at ${codex_exec_server_binary_path}" >&2
+      return 1
+    fi
   fi
 
   docker rm -f "${container_name}" >/dev/null 2>&1 || true

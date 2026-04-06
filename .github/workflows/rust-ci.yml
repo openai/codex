@@ -50,7 +50,7 @@ jobs:
           echo "codex=$codex" >> "$GITHUB_OUTPUT"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
-  # --- Fast Cargo-native PR checks -------------------------------------------
+  # --- Fast PR checks --------------------------------------------------------
   general:
     name: Format / etc
     runs-on: ubuntu-24.04
@@ -97,16 +97,13 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      USE_SCCACHE: "true"
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_CACHE_SIZE: 10G
-      CODEX_TEST_REMOTE_ENV_TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Set up Node.js for js_repl tests
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - name: Set up Bazel CI
+        uses: ./.github/actions/setup-bazel-ci
         with:
-          node-version-file: codex-rs/node-version.txt
+          target: x86_64-unknown-linux-gnu
+          install-test-prereqs: "true"
       - name: Install Linux build dependencies
         shell: bash
         run: |
@@ -115,60 +112,6 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           fi
-      - name: Install DotSlash
-        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-        with:
-          targets: ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}
-      - name: Compute lockfile hash
-        id: lockhash
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "hash=$(sha256sum Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "toolchain_hash=$(sha256sum rust-toolchain.toml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - name: Restore cargo home cache
-        id: cache_cargo_home_restore
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-home-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
-          restore-keys: |
-            cargo-home-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-
-      - name: Install sccache
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
-        with:
-          tool: sccache
-          version: 0.7.5
-      - name: Configure sccache backend
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
-            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-            echo "Using sccache GitHub backend"
-          else
-            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-            echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
-            echo "Using sccache local disk + actions/cache fallback"
-          fi
-      - name: Enable sccache wrapper
-        shell: bash
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-      - name: Restore sccache cache (fallback)
-        if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
-        id: cache_sccache_restore
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-${{ steps.lockhash.outputs.hash }}-
-            sccache-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-
       - name: Enable unprivileged user namespaces
         run: |
           sudo sysctl -w kernel.unprivileged_userns_clone=1
@@ -180,43 +123,39 @@ jobs:
         run: |
           set -euo pipefail
           export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
+          export CODEX_TEST_REMOTE_ENV_SKIP_EXEC_SERVER_BUILD=1
           source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
           echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
-      - name: Build remote exec-server binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build -p codex-exec-server --bin codex-exec-server --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}
-          binary_path="${GITHUB_WORKSPACE}/codex-rs/target/${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}/debug/codex-exec-server"
-          echo "CARGO_BIN_EXE_codex_exec_server=${binary_path}" >> "$GITHUB_ENV"
-      - name: Remote tests
+      - name: Remote tests via Bazel
         id: remote_tests
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p codex-core --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }} --lib unified_exec::tests::unified_exec_uses_remote_exec_server_when_configured -- --exact
-          cargo test -p codex-core --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }} --lib unified_exec::tests::remote_exec_server_rejects_inherited_fd_launches -- --exact
-          cargo test -p codex-core --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }} --test all suite::remote_env::remote_test_env_can_connect_and_use_filesystem -- --exact
+          cd "${GITHUB_WORKSPACE}"
+
+          run_remote_test() {
+            local target="$1"
+            local test_name="$2"
+
+            "${GITHUB_WORKSPACE}/.github/scripts/run-bazel-ci.sh" \
+              --print-failed-test-logs \
+              --use-node-test-env \
+              -- \
+              test \
+              --test_env=CODEX_TEST_REMOTE_ENV="${CODEX_TEST_REMOTE_ENV}" \
+              --test_arg="${test_name}" \
+              --test_arg=--exact \
+              --test_verbose_timeout_warnings \
+              --build_metadata=COMMIT_SHA="${GITHUB_SHA}" \
+              -- \
+              "${target}"
+          }
+
+          run_remote_test "//codex-rs/core:core-unit-tests" "unified_exec::tests::unified_exec_uses_remote_exec_server_when_configured"
+          run_remote_test "//codex-rs/core:core-unit-tests" "unified_exec::tests::remote_exec_server_rejects_inherited_fd_launches"
+          run_remote_test "//codex-rs/core:core-all-test" "suite::remote_env::remote_test_env_can_connect_and_use_filesystem"
         env:
           RUST_BACKTRACE: 1
-      - name: Save cargo home cache
-        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-home-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
-      - name: Save sccache cache (fallback)
-        if: always() && !cancelled() && env.SCCACHE_GHA_ENABLED != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
       - name: Tear down remote test env
         if: always()
         shell: bash
