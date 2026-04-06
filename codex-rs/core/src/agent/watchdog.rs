@@ -562,7 +562,6 @@ impl WatchdogManager {
         entry.owner_was_running = false;
         entry.active_helper_id = Some(helper_thread_id);
     }
-
 }
 
 #[derive(Clone)]
