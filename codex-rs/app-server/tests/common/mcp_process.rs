@@ -483,13 +483,13 @@ impl McpProcess {
         self.send_request("app/list", params).await
     }
 
-    /// Send an `mcpResource/read` JSON-RPC request.
+    /// Send an `mcpServer/resource/read` JSON-RPC request.
     pub async fn send_mcp_resource_read_request(
         &mut self,
         params: McpResourceReadParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("mcpResource/read", params).await
+        self.send_request("mcpServer/resource/read", params).await
     }
 
     /// Send a `skills/list` JSON-RPC request.

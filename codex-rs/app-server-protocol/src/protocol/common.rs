@@ -459,7 +459,7 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
-    McpResourceRead => "mcpResource/read" {
+    McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
         response: v2::McpResourceReadResponse,
     },

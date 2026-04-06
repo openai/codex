@@ -1208,9 +1208,9 @@
             },
             "method": {
               "enum": [
-                "mcpResource/read"
+                "mcpServer/resource/read"
               ],
-              "title": "McpResource/readRequestMethod",
+              "title": "McpServer/resource/readRequestMethod",
               "type": "string"
             },
             "params": {
@@ -1222,7 +1222,7 @@
             "method",
             "params"
           ],
-          "title": "McpResource/readRequest",
+          "title": "McpServer/resource/readRequest",
           "type": "object"
         },
         {
