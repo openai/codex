@@ -5887,6 +5887,9 @@ impl ChatWidget {
                 items,
                 status,
                 error,
+                started_at,
+                completed_at,
+                duration_ms,
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
                 self.last_non_retry_error = None;
@@ -5907,6 +5910,9 @@ impl ChatWidget {
                             items: Vec::new(),
                             status,
                             error,
+                            started_at,
+                            completed_at,
+                            duration_ms,
                         },
                     },
                     Some(replay_kind),
