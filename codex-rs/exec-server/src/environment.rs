@@ -291,10 +291,48 @@ mod tests {
                 env: Default::default(),
                 tty: false,
                 arg0: None,
+                startup_exec_approval: None,
             })
             .await
             .expect("start process");
 
         assert_eq!(response.process.process_id().as_str(), "default-env-proc");
+    }
+    #[tokio::test]
+    async fn disabled_environment_rejects_exec_and_filesystem_access() {
+        let environment = Environment::create_for_mode(EnvironmentMode::Disabled)
+            .await
+            .expect("create disabled environment");
+
+        let exec_error = match environment
+            .get_exec_backend()
+            .start(crate::ExecParams {
+                process_id: ProcessId::from("disabled-proc"),
+                argv: vec!["true".to_string()],
+                cwd: std::env::current_dir().expect("read current dir"),
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+                startup_exec_approval: None,
+            })
+            .await
+        {
+            Ok(_) => panic!("disabled environment should reject exec"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            exec_error.to_string(),
+            "exec-server protocol error: environment is disabled; cannot start process `disabled-proc`"
+        );
+
+        let path =
+            codex_utils_absolute_path::AbsolutePathBuf::try_from(std::env::temp_dir().as_path())
+                .expect("temp dir");
+        let fs_error = environment
+            .get_filesystem()
+            .get_metadata(&path)
+            .await
+            .expect_err("disabled environment should reject filesystem access");
+        assert_eq!(fs_error.kind(), io::ErrorKind::Unsupported);
     }
 }

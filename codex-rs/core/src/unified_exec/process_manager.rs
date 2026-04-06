@@ -2,6 +2,7 @@ use rand::Rng;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -11,6 +12,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecRequest;
@@ -21,9 +23,11 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::unified_exec::UnifiedExecApprovalKey;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -47,7 +51,9 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ReviewDecision;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 
@@ -105,6 +111,34 @@ struct PreparedProcessHandles {
 
 fn exec_server_process_id(process_id: i32) -> String {
     process_id.to_string()
+}
+
+fn startup_exec_approval_request(
+    context: &UnifiedExecContext,
+    request: &ExecCommandRequest,
+    cwd: &AbsolutePathBuf,
+    exec_approval_requirement: &crate::tools::sandboxing::ExecApprovalRequirement,
+) -> Option<codex_exec_server::ExecApprovalRequest> {
+    match exec_approval_requirement {
+        crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+            reason,
+            proposed_execpolicy_amendment,
+        } => Some(codex_exec_server::ExecApprovalRequest {
+            call_id: context.call_id.clone(),
+            approval_id: None,
+            turn_id: context.turn.sub_id.clone(),
+            command: request.command.clone(),
+            cwd: cwd.to_path_buf(),
+            reason: reason.clone().or_else(|| request.justification.clone()),
+            additional_permissions: request.additional_permissions.clone().map(Into::into),
+            proposed_execpolicy_amendment: proposed_execpolicy_amendment
+                .clone()
+                .map(codex_app_server_protocol::ExecPolicyAmendment::from),
+            available_decisions: None,
+        }),
+        crate::tools::sandboxing::ExecApprovalRequirement::Skip { .. }
+        | crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { .. } => None,
+    }
 }
 
 impl UnifiedExecProcessManager {
@@ -230,7 +264,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
         } = process.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected = Self::collect_output_until_deadline(
+        let mut collected = Self::collect_output_until_deadline(
             &output_buffer,
             &output_notify,
             &output_closed,
@@ -244,6 +278,71 @@ impl UnifiedExecProcessManager {
             deadline,
         )
         .await;
+
+        if let Some(exec_approval) = process.take_pending_exec_approval().await {
+            let call_id = exec_approval.call_id.clone();
+            let approval_id = exec_approval.approval_id.clone();
+            let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
+            let approval_keys = vec![UnifiedExecApprovalKey {
+                command: canonicalize_command_for_approval(&request.command),
+                cwd: cwd.clone(),
+                tty: request.tty,
+                sandbox_permissions: request.sandbox_permissions,
+                additional_permissions: request.additional_permissions.clone(),
+            }];
+            let decision = with_cached_approval(
+                &context.session.services,
+                "unified_exec",
+                approval_keys,
+                || async move {
+                    context
+                        .session
+                        .request_command_approval(
+                            &context.turn,
+                            call_id,
+                            approval_id,
+                            exec_approval.command,
+                            exec_approval.cwd,
+                            exec_approval.reason,
+                            /*network_approval_context*/ None,
+                            exec_approval
+                                .proposed_execpolicy_amendment
+                                .map(codex_app_server_protocol::ExecPolicyAmendment::into_core),
+                            exec_approval.additional_permissions.map(Into::into),
+                            exec_approval.available_decisions.map(|decisions| {
+                                decisions
+                                    .into_iter()
+                                    .map(command_execution_approval_decision_to_core)
+                                    .collect()
+                            }),
+                        )
+                        .await
+                },
+            )
+            .await;
+            process
+                .resolve_exec_approval(
+                    effective_approval_id,
+                    command_execution_approval_decision_from_core(decision),
+                )
+                .await?;
+            let remaining_deadline = deadline.max(Instant::now() + Duration::from_millis(1));
+            let additional_output = Self::collect_output_until_deadline(
+                &output_buffer,
+                &output_notify,
+                &output_closed,
+                &output_closed_notify,
+                &cancellation_token,
+                Some(
+                    context
+                        .session
+                        .subscribe_out_of_band_elicitation_pause_state(),
+                ),
+                remaining_deadline,
+            )
+            .await;
+            collected.extend(additional_output);
+        }
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
@@ -584,6 +683,7 @@ impl UnifiedExecProcessManager {
         process_id: i32,
         request: &ExecRequest,
         tty: bool,
+        startup_exec_approval: Option<codex_exec_server::ExecApprovalRequest>,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
@@ -609,6 +709,7 @@ impl UnifiedExecProcessManager {
                     env: request.env.clone(),
                     tty,
                     arg0: request.arg0.clone(),
+                    startup_exec_approval,
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
@@ -675,6 +776,11 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
+        let remote_startup_exec_approval = if context.turn.environment.mode().is_remote() {
+            startup_exec_approval_request(context, request, &cwd, &exec_approval_requirement)
+        } else {
+            None
+        };
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             process_id: request.process_id,
@@ -689,6 +795,7 @@ impl UnifiedExecProcessManager {
             additional_permissions_preapproved: request.additional_permissions_preapproved,
             justification: request.justification.clone(),
             exec_approval_requirement,
+            remote_startup_exec_approval,
         };
         let tool_ctx = ToolCtx {
             session: context.session.clone(),
@@ -911,6 +1018,48 @@ enum ProcessStatus {
         entry: Box<ProcessEntry>,
     },
     Unknown,
+}
+
+fn command_execution_approval_decision_to_core(
+    decision: CommandExecutionApprovalDecision,
+) -> ReviewDecision {
+    match decision {
+        CommandExecutionApprovalDecision::Accept => ReviewDecision::Approved,
+        CommandExecutionApprovalDecision::AcceptForSession => ReviewDecision::ApprovedForSession,
+        CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+            execpolicy_amendment,
+        } => ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+        },
+        CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+            network_policy_amendment,
+        } => ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: network_policy_amendment.into_core(),
+        },
+        CommandExecutionApprovalDecision::Decline => ReviewDecision::Denied,
+        CommandExecutionApprovalDecision::Cancel => ReviewDecision::Abort,
+    }
+}
+
+fn command_execution_approval_decision_from_core(
+    decision: ReviewDecision,
+) -> CommandExecutionApprovalDecision {
+    match decision {
+        ReviewDecision::Approved => CommandExecutionApprovalDecision::Accept,
+        ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment,
+        } => CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+            execpolicy_amendment: proposed_execpolicy_amendment.into(),
+        },
+        ReviewDecision::ApprovedForSession => CommandExecutionApprovalDecision::AcceptForSession,
+        ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+            network_policy_amendment: network_policy_amendment.into(),
+        },
+        ReviewDecision::Denied => CommandExecutionApprovalDecision::Decline,
+        ReviewDecision::Abort => CommandExecutionApprovalDecision::Cancel,
+    }
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_exec_server::ExecApprovalRequest as RemoteExecApprovalRequest;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -62,6 +63,7 @@ pub struct UnifiedExecRequest {
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub remote_startup_exec_approval: Option<RemoteExecApprovalRequest>,
 }
 
 /// Cache key for approval decisions that can be reused across equivalent
@@ -173,7 +175,17 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         &self,
         req: &UnifiedExecRequest,
     ) -> Option<ExecApprovalRequirement> {
-        Some(req.exec_approval_requirement.clone())
+        if req.remote_startup_exec_approval.is_some() {
+            Some(ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: req
+                    .exec_approval_requirement
+                    .proposed_execpolicy_amendment()
+                    .cloned(),
+            })
+        } else {
+            Some(req.exec_approval_requirement.clone())
+        }
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
@@ -256,6 +268,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             req.process_id,
                             &prepared.exec_request,
                             req.tty,
+                            None,
                             prepared.spawn_lifecycle,
                             environment.as_ref(),
                         )
@@ -297,6 +310,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 req.process_id,
                 &exec_env,
                 req.tty,
+                req.remote_startup_exec_approval.clone(),
                 Box::new(NoopSpawnLifecycle),
                 environment.as_ref(),
             )

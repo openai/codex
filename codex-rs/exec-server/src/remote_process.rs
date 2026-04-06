@@ -12,6 +12,7 @@ use crate::client::ExecServerClient;
 use crate::client::Session;
 use crate::protocol::ExecParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::ResolveExecApprovalResponse;
 use crate::protocol::WriteResponse;
 
 #[derive(Clone)]
@@ -73,6 +74,17 @@ impl ExecProcess for RemoteExecProcess {
     async fn terminate(&self) -> Result<(), ExecServerError> {
         trace!("exec process terminate");
         self.session.terminate().await
+    }
+
+    async fn resolve_exec_approval(
+        &self,
+        approval_id: String,
+        decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
+    ) -> Result<ResolveExecApprovalResponse, ExecServerError> {
+        trace!("exec process resolve approval");
+        self.session
+            .resolve_exec_approval(approval_id, decision)
+            .await
     }
 }
 
