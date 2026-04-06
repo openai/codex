@@ -2140,7 +2140,10 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "pretty_assertions",
+ "reqwest",
  "sentry",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

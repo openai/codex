@@ -235,6 +235,8 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Stage;
 use codex_feedback::CodexFeedback;
+use codex_feedback::FeedbackUploadOptions;
+use codex_feedback::is_openai_employee_email;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManager;
@@ -7711,15 +7713,24 @@ impl CodexMessageProcessor {
         }
 
         let session_source = self.thread_manager.session_source();
+        let allow_feedback_mirror_upload = is_openai_employee_email(
+            self.auth_manager
+                .auth_cached()
+                .and_then(|auth| auth.get_account_email())
+                .as_deref(),
+        );
 
         let upload_result = tokio::task::spawn_blocking(move || {
             snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),
-                include_logs,
-                &attachment_paths,
-                Some(session_source),
-                sqlite_feedback_logs,
+                FeedbackUploadOptions {
+                    include_logs,
+                    extra_attachment_paths: &attachment_paths,
+                    session_source: Some(session_source),
+                    logs_override: sqlite_feedback_logs,
+                    allow_feedback_mirror_upload,
+                },
             )
         })
         .await;

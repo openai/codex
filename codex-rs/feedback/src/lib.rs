@@ -16,6 +16,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 use feedback_diagnostics::FeedbackDiagnostics;
+use serde::Serialize;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
@@ -30,6 +31,8 @@ const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
+const FEEDBACK_MIRROR_URL_ENV: &str = "CODEX_FEEDBACK_MIRROR_URL";
+const FEEDBACK_MIRROR_AUTHORIZATION_ENV: &str = "CODEX_FEEDBACK_MIRROR_AUTHORIZATION";
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
 
@@ -337,6 +340,14 @@ pub struct FeedbackSnapshot {
     pub thread_id: String,
 }
 
+pub struct FeedbackUploadOptions<'a> {
+    pub include_logs: bool,
+    pub extra_attachment_paths: &'a [PathBuf],
+    pub session_source: Option<SessionSource>,
+    pub logs_override: Option<Vec<u8>>,
+    pub allow_feedback_mirror_upload: bool,
+}
+
 impl FeedbackSnapshot {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -372,10 +383,7 @@ impl FeedbackSnapshot {
         &self,
         classification: &str,
         reason: Option<&str>,
-        include_logs: bool,
-        extra_attachment_paths: &[PathBuf],
-        session_source: Option<SessionSource>,
-        logs_override: Option<Vec<u8>>,
+        options: FeedbackUploadOptions<'_>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
         use std::str::FromStr;
@@ -389,6 +397,14 @@ impl FeedbackSnapshot {
         use sentry::protocol::Level;
         use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
+
+        let FeedbackUploadOptions {
+            include_logs,
+            extra_attachment_paths,
+            session_source,
+            logs_override,
+            allow_feedback_mirror_upload,
+        } = options;
 
         // Build Sentry client
         let client = Client::from_config(ClientOptions {
@@ -464,6 +480,16 @@ impl FeedbackSnapshot {
 
         client.send_envelope(envelope);
         client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+        if allow_feedback_mirror_upload
+            && let Err(err) =
+                self.upload_feedback_to_mirror(classification, reason, include_logs, session_source)
+        {
+            tracing::warn!(
+                error = %err,
+                thread_id = %self.thread_id,
+                "failed to mirror feedback to configured endpoint"
+            );
+        }
         Ok(())
     }
 
@@ -520,6 +546,133 @@ impl FeedbackSnapshot {
         }
 
         attachments
+    }
+
+    fn upload_feedback_to_mirror(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        include_logs: bool,
+        session_source: Option<SessionSource>,
+    ) -> Result<()> {
+        let Some(submit_url) = feedback_mirror_url() else {
+            return Ok(());
+        };
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(UPLOAD_TIMEOUT_SECS))
+            .build()?;
+        let mut request = client
+            .post(submit_url)
+            .json(&create_feedback_mirror_payload(
+                &self.thread_id,
+                classification,
+                reason,
+                include_logs,
+                session_source,
+            ));
+        if let Some(authorization) = feedback_mirror_authorization() {
+            request = request.header(reqwest::header::AUTHORIZATION, authorization);
+        }
+        let response = request.send()?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        Err(anyhow!(
+            "feedback mirror upload failed with status {status}{}",
+            if body.is_empty() {
+                String::new()
+            } else {
+                format!(": {body}")
+            }
+        ))
+    }
+}
+
+fn feedback_mirror_url() -> Option<String> {
+    std::env::var(FEEDBACK_MIRROR_URL_ENV)
+        .ok()
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+}
+
+fn feedback_mirror_authorization() -> Option<String> {
+    std::env::var(FEEDBACK_MIRROR_AUTHORIZATION_ENV)
+        .ok()
+        .map(|authorization| authorization.trim().to_string())
+        .filter(|authorization| !authorization.is_empty())
+}
+
+pub fn is_openai_employee_email(account_email: Option<&str>) -> bool {
+    let Some(email) = account_email.map(str::trim) else {
+        return false;
+    };
+    let Some((_, domain)) = email.rsplit_once('@') else {
+        return false;
+    };
+    domain.eq_ignore_ascii_case("openai.com")
+}
+
+#[derive(Serialize)]
+struct FeedbackMirrorPayload<'a> {
+    feedback: FeedbackMirrorBody<'a>,
+    thread_id: &'a str,
+    client: FeedbackMirrorClient,
+    source: FeedbackMirrorSource<'a>,
+}
+
+#[derive(Serialize)]
+struct FeedbackMirrorBody<'a> {
+    text: &'a str,
+    classification: &'a str,
+}
+
+#[derive(Serialize)]
+struct FeedbackMirrorClient {
+    client_name: &'static str,
+    style: &'static str,
+    payload_mode: &'static str,
+}
+
+#[derive(Serialize)]
+struct FeedbackMirrorSource<'a> {
+    source: &'static str,
+    cli_version: &'static str,
+    session_source: Option<String>,
+    sentry_correlation_id: &'a str,
+    include_logs_requested: bool,
+}
+
+fn create_feedback_mirror_payload<'a>(
+    thread_id: &'a str,
+    classification: &'a str,
+    reason: Option<&'a str>,
+    include_logs: bool,
+    session_source: Option<SessionSource>,
+) -> FeedbackMirrorPayload<'a> {
+    let text = reason
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or(classification);
+    FeedbackMirrorPayload {
+        feedback: FeedbackMirrorBody {
+            text,
+            classification,
+        },
+        thread_id,
+        client: FeedbackMirrorClient {
+            client_name: "codex-feedback",
+            style: "feedback_mirror",
+            payload_mode: "raw_feedback_without_observed_artifacts",
+        },
+        source: FeedbackMirrorSource {
+            source: "codex_feedback_upload",
+            cli_version: env!("CARGO_PKG_VERSION"),
+            session_source: session_source.map(|source| source.to_string()),
+            sentry_correlation_id: thread_id,
+            include_logs_requested: include_logs,
+        },
     }
 }
 
@@ -611,6 +764,7 @@ mod tests {
     use super::*;
     use feedback_diagnostics::FeedbackDiagnostic;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -695,5 +849,75 @@ mod tests {
         );
         assert_eq!(attachments_without_diagnostics[0].buffer, vec![1]);
         fs::remove_file(extra_path).expect("extra attachment should be removed");
+    }
+
+    #[test]
+    fn is_openai_employee_email_only_for_openai_email() {
+        pretty_assertions::assert_eq!(
+            is_openai_employee_email(/*account_email*/ Some("user@openai.com")),
+            true
+        );
+        pretty_assertions::assert_eq!(
+            is_openai_employee_email(/*account_email*/ Some(" User@OpenAI.com ")),
+            true
+        );
+        pretty_assertions::assert_eq!(
+            is_openai_employee_email(/*account_email*/ Some("user@example.com")),
+            false
+        );
+        pretty_assertions::assert_eq!(is_openai_employee_email(/*account_email*/ None), false);
+    }
+
+    #[test]
+    fn feedback_mirror_payload_omits_logs_and_email() {
+        let payload = create_feedback_mirror_payload(
+            "thread-123",
+            "bug",
+            Some("  bad patch  "),
+            /*include_logs*/ true,
+            /*session_source*/ Some(SessionSource::Cli),
+        );
+
+        pretty_assertions::assert_eq!(
+            serde_json::to_value(payload).unwrap(),
+            json!({
+                "feedback": {
+                    "text": "bad patch",
+                    "classification": "bug",
+                },
+                "thread_id": "thread-123",
+                "client": {
+                    "client_name": "codex-feedback",
+                    "style": "feedback_mirror",
+                    "payload_mode": "raw_feedback_without_observed_artifacts",
+                },
+                "source": {
+                    "source": "codex_feedback_upload",
+                    "cli_version": env!("CARGO_PKG_VERSION"),
+                    "session_source": "cli",
+                    "sentry_correlation_id": "thread-123",
+                    "include_logs_requested": true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn feedback_mirror_payload_uses_classification_when_reason_is_empty() {
+        let payload = create_feedback_mirror_payload(
+            "thread-123",
+            "bug",
+            Some(" "),
+            /*include_logs*/ false,
+            /*session_source*/ None,
+        );
+
+        pretty_assertions::assert_eq!(
+            serde_json::to_value(payload).unwrap()["feedback"],
+            json!({
+                "text": "bug",
+                "classification": "bug",
+            })
+        );
     }
 }
