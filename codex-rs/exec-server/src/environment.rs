@@ -16,8 +16,8 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
 /// Lazily creates and caches the active environment for a session.
 ///
-/// The manager keeps the session's environment mode stable so subagents and
-/// follow-up turns preserve explicit `Disabled` semantics.
+/// The manager keeps the session's environment selection stable so subagents
+/// and follow-up turns preserve an explicit disabled state.
 #[derive(Debug)]
 pub struct EnvironmentManager {
     exec_server_url: Option<String>,
@@ -83,14 +83,14 @@ impl EnvironmentManager {
             })
             .await
             .map(Option::as_ref)
-            .map(|environment| environment.cloned())
+            .map(std::option::Option::<&Arc<Environment>>::cloned)
     }
 }
 
 /// Concrete execution/filesystem environment selected for a session.
 ///
-/// This bundles the chosen mode together with the corresponding exec backend
-/// and remote client, if any.
+/// This bundles the selected backend together with the corresponding remote
+/// client, if any.
 #[derive(Clone)]
 pub struct Environment {
     exec_server_url: Option<String>,
@@ -208,6 +208,7 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
+    use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
