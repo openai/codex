@@ -6593,6 +6593,9 @@ impl CodexMessageProcessor {
                     items: vec![],
                     error: None,
                     status: TurnStatus::InProgress,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
                 };
 
                 let response = TurnStartResponse { turn };
@@ -6929,6 +6932,9 @@ impl CodexMessageProcessor {
             items,
             error: None,
             status: TurnStatus::InProgress,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         }
     }
 
@@ -7347,10 +7353,10 @@ impl CodexMessageProcessor {
                         // Track the event before emitting any typed
                         // translations so thread-local state such as raw event
                         // opt-in stays synchronized with the conversation.
-                        let raw_events_enabled = {
+                        let (raw_events_enabled, terminal_turn) = {
                             let mut thread_state = thread_state.lock().await;
-                            thread_state.track_current_turn_event(&event.msg);
-                            thread_state.experimental_raw_events
+                            let terminal_turn = thread_state.track_current_turn_event(&event.msg);
+                            (thread_state.experimental_raw_events, terminal_turn)
                         };
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
@@ -7366,6 +7372,7 @@ impl CodexMessageProcessor {
                         );
                         apply_bespoke_event_handling(
                             event.clone(),
+                            terminal_turn,
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
@@ -9578,6 +9585,7 @@ mod tests {
             state.track_current_turn_event(&EventMsg::TurnStarted(
                 codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
                 },
