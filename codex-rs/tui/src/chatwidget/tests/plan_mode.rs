@@ -78,7 +78,7 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -107,21 +107,21 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
+            AppEvent::UpdatePlanModeModel(model) if model == "gpt-5.1-codex-max"
         )),
         "expected model update event; events: {events:?}"
     );
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+            .any(|event| matches!(event, AppEvent::UpdatePlanModeReasoningEffort(Some(_)))),
         "expected reasoning update event; events: {events:?}"
     );
 }
@@ -144,7 +144,7 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
@@ -170,7 +170,7 @@ async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
     chat.set_collaboration_mask(plan_mask);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(popup.contains("Low (current)"));
@@ -192,21 +192,21 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     set_chatgpt_auth(&mut chat);
 
     let preset = get_available_model(&chat, "gpt-5");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateModel(model) if model == "gpt-5"
+            AppEvent::UpdatePlanModeModel(model) if model == "gpt-5"
         )),
         "expected model update event; events: {events:?}"
     );
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+            .any(|event| matches!(event, AppEvent::UpdatePlanModeReasoningEffort(Some(_)))),
         "expected reasoning update event; events: {events:?}"
     );
 }
@@ -233,7 +233,10 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+            AppEvent::PersistPlanModeModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+            } if model == "gpt-5.1-codex-max"
         )),
         "expected updated plan override to be persisted; events: {events:?}"
     );
@@ -1154,6 +1157,81 @@ async fn plan_slash_command_switches_to_plan_mode() {
     }
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
+}
+
+#[tokio::test]
+async fn model_slash_command_plan_arg_opens_plan_scoped_picker_without_switching_modes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+
+    chat.bottom_pane
+        .set_composer_text("/model plan".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("for Plan Mode"),
+        "expected Plan-scoped model picker, got: {popup}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+}
+
+#[tokio::test]
+async fn model_slash_command_default_arg_updates_default_model_while_in_plan_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane
+        .set_composer_text("/model default".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("for Default Mode"),
+        "expected Default-scoped model picker, got: {popup}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn plan_scoped_model_picker_selection_updates_plan_model_override() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+
+    chat.open_model_popup_for_target(ModelSelectionTarget::Plan);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected OpenReasoningPopup event");
+    let AppEvent::OpenReasoningPopup { model, target } = event else {
+        panic!("expected OpenReasoningPopup, got {event:?}");
+    };
+    chat.open_reasoning_popup(model, target);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdatePlanModeModel(_))),
+        "expected Plan model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::PersistPlanModeModelSelection { .. })),
+        "expected Plan model persistence event; events: {events:?}"
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
 }
 
 #[tokio::test]

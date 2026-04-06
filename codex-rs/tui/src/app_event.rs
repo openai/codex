@@ -34,6 +34,7 @@ use crate::history_cell::HistoryCell;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -67,6 +68,35 @@ impl RealtimeAudioDeviceKind {
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
     Legacy,
+}
+
+/// Where a model selection from the picker should be applied.
+///
+/// The TUI model picker can target a specific collaboration mode without
+/// requiring the user to switch into that mode first. `Active` preserves the
+/// legacy behavior (mutate whatever is current); `Default` and `Plan` allow
+/// cross-mode selection, e.g. `/model plan` while in Default mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelSelectionTarget {
+    /// Apply a model selection to whichever collaboration mode is active now.
+    Active,
+    /// Apply a model selection to Default mode, even while Plan mode is active.
+    Default,
+    /// Apply a model selection to Plan mode, even while Default mode is active.
+    Plan,
+}
+
+impl ModelSelectionTarget {
+    /// Resolve the abstract target into a concrete [`ModeKind`] given the
+    /// currently active mode. `Active` is the only variant that depends on
+    /// runtime state; the others are constant.
+    pub(crate) fn mode_kind(self, active_mode: ModeKind) -> ModeKind {
+        match self {
+            Self::Active => active_mode,
+            Self::Default => ModeKind::Default,
+            Self::Plan => ModeKind::Plan,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -285,6 +315,12 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Update the Default-mode model slug without touching the active Plan mask.
+    UpdateDefaultModel(String),
+
+    /// Update the Plan-mode model override in memory.
+    UpdatePlanModeModel(String),
+
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
 
@@ -293,6 +329,12 @@ pub(crate) enum AppEvent {
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Persist the selected Plan-mode model override and reasoning effort.
+    PersistPlanModeModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
     },
@@ -327,6 +369,7 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+        target: ModelSelectionTarget,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
@@ -338,6 +381,7 @@ pub(crate) enum AppEvent {
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
+        target: ModelSelectionTarget,
     },
 
     /// Open the confirmation prompt before enabling full access mode.
@@ -444,9 +488,6 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the rate limit switch prompt.
     PersistRateLimitSwitchPromptHidden,
-
-    /// Persist the Plan-mode-specific reasoning effort.
-    PersistPlanModeReasoningEffort(Option<ReasoningEffort>),
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {

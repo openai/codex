@@ -967,6 +967,23 @@ model_reasoning_effort = "high"
     assert_eq!(contents, expected);
 }
 
+#[tokio::test]
+async fn async_builder_set_plan_mode_model_persists() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path().to_path_buf();
+
+    ConfigEditsBuilder::new(&codex_home)
+        .set_plan_mode_model(Some("gpt-5.4-pro"))
+        .apply()
+        .await
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"plan_mode_model = "gpt-5.4-pro"
+"#;
+    assert_eq!(contents, expected);
+}
+
 #[test]
 fn blocking_builder_set_model_round_trips_back_and_forth() {
     let tmp = tempdir().expect("tmpdir");

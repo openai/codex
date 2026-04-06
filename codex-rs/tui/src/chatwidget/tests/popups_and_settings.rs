@@ -1600,10 +1600,13 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         input_modalities: default_input_modalities(),
     };
 
-    chat.open_model_popup_with_presets(vec![
-        preset("test-visible-model", true),
-        preset("test-hidden-model", false),
-    ]);
+    chat.open_model_popup_with_presets(
+        vec![
+            preset("test-visible-model", true),
+            preset("test-hidden-model", false),
+        ],
+        ModelSelectionTarget::Active,
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_picker_filters_hidden_models", popup);
     assert!(
@@ -1658,7 +1661,7 @@ async fn model_reasoning_selection_popup_snapshot() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_reasoning_selection_popup", popup);
@@ -1672,7 +1675,7 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
@@ -1685,7 +1688,7 @@ async fn reasoning_popup_shows_extra_high_with_space() {
     set_chatgpt_auth(&mut chat);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
@@ -1721,7 +1724,7 @@ async fn single_reasoning_option_skips_selection() {
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
@@ -1802,7 +1805,7 @@ async fn reasoning_popup_escape_returns_to_model_popup() {
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(preset, ModelSelectionTarget::Active);
 
     let before_escape = render_bottom_popup(&chat, /*width*/ 80);
     assert!(before_escape.contains("Select Reasoning Level"));
