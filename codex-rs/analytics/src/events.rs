@@ -3,6 +3,7 @@ use crate::facts::CodexTurnSteerEvent;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -21,14 +22,6 @@ pub enum AppServerRpcTransport {
     Stdio,
     Websocket,
     InProcess,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ThreadInitializationMode {
-    New,
-    Forked,
-    Resumed,
 }
 
 #[derive(Serialize)]
@@ -136,6 +129,11 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) turn_id: String,
     pub(crate) product_client_id: String,
     pub(crate) submission_type: Option<TurnSubmissionType>,
+    pub(crate) ephemeral: bool,
+    pub(crate) thread_source: Option<String>,
+    pub(crate) initialization_mode: ThreadInitializationMode,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) model_provider: String,
     pub(crate) sandbox_policy: Option<&'static str>,
@@ -362,5 +360,29 @@ fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String>
             parent_thread_id, ..
         } => Some(parent_thread_id.to_string()),
         _ => None,
+    }
+}
+
+pub(crate) fn turn_subagent_source_name(thread_source: &SessionSource) -> Option<String> {
+    match thread_source {
+        SessionSource::SubAgent(subagent_source) => Some(subagent_source_name(subagent_source)),
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
+    }
+}
+
+pub(crate) fn turn_parent_thread_id(thread_source: &SessionSource) -> Option<String> {
+    match thread_source {
+        SessionSource::SubAgent(subagent_source) => subagent_parent_thread_id(subagent_source),
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
     }
 }
