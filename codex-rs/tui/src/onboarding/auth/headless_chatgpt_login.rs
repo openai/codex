@@ -15,6 +15,7 @@ use crate::shimmer::shimmer_spans;
 use super::AuthModeWidget;
 use super::ContinueWithDeviceCodeState;
 use super::SignInState;
+use super::cancel_login_attempt;
 use super::mark_url_hyperlink;
 use super::onboarding_request_id;
 
@@ -47,13 +48,15 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget) {
                     &request_id,
                     ContinueWithDeviceCodeState::ready(
                         request_id.clone(),
-                        login_id,
+                        login_id.clone(),
                         verification_url,
                         user_code,
                     ),
                 );
                 if updated {
                     *error.write().unwrap() = None;
+                } else {
+                    cancel_login_attempt(&request_handle, login_id).await;
                 }
             }
             Ok(other) => {

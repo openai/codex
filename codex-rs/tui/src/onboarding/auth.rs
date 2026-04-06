@@ -105,6 +105,20 @@ fn onboarding_request_id() -> codex_app_server_protocol::RequestId {
     codex_app_server_protocol::RequestId::String(Uuid::new_v4().to_string())
 }
 
+pub(super) async fn cancel_login_attempt(
+    request_handle: &AppServerRequestHandle,
+    login_id: String,
+) {
+    let _ = request_handle
+        .request_typed::<codex_app_server_protocol::CancelLoginAccountResponse>(
+            ClientRequest::CancelLoginAccount {
+                request_id: onboarding_request_id(),
+                params: CancelLoginAccountParams { login_id },
+            },
+        )
+        .await;
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct ApiKeyInputState {
     value: String,
@@ -245,28 +259,14 @@ impl AuthModeWidget {
                 let request_handle = self.app_server_request_handle.clone();
                 let login_id = state.login_id.clone();
                 tokio::spawn(async move {
-                    let _ = request_handle
-                        .request_typed::<codex_app_server_protocol::CancelLoginAccountResponse>(
-                            ClientRequest::CancelLoginAccount {
-                                request_id: onboarding_request_id(),
-                                params: CancelLoginAccountParams { login_id },
-                            },
-                        )
-                        .await;
+                    cancel_login_attempt(&request_handle, login_id).await;
                 });
             }
             SignInState::ChatGptDeviceCode(state) => {
                 if let Some(login_id) = state.login_id().map(str::to_owned) {
                     let request_handle = self.app_server_request_handle.clone();
                     tokio::spawn(async move {
-                        let _ = request_handle
-                            .request_typed::<codex_app_server_protocol::CancelLoginAccountResponse>(
-                                ClientRequest::CancelLoginAccount {
-                                    request_id: onboarding_request_id(),
-                                    params: CancelLoginAccountParams { login_id },
-                                },
-                            )
-                            .await;
+                        cancel_login_attempt(&request_handle, login_id).await;
                     });
                 }
             }
