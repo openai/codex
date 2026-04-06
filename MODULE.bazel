@@ -250,7 +250,10 @@ bazel_dep(name = "xz", version = "5.4.5.bcr.8")
 crate.annotation(
     crate = "lzma-sys",
     gen_build_script = "off",
-    deps = ["@xz//:lzma"],
+    deps = [
+        "@bzip2//:bz2",
+        "@xz//:lzma",
+    ],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
