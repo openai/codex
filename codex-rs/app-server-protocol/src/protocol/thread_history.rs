@@ -1,7 +1,8 @@
-use crate::protocol::item_builders::CommandExecutionEvent;
-use crate::protocol::item_builders::FileChangeEvent;
-use crate::protocol::item_builders::build_command_execution_item;
-use crate::protocol::item_builders::build_file_change_item;
+use crate::protocol::item_builders::build_command_execution_begin_item;
+use crate::protocol::item_builders::build_command_execution_end_item;
+use crate::protocol::item_builders::build_file_change_approval_request_item;
+use crate::protocol::item_builders::build_file_change_begin_item;
+use crate::protocol::item_builders::build_file_change_end_item;
 use crate::protocol::item_builders::build_item_from_guardian_event;
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
@@ -387,12 +388,12 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_exec_command_begin(&mut self, payload: &ExecCommandBeginEvent) {
-        let item = build_command_execution_item(CommandExecutionEvent::Begin(payload));
+        let item = build_command_execution_begin_item(payload);
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
 
     fn handle_exec_command_end(&mut self, payload: &ExecCommandEndEvent) {
-        let item = build_command_execution_item(CommandExecutionEvent::End(payload));
+        let item = build_command_execution_end_item(payload);
         // Command completions can arrive out of order. Unified exec may return
         // while a PTY is still running, then emit ExecCommandEnd later from a
         // background exit watcher when that process finally exits. By then, a
@@ -420,7 +421,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_apply_patch_approval_request(&mut self, payload: &ApplyPatchApprovalRequestEvent) {
-        let item = build_file_change_item(FileChangeEvent::ApprovalRequest(payload));
+        let item = build_file_change_approval_request_item(payload);
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
         } else {
@@ -429,7 +430,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_patch_apply_begin(&mut self, payload: &PatchApplyBeginEvent) {
-        let item = build_file_change_item(FileChangeEvent::Begin(payload));
+        let item = build_file_change_begin_item(payload);
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
         } else {
@@ -438,7 +439,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_patch_apply_end(&mut self, payload: &PatchApplyEndEvent) {
-        let item = build_file_change_item(FileChangeEvent::End(payload));
+        let item = build_file_change_end_item(payload);
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
         } else {

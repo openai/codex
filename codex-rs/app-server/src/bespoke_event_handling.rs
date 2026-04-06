@@ -23,7 +23,6 @@ use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
-use codex_app_server_protocol::CommandExecutionEvent;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -39,7 +38,6 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeEvent;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -100,8 +98,10 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::build_command_execution_item;
-use codex_app_server_protocol::build_file_change_item;
+use codex_app_server_protocol::build_command_execution_end_item;
+use codex_app_server_protocol::build_file_change_approval_request_item;
+use codex_app_server_protocol::build_file_change_begin_item;
+use codex_app_server_protocol::build_file_change_end_item;
 use codex_app_server_protocol::build_item_from_guardian_event;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_app_server_protocol::convert_patch_changes;
@@ -503,7 +503,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .insert(item_id.clone())
                     };
                     if first_start {
-                        let item = build_file_change_item(FileChangeEvent::ApprovalRequest(&event));
+                        let item = build_file_change_approval_request_item(&event);
                         let notification = ItemStartedNotification {
                             thread_id: conversation_id.to_string(),
                             turn_id: event_turn_id.clone(),
@@ -1535,7 +1535,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .insert(item_id.clone())
             };
             if first_start {
-                let item = build_file_change_item(FileChangeEvent::Begin(&patch_begin_event));
+                let item = build_file_change_begin_item(&patch_begin_event);
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -1553,7 +1553,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             complete_file_change_item(
                 conversation_id,
                 item_id,
-                build_file_change_item(FileChangeEvent::End(&patch_end_event)),
+                build_file_change_end_item(&patch_end_event),
                 event_turn_id.clone(),
                 &outgoing,
                 &thread_state,
@@ -1665,8 +1665,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .remove(&call_id);
             }
 
-            let item =
-                build_command_execution_item(CommandExecutionEvent::End(&exec_command_end_event));
+            let item = build_command_execution_end_item(&exec_command_end_event);
 
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),

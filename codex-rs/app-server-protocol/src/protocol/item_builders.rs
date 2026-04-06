@@ -37,102 +37,98 @@ use codex_shell_command::parse_command::shlex_join;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Core event payloads that can be converted into a [`ThreadItem::FileChange`].
-pub enum FileChangeEvent<'a> {
-    ApprovalRequest(&'a ApplyPatchApprovalRequestEvent),
-    Begin(&'a PatchApplyBeginEvent),
-    End(&'a PatchApplyEndEvent),
-}
-
-/// Core event payloads that can be converted into a [`ThreadItem::CommandExecution`].
-pub enum CommandExecutionEvent<'a> {
-    ApprovalRequest(&'a ExecApprovalRequestEvent),
-    Begin(&'a ExecCommandBeginEvent),
-    End(&'a ExecCommandEndEvent),
-}
-
-pub fn build_file_change_item(event: FileChangeEvent<'_>) -> ThreadItem {
-    match event {
-        FileChangeEvent::ApprovalRequest(payload) => ThreadItem::FileChange {
-            id: payload.call_id.clone(),
-            changes: convert_patch_changes(&payload.changes),
-            status: PatchApplyStatus::InProgress,
-        },
-        FileChangeEvent::Begin(payload) => ThreadItem::FileChange {
-            id: payload.call_id.clone(),
-            changes: convert_patch_changes(&payload.changes),
-            status: PatchApplyStatus::InProgress,
-        },
-        FileChangeEvent::End(payload) => ThreadItem::FileChange {
-            id: payload.call_id.clone(),
-            changes: convert_patch_changes(&payload.changes),
-            status: (&payload.status).into(),
-        },
+pub fn build_file_change_approval_request_item(
+    payload: &ApplyPatchApprovalRequestEvent,
+) -> ThreadItem {
+    ThreadItem::FileChange {
+        id: payload.call_id.clone(),
+        changes: convert_patch_changes(&payload.changes),
+        status: PatchApplyStatus::InProgress,
     }
 }
 
-pub fn build_command_execution_item(event: CommandExecutionEvent<'_>) -> ThreadItem {
-    match event {
-        CommandExecutionEvent::ApprovalRequest(payload) => ThreadItem::CommandExecution {
-            id: payload.call_id.clone(),
-            command: shlex_join(&payload.command),
-            cwd: payload.cwd.clone(),
-            process_id: None,
-            source: CommandExecutionSource::Agent,
-            status: CommandExecutionStatus::InProgress,
-            command_actions: payload
-                .parsed_cmd
-                .iter()
-                .cloned()
-                .map(CommandAction::from)
-                .collect(),
-            aggregated_output: None,
-            exit_code: None,
-            duration_ms: None,
-        },
-        CommandExecutionEvent::Begin(payload) => ThreadItem::CommandExecution {
-            id: payload.call_id.clone(),
-            command: shlex_join(&payload.command),
-            cwd: payload.cwd.clone(),
-            process_id: payload.process_id.clone(),
-            source: payload.source.into(),
-            status: CommandExecutionStatus::InProgress,
-            command_actions: payload
-                .parsed_cmd
-                .iter()
-                .cloned()
-                .map(CommandAction::from)
-                .collect(),
-            aggregated_output: None,
-            exit_code: None,
-            duration_ms: None,
-        },
-        CommandExecutionEvent::End(payload) => {
-            let aggregated_output = if payload.aggregated_output.is_empty() {
-                None
-            } else {
-                Some(payload.aggregated_output.clone())
-            };
-            let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
+pub fn build_file_change_begin_item(payload: &PatchApplyBeginEvent) -> ThreadItem {
+    ThreadItem::FileChange {
+        id: payload.call_id.clone(),
+        changes: convert_patch_changes(&payload.changes),
+        status: PatchApplyStatus::InProgress,
+    }
+}
 
-            ThreadItem::CommandExecution {
-                id: payload.call_id.clone(),
-                command: shlex_join(&payload.command),
-                cwd: payload.cwd.clone(),
-                process_id: payload.process_id.clone(),
-                source: payload.source.into(),
-                status: (&payload.status).into(),
-                command_actions: payload
-                    .parsed_cmd
-                    .iter()
-                    .cloned()
-                    .map(CommandAction::from)
-                    .collect(),
-                aggregated_output,
-                exit_code: Some(payload.exit_code),
-                duration_ms: Some(duration_ms),
-            }
-        }
+pub fn build_file_change_end_item(payload: &PatchApplyEndEvent) -> ThreadItem {
+    ThreadItem::FileChange {
+        id: payload.call_id.clone(),
+        changes: convert_patch_changes(&payload.changes),
+        status: (&payload.status).into(),
+    }
+}
+
+pub fn build_command_execution_approval_request_item(
+    payload: &ExecApprovalRequestEvent,
+) -> ThreadItem {
+    ThreadItem::CommandExecution {
+        id: payload.call_id.clone(),
+        command: shlex_join(&payload.command),
+        cwd: payload.cwd.clone(),
+        process_id: None,
+        source: CommandExecutionSource::Agent,
+        status: CommandExecutionStatus::InProgress,
+        command_actions: payload
+            .parsed_cmd
+            .iter()
+            .cloned()
+            .map(CommandAction::from)
+            .collect(),
+        aggregated_output: None,
+        exit_code: None,
+        duration_ms: None,
+    }
+}
+
+pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItem {
+    ThreadItem::CommandExecution {
+        id: payload.call_id.clone(),
+        command: shlex_join(&payload.command),
+        cwd: payload.cwd.clone(),
+        process_id: payload.process_id.clone(),
+        source: payload.source.into(),
+        status: CommandExecutionStatus::InProgress,
+        command_actions: payload
+            .parsed_cmd
+            .iter()
+            .cloned()
+            .map(CommandAction::from)
+            .collect(),
+        aggregated_output: None,
+        exit_code: None,
+        duration_ms: None,
+    }
+}
+
+pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> ThreadItem {
+    let aggregated_output = if payload.aggregated_output.is_empty() {
+        None
+    } else {
+        Some(payload.aggregated_output.clone())
+    };
+    let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
+
+    ThreadItem::CommandExecution {
+        id: payload.call_id.clone(),
+        command: shlex_join(&payload.command),
+        cwd: payload.cwd.clone(),
+        process_id: payload.process_id.clone(),
+        source: payload.source.into(),
+        status: (&payload.status).into(),
+        command_actions: payload
+            .parsed_cmd
+            .iter()
+            .cloned()
+            .map(CommandAction::from)
+            .collect(),
+        aggregated_output,
+        exit_code: Some(payload.exit_code),
+        duration_ms: Some(duration_ms),
     }
 }
 
