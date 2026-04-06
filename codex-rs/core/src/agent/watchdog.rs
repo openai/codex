@@ -785,6 +785,8 @@ mod tests {
         assert!(prompt.contains("# You are a Subagent"));
         assert!(prompt.contains("Call `send_input`"));
         assert!(prompt.contains("Target agent id:"));
+        assert!(prompt.contains("minimize wasted root-agent and subagent cycles"));
+        assert!(prompt.contains("if a worker has become unblocked"));
         assert!(prompt.ends_with("\n\nping"));
     }
 }
