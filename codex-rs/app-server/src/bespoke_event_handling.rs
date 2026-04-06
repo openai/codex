@@ -2930,33 +2930,36 @@ mod tests {
         }
     }
 
-    async fn apply_guardian_assessment_event(
-        assessment: GuardianAssessmentEvent,
+    struct GuardianAssessmentTestContext {
         conversation_id: ThreadId,
         conversation: Arc<CodexThread>,
         thread_manager: Arc<ThreadManager>,
         outgoing: ThreadScopedOutgoingMessageSender,
         thread_state: Arc<Mutex<ThreadState>>,
         thread_watch_manager: ThreadWatchManager,
-        codex_home: &Path,
-    ) {
-        let event_turn_id = assessment.turn_id.clone();
-        apply_bespoke_event_handling(
-            Event {
-                id: event_turn_id,
-                msg: EventMsg::GuardianAssessment(assessment),
-            },
-            conversation_id,
-            conversation,
-            thread_manager,
-            outgoing,
-            thread_state,
-            thread_watch_manager,
-            ApiVersion::V2,
-            "test-provider".to_string(),
-            codex_home,
-        )
-        .await;
+        codex_home: PathBuf,
+    }
+
+    impl GuardianAssessmentTestContext {
+        async fn apply_guardian_assessment_event(&self, assessment: GuardianAssessmentEvent) {
+            let event_turn_id = assessment.turn_id.clone();
+            apply_bespoke_event_handling(
+                Event {
+                    id: event_turn_id,
+                    msg: EventMsg::GuardianAssessment(assessment),
+                },
+                self.conversation_id.clone(),
+                self.conversation.clone(),
+                self.thread_manager.clone(),
+                self.outgoing.clone(),
+                self.thread_state.clone(),
+                self.thread_watch_manager.clone(),
+                ApiVersion::V2,
+                "test-provider".to_string(),
+                &self.codex_home,
+            )
+            .await;
+        }
     }
 
     #[test]
@@ -3249,22 +3252,23 @@ mod tests {
             vec![ConnectionId(1)],
             conversation_id,
         );
+        let guardian_context = GuardianAssessmentTestContext {
+            conversation_id,
+            conversation: conversation.clone(),
+            thread_manager: thread_manager.clone(),
+            outgoing: outgoing.clone(),
+            thread_state: thread_state.clone(),
+            thread_watch_manager: thread_watch_manager.clone(),
+            codex_home: codex_home.path().to_path_buf(),
+        };
 
-        apply_guardian_assessment_event(
-            guardian_command_assessment(
+        guardian_context
+            .apply_guardian_assessment_event(guardian_command_assessment(
                 "cmd-guardian-approved",
                 "turn-guardian-approved",
                 GuardianAssessmentStatus::InProgress,
-            ),
-            conversation_id,
-            conversation.clone(),
-            thread_manager.clone(),
-            outgoing.clone(),
-            thread_state.clone(),
-            thread_watch_manager.clone(),
-            codex_home.path(),
-        )
-        .await;
+            ))
+            .await;
         let first = recv_broadcast_message(&mut rx).await?;
         match first {
             OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(payload)) => {
@@ -3291,21 +3295,13 @@ mod tests {
             other => bail!("unexpected message: {other:?}"),
         }
 
-        apply_guardian_assessment_event(
-            guardian_command_assessment(
+        guardian_context
+            .apply_guardian_assessment_event(guardian_command_assessment(
                 "cmd-guardian-approved",
                 "turn-guardian-approved",
                 GuardianAssessmentStatus::Approved,
-            ),
-            conversation_id,
-            conversation.clone(),
-            thread_manager.clone(),
-            outgoing.clone(),
-            thread_state.clone(),
-            thread_watch_manager.clone(),
-            codex_home.path(),
-        )
-        .await;
+            ))
+            .await;
         let third = recv_broadcast_message(&mut rx).await?;
         match third {
             OutgoingMessage::AppServerNotification(
@@ -3324,21 +3320,13 @@ mod tests {
             "approved review should not complete the command item"
         );
 
-        apply_guardian_assessment_event(
-            guardian_command_assessment(
+        guardian_context
+            .apply_guardian_assessment_event(guardian_command_assessment(
                 "cmd-guardian-denied",
                 "turn-guardian-denied",
                 GuardianAssessmentStatus::InProgress,
-            ),
-            conversation_id,
-            conversation.clone(),
-            thread_manager.clone(),
-            outgoing.clone(),
-            thread_state.clone(),
-            thread_watch_manager.clone(),
-            codex_home.path(),
-        )
-        .await;
+            ))
+            .await;
         let fourth = recv_broadcast_message(&mut rx).await?;
         match fourth {
             OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(payload)) => {
@@ -3365,21 +3353,13 @@ mod tests {
             other => bail!("unexpected message: {other:?}"),
         }
 
-        apply_guardian_assessment_event(
-            guardian_command_assessment(
+        guardian_context
+            .apply_guardian_assessment_event(guardian_command_assessment(
                 "cmd-guardian-denied",
                 "turn-guardian-denied",
                 GuardianAssessmentStatus::Denied,
-            ),
-            conversation_id,
-            conversation.clone(),
-            thread_manager.clone(),
-            outgoing.clone(),
-            thread_state.clone(),
-            thread_watch_manager,
-            codex_home.path(),
-        )
-        .await;
+            ))
+            .await;
         let sixth = recv_broadcast_message(&mut rx).await?;
         match sixth {
             OutgoingMessage::AppServerNotification(
