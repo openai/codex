@@ -143,7 +143,8 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
-    let auth_manager = auth_manager_from_config(config);
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
     if !config.features.apps_enabled_for_auth(auth.as_ref()) {
         return Some(Vec::new());
@@ -182,7 +183,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
-    let auth_manager = auth_manager_from_config(config);
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
     if !config.features.apps_enabled_for_auth(auth.as_ref()) {
         return Ok(AccessibleConnectorsStatus {
@@ -417,7 +419,8 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     let token_data = if let Some(auth) = auth {
         auth.get_token_data().ok()
     } else {
-        let auth_manager = auth_manager_from_config(config);
+        let auth_manager =
+            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
         auth_manager
             .auth()
             .await
@@ -490,14 +493,6 @@ async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
         let body = response.text().await.unwrap_or_default();
         anyhow::bail!("request failed with status {status}: {body}");
     }
-}
-
-fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
-    AuthManager::shared(
-        config.codex_home.clone(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-    )
 }
 
 pub fn connector_display_label(connector: &AppInfo) -> String {

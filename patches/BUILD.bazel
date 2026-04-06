@@ -3,6 +3,7 @@ exports_files([
     "aws-lc-sys_memcmp_check.patch",
     "aws-lc-sys_windows_msvc_prebuilt_nasm.patch",
     "aws-lc-sys_windows_msvc_memcmp_probe.patch",
+    "bzip2_windows_stack_args.patch",
     "llvm_windows_symlink_extract.patch",
     "rules_rust_windows_bootstrap_process_wrapper_linker.patch",
     "rules_rust_windows_build_script_runner_paths.patch",
@@ -20,5 +21,6 @@ exports_files([
     "v8_module_deps.patch",
     "v8_source_portability.patch",
     "windows-link.patch",
+    "xz_windows_stack_args.patch",
     "zstd-sys_windows_msvc_include_dirs.patch",
 ])
