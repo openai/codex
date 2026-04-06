@@ -817,12 +817,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::AlarmScheduler,
-        key: "alarm_scheduler",
-        stage: Stage::Experimental {
-            name: "Alarm Scheduler",
-            menu_description: "Enable thread-local scheduled alarms and the /loop command.",
-            announcement: "",
-        },
+        key: "alarm_tool",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

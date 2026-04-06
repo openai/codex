@@ -144,9 +144,9 @@ Example with notification opt-out:
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
-- `thread/alarm/create` — create a runtime alarm on a loaded thread; accepts `cronExpression`, `prompt`, `delivery`, and optional `runOnce`, returns the created alarm, and requires the experimental feature flag `alarm_scheduler` to be enabled for that thread.
-- `thread/alarm/delete` — delete one runtime alarm from a loaded thread by id; returns `{ deleted }` and requires `alarm_scheduler`.
-- `thread/alarm/list` — list runtime alarms for a loaded thread; returns `{ data }` and requires `alarm_scheduler`.
+- `thread/alarm/create` — create a runtime alarm on a loaded thread; accepts `cronExpression`, `prompt`, `delivery`, and optional `runOnce`, returns the created alarm, and requires the under-development feature flag `alarm_tool` to be enabled for that thread.
+- `thread/alarm/delete` — delete one runtime alarm from a loaded thread by id; returns `{ deleted }` and requires `alarm_tool`.
+- `thread/alarm/list` — list runtime alarms for a loaded thread; returns `{ data }` and requires `alarm_tool`.
 - `thread/alarm/updated` — notification emitted when a loaded thread’s alarm list changes, including run-once alarms deleting themselves after execution or alarms restored from disk.
 - `thread/alarm/fired` — notification emitted when a thread alarm fires, either for a synthetic follow-on turn or a same-turn steer delivery.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.

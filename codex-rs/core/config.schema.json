@@ -332,7 +332,7 @@
           "default": null,
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
-            "alarm_scheduler": {
+            "alarm_tool": {
               "type": "boolean"
             },
             "apply_patch_freeform": {
@@ -2032,7 +2032,7 @@
       "default": null,
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
-        "alarm_scheduler": {
+        "alarm_tool": {
           "type": "boolean"
         },
         "apply_patch_freeform": {
