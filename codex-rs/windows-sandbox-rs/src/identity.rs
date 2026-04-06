@@ -143,10 +143,10 @@ pub fn require_logon_sandbox_creds(
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = read_roots_override
-        .map(|roots| roots.to_vec())
+        .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_read_roots(command_cwd, policy, codex_home));
     let needed_write = write_roots_override
-        .map(|roots| roots.to_vec())
+        .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots(policy, policy_cwd, command_cwd, env_map));
     let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
     let desired_offline_proxy_settings =
