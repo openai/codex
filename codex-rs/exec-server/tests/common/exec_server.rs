@@ -44,6 +44,11 @@ pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
     let binary = cargo_bin("codex-exec-server")?;
     let mut child = Command::new(binary);
     child.args(["--listen", "ws://127.0.0.1:0"]);
+    if cfg!(target_os = "linux")
+        && let Ok(sandbox_binary) = cargo_bin("codex-linux-sandbox")
+    {
+        child.env("CODEX_LINUX_SANDBOX_EXE", sandbox_binary);
+    }
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());
