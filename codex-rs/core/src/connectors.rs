@@ -18,35 +18,36 @@ use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
 use codex_login::token_data::TokenData;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::warn;
 
-use crate::AuthManager;
-use crate::CodexAuth;
-use crate::SandboxState;
+use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::Config;
-use crate::config::types::AppToolApproval;
-use crate::config::types::AppsConfigToml;
-use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::AppsRequirementsToml;
-use crate::default_client::create_client;
-use crate::default_client::is_first_party_chat_originator;
-use crate::default_client::originator;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
-use crate::mcp::ToolPluginProvenance;
-use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::with_codex_apps_mcp;
-use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
-use crate::tools::discoverable::DiscoverablePluginInfo;
-use crate::tools::discoverable::DiscoverableTool;
+use codex_config::types::AppToolApproval;
+use codex_config::types::AppsConfigToml;
+use codex_config::types::ToolSuggestDiscoverableType;
 use codex_features::Feature;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::default_client::create_client;
+use codex_login::default_client::is_first_party_chat_originator;
+use codex_login::default_client::originator;
+use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::mcp::ToolPluginProvenance;
+use codex_mcp::mcp::auth::compute_auth_statuses;
+use codex_mcp::mcp::with_codex_apps_mcp;
+use codex_mcp::mcp_connection_manager::McpConnectionManager;
+use codex_mcp::mcp_connection_manager::SandboxState;
+use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -133,7 +134,6 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     .map(DiscoverableTool::from);
     let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)?
         .into_iter()
-        .map(DiscoverablePluginInfo::from)
         .map(DiscoverableTool::from);
     Ok(discoverable_connectors
         .chain(discoverable_plugins)
@@ -143,7 +143,8 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
-    let auth_manager = auth_manager_from_config(config);
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
     if !config.features.apps_enabled_for_auth(auth.as_ref()) {
         return Some(Vec::new());
@@ -155,7 +156,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
 pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
-    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
 ) {
     if !config.features.enabled(Feature::Apps) {
         return;
@@ -182,7 +183,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
-    let auth_manager = auth_manager_from_config(config);
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
     if !config.features.apps_enabled_for_auth(auth.as_ref()) {
         return Ok(AccessibleConnectorsStatus {
@@ -191,7 +193,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
@@ -203,12 +206,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let mcp_servers = with_codex_apps_mcp(
-        HashMap::new(),
-        /*connectors_enabled*/ true,
-        auth.as_ref(),
-        config,
-    );
+    let mcp_config = config.to_mcp_config(plugins_manager.as_ref());
+    let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -234,6 +233,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
         &config.permissions.approval_policy,
+        INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         sandbox_state,
         config.codex_home.clone(),
@@ -419,7 +419,8 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     let token_data = if let Some(auth) = auth {
         auth.get_token_data().ok()
     } else {
-        let auth_manager = auth_manager_from_config(config);
+        let auth_manager =
+            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
         auth_manager
             .auth()
             .await
@@ -494,14 +495,6 @@ async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
     }
 }
 
-fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
-    AuthManager::shared(
-        config.codex_home.clone(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-    )
-}
-
 pub fn connector_display_label(connector: &AppInfo) -> String {
     format_connector_label(&connector.name, &connector.id)
 }
@@ -511,7 +504,7 @@ pub fn connector_mention_slug(connector: &AppInfo) -> String {
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
-    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
 ) -> Vec<AppInfo> {
     // ToolInfo already carries plugin provenance, so app-level plugin sources
     // can be derived here instead of requiring a separate enrichment pass.
@@ -685,10 +678,7 @@ pub(crate) fn app_tool_policy(
     )
 }
 
-pub(crate) fn codex_app_tool_is_enabled(
-    config: &Config,
-    tool_info: &crate::mcp_connection_manager::ToolInfo,
-) -> bool {
+pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -> bool {
     if tool_info.server_name != CODEX_APPS_MCP_SERVER_NAME {
         return true;
     }
@@ -717,10 +707,6 @@ const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 pub fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
     filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
-}
-
-pub(crate) fn is_connector_id_allowed(connector_id: &str) -> bool {
-    is_connector_id_allowed_for_originator(connector_id, originator().value.as_str())
 }
 
 fn filter_disallowed_connectors_for_originator(

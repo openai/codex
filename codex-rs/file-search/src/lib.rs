@@ -195,10 +195,10 @@ pub fn create_session(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
-        cancelled: cancelled.clone(),
+        cancelled,
         shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
-        work_tx: work_tx.clone(),
+        work_tx,
     });
 
     let matcher_inner = inner.clone();
@@ -336,7 +336,7 @@ where
 fn create_pattern(pattern: &str) -> Pattern {
     Pattern::new(
         pattern,
-        CaseMatching::Smart,
+        CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
     )
@@ -508,7 +508,7 @@ fn matcher_worker(
                         nucleo.pattern.reparse(
                             0,
                             &query,
-                            CaseMatching::Smart,
+                            CaseMatching::Ignore,
                             Normalization::Smart,
                             append,
                         );
@@ -611,13 +611,14 @@ struct RunReporter {
 
 impl SessionReporter for RunReporter {
     fn on_update(&self, snapshot: &FileSearchSnapshot) {
-        #[expect(clippy::unwrap_used)]
+        #[allow(clippy::unwrap_used)]
         let mut guard = self.snapshot.write().unwrap();
         *guard = snapshot.clone();
     }
 
     fn on_complete(&self) {
         let (cv, mutex) = &self.completed;
+        #[allow(clippy::unwrap_used)]
         let mut completed = mutex.lock().unwrap();
         *completed = true;
         cv.notify_all();
@@ -627,10 +628,15 @@ impl SessionReporter for RunReporter {
 impl RunReporter {
     fn wait_for_complete(&self) -> FileSearchSnapshot {
         let (cv, mutex) = &self.completed;
+        #[allow(clippy::unwrap_used)]
         let mut completed = mutex.lock().unwrap();
         while !*completed {
-            completed = cv.wait(completed).unwrap();
+            #[allow(clippy::unwrap_used)]
+            {
+                completed = cv.wait(completed).unwrap();
+            }
         }
+        #[allow(clippy::unwrap_used)]
         self.snapshot.read().unwrap().clone()
     }
 }

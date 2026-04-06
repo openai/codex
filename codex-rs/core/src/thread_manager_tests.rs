@@ -1,10 +1,10 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::config::test_config;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::manager::RefreshStrategy;
 use crate::rollout::RolloutRecorder;
 use crate::tasks::interrupted_turn_history_marker;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;

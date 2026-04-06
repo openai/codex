@@ -1,0 +1,13 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-collaboration-mode-templates"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_collaboration_mode_templates"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

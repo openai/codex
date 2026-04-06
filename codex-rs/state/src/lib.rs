@@ -46,6 +46,7 @@ pub use model::Stage1StartupClaimParams;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
+pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
 pub use runtime::state_db_filename;
@@ -55,7 +56,7 @@ pub use runtime::state_db_path;
 pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 
 pub const LOGS_DB_FILENAME: &str = "logs";
-pub const LOGS_DB_VERSION: u32 = 1;
+pub const LOGS_DB_VERSION: u32 = 2;
 pub const STATE_DB_FILENAME: &str = "state";
 pub const STATE_DB_VERSION: u32 = 5;
 

@@ -584,13 +584,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
-          node-version: 22
+          # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
           scope: "@openai"
-
-      # Trusted publishing requires npm CLI version 11.5.1 or later.
-      - name: Update npm
-        run: npm install -g npm@latest
 
       - name: Download npm tarballs from release
         env:

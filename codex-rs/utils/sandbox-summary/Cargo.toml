@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 codex-core = { workspace = true }
+codex-model-provider-info = { workspace = true }
 codex-protocol = { workspace = true }
 
 [dev-dependencies]

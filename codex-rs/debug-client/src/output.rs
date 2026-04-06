@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::io;
 use std::io::IsTerminal;
 use std::io::Write;

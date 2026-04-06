@@ -1,6 +1,5 @@
 #![cfg(target_os = "macos")]
 
-use crate::protocol::SandboxPolicy;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
@@ -8,6 +7,7 @@ use crate::spawn::spawn_child_async;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use codex_sandboxing::seatbelt::create_seatbelt_command_args_for_policies;
 use std::collections::HashMap;

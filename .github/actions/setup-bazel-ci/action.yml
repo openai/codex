@@ -9,9 +9,9 @@ inputs:
     required: false
     default: "false"
 outputs:
-  cache-hit:
-    description: Whether the Bazel repository cache key was restored exactly.
-    value: ${{ steps.cache_bazel_repository_restore.outputs.cache-hit }}
+  repository-cache-path:
+    description: Filesystem path used for the Bazel repository cache.
+    value: ${{ steps.configure_bazel_repository_cache.outputs.repository-cache-path }}
 
 runs:
   using: composite
@@ -41,17 +41,16 @@ runs:
     - name: Set up Bazel
       uses: bazelbuild/setup-bazelisk@v3
 
-    # Restore bazel repository cache so we don't have to redownload all the external dependencies
-    # on every CI run.
-    - name: Restore bazel repository cache
-      id: cache_bazel_repository_restore
-      uses: actions/cache/restore@v5
-      with:
-        path: |
-          ~/.cache/bazel-repo-cache
-        key: bazel-cache-${{ inputs.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
-        restore-keys: |
-          bazel-cache-${{ inputs.target }}
+    - name: Configure Bazel repository cache
+      id: configure_bazel_repository_cache
+      shell: pwsh
+      run: |
+        # Keep the repository cache under HOME on all runners. Windows `D:\a`
+        # cache paths match `.bazelrc`, but `actions/cache/restore` currently
+        # returns HTTP 400 for that path in the Windows clippy job.
+        $repositoryCachePath = Join-Path $HOME '.cache/bazel-repo-cache'
+        "repository-cache-path=$repositoryCachePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "BAZEL_REPOSITORY_CACHE=$repositoryCachePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Configure Bazel output root (Windows)
       if: runner.os == 'Windows'
@@ -60,8 +59,68 @@ runs:
         # Use the shortest available drive to reduce argv/path length issues,
         # but avoid the drive root because some Windows test launchers mis-handle
         # MANIFEST paths there.
-        $bazelOutputUserRoot = if (Test-Path 'D:\') { 'D:\b' } else { 'C:\b' }
+        $hasDDrive = Test-Path 'D:\'
+        $bazelOutputUserRoot = if ($hasDDrive) { 'D:\b' } else { 'C:\b' }
+        $repoContentsCache = Join-Path $env:RUNNER_TEMP "bazel-repo-contents-cache-$env:GITHUB_RUN_ID-$env:GITHUB_JOB"
         "BAZEL_OUTPUT_USER_ROOT=$bazelOutputUserRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "BAZEL_REPO_CONTENTS_CACHE=$repoContentsCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Expose MSVC SDK environment (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Bazel exec-side Rust build scripts do not reliably inherit the MSVC developer
+        # shell on GitHub-hosted Windows runners, so discover the latest VS install and
+        # ask `VsDevCmd.bat` to materialize the x64/x64 compiler + SDK environment.
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (-not (Test-Path $vswhere)) {
+          throw "vswhere.exe not found"
+        }
+
+        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if (-not $installPath) {
+          throw "Could not locate a Visual Studio installation with VC tools"
+        }
+
+        $vsDevCmd = Join-Path $installPath 'Common7\Tools\VsDevCmd.bat'
+        if (-not (Test-Path $vsDevCmd)) {
+          throw "VsDevCmd.bat not found at $vsDevCmd"
+        }
+
+        # Keep the export surface explicit: these are the paths and SDK roots that the
+        # MSVC toolchain probes need later when Bazel runs Windows exec-platform build
+        # scripts such as `aws-lc-sys`.
+        $varsToExport = @(
+          'INCLUDE',
+          'LIB',
+          'LIBPATH',
+          'PATH',
+          'UCRTVersion',
+          'UniversalCRTSdkDir',
+          'VCINSTALLDIR',
+          'VCToolsInstallDir',
+          'WindowsLibPath',
+          'WindowsSdkBinPath',
+          'WindowsSdkDir',
+          'WindowsSDKLibVersion',
+          'WindowsSDKVersion'
+        )
+
+        # `VsDevCmd.bat` is a batch file, so invoke it under `cmd.exe`, suppress its
+        # banner, then dump the resulting environment with `set`. Re-export only the
+        # approved keys into `GITHUB_ENV` so later steps inherit the same MSVC context.
+        $envLines = & cmd.exe /c ('"{0}" -no_logo -arch=x64 -host_arch=x64 >nul && set' -f $vsDevCmd)
+        foreach ($line in $envLines) {
+          if ($line -notmatch '^(.*?)=(.*)$') {
+            continue
+          }
+
+          $name = $matches[1]
+          $value = $matches[2]
+          if ($varsToExport -contains $name) {
+            "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+        }
 
     - name: Enable Git long paths (Windows)
       if: runner.os == 'Windows'
