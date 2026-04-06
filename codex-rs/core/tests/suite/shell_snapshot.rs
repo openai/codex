@@ -172,6 +172,7 @@ async fn run_snapshot_command_with_options(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -263,6 +264,7 @@ async fn run_shell_command_snapshot_with_options(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -334,6 +336,7 @@ async fn run_tool_turn_on_harness(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -568,6 +571,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
