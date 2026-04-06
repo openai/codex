@@ -78,7 +78,7 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
         &mut p_new_dacl,
     );
     if res != ERROR_SUCCESS {
-        return Err(anyhow!("SetEntriesInAclW failed: {}", res));
+        return Err(anyhow!("SetEntriesInAclW failed: {res}"));
     }
     let mut info = TokenDefaultDaclInfo {
         default_dacl: p_new_dacl,
@@ -95,8 +95,7 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
             LocalFree(p_new_dacl as HLOCAL);
         }
         return Err(anyhow!(
-            "SetTokenInformation(TokenDefaultDacl) failed: {}",
-            err
+            "SetTokenInformation(TokenDefaultDacl) failed: {err}",
         ));
     }
     if !p_new_dacl.is_null() {
@@ -277,7 +276,7 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     }
     let err = GetLastError();
     if err != 0 {
-        return Err(anyhow!("AdjustTokenPrivileges error {}", err));
+        return Err(anyhow!("AdjustTokenPrivileges error {err}"));
     }
     Ok(())
 }

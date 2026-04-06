@@ -1,6 +1,5 @@
 ---
 source: tui/src/pager_overlay.rs
-assertion_line: 798
 expression: term.backend()
 ---
 "/ S T A T I C / / / / / "

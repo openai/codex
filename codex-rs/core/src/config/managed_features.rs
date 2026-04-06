@@ -96,7 +96,10 @@ impl ManagedFeatures {
 impl From<Features> for ManagedFeatures {
     fn from(features: Features) -> Self {
         Self {
-            value: ConstrainedWithSource::new(Constrained::allow_any(features), None),
+            value: ConstrainedWithSource::new(
+                Constrained::allow_any(features),
+                /*source*/ None,
+            ),
             pinned_features: BTreeMap::new(),
         }
     }

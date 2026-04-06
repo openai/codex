@@ -124,7 +124,7 @@ fn select_identity(
     };
     let password = decode_password(&chosen)?;
     Ok(Some(SandboxIdentity {
-        username: chosen.username.clone(),
+        username: chosen.username,
         password,
     }))
 }

@@ -95,7 +95,7 @@ mod windows_impl {
                     } else {
                         cur.join(gitdir)
                     };
-                    return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
+                    return resolved.parent().map(Path::to_path_buf).or(Some(cur));
                 }
                 return Some(cur);
             }
@@ -277,17 +277,22 @@ mod windows_impl {
         }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sids) = match &policy {
-            SandboxPolicy::ReadOnly { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                vec![caps.readonly.clone()],
-            ),
-            SandboxPolicy::WorkspaceWrite { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                vec![
-                    caps.workspace.clone(),
-                    crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
-                ],
-            ),
+            SandboxPolicy::ReadOnly { .. } => {
+                #[allow(clippy::unwrap_used)]
+                let psid = unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() };
+                (psid, vec![caps.readonly])
+            }
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                #[allow(clippy::unwrap_used)]
+                let psid = unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() };
+                (
+                    psid,
+                    vec![
+                        caps.workspace,
+                        crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
+                    ],
+                )
+            }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
             }
@@ -306,7 +311,7 @@ mod windows_impl {
         let runner_exe = find_runner_exe(codex_home, logs_base_dir);
         let runner_cmdline = runner_exe
             .to_str()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
         let runner_full_cmd = format!(
             "{} {} {}",
@@ -369,7 +374,7 @@ mod windows_impl {
                 ),
                 logs_base_dir,
             );
-            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
+            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
         }
 
         if let Err(err) = connect_pipe(h_pipe_in) {
@@ -455,7 +460,7 @@ mod windows_impl {
             if exit_code == 0 {
                 log_success(&command, logs_base_dir);
             } else {
-                log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+                log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
             }
 
             Ok(CaptureResult {
@@ -494,12 +499,12 @@ mod windows_impl {
 
         #[test]
         fn applies_network_block_when_access_is_disabled() {
-            assert!(!workspace_policy(false).has_full_network_access());
+            assert!(!workspace_policy(/*network_access*/ false).has_full_network_access());
         }
 
         #[test]
         fn skips_network_block_when_access_is_allowed() {
-            assert!(workspace_policy(true).has_full_network_access());
+            assert!(workspace_policy(/*network_access*/ true).has_full_network_access());
         }
 
         #[test]

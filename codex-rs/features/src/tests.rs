@@ -127,6 +127,12 @@ fn tool_search_is_under_development_and_disabled_by_default() {
 }
 
 #[test]
+fn general_analytics_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::GeneralAnalytics.default_enabled(), false);
+}
+
+#[test]
 fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
     assert_eq!(
         feature_for_key("use_legacy_landlock"),
@@ -195,10 +201,10 @@ fn enable_fanout_normalization_enables_multi_agent_one_way() {
 #[test]
 fn apps_require_feature_flag_and_chatgpt_auth() {
     let mut features = Features::with_defaults();
-    assert!(!features.apps_enabled_for_auth(None));
+    assert!(!features.apps_enabled_for_auth(/*auth*/ None));
 
     features.enable(Feature::Apps);
-    assert!(!features.apps_enabled_for_auth(None));
+    assert!(!features.apps_enabled_for_auth(/*auth*/ None));
 
     let api_key_auth = codex_login::CodexAuth::from_api_key("test-api-key");
     assert!(!features.apps_enabled_for_auth(Some(&api_key_auth)));
@@ -256,7 +262,7 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
 
     let warning = unstable_features_warning_event(
         Some(&configured_features),
-        false,
+        /*suppress_unstable_features_warning*/ false,
         &features,
         "/tmp/config.toml",
     )

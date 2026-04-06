@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn resolves_in_progress_turn_to_active_status() {
-        let status = resolve_thread_status(ThreadStatus::Idle, true);
+        let status = resolve_thread_status(ThreadStatus::Idle, /*has_in_progress_turn*/ true);
         assert_eq!(
             status,
             ThreadStatus::Active {
@@ -538,7 +538,8 @@ mod tests {
             }
         );
 
-        let status = resolve_thread_status(ThreadStatus::NotLoaded, true);
+        let status =
+            resolve_thread_status(ThreadStatus::NotLoaded, /*has_in_progress_turn*/ true);
         assert_eq!(
             status,
             ThreadStatus::Active {
@@ -550,11 +551,14 @@ mod tests {
     #[test]
     fn keeps_status_when_no_in_progress_turn() {
         assert_eq!(
-            resolve_thread_status(ThreadStatus::Idle, false),
+            resolve_thread_status(ThreadStatus::Idle, /*has_in_progress_turn*/ false),
             ThreadStatus::Idle
         );
         assert_eq!(
-            resolve_thread_status(ThreadStatus::SystemError, false),
+            resolve_thread_status(
+                ThreadStatus::SystemError,
+                /*has_in_progress_turn*/ false
+            ),
             ThreadStatus::SystemError
         );
     }
@@ -788,6 +792,7 @@ mod tests {
     fn test_thread(thread_id: &str, source: codex_app_server_protocol::SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
             model_provider: "mock-provider".to_string(),

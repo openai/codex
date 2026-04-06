@@ -1,5 +1,5 @@
 #![allow(clippy::expect_used)]
-use codex_core::auth::CODEX_API_KEY_ENV_VAR;
+use codex_login::CODEX_API_KEY_ENV_VAR;
 use std::path::Path;
 use tempfile::TempDir;
 use wiremock::MockServer;

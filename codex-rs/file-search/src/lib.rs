@@ -195,10 +195,10 @@ pub fn create_session(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
-        cancelled: cancelled.clone(),
+        cancelled,
         shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
-        work_tx: work_tx.clone(),
+        work_tx,
     });
 
     let matcher_inner = inner.clone();
@@ -336,7 +336,7 @@ where
 fn create_pattern(pattern: &str) -> Pattern {
     Pattern::new(
         pattern,
-        CaseMatching::Smart,
+        CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
     )
@@ -508,7 +508,7 @@ fn matcher_worker(
                         nucleo.pattern.reparse(
                             0,
                             &query,
-                            CaseMatching::Smart,
+                            CaseMatching::Ignore,
                             Normalization::Smart,
                             append,
                         );
@@ -611,13 +611,14 @@ struct RunReporter {
 
 impl SessionReporter for RunReporter {
     fn on_update(&self, snapshot: &FileSearchSnapshot) {
-        #[expect(clippy::unwrap_used)]
+        #[allow(clippy::unwrap_used)]
         let mut guard = self.snapshot.write().unwrap();
         *guard = snapshot.clone();
     }
 
     fn on_complete(&self) {
         let (cv, mutex) = &self.completed;
+        #[allow(clippy::unwrap_used)]
         let mut completed = mutex.lock().unwrap();
         *completed = true;
         cv.notify_all();
@@ -627,10 +628,15 @@ impl SessionReporter for RunReporter {
 impl RunReporter {
     fn wait_for_complete(&self) -> FileSearchSnapshot {
         let (cv, mutex) = &self.completed;
+        #[allow(clippy::unwrap_used)]
         let mut completed = mutex.lock().unwrap();
         while !*completed {
-            completed = cv.wait(completed).unwrap();
+            #[allow(clippy::unwrap_used)]
+            {
+                completed = cv.wait(completed).unwrap();
+            }
         }
+        #[allow(clippy::unwrap_used)]
         self.snapshot.read().unwrap().clone()
     }
 }
@@ -789,13 +795,13 @@ mod tests {
 
     #[test]
     fn session_scanned_file_count_is_monotonic_across_queries() {
-        let dir = create_temp_tree(200);
+        let dir = create_temp_tree(/*file_count*/ 200);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -814,13 +820,13 @@ mod tests {
 
     #[test]
     fn session_streams_updates_before_walk_complete() {
-        let dir = create_temp_tree(600);
+        let dir = create_temp_tree(/*file_count*/ 600);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -842,7 +848,7 @@ mod tests {
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -873,7 +879,7 @@ mod tests {
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -893,8 +899,8 @@ mod tests {
 
     #[test]
     fn dropping_session_does_not_cancel_siblings_with_shared_cancel_flag() {
-        let root_a = create_temp_tree(200);
-        let root_b = create_temp_tree(4_000);
+        let root_a = create_temp_tree(/*file_count*/ 200);
+        let root_b = create_temp_tree(/*file_count*/ 4_000);
         let cancel_flag = Arc::new(AtomicBool::new(false));
 
         let reporter_a = Arc::new(RecordingReporter::default());
@@ -927,13 +933,13 @@ mod tests {
 
     #[test]
     fn session_emits_updates_when_query_changes() {
-        let dir = create_temp_tree(200);
+        let dir = create_temp_tree(/*file_count*/ 200);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -953,7 +959,7 @@ mod tests {
 
     #[test]
     fn run_returns_matches_for_query() {
-        let dir = create_temp_tree(40);
+        let dir = create_temp_tree(/*file_count*/ 40);
         let options = FileSearchOptions {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
@@ -961,8 +967,13 @@ mod tests {
             compute_indices: false,
             respect_gitignore: true,
         };
-        let results =
-            run("file-000", vec![dir.path().to_path_buf()], options, None).expect("run ok");
+        let results = run(
+            "file-000",
+            vec![dir.path().to_path_buf()],
+            options,
+            /*cancel_flag*/ None,
+        )
+        .expect("run ok");
 
         assert!(!results.matches.is_empty());
         assert!(results.total_match_count >= results.matches.len());
@@ -991,7 +1002,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
 
@@ -1003,7 +1014,7 @@ mod tests {
 
     #[test]
     fn cancel_exits_run() {
-        let dir = create_temp_tree(200);
+        let dir = create_temp_tree(/*file_count*/ 200);
         let cancel_flag = Arc::new(AtomicBool::new(true));
         let search_dir = dir.path().to_path_buf();
         let options = FileSearchOptions {
@@ -1059,7 +1070,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1079,7 +1090,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1123,7 +1134,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1143,7 +1154,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1163,7 +1174,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(

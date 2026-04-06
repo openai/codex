@@ -15,8 +15,10 @@ In the codex-rs folder where the rust code lives:
 - When you cannot make that API change and still need a small positional-literal callsite in Rust, follow the `argument_comment_lint` convention:
   - Use an exact `/*param_name*/` comment before opaque literal arguments such as `None`, booleans, and numeric literals when passing them by position.
   - Do not add these comments for string or char literals unless the comment adds real clarity; those literals are intentionally exempt from the lint.
-  - If you add one of these comments, the parameter name must exactly match the callee signature.
+  - The parameter name in the comment must exactly match the callee signature.
+  - You can run `just argument-comment-lint` to run the lint check locally. This is powered by Bazel, so running it the first time can be slow if Bazel is not warmed up, though incremental invocations should take <15s. Most of the time, it is best to update the PR and let CI take responsibility for checking this (or run it asynchronously in the background after submitting the PR). Note CI checks all three platforms, which the local run does not.
 - When possible, make `match` statements exhaustive and avoid wildcard arms.
+- Newly added traits should include doc comments that explain their role and how implementations are expected to use them.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
@@ -49,8 +51,6 @@ Run `just fmt` (in `codex-rs` directory) automatically after you have finished m
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
-Also run `just argument-comment-lint` to ensure the codebase is clean of comment lint errors.
-
 ## The `codex-core` crate
 
 Over time, the `codex-core` crate (defined in `codex-rs/core/`) has become bloated because it is the largest crate, so it is often easier to add something new to `codex-core` rather than refactor out the library code you need so your new code neither takes a dependency on, nor contributes to the size of, `codex-core`.
@@ -69,8 +69,6 @@ Likewise, when reviewing code, do not hesitate to push back on PRs that would un
 See `codex-rs/tui/styles.md`.
 
 ## TUI code conventions
-
-- When a change lands in `codex-rs/tui` and `codex-rs/tui_app_server` has a parallel implementation of the same behavior, reflect the change in `codex-rs/tui_app_server` too unless there is a documented reason not to.
 
 - Use concise styling helpers from ratatui’s Stylize trait.
   - Basic spans: use "text".into()

@@ -6,10 +6,6 @@ use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
-use crate::protocol::AskForApproval;
-use crate::protocol::GranularApprovalConfig;
-use crate::protocol::ReadOnlyAccess;
-use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
@@ -23,6 +19,10 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
@@ -95,15 +95,24 @@ fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
 #[test]
 fn approval_sandbox_permissions_only_downgrades_preapproved_additional_permissions() {
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, true),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::WithAdditionalPermissions,
+            /*additional_permissions_preapproved*/ true
+        ),
         SandboxPermissions::UseDefault,
     );
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, false),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::WithAdditionalPermissions,
+            /*additional_permissions_preapproved*/ false
+        ),
         SandboxPermissions::WithAdditionalPermissions,
     );
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::RequireEscalated, true),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::RequireEscalated,
+            /*additional_permissions_preapproved*/ true
+        ),
         SandboxPermissions::RequireEscalated,
     );
 }
@@ -278,7 +287,7 @@ fn shell_request_escalation_execution_is_explicit() {
             &sandbox_policy,
             &file_system_sandbox_policy,
             network_sandbox_policy,
-            None,
+            /*additional_permissions*/ None,
         ),
         EscalationExecution::TurnDefault,
     );
@@ -288,7 +297,7 @@ fn shell_request_escalation_execution_is_explicit() {
             &sandbox_policy,
             &file_system_sandbox_policy,
             network_sandbox_policy,
-            None,
+            /*additional_permissions*/ None,
         ),
         EscalationExecution::Unsandboxed,
     );
@@ -466,7 +475,7 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
             file_system_sandbox_policy: &file_system_sandbox_policy,
             sandbox_permissions: super::approval_sandbox_permissions(
                 SandboxPermissions::WithAdditionalPermissions,
-                true,
+                /*additional_permissions_preapproved*/ true,
             ),
             enable_shell_wrapper_parsing: false,
         },

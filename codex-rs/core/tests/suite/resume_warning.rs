@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use codex_core::CodexAuth;
 use codex_core::NewThread;
+use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
@@ -98,7 +98,13 @@ async fn emits_warning_when_resumed_model_differs() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, initial_history, auth_manager, false, None)
+        .resume_thread_with_history(
+            config,
+            initial_history,
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
         .await
         .expect("resume conversation");
 

@@ -29,7 +29,8 @@ mod wsl {
 
     #[test]
     fn wsl_mnt_drive_paths_lowercase() {
-        let normalized = normalize_for_wsl_with_flag(PathBuf::from("/mnt/C/Users/Dev"), true);
+        let normalized =
+            normalize_for_wsl_with_flag(PathBuf::from("/mnt/C/Users/Dev"), /*is_wsl*/ true);
 
         assert_eq!(normalized, PathBuf::from("/mnt/c/users/dev"));
     }
@@ -37,7 +38,7 @@ mod wsl {
     #[test]
     fn wsl_non_drive_paths_unchanged() {
         let path = PathBuf::from("/mnt/cc/Users/Dev");
-        let normalized = normalize_for_wsl_with_flag(path.clone(), true);
+        let normalized = normalize_for_wsl_with_flag(path.clone(), /*is_wsl*/ true);
 
         assert_eq!(normalized, path);
     }
@@ -45,7 +46,7 @@ mod wsl {
     #[test]
     fn wsl_non_mnt_paths_unchanged() {
         let path = PathBuf::from("/home/Dev");
-        let normalized = normalize_for_wsl_with_flag(path.clone(), true);
+        let normalized = normalize_for_wsl_with_flag(path.clone(), /*is_wsl*/ true);
 
         assert_eq!(normalized, path);
     }
@@ -60,7 +61,7 @@ mod native_workdir {
     #[test]
     fn windows_verbatim_paths_are_simplified() {
         let path = PathBuf::from(r"\\?\D:\c\x\worktrees\2508\swift-base");
-        let normalized = normalize_for_native_workdir_with_flag(path, true);
+        let normalized = normalize_for_native_workdir_with_flag(path, /*is_windows*/ true);
 
         assert_eq!(
             normalized,
@@ -71,7 +72,8 @@ mod native_workdir {
     #[test]
     fn non_windows_paths_are_unchanged() {
         let path = PathBuf::from(r"\\?\D:\c\x\worktrees\2508\swift-base");
-        let normalized = normalize_for_native_workdir_with_flag(path.clone(), false);
+        let normalized =
+            normalize_for_native_workdir_with_flag(path.clone(), /*is_windows*/ false);
 
         assert_eq!(normalized, path);
     }

@@ -1,9 +1,9 @@
-use crate::ParsedToolDefinition;
+use crate::ToolDefinition;
 use crate::parse_tool_input_schema;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
-pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ParsedToolDefinition, serde_json::Error> {
+pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_json::Error> {
     let mut serialized_input_schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
 
     // OpenAI models mandate the "properties" field in the schema. Some MCP
@@ -25,7 +25,8 @@ pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ParsedToolDefinition, 
         .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
 
-    Ok(ParsedToolDefinition {
+    Ok(ToolDefinition {
+        name: tool.name.to_string(),
         description: tool.description.clone().map(Into::into).unwrap_or_default(),
         input_schema,
         output_schema: Some(mcp_call_tool_result_output_schema(

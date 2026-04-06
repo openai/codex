@@ -120,7 +120,7 @@ fn execpolicy_network_rules_overlay_network_lists() {
             "blocked.example.com",
             NetworkRuleProtocol::Https,
             Decision::Allow,
-            None,
+            /*justification*/ None,
         )
         .expect("allow rule should be valid");
     exec_policy
@@ -128,7 +128,7 @@ fn execpolicy_network_rules_overlay_network_lists() {
             "api.example.com",
             NetworkRuleProtocol::Http,
             Decision::Forbidden,
-            None,
+            /*justification*/ None,
         )
         .expect("deny rule should be valid");
 

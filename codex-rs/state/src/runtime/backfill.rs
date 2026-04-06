@@ -265,13 +265,13 @@ mod tests {
             .expect("initialize runtime");
 
         let claimed = runtime
-            .try_claim_backfill(3600)
+            .try_claim_backfill(/*lease_seconds*/ 3600)
             .await
             .expect("initial backfill claim");
         assert_eq!(claimed, true);
 
         let duplicate_claim = runtime
-            .try_claim_backfill(3600)
+            .try_claim_backfill(/*lease_seconds*/ 3600)
             .await
             .expect("duplicate backfill claim");
         assert_eq!(duplicate_claim, false);
@@ -291,17 +291,17 @@ WHERE id = 1
         .expect("force stale backfill lease");
 
         let stale_claim = runtime
-            .try_claim_backfill(10)
+            .try_claim_backfill(/*lease_seconds*/ 10)
             .await
             .expect("stale backfill claim");
         assert_eq!(stale_claim, true);
 
         runtime
-            .mark_backfill_complete(None)
+            .mark_backfill_complete(/*last_watermark*/ None)
             .await
             .expect("mark complete");
         let claim_after_complete = runtime
-            .try_claim_backfill(3600)
+            .try_claim_backfill(/*lease_seconds*/ 3600)
             .await
             .expect("claim after complete");
         assert_eq!(claim_after_complete, false);

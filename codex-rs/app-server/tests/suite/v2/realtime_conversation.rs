@@ -99,7 +99,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
-        true,
+        /*realtime_enabled*/ true,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -137,7 +137,9 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert!(started.session_id.is_some());
     assert_eq!(started.version, RealtimeConversationVersion::V2);
 
-    let startup_context_request = realtime_server.wait_for_request(0, 0).await;
+    let startup_context_request = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
     assert_eq!(
         startup_context_request.body_json()["type"].as_str(),
         Some("session.update")
@@ -306,7 +308,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
-        true,
+        /*realtime_enabled*/ true,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -378,7 +380,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
-        false,
+        /*realtime_enabled*/ false,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;

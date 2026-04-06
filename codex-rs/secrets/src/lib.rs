@@ -219,7 +219,7 @@ mod tests {
         manager.set(&scope, &name, "token-1")?;
         assert_eq!(manager.get(&scope, &name)?, Some("token-1".to_string()));
 
-        let listed = manager.list(None)?;
+        let listed = manager.list(/*scope_filter*/ None)?;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, name);
 

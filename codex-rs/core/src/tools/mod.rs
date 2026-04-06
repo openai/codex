@@ -1,7 +1,5 @@
 pub mod code_mode;
-pub(crate) mod code_mode_description;
 pub mod context;
-pub(crate) mod discoverable;
 pub mod events;
 pub(crate) mod handlers;
 pub mod js_repl;
@@ -14,7 +12,7 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
-use crate::exec::ExecToolCallOutput;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_text;

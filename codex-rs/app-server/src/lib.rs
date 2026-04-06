@@ -2,7 +2,6 @@
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -31,6 +30,7 @@ use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
+use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -42,6 +42,7 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
+use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
@@ -456,7 +457,9 @@ pub async fn run_main_with_transport(
             range: None,
         });
     }
-    if let Some(warning) = codex_core::config::system_bwrap_warning() {
+    if let Some(warning) =
+        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
             details: None,
@@ -623,6 +626,7 @@ pub async fn run_main_with_transport(
             config_warnings,
             session_source,
             enable_codex_api_key_env: false,
+            rpc_transport: analytics_rpc_transport(transport),
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
@@ -846,6 +850,13 @@ pub async fn run_main_with_transport(
     Ok(())
 }
 
+fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTransport {
+    match transport {
+        AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
+        AppServerTransport::WebSocket { .. } => AppServerRpcTransport::Websocket,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
@@ -860,7 +871,10 @@ mod tests {
 
     #[test]
     fn log_format_from_env_value_defaults_for_non_json_values() {
-        assert_eq!(LogFormat::from_env_value(None), LogFormat::Default);
+        assert_eq!(
+            LogFormat::from_env_value(/*value*/ None),
+            LogFormat::Default
+        );
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);

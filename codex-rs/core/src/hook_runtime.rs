@@ -16,6 +16,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
@@ -306,7 +307,7 @@ async fn emit_hook_started_events(
     for run in preview_runs {
         sess.send_event(
             turn_context,
-            EventMsg::HookStarted(crate::protocol::HookStartedEvent {
+            EventMsg::HookStarted(HookStartedEvent {
                 turn_id: Some(turn_context.sub_id.clone()),
                 run,
             }),

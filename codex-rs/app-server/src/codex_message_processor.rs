@@ -20,6 +20,7 @@ use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
@@ -28,10 +29,12 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::AuthMode as CoreAuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -179,8 +182,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
@@ -191,23 +193,16 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
-use codex_core::auth::AuthMode as CoreAuthMode;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_state;
-use codex_core::default_client::set_default_client_residency_requirement;
-use codex_core::error::CodexErr;
-use codex_core::error::Result as CodexResult;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
@@ -216,11 +211,6 @@ use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
-use codex_core::mcp::auth::discover_supported_scopes;
-use codex_core::mcp::auth::resolve_oauth_scopes;
-use codex_core::mcp::collect_mcp_snapshot;
-use codex_core::mcp::group_tools_by_server;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSource;
@@ -235,9 +225,6 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::get_state_db;
-use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
@@ -246,18 +233,33 @@ use codex_features::Feature;
 use codex_features::Stage;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::git_diff_to_remote;
+use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_login::AuthManager;
+use codex_login::CLIENT_ID;
+use codex_login::CodexAuth;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
+use codex_login::default_client::set_default_client_residency_requirement;
+use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_mcp::mcp::auth::discover_supported_scopes;
+use codex_mcp::mcp::auth::resolve_oauth_scopes;
+use codex_mcp::mcp::collect_mcp_snapshot;
+use codex_mcp::mcp::effective_mcp_servers;
+use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -282,6 +284,9 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_rollout::state_db::StateDbHandle;
+use codex_rollout::state_db::get_state_db;
+use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
@@ -403,6 +408,7 @@ pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
+    analytics_events_client: AnalyticsEventsClient,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
@@ -433,6 +439,8 @@ struct ListenerTaskContext {
     thread_manager: Arc<ThreadManager>,
     thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
+    analytics_events_client: AnalyticsEventsClient,
+    general_analytics_enabled: bool,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
@@ -455,6 +463,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) thread_manager: Arc<ThreadManager>,
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
@@ -519,6 +528,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             cli_overrides,
@@ -531,6 +541,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing: outgoing.clone(),
+            analytics_events_client,
             arg0_paths,
             config,
             cli_overrides,
@@ -680,6 +691,7 @@ impl CodexMessageProcessor {
         connection_id: ConnectionId,
         request: ClientRequest,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
         request_context: RequestContext,
     ) {
         let to_connection_request_id = |request_id| ConnectionRequestId {
@@ -696,6 +708,8 @@ impl CodexMessageProcessor {
                 self.thread_start(
                     to_connection_request_id(request_id),
                     params,
+                    app_server_client_name.clone(),
+                    app_server_client_version.clone(),
                     request_context,
                 )
                 .await;
@@ -800,6 +814,7 @@ impl CodexMessageProcessor {
                     to_connection_request_id(request_id),
                     params,
                     app_server_client_name.clone(),
+                    app_server_client_version.clone(),
                 )
                 .await;
             }
@@ -1015,7 +1030,7 @@ impl CodexMessageProcessor {
         &mut self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        if self.auth_manager.is_external_auth_active() {
+        if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
         }
 
@@ -1094,7 +1109,7 @@ impl CodexMessageProcessor {
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
-        if self.auth_manager.is_external_auth_active() {
+        if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
         }
 
@@ -1531,7 +1546,7 @@ impl CodexMessageProcessor {
     }
 
     async fn refresh_token_if_requested(&self, do_refresh: bool) -> RefreshTokenRequestOutcome {
-        if self.auth_manager.is_external_auth_active() {
+        if self.auth_manager.is_external_chatgpt_auth_active() {
             return RefreshTokenRequestOutcome::NotAttemptedOrSucceeded;
         }
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
@@ -2046,6 +2061,8 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
         request_context: RequestContext,
     ) {
         let ThreadStartParams {
@@ -2086,6 +2103,8 @@ impl CodexMessageProcessor {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
+            analytics_events_client: self.analytics_events_client.clone(),
+            general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
@@ -2099,6 +2118,8 @@ impl CodexMessageProcessor {
                 runtime_feature_enablement,
                 cloud_requirements,
                 request_id,
+                app_server_client_name,
+                app_server_client_version,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -2172,6 +2193,8 @@ impl CodexMessageProcessor {
         runtime_feature_enablement: BTreeMap<String, bool>,
         cloud_requirements: CloudRequirementsLoader,
         request_id: ConnectionRequestId,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
@@ -2180,10 +2203,11 @@ impl CodexMessageProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) {
-        let config = match derive_config_from_params(
+        let requested_cwd = typesafe_overrides.cwd.clone();
+        let mut config = match derive_config_from_params(
             &cli_overrides,
-            config_overrides,
-            typesafe_overrides,
+            config_overrides.clone(),
+            typesafe_overrides.clone(),
             &cloud_requirements,
             &listener_task_context.codex_home,
             &runtime_feature_enablement,
@@ -2200,6 +2224,70 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        // The user may have requested WorkspaceWrite or DangerFullAccess via
+        // the command line, though in the process of deriving the Config, it
+        // could be downgraded to ReadOnly (perhaps there is no sandbox
+        // available on Windows or the enterprise config disallows it). The cwd
+        // should still be considered "trusted" in this case.
+        let requested_sandbox_trusts_project = matches!(
+            typesafe_overrides.sandbox_mode,
+            Some(
+                codex_protocol::config_types::SandboxMode::WorkspaceWrite
+                    | codex_protocol::config_types::SandboxMode::DangerFullAccess
+            )
+        );
+
+        if requested_cwd.is_some()
+            && !config.active_project.is_trusted()
+            && (requested_sandbox_trusts_project
+                || matches!(
+                    config.permissions.sandbox_policy.get(),
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                        | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+                ))
+        {
+            let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
+                .unwrap_or_else(|| config.cwd.to_path_buf());
+            if let Err(err) = codex_core::config::set_project_trust_level(
+                &listener_task_context.codex_home,
+                trust_target.as_path(),
+                TrustLevel::Trusted,
+            ) {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to persist trusted project state: {err}"),
+                    data: None,
+                };
+                listener_task_context
+                    .outgoing
+                    .send_error(request_id, error)
+                    .await;
+                return;
+            }
+
+            config = match derive_config_from_params(
+                &cli_overrides,
+                config_overrides,
+                typesafe_overrides,
+                &cloud_requirements,
+                &listener_task_context.codex_home,
+                &runtime_feature_enablement,
+            )
+            .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = config_load_error(&err);
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+            };
+        }
 
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
@@ -2253,6 +2341,19 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
+                if let Err(error) = Self::set_app_server_client_info(
+                    thread.as_ref(),
+                    app_server_client_name,
+                    app_server_client_version,
+                )
+                .await
+                {
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
                 let config_snapshot = thread
                     .config_snapshot()
                     .instrument(tracing::info_span!(
@@ -2318,6 +2419,17 @@ impl CodexMessageProcessor {
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
+                if listener_task_context.general_analytics_enabled {
+                    listener_task_context
+                        .analytics_events_client
+                        .track_response(
+                            request_id.connection_id.0,
+                            ClientResponse::ThreadStart {
+                                request_id: request_id.request_id.clone(),
+                                response: response.clone(),
+                            },
+                        );
+                }
 
                 listener_task_context
                     .outgoing
@@ -3275,6 +3387,13 @@ impl CodexMessageProcessor {
             cwd,
             search_term,
         } = params;
+        let cwd = match normalize_thread_list_cwd_filter(cwd) {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         let requested_page_size = limit
             .map(|value| value as usize)
@@ -3293,7 +3412,7 @@ impl CodexMessageProcessor {
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
-                    cwd: cwd.map(PathBuf::from),
+                    cwd,
                     search_term,
                 },
             )
@@ -3502,6 +3621,11 @@ impl CodexMessageProcessor {
             }
             build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
         };
+        if thread.forked_from_id.is_none()
+            && let Some(rollout_path) = rollout_path.as_ref()
+        {
+            thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
+        }
         self.attach_thread_name(thread_uuid, &mut thread).await;
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
@@ -3796,6 +3920,15 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::ThreadResume {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
+                }
 
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -4322,7 +4455,12 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => {
+                    let mut thread = summary_to_thread(summary);
+                    thread.forked_from_id =
+                        forked_from_id_from_rollout(fork_rollout_path.as_path()).await;
+                    thread
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -4356,6 +4494,14 @@ impl CodexMessageProcessor {
                 }
             };
             thread.preview = preview_from_rollout_items(&history_items);
+            thread.forked_from_id = source_thread_id
+                .or_else(|| {
+                    history_items.iter().find_map(|item| match item {
+                        RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.id),
+                        _ => None,
+                    })
+                })
+                .map(|id| id.to_string());
             if let Err(message) = populate_thread_turns(
                 &mut thread,
                 ThreadTurnSource::HistoryItems(&history_items),
@@ -4403,6 +4549,15 @@ impl CodexMessageProcessor {
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
+        if self.config.features.enabled(Feature::GeneralAnalytics) {
+            self.analytics_events_client.track_response(
+                request_id.connection_id.0,
+                ClientResponse::ThreadFork {
+                    request_id: request_id.request_id.clone(),
+                    response: response.clone(),
+                },
+            );
+        }
 
         self.outgoing.send_response(request_id, response).await;
 
@@ -5000,9 +5155,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let mcp_config = config.to_mcp_config(self.thread_manager.plugins_manager().as_ref());
+        let auth = self.auth_manager.auth().await;
 
         tokio::spawn(async move {
-            Self::list_mcp_server_status_task(outgoing, request, params, config).await;
+            Self::list_mcp_server_status_task(outgoing, request, params, config, mcp_config, auth)
+                .await;
         });
     }
 
@@ -5011,15 +5169,66 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ListMcpServerStatusParams,
         config: Config,
+        mcp_config: codex_mcp::mcp::McpConfig,
+        auth: Option<CodexAuth>,
     ) {
-        let snapshot = collect_mcp_snapshot(&config).await;
+        let snapshot = collect_mcp_snapshot(
+            &mcp_config,
+            auth.as_ref(),
+            request_id.request_id.to_string(),
+        )
+        .await;
 
-        let tools_by_server = group_tools_by_server(&snapshot.tools);
+        // Rebuild the tool list per original server name instead of using
+        // `group_tools_by_server()`: qualified tool names are sanitized for the
+        // Responses API, so a config key like `some-server` is encoded as the
+        // `mcp__some_server__` prefix. Matching with the original server name's
+        // sanitized prefix preserves `/mcp` output for hyphenated names.
+        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+        let mut sanitized_prefix_counts = HashMap::<String, usize>::new();
+        for name in effective_servers.keys() {
+            let prefix = qualified_mcp_tool_name_prefix(name);
+            *sanitized_prefix_counts.entry(prefix).or_default() += 1;
+        }
+        let tools_by_server = effective_servers
+            .keys()
+            .map(|name| {
+                let prefix = qualified_mcp_tool_name_prefix(name);
+                // If multiple server names normalize to the same prefix, the
+                // qualified tool namespace is ambiguous (for example
+                // `some-server` and `some_server` both become
+                // `mcp__some_server__`). In that case, avoid attributing the
+                // same tools to multiple servers.
+                let tools = if sanitized_prefix_counts
+                    .get(&prefix)
+                    .copied()
+                    .unwrap_or_default()
+                    == 1
+                {
+                    snapshot
+                        .tools
+                        .iter()
+                        .filter_map(|(qualified_name, tool)| {
+                            qualified_name
+                                .strip_prefix(&prefix)
+                                .map(|tool_name| (tool_name.to_string(), tool.clone()))
+                        })
+                        .collect::<HashMap<_, _>>()
+                } else {
+                    HashMap::new()
+                };
+                (name.clone(), tools)
+            })
+            .collect::<HashMap<_, _>>();
 
         let mut server_names: Vec<String> = config
             .mcp_servers
             .keys()
             .cloned()
+            // Include built-in/plugin MCP servers that are present in the
+            // effective runtime config even when they are not user-declared in
+            // `config.mcp_servers`.
+            .chain(effective_servers.keys().cloned())
             .chain(snapshot.auth_statuses.keys().cloned())
             .chain(snapshot.resources.keys().cloned())
             .chain(snapshot.resource_templates.keys().cloned())
@@ -6288,6 +6497,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: TurnStartParams,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
     ) {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.outgoing.send_error(request_id, error).await;
@@ -6300,8 +6510,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        if let Err(error) =
-            Self::set_app_server_client_name(thread.as_ref(), app_server_client_name).await
+        if let Err(error) = Self::set_app_server_client_info(
+            thread.as_ref(),
+            app_server_client_name,
+            app_server_client_version,
+        )
+        .await
         {
             self.outgoing.send_error(request_id, error).await;
             return;
@@ -6395,16 +6609,17 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn set_app_server_client_name(
+    async fn set_app_server_client_info(
         thread: &CodexThread,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
     ) -> Result<(), JSONRPCErrorError> {
         thread
-            .set_app_server_client_name(app_server_client_name)
+            .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
-                message: format!("failed to set app server client name: {err}"),
+                message: format!("failed to set app server client info: {err}"),
                 data: None,
             })
     }
@@ -6984,6 +7199,8 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                analytics_events_client: self.analytics_events_client.clone(),
+                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -7071,6 +7288,8 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                analytics_events_client: self.analytics_events_client.clone(),
+                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -7102,6 +7321,8 @@ impl CodexMessageProcessor {
             outgoing,
             thread_manager,
             thread_state_manager,
+            analytics_events_client: _,
+            general_analytics_enabled: _,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -7533,6 +7754,57 @@ impl CodexMessageProcessor {
             Ok(conv) => conv.rollout_path(),
             Err(_) => None,
         }
+    }
+}
+
+fn normalize_thread_list_cwd_filter(
+    cwd: Option<String>,
+) -> Result<Option<PathBuf>, JSONRPCErrorError> {
+    let Some(cwd) = cwd else {
+        return Ok(None);
+    };
+    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
+        .map(AbsolutePathBuf::into_path_buf)
+        .map(Some)
+        .map_err(|err| JSONRPCErrorError {
+            code: INVALID_PARAMS_ERROR_CODE,
+            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
+            data: None,
+        })
+}
+
+#[cfg(test)]
+mod thread_list_cwd_filter_tests {
+    use super::normalize_thread_list_cwd_filter;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn normalize_thread_list_cwd_filter_preserves_absolute_paths() {
+        let cwd = if cfg!(windows) {
+            String::from(r"C:\srv\repo-b")
+        } else {
+            String::from("/srv/repo-b")
+        };
+
+        assert_eq!(
+            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
+            Some(PathBuf::from(cwd))
+        );
+    }
+
+    #[test]
+    fn normalize_thread_list_cwd_filter_resolves_relative_paths_against_server_cwd()
+    -> std::io::Result<()> {
+        let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
+
+        assert_eq!(
+            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
+                .expect("cwd filter should parse"),
+            Some(expected)
+        );
+        Ok(())
     }
 }
 
@@ -8511,6 +8783,7 @@ async fn load_thread_summary_for_rollout(
                 rollout_path.display()
             )
         })?;
+    thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
     if let Some(persisted_metadata) = persisted_metadata {
         merge_mutable_thread_metadata(
             &mut thread,
@@ -8520,6 +8793,14 @@ async fn load_thread_summary_for_rollout(
         merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
     }
     Ok(thread)
+}
+
+async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
+    read_session_meta_line(path)
+        .await
+        .ok()
+        .and_then(|meta_line| meta_line.meta.forked_from_id)
+        .map(|thread_id| thread_id.to_string())
 }
 
 fn merge_mutable_thread_metadata(thread: &mut Thread, persisted_thread: Thread) {
@@ -8602,6 +8883,7 @@ fn build_thread_from_snapshot(
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     Thread {
         id: thread_id.to_string(),
+        forked_from_id: None,
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
         model_provider: config_snapshot.model_provider_id.clone(),
@@ -8644,6 +8926,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 
     Thread {
         id: conversation_id.to_string(),
+        forked_from_id: None,
         preview,
         ephemeral: false,
         model_provider,
@@ -8747,7 +9030,7 @@ mod tests {
     fn config_load_error_marks_non_auth_cloud_requirements_failures_without_relogin() {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::RequestFailed,
-            None,
+            /*status_code*/ None,
             "failed to load your workspace-managed config",
         ));
 
@@ -8961,7 +9244,8 @@ mod tests {
     fn merge_persisted_resume_metadata_skips_missing_values() -> Result<()> {
         let mut request_overrides = None;
         let mut typesafe_overrides = ConfigOverrides::default();
-        let persisted_metadata = test_thread_metadata(None, None)?;
+        let persisted_metadata =
+            test_thread_metadata(/*model*/ None, /*reasoning_effort*/ None)?;
 
         merge_persisted_resume_metadata(
             &mut request_overrides,
@@ -9013,7 +9297,7 @@ mod tests {
             path.clone(),
             &head,
             &session_meta,
-            None,
+            /*git*/ None,
             "test-provider",
             timestamp.clone(),
         )
@@ -9140,6 +9424,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_summary_from_rollout_preserves_forked_from_id() -> Result<()> {
+        use codex_protocol::protocol::RolloutItem;
+        use codex_protocol::protocol::RolloutLine;
+        use codex_protocol::protocol::SessionMetaLine;
+        use std::fs;
+
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+
+        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let forked_from_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let timestamp = "2025-09-05T16:53:11.850Z".to_string();
+
+        let session_meta = SessionMeta {
+            id: conversation_id,
+            forked_from_id: Some(forked_from_id),
+            timestamp: timestamp.clone(),
+            model_provider: Some("test-provider".to_string()),
+            ..SessionMeta::default()
+        };
+
+        let line = RolloutLine {
+            timestamp,
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }),
+        };
+        fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
+
+        assert_eq!(
+            forked_from_id_from_rollout(path.as_path()).await,
+            Some(forked_from_id.to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn aborting_pending_request_clears_pending_state() -> Result<()> {
         let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
         let connection_id = ConnectionId(7);
@@ -9223,9 +9545,9 @@ mod tests {
             source,
             Some("atlas".to_string()),
             Some("explorer".to_string()),
-            None,
-            None,
-            None,
+            /*git_sha*/ None,
+            /*git_branch*/ None,
+            /*git_origin_url*/ None,
         );
 
         let thread = summary_to_thread(summary);
@@ -9244,7 +9566,9 @@ mod tests {
 
         manager.connection_initialized(connection).await;
         manager
-            .try_ensure_connection_subscribed(thread_id, connection, false)
+            .try_ensure_connection_subscribed(
+                thread_id, connection, /*experimental_raw_events*/ false,
+            )
             .await
             .expect("connection should be live");
         {
@@ -9288,11 +9612,19 @@ mod tests {
         manager.connection_initialized(connection_a).await;
         manager.connection_initialized(connection_b).await;
         manager
-            .try_ensure_connection_subscribed(thread_id, connection_a, false)
+            .try_ensure_connection_subscribed(
+                thread_id,
+                connection_a,
+                /*experimental_raw_events*/ false,
+            )
             .await
             .expect("connection_a should be live");
         manager
-            .try_ensure_connection_subscribed(thread_id, connection_b, false)
+            .try_ensure_connection_subscribed(
+                thread_id,
+                connection_b,
+                /*experimental_raw_events*/ false,
+            )
             .await
             .expect("connection_b should be live");
         {
@@ -9325,7 +9657,9 @@ mod tests {
 
         assert!(
             manager
-                .try_ensure_connection_subscribed(thread_id, connection, false)
+                .try_ensure_connection_subscribed(
+                    thread_id, connection, /*experimental_raw_events*/ false
+                )
                 .await
                 .is_none()
         );

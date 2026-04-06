@@ -1,12 +1,13 @@
 use super::*;
-use crate::auth::CodexAuth;
 use crate::config::CONFIG_TOML_FILE;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
+use codex_login::CodexAuth;
 use pretty_assertions::assert_eq;
 use std::io::Write;
+use std::path::Path;
 use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -16,6 +17,21 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
+
+fn has_plugins_clone_dirs(codex_home: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(codex_home.join(".tmp")) else {
+        return false;
+    };
+
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        path.is_dir()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("plugins-clone-"))
+    })
+}
 
 #[test]
 fn curated_plugins_repo_path_uses_codex_home_tmp_dir() {
@@ -36,6 +52,49 @@ fn read_curated_plugins_sha_reads_trimmed_sha_file() {
         read_curated_plugins_sha(tmp.path()).as_deref(),
         Some("abc123")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_stale_curated_repo_temp_dirs_removes_only_matching_directories() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::SystemTime;
+
+    fn set_dir_mtime(path: &Path, age: Duration) -> Result<(), Box<dyn std::error::Error>> {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
+        let modified_at = now.saturating_sub(age);
+        let tv_sec = i64::try_from(modified_at.as_secs())?;
+        let ts = libc::timespec { tv_sec, tv_nsec: 0 };
+        let times = [ts, ts];
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        let result = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(())
+    }
+
+    let tmp = tempdir().expect("tempdir");
+    let parent = tmp.path().join(".tmp");
+    let stale_clone_dir = parent.join("plugins-clone-stale");
+    let fresh_clone_dir = parent.join("plugins-clone-fresh");
+    let unrelated_dir = parent.join("plugins-cache");
+
+    std::fs::create_dir_all(&stale_clone_dir).expect("create stale clone dir");
+    std::fs::create_dir_all(&fresh_clone_dir).expect("create fresh clone dir");
+    std::fs::create_dir_all(&unrelated_dir).expect("create unrelated dir");
+    set_dir_mtime(
+        &stale_clone_dir,
+        CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE + Duration::from_secs(60),
+    )
+    .expect("age stale clone dir");
+    set_dir_mtime(&fresh_clone_dir, Duration::ZERO).expect("age fresh clone dir");
+
+    remove_stale_curated_repo_temp_dirs(&parent, CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE);
+
+    assert!(!stale_clone_dir.exists());
+    assert!(fresh_clone_dir.is_dir());
+    assert!(unrelated_dir.is_dir());
 }
 
 #[cfg(unix)]
@@ -227,6 +286,94 @@ exit 1
             .is_file()
     );
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_openai_plugins_repo_via_git_cleans_up_staged_dir_on_clone_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().expect("tempdir");
+    let bin_dir = tempfile::Builder::new()
+        .prefix("fake-git-partial-fail-")
+        .tempdir()
+        .expect("tempdir");
+    let git_path = bin_dir.path().join("git");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+
+    std::fs::write(
+        &git_path,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "ls-remote" ]; then
+  printf '%s\tHEAD\n' "{sha}"
+  exit 0
+fi
+if [ "$1" = "clone" ]; then
+  dest="$5"
+  mkdir -p "$dest/.git"
+  echo "fatal: early EOF" >&2
+  exit 128
+fi
+echo "unexpected git invocation: $@" >&2
+exit 1
+"#
+        ),
+    )
+    .expect("write fake git");
+    let mut permissions = std::fs::metadata(&git_path)
+        .expect("metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&git_path, permissions).expect("chmod");
+
+    let err = sync_openai_plugins_repo_via_git(tmp.path(), git_path.to_str().expect("utf8 path"))
+        .expect_err("git sync should fail");
+
+    assert!(err.contains("fatal: early EOF"));
+    assert!(!has_plugins_clone_dirs(tmp.path()));
+}
+
+#[tokio::test]
+async fn sync_openai_plugins_repo_via_http_cleans_up_staged_dir_on_extract_failure() {
+    let tmp = tempdir().expect("tempdir");
+    let server = MockServer::start().await;
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+
+    Mock::given(method("GET"))
+        .and(path("/repos/openai/plugins"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"default_branch":"main"}"#))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/openai/plugins/git/ref/heads/main"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(format!(r#"{{"object":{{"sha":"{sha}"}}}}"#)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/repos/openai/plugins/zipball/{sha}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/zip")
+                .set_body_bytes(b"not a zip archive".to_vec()),
+        )
+        .mount(&server)
+        .await;
+
+    let server_uri = server.uri();
+    let tmp_path = tmp.path().to_path_buf();
+    let err = tokio::task::spawn_blocking(move || {
+        sync_openai_plugins_repo_via_http(tmp_path.as_path(), &server_uri)
+    })
+    .await
+    .expect("sync task should join")
+    .expect_err("http sync should fail");
+
+    assert!(err.contains("failed to open curated plugins zip archive"));
+    assert!(!has_plugins_clone_dirs(tmp.path()));
 }
 
 #[tokio::test]

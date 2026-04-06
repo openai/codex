@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/status_line_setup.rs
-assertion_line: 365
 expression: "render_lines(&view, 72)"
 ---
                                                                         

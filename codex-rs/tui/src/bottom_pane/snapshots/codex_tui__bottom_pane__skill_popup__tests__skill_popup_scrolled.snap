@@ -1,0 +1,43 @@
+---
+source: tui/src/bottom_pane/skill_popup.rs
+assertion_line: 289
+expression: "render_popup(&popup, /*width*/ 72)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 72, height: 10 },
+    content: [
+        "  Mention 01  [Skill] Description 01                                    ",
+        "  Mention 02  [Skill] Description 02                                    ",
+        "  Mention 03  [Skill] Description 03                                    ",
+        "  Mention 04  [Skill] Description 04                                    ",
+        "  Mention 05  [Skill] Description 05                                    ",
+        "  Mention 06  [Skill] Description 06                                    ",
+        "  Mention 07  [Skill] Description 07                                    ",
+        "  Mention 08  [Skill] Description 08                                    ",
+        "                                                                        ",
+        "  Press enter to insert or esc to close                                 ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 7, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 36, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 8, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 13, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 27, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 30, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

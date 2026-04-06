@@ -878,7 +878,10 @@ mod tests {
             network_proxy_state_for_policy(network_settings(&["example.com"], &["example.com"]));
 
         assert_eq!(
-            state.host_blocked("example.com", 80).await.unwrap(),
+            state
+                .host_blocked("example.com", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
@@ -888,13 +891,16 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
-            state.host_blocked("example.com", 80).await.unwrap(),
+            state
+                .host_blocked("example.com", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Allowed
         );
         assert_eq!(
             // Use a public IP literal to avoid relying on ambient DNS behavior (some networks
             // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
-            state.host_blocked("8.8.8.8", 80).await.unwrap(),
+            state.host_blocked("8.8.8.8", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
     }
@@ -909,7 +915,10 @@ mod tests {
         assert_eq!(allowed, vec!["example.com".to_string()]);
         assert!(denied.is_empty());
         assert_eq!(
-            state.host_blocked("example.com", 80).await.unwrap(),
+            state
+                .host_blocked("example.com", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Allowed
         );
     }
@@ -924,7 +933,10 @@ mod tests {
         assert!(allowed.is_empty());
         assert_eq!(denied, vec!["example.com".to_string()]);
         assert_eq!(
-            state.host_blocked("example.com", 80).await.unwrap(),
+            state
+                .host_blocked("example.com", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
@@ -935,7 +947,7 @@ mod tests {
 
         assert_eq!(
             // Use a public IP literal to avoid relying on ambient DNS behavior.
-            state.host_blocked("8.8.8.8", 80).await.unwrap(),
+            state.host_blocked("8.8.8.8", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Allowed
         );
 
@@ -945,7 +957,7 @@ mod tests {
         assert_eq!(allowed, vec!["*".to_string()]);
         assert_eq!(denied, vec!["8.8.8.8".to_string()]);
         assert_eq!(
-            state.host_blocked("8.8.8.8", 80).await.unwrap(),
+            state.host_blocked("8.8.8.8", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
@@ -1133,11 +1145,14 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["*.openai.com"], &[]));
 
         assert_eq!(
-            state.host_blocked("api.openai.com", 80).await.unwrap(),
+            state
+                .host_blocked("api.openai.com", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Allowed
         );
         assert_eq!(
-            state.host_blocked("openai.com", 80).await.unwrap(),
+            state.host_blocked("openai.com", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
     }
@@ -1147,15 +1162,24 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["*"], &["evil.example"]));
 
         assert_eq!(
-            state.host_blocked("example.com", 80).await.unwrap(),
+            state
+                .host_blocked("example.com", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Allowed
         );
         assert_eq!(
-            state.host_blocked("api.openai.com", 443).await.unwrap(),
+            state
+                .host_blocked("api.openai.com", /*port*/ 443)
+                .await
+                .unwrap(),
             HostBlockDecision::Allowed
         );
         assert_eq!(
-            state.host_blocked("evil.example", 80).await.unwrap(),
+            state
+                .host_blocked("evil.example", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
@@ -1165,11 +1189,11 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
-            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            state.host_blocked("127.0.0.1", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
         assert_eq!(
-            state.host_blocked("localhost", 80).await.unwrap(),
+            state.host_blocked("localhost", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -1179,7 +1203,7 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["localhost"], &[]));
 
         assert_eq!(
-            state.host_blocked("localhost", 80).await.unwrap(),
+            state.host_blocked("localhost", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Allowed
         );
     }
@@ -1189,7 +1213,7 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["10.0.0.1"], &[]));
 
         assert_eq!(
-            state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            state.host_blocked("10.0.0.1", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Allowed
         );
     }
@@ -1199,7 +1223,10 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
-            state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
+            state
+                .host_blocked("fe80::1%lo0", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -1209,7 +1236,10 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["fe80::1%lo0"], &[]));
 
         assert_eq!(
-            state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
+            state
+                .host_blocked("fe80::1%lo0", /*port*/ 80)
+                .await
+                .unwrap(),
             HostBlockDecision::Allowed
         );
     }
@@ -1219,7 +1249,7 @@ mod tests {
         let state = network_proxy_state_for_policy(network_settings(&["example.com"], &[]));
 
         assert_eq!(
-            state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            state.host_blocked("10.0.0.1", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -1229,7 +1259,7 @@ mod tests {
         let state = network_proxy_state_for_policy(NetworkProxySettings::default());
 
         assert_eq!(
-            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            state.host_blocked("127.0.0.1", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -1242,7 +1272,7 @@ mod tests {
 
         assert_eq!(
             state
-                .host_blocked("does-not-resolve.invalid", 80)
+                .host_blocked("does-not-resolve.invalid", /*port*/ 80)
                 .await
                 .unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)

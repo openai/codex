@@ -60,7 +60,10 @@ async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_
     let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string())
         .await
         .unwrap();
-    runtime.mark_backfill_complete(None).await.unwrap();
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .unwrap();
     let mut builder = ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
@@ -168,14 +171,14 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
         &config,
         RolloutRecorderParams::new(
             thread_id,
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await?;
     recorder.persist().await?;

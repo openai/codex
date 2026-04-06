@@ -17,10 +17,10 @@ jobs:
     outputs:
       codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - id: codex
-        uses: openai/codex-action@main
+        uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
@@ -52,13 +52,15 @@ jobs:
             6. code-review — Issues related to the code review feature or functionality.
             7. safety-check - Issues related to cyber risk detection or trusted access verification.
             8. auth - Problems related to authentication, login, or access tokens.
-            9. codex-exec - Problems related to the "codex exec" command or functionality.
-            10. context-management - Problems related to compaction, context windows, or available context reporting.
-            11. custom-model - Problems that involve using custom model providers, local models, or OSS models.
-            12. rate-limits - Problems related to token limits, rate limits, or token usage reporting.
-            13. sandbox - Issues related to local sandbox environments or tool call approvals to override sandbox restrictions.
-            14. tool-calls - Problems related to specific tool call invocations including unexpected errors, failures, or hangs.
-            15. TUI - Problems with the terminal user interface (TUI) including keyboard shortcuts, copy & pasting, menus, or screen update issues.
+            9. exec - Problems related to the "codex exec" command or functionality.
+            10. hooks - Problems related to event hooks
+            11. context - Problems related to compaction, context windows, or available context reporting.
+            12. skills - Problems related to skills or plugins
+            13. custom-model - Problems that involve using custom model providers, local models, or OSS models.
+            14. rate-limits - Problems related to token limits, rate limits, or token usage reporting.
+            15. sandbox - Issues related to local sandbox environments or tool call approvals to override sandbox restrictions.
+            16. tool-calls - Problems related to specific tool call invocations including unexpected errors, failures, or hangs.
+            17. TUI - Problems with the terminal user interface (TUI) including keyboard shortcuts, copy & pasting, menus, or screen update issues.
 
             Issue number: ${{ github.event.issue.number }}
 

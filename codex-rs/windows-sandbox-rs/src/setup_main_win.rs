@@ -314,8 +314,7 @@ fn lock_sandbox_dir(
         );
         if set != 0 {
             return Err(anyhow::anyhow!(
-                "SetEntriesInAclW sandbox dir failed: {}",
-                set
+                "SetEntriesInAclW sandbox dir failed: {set}",
             ));
         }
         let path_w = to_wide(dir.as_os_str());
@@ -330,8 +329,7 @@ fn lock_sandbox_dir(
         );
         if res != 0 {
             return Err(anyhow::anyhow!(
-                "SetNamedSecurityInfoW sandbox dir failed: {}",
-                res
+                "SetNamedSecurityInfoW sandbox dir failed: {res}",
             ));
         }
         if !new_dacl.is_null() {
@@ -426,7 +424,7 @@ fn real_main() -> Result<()> {
             });
         let report = SetupErrorReport {
             code: failure.code,
-            message: failure.message.clone(),
+            message: failure.message,
         };
         if let Err(write_err) = write_setup_error_report(&payload.codex_home, &report) {
             let _ = log_line(
@@ -498,7 +496,7 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     if !refresh_errors.is_empty() {
         log_line(
             log,
-            &format!("read ACL run completed with errors: {:?}", refresh_errors),
+            &format!("read ACL run completed with errors: {refresh_errors:?}"),
         )?;
         if payload.refresh_only {
             anyhow::bail!("read ACL run had errors");
@@ -639,7 +637,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    let cap_sid_str = caps.workspace.clone();
+    let cap_sid_str = caps.workspace;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
@@ -928,7 +926,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     if refresh_only && !refresh_errors.is_empty() {
         log_line(
             log,
-            &format!("setup refresh completed with errors: {:?}", refresh_errors),
+            &format!("setup refresh completed with errors: {refresh_errors:?}"),
         )?;
         anyhow::bail!("setup refresh had errors");
     }

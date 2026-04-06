@@ -60,17 +60,24 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         .path()
         .join(created_filename);
 
-    let shell_command = if cfg!(windows) {
-        vec![
-            "New-Item".to_string(),
-            "-ItemType".to_string(),
-            "File".to_string(),
-            "-Path".to_string(),
-            created_filename.to_string(),
-            "-Force".to_string(),
-        ]
+    let (shell_command, timeout_ms) = if cfg!(windows) {
+        (
+            vec![
+                "New-Item".to_string(),
+                "-ItemType".to_string(),
+                "File".to_string(),
+                "-Path".to_string(),
+                created_filename.to_string(),
+                "-Force".to_string(),
+            ],
+            // `powershell.exe` startup can be slow on loaded Windows CI workers
+            10_000,
+        )
     } else {
-        vec!["touch".to_string(), created_filename.to_string()]
+        (
+            vec!["touch".to_string(), created_filename.to_string()],
+            5_000,
+        )
     };
     let expected_shell_command =
         format_with_current_shell(&shlex::try_join(shell_command.iter().map(String::as_str))?);
@@ -83,7 +90,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         create_shell_command_sse_response(
             shell_command.clone(),
             Some(workdir_for_shell_function_call.path()),
-            Some(5_000),
+            Some(timeout_ms),
             "call1234",
         )?,
         create_final_assistant_message_sse_response("File created!")?,
@@ -287,8 +294,8 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         elicitation_request.request.params,
         Some(create_expected_patch_approval_elicitation_request_params(
             expected_changes,
-            None, // No grant_root expected
-            None, // No reason expected
+            /*grant_root*/ None, // No grant_root expected
+            /*reason*/ None, // No reason expected
             codex_request_id.to_string(),
             params.codex_event_id.clone(),
             params.thread_id,

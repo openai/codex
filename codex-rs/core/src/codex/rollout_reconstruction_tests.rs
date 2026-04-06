@@ -1,13 +1,13 @@
 use super::*;
 
-use crate::protocol::CompactedItem;
-use crate::protocol::InitialHistory;
-use crate::protocol::ResumedHistory;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::ResumedHistory;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
@@ -41,7 +41,7 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
         AgentPath::root().join("worker").unwrap(),
         Vec::new(),
         text.to_string(),
-        true,
+        /*trigger_turn*/ true,
     );
     ResponseItem::Message {
         id: None,

@@ -797,7 +797,7 @@ async fn load_config_layers_fails_when_cloud_requirements_loader_fails() -> anyh
         CloudRequirementsLoader::new(async {
             Err(CloudRequirementsLoadError::new(
                 codex_config::CloudRequirementsLoadErrorCode::RequestFailed,
-                None,
+                /*status_code*/ None,
                 "cloud requirements failed",
             ))
         }),
@@ -833,7 +833,13 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
         &codex_home,
@@ -899,7 +905,13 @@ model_instructions_file = "child.txt"
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home)
@@ -965,7 +977,13 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
         &codex_home,
@@ -1018,7 +1036,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     let project_layers: Vec<_> = layers
         .get_layers(
             super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            true,
+            /*include_disabled*/ true,
         )
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
@@ -1046,7 +1064,13 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
     tokio::fs::write(nested_dot_codex.join(CONFIG_TOML_FILE), "foo = \"child\"\n").await?;
 
     tokio::fs::create_dir_all(&project_dot_codex).await?;
-    make_config_for_test(&project_dot_codex, &project_root, TrustLevel::Trusted, None).await?;
+    make_config_for_test(
+        &project_dot_codex,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
     let user_config_path = project_dot_codex.join(CONFIG_TOML_FILE);
     let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
     tokio::fs::write(
@@ -1068,7 +1092,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
     let project_layers: Vec<_> = layers
         .get_layers(
             super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            true,
+            /*include_disabled*/ true,
         )
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
@@ -1115,7 +1139,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         &codex_home_untrusted,
         &project_root,
         TrustLevel::Untrusted,
-        None,
+        /*project_root_markers*/ None,
     )
     .await?;
     let untrusted_config_path = codex_home_untrusted.join(CONFIG_TOML_FILE);
@@ -1137,7 +1161,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let project_layers_untrusted: Vec<_> = layers_untrusted
         .get_layers(
             super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            true,
+            /*include_disabled*/ true,
         )
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
@@ -1175,7 +1199,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let project_layers_unknown: Vec<_> = layers_unknown
         .get_layers(
             super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            true,
+            /*include_disabled*/ true,
         )
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
@@ -1218,7 +1242,13 @@ enabled = false
 "#,
     )
     .await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home)
@@ -1303,7 +1333,13 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         let config_path = codex_home.join(CONFIG_TOML_FILE);
 
         if let Some(trust_level) = trust_level {
-            make_config_for_test(&codex_home, &project_root, trust_level, None).await?;
+            make_config_for_test(
+                &codex_home,
+                &project_root,
+                trust_level,
+                /*project_root_markers*/ None,
+            )
+            .await?;
             let config_contents = tokio::fs::read_to_string(&config_path).await?;
             tokio::fs::write(&config_path, format!("foo = \"user\"\n{config_contents}")).await?;
         } else {
@@ -1321,7 +1357,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         let project_layers: Vec<_> = layers
             .get_layers(
                 super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
-                true,
+                /*include_disabled*/ true,
             )
             .into_iter()
             .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
@@ -1358,7 +1394,13 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let cli_overrides = vec![(
