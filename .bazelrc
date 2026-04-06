@@ -124,9 +124,6 @@ build:argument-comment-lint --@rules_rust//rust/toolchain/channel=nightly
 common:ci-windows --config=ci-bazel
 common:ci-windows --build_metadata=TAG_os=windows
 common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
-# `xz`'s Windows objects can pick up stack protector calls that do not resolve
-# in the `windows-gnullvm` link. Disable it only for the external xz C sources.
-common:ci-windows --per_file_copt=.*external/xz\\+/.*\\.c@-fno-stack-protector
 
 # We prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
