@@ -37,6 +37,7 @@ use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::Write;
+use std::os::windows::fs::MetadataExt;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -65,6 +66,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 mod read_acl_mutex;
 mod sandbox_users;
@@ -243,6 +245,44 @@ fn read_mask_allows_or_log(
             Ok(false)
         }
     }
+}
+
+fn repair_existing_descendant_write_aces(
+    root: &Path,
+    psids: &[*mut c_void],
+) -> Result<(usize, usize, usize)> {
+    let mut pending_dirs = vec![root.to_path_buf()];
+    let mut checked_paths = 0usize;
+    let mut updated_paths = 0usize;
+    let mut skipped_reparse_points = 0usize;
+
+    while let Some(dir) = pending_dirs.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|err| anyhow::anyhow!("read_dir failed on {}: {err}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                anyhow::anyhow!("read_dir entry failed under {}: {err}", dir.display())
+            })?;
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).map_err(|err| {
+                anyhow::anyhow!("symlink_metadata failed on {}: {err}", path.display())
+            })?;
+            if (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+                skipped_reparse_points += 1;
+                continue;
+            }
+
+            checked_paths += 1;
+            if unsafe { ensure_allow_write_aces(&path, psids) }? {
+                updated_paths += 1;
+            }
+            if metadata.is_dir() {
+                pending_dirs.push(path);
+            }
+        }
+    }
+
+    Ok((checked_paths, updated_paths, skipped_reparse_points))
 }
 
 fn lock_sandbox_dir(
@@ -710,7 +750,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
+    let (tx, rx) = mpsc::channel::<(PathBuf, Result<(bool, usize, usize, usize)>)>();
     std::thread::scope(|scope| {
         for root in grant_tasks {
             let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
@@ -732,7 +772,17 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                let res = (|| -> Result<(bool, usize, usize, usize)> {
+                    let root_updated = unsafe { ensure_allow_write_aces(&root, &psids) }?;
+                    let (checked_paths, updated_paths, skipped_reparse_points) =
+                        repair_existing_descendant_write_aces(&root, &psids)?;
+                    Ok((
+                        root_updated,
+                        checked_paths,
+                        updated_paths,
+                        skipped_reparse_points,
+                    ))
+                })();
 
                 for psid in psids {
                     unsafe {
@@ -745,7 +795,21 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         drop(tx);
         for (root, res) in rx {
             match res {
-                Ok(_) => {}
+                Ok((root_updated, checked_paths, updated_paths, skipped_reparse_points)) => {
+                    if root_updated || checked_paths > 0 || skipped_reparse_points > 0 {
+                        let repaired_paths = updated_paths + usize::from(root_updated);
+                        let _ = log_line(
+                            log,
+                            &format!(
+                                "write ACE repair completed on {}: repaired_paths={}, descendants_checked={}, skipped_reparse_points={}",
+                                root.display(),
+                                repaired_paths,
+                                checked_paths,
+                                skipped_reparse_points
+                            ),
+                        );
+                    }
+                }
                 Err(e) => {
                     refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
                     if log_line(
