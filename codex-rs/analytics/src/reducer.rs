@@ -10,7 +10,6 @@ use crate::events::CodexTurnEventRequest;
 use crate::events::CodexTurnSteerEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
-use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
@@ -21,6 +20,8 @@ use crate::events::codex_turn_steer_event_params;
 use crate::events::plugin_state_event_type;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
+use crate::events::turn_parent_thread_id;
+use crate::events::turn_subagent_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
@@ -30,6 +31,7 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerInput;
@@ -567,6 +569,9 @@ fn codex_turn_event_params(
         thread_id: _resolved_thread_id,
         num_input_images: _resolved_num_input_images,
         submission_type,
+        ephemeral,
+        session_source,
+        initialization_mode,
         model,
         model_provider,
         sandbox_policy,
@@ -586,6 +591,11 @@ fn codex_turn_event_params(
         turn_id,
         product_client_id,
         submission_type,
+        ephemeral,
+        thread_source: thread_source_name(&session_source).map(str::to_string),
+        initialization_mode,
+        subagent_source: turn_subagent_source_name(&session_source),
+        parent_thread_id: turn_parent_thread_id(&session_source),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),

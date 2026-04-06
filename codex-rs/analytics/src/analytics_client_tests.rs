@@ -8,7 +8,6 @@ use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventRequest;
 use crate::events::CodexTurnSteerEventRequest;
-use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
@@ -30,6 +29,7 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
@@ -75,6 +75,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -248,6 +249,9 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         thread_id: "thread-2".to_string(),
         num_input_images: 1,
         submission_type: Some(TurnSubmissionType::Default),
+        ephemeral: false,
+        session_source: SessionSource::Exec,
+        initialization_mode: ThreadInitializationMode::New,
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -1070,6 +1074,11 @@ fn turn_event_serializes_expected_shape() {
             turn_id: "turn-2".to_string(),
             product_client_id: "codex-tui".to_string(),
             submission_type: Some(TurnSubmissionType::Default),
+            ephemeral: false,
+            thread_source: Some("user".to_string()),
+            initialization_mode: ThreadInitializationMode::New,
+            subagent_source: None,
+            parent_thread_id: None,
             model: Some("gpt-5".to_string()),
             model_provider: "openai".to_string(),
             sandbox_policy: Some("read_only"),
@@ -1106,51 +1115,81 @@ fn turn_event_serializes_expected_shape() {
     }));
 
     let payload = serde_json::to_value(&event).expect("serialize turn event");
-
+    assert_eq!(payload["event_type"], json!("codex_turn_event"));
+    assert_eq!(payload["event_params"]["thread_id"], json!("thread-2"));
+    assert_eq!(payload["event_params"]["turn_id"], json!("turn-2"));
     assert_eq!(
-        payload,
-        json!({
-            "event_type": "codex_turn_event",
-            "event_params": {
-                "thread_id": "thread-2",
-                "turn_id": "turn-2",
-                "product_client_id": "codex-tui",
-                "submission_type": "default",
-                "model": "gpt-5",
-                "model_provider": "openai",
-                "sandbox_policy": "read_only",
-                "reasoning_effort": "high",
-                "reasoning_summary": "detailed",
-                "service_tier": "flex",
-                "approval_policy": "on-request",
-                "approvals_reviewer": "guardian_subagent",
-                "sandbox_network_access": true,
-                "collaboration_mode": "plan",
-                "personality": "pragmatic",
-                "num_input_images": 2,
-                "is_first_turn": true,
-                "status": "completed",
-                "turn_error": null,
-                "steer_count": 0,
-                "total_tool_call_count": null,
-                "shell_command_count": null,
-                "file_change_count": null,
-                "mcp_tool_call_count": null,
-                "dynamic_tool_call_count": null,
-                "subagent_tool_call_count": null,
-                "web_search_count": null,
-                "image_generation_count": null,
-                "input_tokens": null,
-                "cached_input_tokens": null,
-                "output_tokens": null,
-                "reasoning_output_tokens": null,
-                "total_tokens": null,
-                "duration_ms": 1234,
-                "created_at": 455,
-                "completed_at": 456
-            }
-        })
+        payload["event_params"]["product_client_id"],
+        json!("codex-tui")
     );
+    assert_eq!(payload["event_params"]["submission_type"], json!("default"));
+    assert_eq!(payload["event_params"]["ephemeral"], json!(false));
+    assert_eq!(payload["event_params"]["thread_source"], json!("user"));
+    assert_eq!(payload["event_params"]["initialization_mode"], json!("new"));
+    assert_eq!(payload["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+    assert_eq!(payload["event_params"]["model"], json!("gpt-5"));
+    assert_eq!(payload["event_params"]["model_provider"], json!("openai"));
+    assert_eq!(
+        payload["event_params"]["sandbox_policy"],
+        json!("read_only")
+    );
+    assert_eq!(payload["event_params"]["reasoning_effort"], json!("high"));
+    assert_eq!(
+        payload["event_params"]["reasoning_summary"],
+        json!("detailed")
+    );
+    assert_eq!(payload["event_params"]["service_tier"], json!("flex"));
+    assert_eq!(
+        payload["event_params"]["approval_policy"],
+        json!("on-request")
+    );
+    assert_eq!(
+        payload["event_params"]["approvals_reviewer"],
+        json!("guardian_subagent")
+    );
+    assert_eq!(
+        payload["event_params"]["sandbox_network_access"],
+        json!(true)
+    );
+    assert_eq!(payload["event_params"]["collaboration_mode"], json!("plan"));
+    assert_eq!(payload["event_params"]["personality"], json!("pragmatic"));
+    assert_eq!(payload["event_params"]["num_input_images"], json!(2));
+    assert_eq!(payload["event_params"]["is_first_turn"], json!(true));
+    assert_eq!(payload["event_params"]["status"], json!("completed"));
+    assert_eq!(payload["event_params"]["turn_error"], json!(null));
+    assert_eq!(payload["event_params"]["steer_count"], json!(0));
+    assert_eq!(
+        payload["event_params"]["total_tool_call_count"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["shell_command_count"], json!(null));
+    assert_eq!(payload["event_params"]["file_change_count"], json!(null));
+    assert_eq!(payload["event_params"]["mcp_tool_call_count"], json!(null));
+    assert_eq!(
+        payload["event_params"]["dynamic_tool_call_count"],
+        json!(null)
+    );
+    assert_eq!(
+        payload["event_params"]["subagent_tool_call_count"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["web_search_count"], json!(null));
+    assert_eq!(
+        payload["event_params"]["image_generation_count"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["input_tokens"], json!(null));
+    assert_eq!(payload["event_params"]["cached_input_tokens"], json!(null));
+    assert_eq!(payload["event_params"]["output_tokens"], json!(null));
+    assert_eq!(
+        payload["event_params"]["reasoning_output_tokens"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["total_tokens"], json!(null));
+    assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(payload["event_params"]["created_at"], json!(455));
+    assert_eq!(payload["event_params"]["completed_at"], json!(456));
 }
 
 #[test]
@@ -1272,6 +1311,11 @@ async fn turn_lifecycle_emits_turn_event() {
         payload["event_params"]["product_client_id"],
         json!("codex-tui")
     );
+    assert_eq!(payload["event_params"]["ephemeral"], json!(false));
+    assert_eq!(payload["event_params"]["thread_source"], json!("user"));
+    assert_eq!(payload["event_params"]["initialization_mode"], json!("new"));
+    assert_eq!(payload["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
     assert_eq!(payload["event_params"]["status"], json!("completed"));
     assert_eq!(payload["event_params"]["steer_count"], json!(0));
@@ -1467,6 +1511,73 @@ async fn queued_submission_type_emits_queued_turn_event() {
     assert_eq!(out.len(), 1);
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["submission_type"], json!("queued"));
+}
+
+#[tokio::test]
+async fn turn_event_includes_subagent_thread_metadata() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ false,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+
+    let mut resolved_config = sample_turn_resolved_config("turn-2");
+    resolved_config.ephemeral = true;
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
+            .expect("valid thread id");
+    resolved_config.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: Some("worker".to_string()),
+        agent_role: None,
+    });
+    resolved_config.initialization_mode = ThreadInitializationMode::Forked;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                resolved_config,
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(payload["event_params"]["ephemeral"], json!(true));
+    assert_eq!(payload["event_params"]["thread_source"], json!("subagent"));
+    assert_eq!(
+        payload["event_params"]["initialization_mode"],
+        json!("forked")
+    );
+    assert_eq!(
+        payload["event_params"]["subagent_source"],
+        json!("thread_spawn")
+    );
+    assert_eq!(
+        payload["event_params"]["parent_thread_id"],
+        json!("11111111-1111-1111-1111-111111111111")
+    );
 }
 
 #[tokio::test]

@@ -14,6 +14,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
@@ -44,6 +45,9 @@ pub struct TurnResolvedConfigFact {
     pub thread_id: String,
     pub num_input_images: usize,
     pub submission_type: Option<TurnSubmissionType>,
+    pub ephemeral: bool,
+    pub session_source: SessionSource,
+    pub initialization_mode: ThreadInitializationMode,
     pub model: String,
     pub model_provider: String,
     pub sandbox_policy: SandboxPolicy,
@@ -63,6 +67,14 @@ pub struct TurnResolvedConfigFact {
 pub enum TurnSubmissionType {
     Default,
     Queued,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadInitializationMode {
+    New,
+    Forked,
+    Resumed,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
