@@ -12,7 +12,9 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
@@ -334,6 +336,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && !is_windows_apps_path(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -341,6 +344,15 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn is_windows_apps_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 fn gather_legacy_full_read_roots(
@@ -570,8 +582,17 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
+    if let Ok(codex_home) = crate::codex_home::find_codex_home() {
+        return resolve_helper_for_launch(
+            HelperExecutable::Setup,
+            &codex_home,
+            Some(&sandbox_dir(&codex_home)),
+        );
+    }
+
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && !is_windows_apps_path(dir)
     {
         let candidate = dir.join("codex-windows-sandbox-setup.exe");
         if candidate.exists() {
@@ -804,6 +825,7 @@ mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::is_windows_apps_path;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -961,6 +983,19 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn windows_apps_paths_are_detected_case_insensitively() {
+        assert!(is_windows_apps_path(
+            PathBuf::from(r"C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe").as_path()
+        ));
+        assert!(is_windows_apps_path(
+            PathBuf::from(r"c:\program files\windowsapps\OpenAI.Codex").as_path()
+        ));
+        assert!(!is_windows_apps_path(
+            PathBuf::from(r"C:\Users\example\.codex\.sandbox-bin").as_path()
+        ));
     }
 
     #[test]

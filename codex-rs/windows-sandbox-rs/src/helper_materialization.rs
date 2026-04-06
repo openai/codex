@@ -16,18 +16,21 @@ use crate::sandbox_bin_dir;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup-helper",
         }
     }
 }
@@ -49,7 +52,7 @@ pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
         && let Some(dir) = exe.parent()
     {
         let candidate = dir.join(kind.file_name());
-        if candidate.exists() {
+        if candidate.exists() && !is_windows_apps_path(dir) {
             return candidate;
         }
     }
@@ -182,6 +185,13 @@ fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     let dir = exe
         .parent()
         .ok_or_else(|| anyhow!("current executable has no parent directory"))?;
+    if is_windows_apps_path(dir) {
+        return Err(anyhow!(
+            "refusing to source {} from WindowsApps directory {}",
+            kind.label(),
+            dir.display()
+        ));
+    }
     let candidate = dir.join(kind.file_name());
     if candidate.exists() {
         Ok(candidate)
@@ -287,7 +297,28 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         .modified()
         .with_context(|| format!("read helper destination mtime {}", destination.display()))?;
 
-    Ok(destination_modified >= source_modified)
+    if destination_modified < source_modified {
+        return Ok(false);
+    }
+
+    files_match(source, destination)
+}
+
+fn files_match(source: &Path, destination: &Path) -> Result<bool> {
+    let source_bytes = fs::read(source)
+        .with_context(|| format!("read helper source bytes {}", source.display()))?;
+    let destination_bytes = fs::read(destination)
+        .with_context(|| format!("read helper destination bytes {}", destination.display()))?;
+    Ok(source_bytes == destination_bytes)
+}
+
+fn is_windows_apps_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 #[cfg(test)]
@@ -348,6 +379,21 @@ mod tests {
     }
 
     #[test]
+    fn destination_is_not_fresh_when_content_differs_with_same_size() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = tmp.path().join("source.exe");
+        let destination = tmp.path().join("destination.exe");
+
+        fs::write(&source, b"runner-v1").expect("write source");
+        fs::write(&destination, b"runner-v2").expect("write destination");
+
+        assert!(
+            !destination_is_fresh(&source, &destination)
+                .expect("content drift should mark destination stale")
+        );
+    }
+
+    #[test]
     fn helper_bin_dir_is_under_sandbox_bin() {
         let codex_home = Path::new(r"C:\Users\example\.codex");
 
@@ -375,5 +421,18 @@ mod tests {
             b"runner".as_slice(),
             fs::read(&runner_destination).expect("read runner")
         );
+    }
+
+    #[test]
+    fn windows_apps_paths_are_detected_case_insensitively() {
+        assert!(super::is_windows_apps_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe"
+        )));
+        assert!(super::is_windows_apps_path(Path::new(
+            r"c:\program files\windowsapps\OpenAI.Codex"
+        )));
+        assert!(!super::is_windows_apps_path(Path::new(
+            r"C:\Users\example\.codex\.sandbox-bin"
+        )));
     }
 }
