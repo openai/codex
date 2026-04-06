@@ -109,11 +109,12 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
-    pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {
-        self.current_turn_history.handle_event(event);
-        if !self.current_turn_history.has_active_turn() {
+    pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) -> Option<Turn> {
+        let completed_turn = self.current_turn_history.handle_event(event);
+        if completed_turn.is_some() && !self.current_turn_history.has_active_turn() {
             self.current_turn_history.reset();
         }
+        completed_turn
     }
 }
 
