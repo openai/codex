@@ -74,6 +74,7 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = {
 mod abort_tasks;
 mod agent_jobs;
 mod agent_websocket;
+mod alarms;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
@@ -96,7 +97,6 @@ mod hierarchical_agents;
 mod hooks;
 mod image_rollout;
 mod items;
-mod jobs;
 mod js_repl;
 mod json_result;
 mod live_cli;

@@ -223,12 +223,12 @@ macro_rules! assert_chatwidget_snapshot {
     }};
 }
 
+mod alarms;
 mod app_server;
 mod composer_submission;
 mod exec_flow;
 mod helpers;
 mod history_replay;
-mod jobs;
 mod mcp_guardian;
 mod permissions;
 mod plan_mode;

@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests/jobs.rs
+source: tui/src/chatwidget/tests/alarms.rs
 expression: popup
 ---
   Thread alarms
