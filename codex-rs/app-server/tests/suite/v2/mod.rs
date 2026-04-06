@@ -14,6 +14,7 @@ mod experimental_api;
 mod experimental_feature_list;
 mod fs;
 mod initialize;
+mod mcp_resource;
 mod mcp_server_elicitation;
 mod model_list;
 mod output_schema;
