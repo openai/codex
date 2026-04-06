@@ -16,6 +16,7 @@ pub enum ToolHandlerKind {
     CloseAgentV2,
     CodeModeExecute,
     CodeModeWait,
+    CompactParentContext,
     DynamicTool,
     FollowupTaskV2,
     JsRepl,
@@ -41,6 +42,7 @@ pub enum ToolHandlerKind {
     ViewImage,
     WaitAgentV1,
     WaitAgentV2,
+    WatchdogSelfClose,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
