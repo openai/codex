@@ -2468,7 +2468,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 }
 
 #[tokio::test]
-async fn session_update_settings_keeps_runtime_cwds_absolute() {
+async fn session_update_settings_updates_runtime_config_cwds() {
     let (session, turn_context) = make_session_and_context().await;
     let updated_cwd = turn_context
         .cwd
@@ -2492,9 +2492,69 @@ async fn session_update_settings_keeps_runtime_cwds_absolute() {
     let next_turn = session.new_default_turn().await;
 
     assert_eq!(session_cwd, updated_cwd);
-    assert_eq!(config.cwd, turn_context.cwd);
+    assert_eq!(config.cwd, updated_cwd);
     assert_eq!(next_turn.cwd, updated_cwd);
     assert_eq!(next_turn.config.cwd, updated_cwd);
+}
+
+#[tokio::test]
+async fn session_update_settings_refreshes_user_instructions_for_new_cwd() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let cwd_one =
+        AbsolutePathBuf::try_from(temp_dir.path().join("agents_one")).expect("resolve agents_one");
+    let cwd_two =
+        AbsolutePathBuf::try_from(temp_dir.path().join("agents_two")).expect("resolve agents_two");
+    std::fs::create_dir_all(cwd_one.as_path()).expect("create agents_one");
+    std::fs::create_dir_all(cwd_two.as_path()).expect("create agents_two");
+    std::fs::write(
+        cwd_one.as_path().join("AGENTS.md"),
+        "# AGENTS one\n\n<INSTRUCTIONS>\nTurn one instructions.\n</INSTRUCTIONS>\n",
+    )
+    .expect("write AGENTS one");
+    std::fs::write(
+        cwd_two.as_path().join("AGENTS.md"),
+        "# AGENTS two\n\n<INSTRUCTIONS>\nTurn two instructions.\n</INSTRUCTIONS>\n",
+    )
+    .expect("write AGENTS two");
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            cwd: Some(cwd_one.to_path_buf()),
+            ..Default::default()
+        })
+        .await
+        .expect("first cwd update should succeed");
+    let first_turn = session.new_default_turn().await;
+
+    assert_eq!(first_turn.cwd, cwd_one);
+    assert!(
+        first_turn
+            .user_instructions
+            .as_deref()
+            .is_some_and(|instructions| instructions.contains("Turn one instructions.")),
+        "expected refreshed instructions to include agents_one content"
+    );
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            cwd: Some(cwd_two.to_path_buf()),
+            ..Default::default()
+        })
+        .await
+        .expect("second cwd update should succeed");
+    let config = session.get_config().await;
+    let second_turn = session.new_default_turn().await;
+
+    assert_eq!(config.cwd, cwd_two);
+    assert_eq!(second_turn.cwd, cwd_two);
+    assert!(
+        second_turn
+            .user_instructions
+            .as_deref()
+            .is_some_and(|instructions| instructions.contains("Turn two instructions.")),
+        "expected refreshed instructions to include agents_two content"
+    );
 }
 
 #[tokio::test]

@@ -280,6 +280,11 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
+    ThreadTurnContextUpdate => "thread/turnContext/update" {
+        params: v2::ThreadTurnContextUpdateParams,
+        inspect_params: true,
+        response: v2::ThreadTurnContextUpdateResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,

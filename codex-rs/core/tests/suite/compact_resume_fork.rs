@@ -631,7 +631,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
         .iter()
         .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
         .count();
-    assert_eq!(after_rollback_developer_count, 1);
+    assert_eq!(after_rollback_developer_count, 0);
 
     let after_rollback_user_texts = requests[2].message_input_texts("user");
     assert_eq!(
@@ -639,7 +639,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
             .iter()
             .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
             .count(),
-        1
+        0
     );
     assert_eq!(
         after_rollback_user_texts.last().map(String::as_str),

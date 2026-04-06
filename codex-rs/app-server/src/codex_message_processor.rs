@@ -158,6 +158,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadTurnContextUpdateParams;
+use codex_app_server_protocol::ThreadTurnContextUpdateResponse;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
@@ -740,6 +742,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadSetName { request_id, params } => {
                 self.thread_set_name(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadTurnContextUpdate { request_id, params } => {
+                self.thread_turn_context_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
@@ -2705,6 +2711,75 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
             .await;
+    }
+
+    async fn thread_turn_context_update(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadTurnContextUpdateParams,
+    ) {
+        let ThreadTurnContextUpdateParams {
+            thread_id,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let collaboration_modes_config = CollaborationModesConfig {
+            default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
+        };
+        let collaboration_mode = collaboration_mode.map(|mode| {
+            self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
+        });
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::OverrideTurnContext {
+                    cwd,
+                    approval_policy: approval_policy.map(AskForApproval::to_core),
+                    approvals_reviewer: approvals_reviewer
+                        .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
+                    sandbox_policy: sandbox_policy.map(|p| p.to_core()),
+                    windows_sandbox_level: None,
+                    model,
+                    effort,
+                    summary,
+                    service_tier,
+                    collaboration_mode,
+                    personality,
+                },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadTurnContextUpdateResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to update thread turn context: {err}"),
+                )
+                .await;
+            }
+        }
     }
 
     async fn thread_metadata_update(
