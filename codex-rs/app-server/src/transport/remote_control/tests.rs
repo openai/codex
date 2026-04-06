@@ -13,13 +13,19 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::TransportEvent;
 use base64::Engine;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_core::test_support::auth_manager_from_auth_with_home;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::save_auth;
+use codex_login::token_data::TokenData;
+use codex_login::token_data::parse_chatgpt_jwt_claims;
 use codex_state::StateRuntime;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -36,6 +42,7 @@ use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
@@ -53,6 +60,43 @@ fn remote_control_auth_manager_with_home(codex_home: &TempDir) -> Arc<AuthManage
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         codex_home.path().to_path_buf(),
     )
+}
+
+fn remote_control_auth_dot_json(account_id: Option<&str>) -> AuthDotJson {
+    #[derive(serde::Serialize)]
+    struct Header {
+        alg: &'static str,
+        typ: &'static str,
+    }
+
+    let header = Header {
+        alg: "none",
+        typ: "JWT",
+    };
+    let payload = serde_json::json!({
+        "email": "user@example.com",
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": "user-12345",
+            "user_id": "user-12345",
+            "chatgpt_account_id": "account_id"
+        }
+    });
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let header_b64 = b64(&serde_json::to_vec(&header).expect("header should serialize"));
+    let payload_b64 = b64(&serde_json::to_vec(&payload).expect("payload should serialize"));
+    let fake_jwt = format!("{header_b64}.{payload_b64}.sig");
+
+    AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: parse_chatgpt_jwt_claims(&fake_jwt).expect("fake jwt should parse"),
+            access_token: "Access Token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            account_id: account_id.map(str::to_string),
+        }),
+        last_refresh: Some(chrono::Utc::now()),
+    }
 }
 
 async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime> {
@@ -87,6 +131,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
     )
     .await
     .expect("remote control should start");
@@ -350,6 +395,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
     )
     .await
     .expect("remote control should start");
@@ -425,6 +471,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
     )
     .await
     .expect("remote control should start");
@@ -590,6 +637,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
     )
     .await
     .expect("remote control should start");
@@ -781,7 +829,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     let remote_control_target =
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
     let persisted_enrollment = RemoteControlEnrollment {
-        account_id: Some("account_id".to_string()),
+        account_id: "account_id".to_string(),
         environment_id: "env_persisted".to_string(),
         server_id: "srv_e_persisted".to_string(),
         server_name: "persisted-server".to_string(),
@@ -789,7 +837,8 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),
         &remote_control_target,
-        Some("account_id"),
+        "account_id",
+        /*app_server_client_name*/ None,
         Some(&persisted_enrollment),
     )
     .await
@@ -804,6 +853,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
     )
     .await
     .expect("remote control should start");
@@ -821,10 +871,144 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
         load_persisted_remote_control_enrollment(
             Some(state_db.as_ref()),
             &remote_control_target,
-            Some("account_id"),
+            "account_id",
+            /*app_server_client_name*/ None,
         )
         .await,
         Some(persisted_enrollment)
+    );
+
+    shutdown_token.cancel();
+    let _ = remote_handle.await;
+}
+
+#[tokio::test]
+async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url).expect("target should parse");
+    let app_server_client_name = "stdio-client";
+    let persisted_enrollment = RemoteControlEnrollment {
+        account_id: "account_id".to_string(),
+        environment_id: "env_persisted".to_string(),
+        server_id: "srv_e_persisted".to_string(),
+        server_name: "persisted-server".to_string(),
+    };
+    update_persisted_remote_control_enrollment(
+        Some(state_db.as_ref()),
+        &remote_control_target,
+        "account_id",
+        Some(app_server_client_name),
+        Some(&persisted_enrollment),
+    )
+    .await
+    .expect("persisted enrollment should save");
+
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let (app_server_client_name_tx, app_server_client_name_rx) = oneshot::channel::<String>();
+    let shutdown_token = CancellationToken::new();
+    let remote_handle = start_remote_control(
+        remote_control_url,
+        Some(state_db.clone()),
+        remote_control_auth_manager_with_home(&codex_home),
+        transport_event_tx,
+        shutdown_token.clone(),
+        Some(app_server_client_name_rx),
+    )
+    .await
+    .expect("remote control should start");
+
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("remote control should wait for the stdio client name");
+
+    let _ = app_server_client_name_tx.send(app_server_client_name.to_string());
+    let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
+    assert_eq!(
+        handshake_request.headers.get("x-codex-server-id"),
+        Some(&persisted_enrollment.server_id)
+    );
+
+    shutdown_token.cancel();
+    let _ = remote_handle.await;
+}
+
+#[tokio::test]
+async fn remote_control_waits_for_account_id_before_enrolling() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(/*account_id*/ None),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("auth without account id should save");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+    let expected_server_name = gethostname().to_string_lossy().trim().to_string();
+    let expected_enrollment = RemoteControlEnrollment {
+        account_id: "account_id".to_string(),
+        environment_id: "env_ready".to_string(),
+        server_id: "srv_e_ready".to_string(),
+        server_name: expected_server_name,
+    };
+
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let remote_handle = start_remote_control(
+        remote_control_url,
+        Some(state_db.clone()),
+        auth_manager,
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+    )
+    .await
+    .expect("remote control should start before account id is available");
+
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("remote control should wait for account id before enrolling");
+
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(Some("account_id")),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("auth with account id should save");
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        enroll_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    respond_with_json(
+        enroll_request.stream,
+        json!({
+            "server_id": expected_enrollment.server_id,
+            "environment_id": expected_enrollment.environment_id,
+        }),
+    )
+    .await;
+
+    let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
+    assert_eq!(
+        handshake_request.headers.get("x-codex-server-id"),
+        Some(&expected_enrollment.server_id)
     );
 
     shutdown_token.cancel();
@@ -843,13 +1027,13 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
     let stale_enrollment = RemoteControlEnrollment {
-        account_id: Some("account_id".to_string()),
+        account_id: "account_id".to_string(),
         environment_id: "env_stale".to_string(),
         server_id: "srv_e_stale".to_string(),
         server_name: "stale-server".to_string(),
     };
     let refreshed_enrollment = RemoteControlEnrollment {
-        account_id: Some("account_id".to_string()),
+        account_id: "account_id".to_string(),
         environment_id: "env_refreshed".to_string(),
         server_id: "srv_e_refreshed".to_string(),
         server_name: expected_server_name,
@@ -857,7 +1041,8 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),
         &remote_control_target,
-        Some("account_id"),
+        "account_id",
+        /*app_server_client_name*/ None,
         Some(&stale_enrollment),
     )
     .await
@@ -872,6 +1057,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
     )
     .await
     .expect("remote control should start");
@@ -910,7 +1096,8 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         load_persisted_remote_control_enrollment(
             Some(state_db.as_ref()),
             &remote_control_target,
-            Some("account_id"),
+            "account_id",
+            /*app_server_client_name*/ None,
         )
         .await,
         Some(refreshed_enrollment)

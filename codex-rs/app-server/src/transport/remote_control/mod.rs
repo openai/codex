@@ -35,6 +35,7 @@ pub(crate) async fn start_remote_control(
     auth_manager: Arc<AuthManager>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
+    app_server_client_name_rx: Option<oneshot::Receiver<String>>,
 ) -> io::Result<JoinHandle<()>> {
     let remote_control_target = normalize_remote_control_url(&remote_control_url)?;
     validate_remote_control_auth(&auth_manager).await?;
@@ -47,7 +48,7 @@ pub(crate) async fn start_remote_control(
             transport_event_tx,
             shutdown_token,
         )
-        .run()
+        .run(app_server_client_name_rx)
         .await;
     }))
 }
@@ -55,7 +56,11 @@ pub(crate) async fn start_remote_control(
 pub(crate) async fn validate_remote_control_auth(
     auth_manager: &Arc<AuthManager>,
 ) -> io::Result<()> {
-    load_remote_control_auth(auth_manager).await.map(|_| ())
+    match load_remote_control_auth(auth_manager).await {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]

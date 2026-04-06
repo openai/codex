@@ -48,6 +48,7 @@ use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
@@ -535,11 +536,18 @@ pub async fn run_main_with_transport(
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let shutdown_when_no_connections = single_client_mode;
     let graceful_signal_restart_enabled = !single_client_mode;
+    let mut app_server_client_name_rx = None;
 
     match transport {
         AppServerTransport::Stdio => {
-            start_stdio_connection(transport_event_tx.clone(), &mut transport_accept_handles)
-                .await?;
+            let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
+            app_server_client_name_rx = Some(stdio_client_name_rx);
+            start_stdio_connection(
+                transport_event_tx.clone(),
+                &mut transport_accept_handles,
+                stdio_client_name_tx,
+            )
+            .await?;
         }
         AppServerTransport::WebSocket { bind_address } => {
             let accept_handle = start_websocket_acceptor(
@@ -563,6 +571,7 @@ pub async fn run_main_with_transport(
             auth_manager.clone(),
             transport_event_tx.clone(),
             transport_shutdown_token.clone(),
+            app_server_client_name_rx,
         )
         .await?;
         transport_accept_handles.push(accept_handle);

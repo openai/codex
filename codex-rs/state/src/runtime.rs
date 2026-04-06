@@ -59,6 +59,8 @@ mod remote_control;
 mod test_support;
 mod threads;
 
+pub use remote_control::RemoteControlEnrollmentRecord;
+
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
 // - one bucket per threadless (thread_id IS NULL) non-null process_uuid

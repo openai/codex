@@ -3,6 +3,7 @@ use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
 use codex_login::default_client::build_reqwest_client;
+use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use gethostname::gethostname;
 use std::io;
@@ -20,7 +21,7 @@ pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlEnrollment {
-    pub(super) account_id: Option<String>,
+    pub(super) account_id: String,
     pub(super) environment_id: String,
     pub(super) server_id: String,
     pub(super) server_name: String,
@@ -29,52 +30,61 @@ pub(super) struct RemoteControlEnrollment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlConnectionAuth {
     pub(super) bearer_token: String,
-    pub(super) account_id: Option<String>,
+    pub(super) account_id: String,
 }
 
 pub(super) async fn load_persisted_remote_control_enrollment(
     state_db: Option<&StateRuntime>,
     remote_control_target: &RemoteControlTarget,
-    account_id: Option<&str>,
+    account_id: &str,
+    app_server_client_name: Option<&str>,
 ) -> Option<RemoteControlEnrollment> {
     let Some(state_db) = state_db else {
         info!(
-            "remote control enrollment cache unavailable because sqlite state db is disabled: websocket_url={}, account_id={:?}",
-            remote_control_target.websocket_url, account_id
+            "remote control enrollment cache unavailable because sqlite state db is disabled: websocket_url={}, account_id={}, app_server_client_name={:?}",
+            remote_control_target.websocket_url, account_id, app_server_client_name
         );
         return None;
     };
     let enrollment = match state_db
-        .get_remote_control_enrollment(&remote_control_target.websocket_url, account_id)
+        .get_remote_control_enrollment(
+            &remote_control_target.websocket_url,
+            account_id,
+            app_server_client_name,
+        )
         .await
     {
         Ok(enrollment) => enrollment,
         Err(err) => {
             warn!(
-                "failed to load persisted remote control enrollment: websocket_url={}, account_id={:?}, err={err}",
-                remote_control_target.websocket_url, account_id
+                "failed to load persisted remote control enrollment: websocket_url={}, account_id={}, app_server_client_name={:?}, err={err}",
+                remote_control_target.websocket_url, account_id, app_server_client_name
             );
             return None;
         }
     };
 
     match enrollment {
-        Some((server_id, environment_id, server_name)) => {
+        Some(enrollment) => {
             info!(
-                "reusing persisted remote control enrollment: websocket_url={}, account_id={:?}, server_id={}, environment_id={}",
-                remote_control_target.websocket_url, account_id, server_id, environment_id
+                "reusing persisted remote control enrollment: websocket_url={}, account_id={}, app_server_client_name={:?}, server_id={}, environment_id={}",
+                remote_control_target.websocket_url,
+                account_id,
+                app_server_client_name,
+                enrollment.server_id,
+                enrollment.environment_id
             );
             Some(RemoteControlEnrollment {
-                account_id: account_id.map(&str::to_string),
-                environment_id,
-                server_id,
-                server_name,
+                account_id: enrollment.account_id,
+                environment_id: enrollment.environment_id,
+                server_id: enrollment.server_id,
+                server_name: enrollment.server_name,
             })
         }
         None => {
             info!(
-                "no persisted remote control enrollment found: websocket_url={}, account_id={:?}",
-                remote_control_target.websocket_url, account_id
+                "no persisted remote control enrollment found: websocket_url={}, account_id={}, app_server_client_name={:?}",
+                remote_control_target.websocket_url, account_id, app_server_client_name
             );
             None
         }
@@ -84,53 +94,61 @@ pub(super) async fn load_persisted_remote_control_enrollment(
 pub(super) async fn update_persisted_remote_control_enrollment(
     state_db: Option<&StateRuntime>,
     remote_control_target: &RemoteControlTarget,
-    account_id: Option<&str>,
+    account_id: &str,
+    app_server_client_name: Option<&str>,
     enrollment: Option<&RemoteControlEnrollment>,
 ) -> io::Result<()> {
     let Some(state_db) = state_db else {
         info!(
-            "skipping remote control enrollment persistence because sqlite state db is disabled: websocket_url={}, account_id={:?}, has_enrollment={}",
+            "skipping remote control enrollment persistence because sqlite state db is disabled: websocket_url={}, account_id={}, app_server_client_name={:?}, has_enrollment={}",
             remote_control_target.websocket_url,
             account_id,
+            app_server_client_name,
             enrollment.is_some()
         );
         return Ok(());
     };
     if let &Some(enrollment) = &enrollment
-        && enrollment.account_id.as_deref() != account_id
+        && enrollment.account_id != account_id
     {
         return Err(io::Error::other(format!(
-            "enrollment account_id does not match expected account_id `{account_id:?}`"
+            "enrollment account_id does not match expected account_id `{account_id}`"
         )));
     }
 
     if let Some(enrollment) = enrollment {
         state_db
-            .upsert_remote_control_enrollment(
-                &remote_control_target.websocket_url,
-                account_id,
-                &enrollment.server_id,
-                &enrollment.environment_id,
-                &enrollment.server_name,
-            )
+            .upsert_remote_control_enrollment(&RemoteControlEnrollmentRecord {
+                websocket_url: remote_control_target.websocket_url.clone(),
+                account_id: account_id.to_string(),
+                app_server_client_name: app_server_client_name.map(str::to_string),
+                server_id: enrollment.server_id.clone(),
+                environment_id: enrollment.environment_id.clone(),
+                server_name: enrollment.server_name.clone(),
+            })
             .await
             .map_err(io::Error::other)?;
         info!(
-            "persisted remote control enrollment: websocket_url={}, account_id={:?}, server_id={}, environment_id={}",
+            "persisted remote control enrollment: websocket_url={}, account_id={}, app_server_client_name={:?}, server_id={}, environment_id={}",
             remote_control_target.websocket_url,
             account_id,
+            app_server_client_name,
             enrollment.server_id,
             enrollment.environment_id
         );
         Ok(())
     } else {
         let rows_affected = state_db
-            .delete_remote_control_enrollment(&remote_control_target.websocket_url, account_id)
+            .delete_remote_control_enrollment(
+                &remote_control_target.websocket_url,
+                account_id,
+                app_server_client_name,
+            )
             .await
             .map_err(io::Error::other)?;
         info!(
-            "cleared persisted remote control enrollment: websocket_url={}, account_id={:?}, rows_affected={rows_affected}",
-            remote_control_target.websocket_url, account_id
+            "cleared persisted remote control enrollment: websocket_url={}, account_id={}, app_server_client_name={:?}, rows_affected={rows_affected}",
+            remote_control_target.websocket_url, account_id, app_server_client_name
         );
         Ok(())
     }
@@ -181,15 +199,12 @@ pub(super) async fn enroll_remote_control_server(
         app_server_version: env!("CARGO_PKG_VERSION"),
     };
     let client = build_reqwest_client();
-    let mut http_request = client
+    let http_request = client
         .post(enroll_url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
         .bearer_auth(&auth.bearer_token)
+        .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .json(&request);
-    let account_id = auth.account_id.as_deref();
-    if let Some(account_id) = account_id {
-        http_request = http_request.header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, account_id);
-    }
 
     let response = http_request.send().await.map_err(|err| {
         io::Error::other(format!(
@@ -227,7 +242,7 @@ pub(super) async fn enroll_remote_control_server(
     })?;
 
     Ok(RemoteControlEnrollment {
-        account_id: account_id.map(&str::to_string),
+        account_id: auth.account_id.clone(),
         environment_id: enrollment.environment_id,
         server_id: enrollment.server_id,
         server_name,
@@ -267,13 +282,13 @@ mod tests {
             normalize_remote_control_url("https://api.chatgpt-staging.com/other/control")
                 .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
-            account_id: Some("account-a".to_string()),
+            account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
         };
         let second_enrollment = RemoteControlEnrollment {
-            account_id: Some("account-a".to_string()),
+            account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
@@ -282,7 +297,8 @@ mod tests {
         update_persisted_remote_control_enrollment(
             Some(state_db.as_ref()),
             &first_target,
-            Some("account-a"),
+            "account-a",
+            Some("desktop-client"),
             Some(&first_enrollment),
         )
         .await
@@ -290,7 +306,8 @@ mod tests {
         update_persisted_remote_control_enrollment(
             Some(state_db.as_ref()),
             &second_target,
-            Some("account-a"),
+            "account-a",
+            Some("desktop-client"),
             Some(&second_enrollment),
         )
         .await
@@ -300,7 +317,8 @@ mod tests {
             load_persisted_remote_control_enrollment(
                 Some(state_db.as_ref()),
                 &first_target,
-                Some("account-a"),
+                "account-a",
+                Some("desktop-client"),
             )
             .await,
             Some(first_enrollment.clone())
@@ -309,7 +327,8 @@ mod tests {
             load_persisted_remote_control_enrollment(
                 Some(state_db.as_ref()),
                 &first_target,
-                Some("account-b"),
+                "account-b",
+                Some("desktop-client"),
             )
             .await,
             None
@@ -318,7 +337,8 @@ mod tests {
             load_persisted_remote_control_enrollment(
                 Some(state_db.as_ref()),
                 &second_target,
-                Some("account-a"),
+                "account-a",
+                Some("desktop-client"),
             )
             .await,
             Some(second_enrollment)
@@ -335,13 +355,13 @@ mod tests {
             normalize_remote_control_url("https://api.chatgpt-staging.com/other/control")
                 .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
-            account_id: Some("account-a".to_string()),
+            account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
         };
         let second_enrollment = RemoteControlEnrollment {
-            account_id: Some("account-a".to_string()),
+            account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
@@ -350,7 +370,8 @@ mod tests {
         update_persisted_remote_control_enrollment(
             Some(state_db.as_ref()),
             &first_target,
-            Some("account-a"),
+            "account-a",
+            /*app_server_client_name*/ None,
             Some(&first_enrollment),
         )
         .await
@@ -358,7 +379,8 @@ mod tests {
         update_persisted_remote_control_enrollment(
             Some(state_db.as_ref()),
             &second_target,
-            Some("account-a"),
+            "account-a",
+            /*app_server_client_name*/ None,
             Some(&second_enrollment),
         )
         .await
@@ -367,7 +389,8 @@ mod tests {
         update_persisted_remote_control_enrollment(
             Some(state_db.as_ref()),
             &first_target,
-            Some("account-a"),
+            "account-a",
+            /*app_server_client_name*/ None,
             /*enrollment*/ None,
         )
         .await
@@ -377,7 +400,8 @@ mod tests {
             load_persisted_remote_control_enrollment(
                 Some(state_db.as_ref()),
                 &first_target,
-                Some("account-a"),
+                "account-a",
+                /*app_server_client_name*/ None,
             )
             .await,
             None
@@ -386,7 +410,8 @@ mod tests {
             load_persisted_remote_control_enrollment(
                 Some(state_db.as_ref()),
                 &second_target,
-                Some("account-a"),
+                "account-a",
+                /*app_server_client_name*/ None,
             )
             .await,
             Some(second_enrollment)
@@ -421,7 +446,7 @@ mod tests {
             &remote_control_target,
             &RemoteControlConnectionAuth {
                 bearer_token: "Access Token".to_string(),
-                account_id: Some("account_id".to_string()),
+                account_id: "account_id".to_string(),
             },
         )
         .await
