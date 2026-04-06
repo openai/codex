@@ -80,7 +80,9 @@ impl ToolHandler for ToolSearchHandler {
             results
                 .into_iter()
                 .filter_map(|result| entries.get(result.document.id))
-                .map(|(_name, tool)| ToolSearchResultSource {
+                .map(|(name, tool)| ToolSearchResultSource {
+                    qualified_tool_name: name.as_str(),
+                    server_name: tool.server_name.as_str(),
                     tool_namespace: tool.tool_namespace.as_str(),
                     tool_name: tool.tool_name.as_str(),
                     tool: &tool.tool,
@@ -128,6 +130,15 @@ fn build_search_text(name: &str, info: &ToolInfo) -> String {
     {
         parts.push(connector_description.to_string());
     }
+
+    parts.extend(
+        info.plugin_display_names
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string),
+    );
 
     parts.extend(
         info.tool

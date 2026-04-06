@@ -436,7 +436,7 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
-const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
+const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -6510,6 +6510,42 @@ fn connector_inserted_in_messages(
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
+struct McpToolExposure {
+    direct_tools: HashMap<String, McpToolInfo>,
+    deferred_tools: Option<HashMap<String, McpToolInfo>>,
+}
+
+fn build_mcp_tool_exposure(
+    all_mcp_tools: &HashMap<String, McpToolInfo>,
+    connectors: Option<&[connectors::AppInfo]>,
+    explicitly_enabled_connectors: &[connectors::AppInfo],
+    config: &Config,
+    tools_config: &ToolsConfig,
+) -> McpToolExposure {
+    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
+    if let Some(connectors) = connectors {
+        deferred_tools.extend(filter_codex_apps_mcp_tools(
+            all_mcp_tools,
+            connectors,
+            config,
+        ));
+    }
+
+    if !tools_config.search_tool || deferred_tools.len() < DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD {
+        return McpToolExposure {
+            direct_tools: deferred_tools,
+            deferred_tools: None,
+        };
+    }
+
+    let direct_tools =
+        filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
+    McpToolExposure {
+        direct_tools,
+        deferred_tools: Some(deferred_tools),
+    }
+}
+
 fn filter_codex_apps_mcp_tools(
     mcp_tools: &HashMap<String, McpToolInfo>,
     connectors: &[connectors::AppInfo],
@@ -6725,7 +6761,7 @@ pub(crate) async fn built_tools(
 ) -> CodexResult<Arc<ToolRouter>> {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
-    let mut mcp_tools = mcp_connection_manager
+    let all_mcp_tools = mcp_connection_manager
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
@@ -6740,7 +6776,7 @@ pub(crate) async fn built_tools(
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
-        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&mcp_tools));
+        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
     let accessible_connectors_with_enabled_state =
         accessible_connectors.as_ref().map(|connectors| {
             connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
@@ -6786,57 +6822,39 @@ pub(crate) async fn built_tools(
         None
     };
 
-    let app_tools = connectors.as_ref().map(|connectors| {
-        filter_codex_apps_mcp_tools(&mcp_tools, connectors, &turn_context.config)
-    });
-
-    if let Some(connectors) = connectors.as_ref() {
+    let explicitly_enabled = if let Some(connectors) = connectors.as_ref() {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
 
-        let explicitly_enabled = filter_connectors_for_input(
+        filter_connectors_for_input(
             connectors,
             input,
             &effective_explicitly_enabled_connectors,
             &skill_name_counts_lower,
-        );
-
-        let mut selected_mcp_tools = filter_non_codex_apps_mcp_tools_only(&mcp_tools);
-        selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
-            &mcp_tools,
-            explicitly_enabled.as_ref(),
-            &turn_context.config,
-        ));
-
-        mcp_tools = selected_mcp_tools;
-    }
-
-    // Expose app tools directly when tool_search is disabled, or when tool_search
-    // is enabled but the accessible app tool set stays below the direct-exposure threshold.
-    let expose_app_tools_directly = !turn_context.tools_config.search_tool
-        || app_tools
-            .as_ref()
-            .is_some_and(|tools| tools.len() < DIRECT_APP_TOOL_EXPOSURE_THRESHOLD);
-    if expose_app_tools_directly && let Some(app_tools) = app_tools.as_ref() {
-        mcp_tools.extend(app_tools.clone());
-    }
-    let app_tools = if expose_app_tools_directly {
-        None
+        )
     } else {
-        app_tools
+        Vec::new()
     };
+    let mcp_tool_exposure = build_mcp_tool_exposure(
+        &all_mcp_tools,
+        connectors.as_deref(),
+        explicitly_enabled.as_slice(),
+        &turn_context.config,
+        &turn_context.tools_config,
+    );
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
             mcp_tools: has_mcp_servers.then(|| {
-                mcp_tools
+                mcp_tool_exposure
+                    .direct_tools
                     .into_iter()
                     .map(|(name, tool)| (name, tool.tool))
                     .collect()
             }),
-            app_tools,
+            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

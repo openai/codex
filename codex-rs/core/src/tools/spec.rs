@@ -5,12 +5,11 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::mcp_connection_manager::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolHandlerKind;
-use codex_tools::ToolRegistryPlanAppTool;
+use codex_tools::ToolRegistryPlanDeferredTool;
 use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
@@ -32,7 +31,7 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
-    app_tools: Option<HashMap<String, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -68,10 +67,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 
     let mut builder = ToolRegistryBuilder::new();
-    let app_tool_sources = app_tools.as_ref().map(|app_tools| {
-        app_tools
-            .values()
-            .map(|tool| ToolRegistryPlanAppTool {
+    let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
+        tools
+            .iter()
+            .map(|(qualified_tool_name, tool)| ToolRegistryPlanDeferredTool {
+                qualified_tool_name: qualified_tool_name.as_str(),
                 tool_name: tool.tool_name.as_str(),
                 tool_namespace: tool.tool_namespace.as_str(),
                 server_name: tool.server_name.as_str(),
@@ -86,7 +86,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         config,
         ToolRegistryPlanParams {
             mcp_tools: mcp_tools.as_ref(),
-            app_tools: app_tool_sources.as_deref(),
+            deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,
@@ -95,7 +95,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
-            codex_apps_mcp_server_name: CODEX_APPS_MCP_SERVER_NAME,
         },
     );
     let shell_handler = Arc::new(ShellHandler);
@@ -207,9 +206,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ToolSearch => {
                 if tool_search_handler.is_none() {
-                    tool_search_handler = app_tools
+                    tool_search_handler = deferred_mcp_tools
                         .as_ref()
-                        .map(|app_tools| Arc::new(ToolSearchHandler::new(app_tools.clone())));
+                        .map(|tools| Arc::new(ToolSearchHandler::new(tools.clone())));
                 }
                 if let Some(tool_search_handler) = tool_search_handler.as_ref() {
                     builder.register_handler(handler.name, tool_search_handler.clone());

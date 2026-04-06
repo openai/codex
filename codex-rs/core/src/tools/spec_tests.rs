@@ -174,13 +174,13 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
 fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
-    app_tools: Option<HashMap<String, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     build_specs_with_discoverable_tools(
         config,
         mcp_tools,
-        app_tools,
+        deferred_mcp_tools,
         /*discoverable_tools*/ None,
         dynamic_tools,
     )
@@ -229,7 +229,7 @@ fn get_memory_requires_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -261,7 +261,7 @@ fn assert_model_tools(
         &tools_config,
         ToolRouterParams {
             mcp_tools: None,
-            app_tools: None,
+            deferred_mcp_tools: None,
             discoverable_tools: None,
             dynamic_tools: &[],
         },
@@ -521,7 +521,7 @@ fn test_build_specs_default_shell_present() {
     let (tools, _) = build_specs(
         &tools_config,
         Some(HashMap::new()),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -627,7 +627,7 @@ fn tool_suggest_requires_apps_and_plugins_features() {
         let (tools, _) = build_specs_with_discoverable_tools(
             &tools_config,
             /*mcp_tools*/ None,
-            /*app_tools*/ None,
+            /*deferred_mcp_tools*/ None,
             discoverable_tools.clone(),
             &[],
         )
@@ -643,7 +643,7 @@ fn tool_suggest_requires_apps_and_plugins_features() {
 }
 
 #[test]
-fn search_tool_description_handles_no_enabled_apps() {
+fn search_tool_description_handles_no_enabled_mcp_tools() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -672,7 +672,7 @@ fn search_tool_description_handles_no_enabled_apps() {
     };
 
     assert!(description.contains("None currently enabled."));
-    assert!(!description.contains("{{app_descriptions}}"));
+    assert!(!description.contains("{{source_descriptions}}"));
 }
 
 #[test]
@@ -725,7 +725,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
 }
 
 #[test]
-fn search_tool_registers_namespaced_app_tool_aliases() {
+fn search_tool_registers_namespaced_mcp_tool_aliases() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -779,15 +779,30 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                     plugin_display_names: Vec::new(),
                 },
             ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                ToolInfo {
+                    server_name: "rmcp".to_string(),
+                    tool_name: "echo".to_string(),
+                    tool_namespace: "rmcp".to_string(),
+                    tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
+                    connector_id: None,
+                    connector_name: None,
+                    connector_description: None,
+                    plugin_display_names: Vec::new(),
+                },
+            ),
         ])),
         &[],
     )
     .build();
 
-    let alias = tool_handler_key("_create_event", Some("mcp__codex_apps__calendar"));
+    let app_alias = tool_handler_key("_create_event", Some("mcp__codex_apps__calendar"));
+    let mcp_alias = tool_handler_key("echo", Some("mcp__rmcp__"));
 
     assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, /*namespace*/ None));
-    assert!(registry.has_handler(alias.as_str(), /*namespace*/ None));
+    assert!(registry.has_handler(app_alias.as_str(), /*namespace*/ None));
+    assert!(registry.has_handler(mcp_alias.as_str(), /*namespace*/ None));
 }
 
 #[test]
@@ -822,7 +837,7 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -880,7 +895,7 @@ fn test_mcp_tool_integer_normalized_to_number() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -937,7 +952,7 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -998,7 +1013,7 @@ fn test_mcp_tool_anyof_defaults_to_string() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -1072,7 +1087,7 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();

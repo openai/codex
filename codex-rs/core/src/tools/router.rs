@@ -41,7 +41,7 @@ pub struct ToolRouter {
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
-    pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
@@ -50,14 +50,14 @@ impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
         let ToolRouterParams {
             mcp_tools,
-            app_tools,
+            deferred_mcp_tools,
             discoverable_tools,
             dynamic_tools,
         } = params;
         let builder = build_specs_with_discoverable_tools(
             config,
             mcp_tools,
-            app_tools,
+            deferred_mcp_tools,
             discoverable_tools,
             dynamic_tools,
         );

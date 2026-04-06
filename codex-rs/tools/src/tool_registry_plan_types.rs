@@ -58,16 +58,16 @@ pub struct ToolRegistryPlan {
 #[derive(Debug, Clone, Copy)]
 pub struct ToolRegistryPlanParams<'a> {
     pub mcp_tools: Option<&'a HashMap<String, McpTool>>,
-    pub app_tools: Option<&'a [ToolRegistryPlanAppTool<'a>]>,
+    pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
     pub dynamic_tools: &'a [DynamicToolSpec],
     pub default_agent_type_description: &'a str,
     pub wait_agent_timeouts: WaitAgentTimeoutOptions,
-    pub codex_apps_mcp_server_name: &'a str,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ToolRegistryPlanAppTool<'a> {
+pub struct ToolRegistryPlanDeferredTool<'a> {
+    pub qualified_tool_name: &'a str,
     pub tool_name: &'a str,
     pub tool_namespace: &'a str,
     pub server_name: &'a str,

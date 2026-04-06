@@ -1571,7 +1571,7 @@ impl JsReplManager {
                         .map(|(name, tool)| (name, tool.tool))
                         .collect(),
                 ),
-                app_tools: None,
+                deferred_mcp_tools: None,
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             },
