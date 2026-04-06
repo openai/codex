@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use rmcp::ClientHandler;
 use rmcp::RoleClient;
+use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::CancelledNotificationParam;
 use rmcp::model::ClientInfo;
 use rmcp::model::CreateElicitationRequestParams;
@@ -23,6 +24,7 @@ use crate::rmcp_client::SendElicitation;
 pub(crate) struct LoggingClientHandler {
     client_info: ClientInfo,
     send_elicitation: Arc<SendElicitation>,
+    progress_handler: ProgressDispatcher,
 }
 
 impl LoggingClientHandler {
@@ -30,7 +32,12 @@ impl LoggingClientHandler {
         Self {
             client_info,
             send_elicitation: Arc::new(send_elicitation),
+            progress_handler: ProgressDispatcher::new(),
         }
+    }
+
+    pub(crate) fn progress_handler(&self) -> ProgressDispatcher {
+        self.progress_handler.clone()
     }
 }
 
@@ -66,6 +73,7 @@ impl ClientHandler for LoggingClientHandler {
             "MCP server progress notification (token: {:?}, progress: {}, total: {:?}, message: {:?})",
             params.progress_token, params.progress, params.total, params.message
         );
+        self.progress_handler.handle_notification(params).await;
     }
 
     async fn on_resource_updated(

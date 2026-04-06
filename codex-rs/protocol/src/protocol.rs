@@ -1297,6 +1297,8 @@ pub enum EventMsg {
 
     McpToolCallBegin(McpToolCallBeginEvent),
 
+    McpToolCallProgress(McpToolCallProgressEvent),
+
     McpToolCallEnd(McpToolCallEndEvent),
 
     WebSearchBegin(WebSearchBeginEvent),
@@ -2166,6 +2168,14 @@ pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct McpToolCallProgressEvent {
+    /// Identifier for the corresponding McpToolCallBegin that is still running.
+    pub call_id: String,
+    /// User-visible progress text for the current MCP tool call.
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]

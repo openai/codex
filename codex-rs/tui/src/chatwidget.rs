@@ -6927,6 +6927,7 @@ impl ChatWidget {
             EventMsg::ImageGenerationBegin(ev) => self.on_image_generation_begin(ev),
             EventMsg::ImageGenerationEnd(ev) => self.on_image_generation_end(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
+            EventMsg::McpToolCallProgress(_) => {}
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),

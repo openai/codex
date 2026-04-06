@@ -107,6 +107,7 @@ async fn call_echo_tool(client: &RmcpClient, message: &str) -> anyhow::Result<Ca
             Some(json!({ "message": message })),
             /*meta*/ None,
             Some(Duration::from_secs(5)),
+            None,
         )
         .await
 }

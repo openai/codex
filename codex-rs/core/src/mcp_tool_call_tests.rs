@@ -132,6 +132,40 @@ fn approval_question_text_prepends_safety_reason() {
     );
 }
 
+#[test]
+fn mcp_tool_progress_prefers_server_message() {
+    let notification = rmcp::model::ProgressNotificationParam {
+        progress_token: rmcp::model::ProgressToken(rmcp::model::NumberOrString::String(
+            "token".into(),
+        )),
+        progress: 1.0,
+        total: Some(3.0),
+        message: Some(" indexing files ".to_string()),
+    };
+
+    assert_eq!(
+        format_mcp_tool_call_progress_message(&notification),
+        Some("indexing files".to_string())
+    );
+}
+
+#[test]
+fn mcp_tool_progress_formats_numeric_fallback() {
+    let notification = rmcp::model::ProgressNotificationParam {
+        progress_token: rmcp::model::ProgressToken(rmcp::model::NumberOrString::String(
+            "token".into(),
+        )),
+        progress: 2.0,
+        total: Some(5.0),
+        message: None,
+    };
+
+    assert_eq!(
+        format_mcp_tool_call_progress_message(&notification),
+        Some("2 / 5".to_string())
+    );
+}
+
 #[tokio::test]
 async fn mcp_tool_call_span_records_expected_fields() {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =

@@ -41,6 +41,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::McpToolCallProgressEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -50,7 +51,9 @@ use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::SendProgressNotification;
 use codex_rollout::state_db;
+use rmcp::model::ProgressNotificationParam;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::Serialize;
@@ -153,6 +156,11 @@ pub(crate) async fn handle_mcp_tool_call(
         .await
         .server_origin(&server)
         .map(str::to_string);
+    let progress_notification = build_mcp_tool_call_progress_notification_sender(
+        Arc::clone(&sess),
+        Arc::clone(turn_context),
+        call_id.clone(),
+    );
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
@@ -183,6 +191,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         &tool_name,
                         arguments_value.clone(),
                         request_meta.clone(),
+                        Some(progress_notification.clone()),
                     )
                     .await
                     .map_err(|e| format!("tool call error: {e:?}"))
@@ -296,9 +305,15 @@ pub(crate) async fn handle_mcp_tool_call(
     let start = Instant::now();
     // Perform the tool call.
     let result = async {
-        sess.call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
-            .await
-            .map_err(|e| format!("tool call error: {e:?}"))
+        sess.call_tool(
+            &server,
+            &tool_name,
+            arguments_value.clone(),
+            request_meta,
+            Some(progress_notification),
+        )
+        .await
+        .map_err(|e| format!("tool call error: {e:?}"))
     }
     .instrument(mcp_tool_call_span(
         sess.as_ref(),
@@ -502,6 +517,66 @@ fn sanitize_mcp_tool_result_for_model(
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
     sess.send_event(turn_context, event).await;
+}
+
+fn build_mcp_tool_call_progress_notification_sender(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    call_id: String,
+) -> SendProgressNotification {
+    Arc::new(move |notification: ProgressNotificationParam| {
+        let sess = Arc::clone(&sess);
+        let turn_context = Arc::clone(&turn_context);
+        let call_id = call_id.clone();
+        Box::pin(async move {
+            if let Some(message) = format_mcp_tool_call_progress_message(&notification) {
+                notify_mcp_tool_call_event(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    EventMsg::McpToolCallProgress(McpToolCallProgressEvent { call_id, message }),
+                )
+                .await;
+            }
+        })
+    })
+}
+
+fn format_mcp_tool_call_progress_message(
+    notification: &ProgressNotificationParam,
+) -> Option<String> {
+    if let Some(message) = notification.message.as_deref() {
+        let trimmed = message.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Some(total) = notification.total
+        && notification.progress.is_finite()
+        && total.is_finite()
+        && total > 0.0
+    {
+        return Some(format!(
+            "{} / {}",
+            format_mcp_progress_value(notification.progress),
+            format_mcp_progress_value(total),
+        ));
+    }
+
+    notification.progress.is_finite().then(|| {
+        format!(
+            "Progress: {}",
+            format_mcp_progress_value(notification.progress)
+        )
+    })
+}
+
+fn format_mcp_progress_value(value: f64) -> String {
+    let formatted = format!("{value:.2}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 struct McpAppUsageMetadata {

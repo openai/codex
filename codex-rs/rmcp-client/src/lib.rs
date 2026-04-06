@@ -28,4 +28,5 @@ pub use rmcp_client::ElicitationResponse;
 pub use rmcp_client::ListToolsWithConnectorIdResult;
 pub use rmcp_client::RmcpClient;
 pub use rmcp_client::SendElicitation;
+pub use rmcp_client::SendProgressNotification;
 pub use rmcp_client::ToolWithConnectorId;
