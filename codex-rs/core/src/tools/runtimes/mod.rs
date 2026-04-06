@@ -49,6 +49,13 @@ pub(crate) fn build_sandbox_command(
 /// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
 /// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
 /// not match the snapshot cwd, this is a no-op.
+///
+/// `explicit_env_overrides` and `env` are intentionally separate inputs.
+/// `explicit_env_overrides` contains policy-driven shell env overrides that
+/// should win after the snapshot is sourced, while `env` is the full live exec
+/// environment. We need access to both so snapshot restore logic can preserve
+/// runtime-only vars like `CODEX_THREAD_ID` without pretending they came from
+/// the explicit override policy.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
