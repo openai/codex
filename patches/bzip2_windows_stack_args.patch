@@ -13,3 +13,11 @@ diff --git a/BUILD.bazel b/BUILD.bazel
 +        "//conditions:default": [],
 +    }),
      includes = ["."],
+diff --git a/MODULE.bazel b/MODULE.bazel
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -4,3 +4,4 @@ module(
+ )
+ 
+ bazel_dep(name = "rules_cc", version = "0.0.10")
++bazel_dep(name = "platforms", version = "1.0.0")
