@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn exec_description_mentions_timeout_helpers() {
-        let description = build_exec_tool_description(&[], false);
+        let description = build_exec_tool_description(&[], /*code_mode_only*/ false);
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
     }
