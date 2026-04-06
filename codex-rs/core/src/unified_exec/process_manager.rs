@@ -775,7 +775,7 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
-        let remote_startup_exec_approval = if context.turn.environment.mode().is_remote() {
+        let remote_startup_exec_approval = if context.turn.environment.exec_server_url().is_some() {
             startup_exec_approval_request(context, request, &cwd, &exec_approval_requirement)
         } else {
             None
