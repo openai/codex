@@ -1051,7 +1051,7 @@
               "type": "null"
             }
           ],
-          "description": "Controls how much MCP inventory data to fetch for each server."
+          "description": "Controls how much MCP inventory data to fetch for each server. Defaults to `Full` when omitted."
         },
         "limit": {
           "description": "Optional page size; defaults to a server-defined value.",

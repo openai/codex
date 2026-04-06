@@ -14,5 +14,6 @@ cursor?: string | null,
 limit?: number | null, 
 /**
  * Controls how much MCP inventory data to fetch for each server.
+ * Defaults to `Full` when omitted.
  */
 detail?: McpServerStatusDetail | null, };

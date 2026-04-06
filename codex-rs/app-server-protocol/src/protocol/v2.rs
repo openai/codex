@@ -1948,6 +1948,7 @@ pub struct ListMcpServerStatusParams {
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
     /// Controls how much MCP inventory data to fetch for each server.
+    /// Defaults to `Full` when omitted.
     #[ts(optional = nullable)]
     pub detail: Option<McpServerStatusDetail>,
 }
