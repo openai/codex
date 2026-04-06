@@ -4,6 +4,21 @@
 use core_test_support::responses;
 use core_test_support::test_codex_exec::test_codex_exec;
 use predicates::str::contains;
+use walkdir::WalkDir;
+
+fn session_rollout_count(home_path: &std::path::Path) -> usize {
+    let sessions_dir = home_path.join("sessions");
+    if !sessions_dir.exists() {
+        return 0;
+    }
+
+    WalkDir::new(sessions_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".jsonl"))
+        .count()
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_appends_piped_stdin_to_prompt_argument() -> anyhow::Result<()> {
@@ -152,6 +167,8 @@ fn exec_without_prompt_argument_rejects_empty_piped_stdin() {
         .assert()
         .code(1)
         .stderr(contains("No prompt provided via stdin."));
+
+    assert_eq!(session_rollout_count(test.home_path()), 0);
 }
 
 #[test]
