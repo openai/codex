@@ -10,6 +10,8 @@ fn system_bwrap_warning_reports_missing_system_bwrap() {
         .expect("missing system bwrap should emit a warning");
 
     assert!(warning.contains("could not find system bubblewrap"));
+    assert!(warning.contains("not npm"));
+    assert!(warning.contains("https://github.com/containers/bubblewrap"));
 }
 
 #[test]

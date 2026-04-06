@@ -23,7 +23,7 @@ fn system_bwrap_warning_for_lookup(system_bwrap_path: Option<PathBuf>) -> Option
     match system_bwrap_path {
         Some(_) => None,
         None => Some(
-            "Codex could not find system bubblewrap on PATH. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
+            "Codex could not find system bubblewrap on PATH. Please install the Bubblewrap system package with your OS package manager (for example apt, dnf, or pacman), not npm. Upstream project: https://github.com/containers/bubblewrap. Codex will use the vendored bubblewrap in the meantime."
                 .to_string(),
         ),
     }
