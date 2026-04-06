@@ -789,7 +789,9 @@ fn parse_local_link_target(dest_url: &str) -> Option<(String, Option<String>)> {
         location_suffix = Some(suffix);
     }
 
-    Some((expand_local_link_path(path_text), location_suffix))
+    let decoded_path_text =
+        urlencoding::decode(path_text).unwrap_or(std::borrow::Cow::Borrowed(path_text));
+    Some((expand_local_link_path(&decoded_path_text), location_suffix))
 }
 
 /// Normalize a hash fragment like `L12` or `L12C3-L14C9` into the display suffix we render.

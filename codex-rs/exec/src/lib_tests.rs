@@ -294,6 +294,25 @@ fn turn_items_for_thread_returns_matching_turn_items() {
 }
 
 #[test]
+fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
+    let notification =
+        ServerNotification::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+            },
+        });
+
+    assert!(!should_backfill_turn_completed_items(
+        /*thread_ephemeral*/ true,
+        &notification
+    ));
+}
+
+#[test]
 fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
     let value = canceled_mcp_server_elicitation_response()
         .expect("mcp elicitation cancel response should serialize");
