@@ -1,6 +1,6 @@
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -16,18 +16,21 @@ use crate::sandbox_bin_dir;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup-helper",
         }
     }
 }
@@ -49,7 +52,7 @@ pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
         && let Some(dir) = exe.parent()
     {
         let candidate = dir.join(kind.file_name());
-        if candidate.exists() {
+        if candidate.exists() && !is_windows_apps_dir(dir) {
             return candidate;
         }
     }
@@ -88,10 +91,7 @@ pub(crate) fn resolve_helper_for_launch(
     }
 }
 
-pub fn resolve_current_exe_for_launch(
-    codex_home: &Path,
-    fallback_executable: &str,
-) -> PathBuf {
+pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
     let source = match std::env::current_exe() {
         Ok(path) => path,
         Err(_) => return PathBuf::from(fallback_executable),
@@ -198,9 +198,12 @@ fn copy_from_source_if_needed(source: &Path, destination: &Path) -> Result<CopyO
         return Ok(CopyOutcome::Reused);
     }
 
-    let destination_dir = destination
-        .parent()
-        .ok_or_else(|| anyhow!("helper destination has no parent: {}", destination.display()))?;
+    let destination_dir = destination.parent().ok_or_else(|| {
+        anyhow!(
+            "helper destination has no parent: {}",
+            destination.display()
+        )
+    })?;
     fs::create_dir_all(destination_dir).with_context(|| {
         format!(
             "create helper destination directory {}",
@@ -271,8 +274,9 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => {
-            return Err(err)
-                .with_context(|| format!("read helper destination metadata {}", destination.display()));
+            return Err(err).with_context(|| {
+                format!("read helper destination metadata {}", destination.display())
+            });
         }
     };
 
@@ -287,15 +291,37 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         .modified()
         .with_context(|| format!("read helper destination mtime {}", destination.display()))?;
 
-    Ok(destination_modified >= source_modified)
+    if destination_modified < source_modified {
+        return Ok(false);
+    }
+
+    files_match(source, destination)
+}
+
+pub(crate) fn is_windows_apps_dir(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
+}
+
+fn files_match(source: &Path, destination: &Path) -> Result<bool> {
+    let source_bytes = fs::read(source)
+        .with_context(|| format!("read helper source bytes {}", source.display()))?;
+    let destination_bytes = fs::read(destination)
+        .with_context(|| format!("read helper destination bytes {}", destination.display()))?;
+    Ok(source_bytes == destination_bytes)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::CopyOutcome;
+    use super::copy_from_source_if_needed;
     use super::destination_is_fresh;
     use super::helper_bin_dir;
-    use super::copy_from_source_if_needed;
-    use super::CopyOutcome;
+    use super::is_windows_apps_dir;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -313,21 +339,29 @@ mod tests {
         let outcome = copy_from_source_if_needed(&source, &destination).expect("copy helper");
 
         assert_eq!(CopyOutcome::ReCopied, outcome);
-        assert_eq!(b"runner-v1".as_slice(), fs::read(&destination).expect("read destination"));
+        assert_eq!(
+            b"runner-v1".as_slice(),
+            fs::read(&destination).expect("read destination")
+        );
     }
 
     #[test]
-    fn destination_is_fresh_uses_size_and_mtime() {
+    fn destination_is_fresh_requires_matching_content_when_metadata_looks_fresh() {
         let tmp = TempDir::new().expect("tempdir");
         let source = tmp.path().join("source.exe");
         let destination = tmp.path().join("destination.exe");
 
-        fs::write(&destination, b"same-size").expect("write destination");
+        fs::write(&destination, b"dest-v001").expect("write destination");
         std::thread::sleep(std::time::Duration::from_secs(1));
-        fs::write(&source, b"same-size").expect("write source");
+        fs::write(&source, b"src--v001").expect("write source");
         assert!(!destination_is_fresh(&source, &destination).expect("stale metadata"));
 
-        fs::write(&destination, b"same-size").expect("rewrite destination");
+        fs::write(&destination, b"dest-v002").expect("rewrite destination");
+        assert!(
+            !destination_is_fresh(&source, &destination).expect("content drift should be stale")
+        );
+
+        fs::write(&destination, b"src--v001").expect("rewrite destination with matching content");
         assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
     }
 
@@ -340,11 +374,13 @@ mod tests {
         fs::write(&source, b"runner-v1").expect("write source");
         copy_from_source_if_needed(&source, &destination).expect("initial copy");
 
-        let outcome =
-            copy_from_source_if_needed(&source, &destination).expect("revalidate helper");
+        let outcome = copy_from_source_if_needed(&source, &destination).expect("revalidate helper");
 
         assert_eq!(CopyOutcome::Reused, outcome);
-        assert_eq!(b"runner-v1".as_slice(), fs::read(&destination).expect("read destination"));
+        assert_eq!(
+            b"runner-v1".as_slice(),
+            fs::read(&destination).expect("read destination")
+        );
     }
 
     #[test]
@@ -375,5 +411,18 @@ mod tests {
             b"runner".as_slice(),
             fs::read(&runner_destination).expect("read runner")
         );
+    }
+
+    #[test]
+    fn detects_windows_apps_install_dirs() {
+        assert!(is_windows_apps_dir(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3_x64__abc"
+        )));
+        assert!(is_windows_apps_dir(Path::new(
+            r"E:\WindowsApps\OpenAI.Codex_1.2.3_x64__abc\app\resources"
+        )));
+        assert!(!is_windows_apps_dir(Path::new(
+            r"C:\Users\example\.codex\.sandbox-bin"
+        )));
     }
 }
