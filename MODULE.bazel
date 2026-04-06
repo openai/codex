@@ -238,7 +238,8 @@ single_version_override(
 
 crate.annotation(
     crate = "bzip2-sys",
-    gen_build_script = "on",
+    gen_build_script = "off",
+    deps = ["@bzip2//:bz2"],
 )
 
 inject_repo(crate, "bzip2")
@@ -264,10 +265,7 @@ single_version_override(
 crate.annotation(
     crate = "lzma-sys",
     gen_build_script = "off",
-    deps = [
-        "@bzip2//:bz2",
-        "@xz//:lzma",
-    ],
+    deps = ["@xz//:lzma"],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
