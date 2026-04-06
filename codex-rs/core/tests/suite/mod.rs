@@ -122,6 +122,7 @@ mod request_permissions;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions_tool;
 mod request_user_input;
+mod responses_api_proxy_headers;
 mod resume;
 mod resume_warning;
 mod review;
@@ -154,3 +155,4 @@ mod user_shell_cmd;
 mod view_image;
 mod web_search;
 mod websocket_fallback;
+mod window_headers;

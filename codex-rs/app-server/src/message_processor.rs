@@ -844,6 +844,7 @@ impl MessageProcessor {
                         connection_id,
                         other,
                         session.app_server_client_name.clone(),
+                        session.client_version.clone(),
                         request_context,
                     )
                     .boxed()

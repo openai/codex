@@ -395,10 +395,13 @@ fn spawn_app_server_page_loader(
 /// Returns the human-readable column header for the given sort key.
 fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
     match sort_key {
-        ThreadSortKey::CreatedAt => "Created at",
-        ThreadSortKey::UpdatedAt => "Updated at",
+        ThreadSortKey::CreatedAt => "Created",
+        ThreadSortKey::UpdatedAt => "Updated",
     }
 }
+
+const CREATED_COLUMN_LABEL: &str = "Created";
+const UPDATED_COLUMN_LABEL: &str = "Updated";
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
 struct AltScreenGuard<'a> {
@@ -421,6 +424,7 @@ impl Drop for AltScreenGuard<'_> {
 struct PickerState {
     codex_home: PathBuf,
     requester: FrameRequester,
+    relative_time_reference: Option<DateTime<Utc>>,
     pagination: PaginationState,
     all_rows: Vec<Row>,
     filtered_rows: Vec<Row>,
@@ -579,6 +583,7 @@ impl PickerState {
         Self {
             codex_home,
             requester,
+            relative_time_reference: None,
             pagination: PaginationState {
                 next_cursor: None,
                 num_scanned_files: 0,
@@ -711,6 +716,7 @@ impl PickerState {
     }
 
     fn start_initial_load(&mut self) {
+        self.relative_time_reference = Some(Utc::now());
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
@@ -1186,7 +1192,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         // Search line
         frame.render_widget_ref(search_line(state), search);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(
+            &state.filtered_rows,
+            state.show_all,
+            state.relative_time_reference.unwrap_or_else(Utc::now),
+        );
 
         // Column headers and list
         render_column_headers(frame, columns, &metrics, state.sort_key);
@@ -1387,9 +1397,8 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     vec!["No sessions yet".italic().dim()].into()
 }
 
-fn human_time_ago(ts: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let delta = now - ts;
+fn human_time_ago(ts: DateTime<Utc>, reference_now: DateTime<Utc>) -> String {
+    let delta = reference_now - ts;
     let secs = delta.num_seconds();
     if secs < 60 {
         let n = secs.max(0);
@@ -1422,17 +1431,17 @@ fn human_time_ago(ts: DateTime<Utc>) -> String {
     }
 }
 
-fn format_updated_label(row: &Row) -> String {
+fn format_updated_label_at(row: &Row, reference_now: DateTime<Utc>) -> String {
     match (row.updated_at, row.created_at) {
-        (Some(updated), _) => human_time_ago(updated),
-        (None, Some(created)) => human_time_ago(created),
+        (Some(updated), _) => human_time_ago(updated, reference_now),
+        (None, Some(created)) => human_time_ago(created, reference_now),
         (None, None) => "-".to_string(),
     }
 }
 
-fn format_created_label(row: &Row) -> String {
+fn format_created_label_at(row: &Row, reference_now: DateTime<Utc>) -> String {
     match row.created_at {
-        Some(created) => human_time_ago(created),
+        Some(created) => human_time_ago(created, reference_now),
         None => "-".to_string(),
     }
 }
@@ -1452,7 +1461,7 @@ fn render_column_headers(
     if visibility.show_created {
         let label = format!(
             "{text:<width$}",
-            text = "Created at",
+            text = CREATED_COLUMN_LABEL,
             width = metrics.max_created_width
         );
         spans.push(Span::from(label).bold());
@@ -1461,7 +1470,7 @@ fn render_column_headers(
     if visibility.show_updated {
         let label = format!(
             "{text:<width$}",
-            text = "Updated at",
+            text = UPDATED_COLUMN_LABEL,
             width = metrics.max_updated_width
         );
         spans.push(Span::from(label).bold());
@@ -1515,7 +1524,11 @@ struct ColumnVisibility {
     show_cwd: bool,
 }
 
-fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
+fn calculate_column_metrics(
+    rows: &[Row],
+    include_cwd: bool,
+    reference_now: DateTime<Utc>,
+) -> ColumnMetrics {
     fn right_elide(s: &str, max: usize) -> String {
         if s.chars().count() <= max {
             return s.to_string();
@@ -1536,8 +1549,8 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     }
 
     let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
-    let mut max_created_width = UnicodeWidthStr::width("Created at");
-    let mut max_updated_width = UnicodeWidthStr::width("Updated at");
+    let mut max_created_width = UnicodeWidthStr::width(CREATED_COLUMN_LABEL);
+    let mut max_updated_width = UnicodeWidthStr::width(UPDATED_COLUMN_LABEL);
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1546,8 +1559,8 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     };
 
     for row in rows {
-        let created = format_created_label(row);
-        let updated = format_updated_label(row);
+        let created = format_created_label_at(row, reference_now);
+        let updated = format_updated_label_at(row, reference_now);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, /*max*/ 24);
         let cwd = if include_cwd {
@@ -1967,7 +1980,8 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(/*rows*/ 3);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        state.relative_time_reference = Some(now);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, now);
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -2273,7 +2287,8 @@ mod tests {
 
         state.update_thread_names().await;
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        state.relative_time_reference = Some(now);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, now);
 
         let width: u16 = 80;
         let height: u16 = 5;
