@@ -728,4 +728,53 @@ mod tests {
             conversation.tokens
         );
     }
+
+    #[test]
+    fn developer_message_content_items_are_classified_individually() {
+        let breakdown = build_context_window_breakdown(
+            &[ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "<permissions instructions>\npolicy".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "<skills_instructions>\n### Available skills\n- notify: send a notification\n### How to use skills\n</skills_instructions>"
+                            .to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
+            }],
+            &BaseInstructions {
+                text: String::new(),
+            },
+            /*model_context_window*/ None,
+            /*verbose*/ false,
+        );
+
+        let mut sections = breakdown
+            .sections
+            .iter()
+            .map(|section| (section.label.clone(), section.tokens))
+            .collect::<Vec<_>>();
+        sections.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(
+            sections
+                .iter()
+                .map(|(label, _)| label.clone())
+                .collect::<Vec<_>>(),
+            vec!["Built-in".to_string(), "Skills".to_string()]
+        );
+        assert_eq!(
+            breakdown.total_tokens,
+            breakdown
+                .sections
+                .iter()
+                .map(|section| section.tokens)
+                .sum::<i64>()
+        );
+    }
 }

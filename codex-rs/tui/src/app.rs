@@ -505,6 +505,7 @@ enum ThreadBufferedEvent {
     Request(ServerRequest),
     HistoryEntryResponse(GetHistoryEntryResponseEvent),
     FeedbackSubmission(FeedbackThreadEvent),
+    ContextWindowBreakdown(ContextWindowBreakdownThreadEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -513,6 +514,11 @@ struct FeedbackThreadEvent {
     include_logs: bool,
     feedback_audience: FeedbackAudience,
     result: Result<String, String>,
+}
+
+#[derive(Debug, Clone)]
+struct ContextWindowBreakdownThreadEvent {
+    result: Result<ThreadContextWindowBreakdown, String>,
 }
 
 #[derive(Debug)]
@@ -535,6 +541,7 @@ impl ThreadEventStore {
                 | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
                 | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
                 | ThreadBufferedEvent::FeedbackSubmission(_)
+                | ThreadBufferedEvent::ContextWindowBreakdown(_)
         )
     }
 
@@ -640,7 +647,8 @@ impl ThreadEventStore {
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
                     | ThreadBufferedEvent::HistoryEntryResponse(_)
-                    | ThreadBufferedEvent::FeedbackSubmission(_) => true,
+                    | ThreadBufferedEvent::FeedbackSubmission(_)
+                    | ThreadBufferedEvent::ContextWindowBreakdown(_) => true,
                 })
                 .cloned()
                 .collect(),
@@ -1917,7 +1925,7 @@ impl App {
                 .await
                 .map(|response: ThreadContextReadResponse| response.context)
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::ContextWindowBreakdownLoaded { result });
+            app_event_tx.send(AppEvent::ContextWindowBreakdownLoaded { thread_id, result });
         });
     }
 
@@ -2093,6 +2101,49 @@ impl App {
 
         if should_send {
             match sender.try_send(ThreadBufferedEvent::FeedbackSubmission(event)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
+        }
+    }
+
+    async fn enqueue_thread_context_window_breakdown_event(
+        &mut self,
+        thread_id: ThreadId,
+        event: ContextWindowBreakdownThreadEvent,
+    ) {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard
+                .buffer
+                .push_back(ThreadBufferedEvent::ContextWindowBreakdown(event.clone()));
+            if guard.buffer.len() > guard.capacity
+                && let Some(removed) = guard.buffer.pop_front()
+                && let ThreadBufferedEvent::Request(request) = &removed
+            {
+                guard
+                    .pending_interactive_replay
+                    .note_evicted_server_request(request);
+            }
+            guard.active
+        };
+
+        if should_send {
+            match sender.try_send(ThreadBufferedEvent::ContextWindowBreakdown(event)) {
                 Ok(()) => {}
                 Err(TrySendError::Full(event)) => {
                     tokio::spawn(async move {
@@ -2797,6 +2848,10 @@ impl App {
                 }
                 ThreadBufferedEvent::FeedbackSubmission(event) => {
                     self.enqueue_thread_feedback_event(thread_id, event).await;
+                }
+                ThreadBufferedEvent::ContextWindowBreakdown(event) => {
+                    self.enqueue_thread_context_window_breakdown_event(thread_id, event)
+                        .await;
                 }
             }
         }
@@ -4495,8 +4550,12 @@ impl App {
                     ));
                 }
             }
-            AppEvent::ContextWindowBreakdownLoaded { result } => {
-                self.handle_context_window_breakdown_result(result);
+            AppEvent::ContextWindowBreakdownLoaded { thread_id, result } => {
+                self.enqueue_thread_context_window_breakdown_event(
+                    thread_id,
+                    ContextWindowBreakdownThreadEvent { result },
+                )
+                .await;
             }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
@@ -5688,6 +5747,9 @@ impl App {
             ThreadBufferedEvent::FeedbackSubmission(event) => {
                 self.handle_feedback_thread_event(event);
             }
+            ThreadBufferedEvent::ContextWindowBreakdown(event) => {
+                self.handle_context_window_breakdown_result(event.result);
+            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -5707,6 +5769,9 @@ impl App {
             }
             ThreadBufferedEvent::FeedbackSubmission(event) => {
                 self.handle_feedback_thread_event(event);
+            }
+            ThreadBufferedEvent::ContextWindowBreakdown(event) => {
+                self.handle_context_window_breakdown_result(event.result);
             }
         }
     }
@@ -9641,6 +9706,86 @@ guardian_approval = true
             cell.contains("• Feedback uploaded. Please open an issue using the following URL:")
                 && cell.contains("uploaded-thread")
         }));
+    }
+
+    #[tokio::test]
+    async fn context_window_breakdown_for_inactive_thread_replays_into_origin_thread() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let origin_thread_id = ThreadId::new();
+        let active_thread_id = ThreadId::new();
+        let origin_session = test_thread_session(origin_thread_id, PathBuf::from("/tmp/origin"));
+        let active_session = test_thread_session(active_thread_id, PathBuf::from("/tmp/active"));
+        app.thread_event_channels.insert(
+            origin_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                origin_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.thread_event_channels.insert(
+            active_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                active_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.activate_thread_channel(active_thread_id).await;
+        app.chat_widget.handle_thread_session(active_session);
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.enqueue_thread_context_window_breakdown_event(
+            origin_thread_id,
+            ContextWindowBreakdownThreadEvent {
+                result: Ok(ThreadContextWindowBreakdown {
+                    model_context_window: Some(1000),
+                    total_tokens: 250,
+                    sections: vec![codex_app_server_protocol::ThreadContextWindowSection {
+                        label: "Conversation".to_string(),
+                        tokens: 250,
+                        details: vec![codex_app_server_protocol::ThreadContextWindowDetail {
+                            label: "User message".to_string(),
+                            tokens: 250,
+                        }],
+                    }],
+                }),
+            },
+        )
+        .await;
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
+
+        let snapshot = {
+            let channel = app
+                .thread_event_channels
+                .get(&origin_thread_id)
+                .expect("origin thread channel should exist");
+            let store = channel.store.lock().await;
+            assert!(matches!(
+                store.buffer.back(),
+                Some(ThreadBufferedEvent::ContextWindowBreakdown(_))
+            ));
+            store.snapshot()
+        };
+
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+        let mut rendered_cells = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+            }
+        }
+        assert!(
+            rendered_cells
+                .iter()
+                .any(|cell| cell.contains("/context") && cell.contains("Context map")),
+            "expected replayed context breakdown output, got {rendered_cells:?}"
+        );
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {

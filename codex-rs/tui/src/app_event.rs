@@ -272,6 +272,7 @@ pub(crate) enum AppEvent {
 
     /// Result of fetching the current thread's context-window breakdown.
     ContextWindowBreakdownLoaded {
+        thread_id: ThreadId,
         result: Result<ThreadContextWindowBreakdown, String>,
     },
 
