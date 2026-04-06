@@ -3,6 +3,7 @@ use anyhow::Context;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,18 +17,21 @@ use crate::sandbox_bin_dir;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup",
         }
     }
 }
@@ -49,11 +53,20 @@ pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
         && let Some(dir) = exe.parent()
     {
         let candidate = dir.join(kind.file_name());
-        if candidate.exists() {
+        if !is_windowsapps_path(dir) && candidate.exists() {
             return candidate;
         }
     }
     PathBuf::from(kind.file_name())
+}
+
+pub(crate) fn is_windowsapps_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 pub(crate) fn resolve_helper_for_launch(
@@ -286,12 +299,50 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
     let destination_modified = destination_meta
         .modified()
         .with_context(|| format!("read helper destination mtime {}", destination.display()))?;
+    if destination_modified < source_modified {
+        return Ok(false);
+    }
 
-    Ok(destination_modified >= source_modified)
+    files_match(source, destination)
+}
+
+fn files_match(source: &Path, destination: &Path) -> Result<bool> {
+    let mut source_file = fs::File::open(source)
+        .with_context(|| format!("open helper source for comparison {}", source.display()))?;
+    let mut destination_file = fs::File::open(destination).with_context(|| {
+        format!(
+            "open helper destination for comparison {}",
+            destination.display()
+        )
+    })?;
+
+    let mut source_buf = [0_u8; 8192];
+    let mut destination_buf = [0_u8; 8192];
+    loop {
+        let source_read = source_file
+            .read(&mut source_buf)
+            .with_context(|| format!("read helper source for comparison {}", source.display()))?;
+        let destination_read = destination_file.read(&mut destination_buf).with_context(|| {
+            format!(
+                "read helper destination for comparison {}",
+                destination.display()
+            )
+        })?;
+        if source_read != destination_read {
+            return Ok(false);
+        }
+        if source_read == 0 {
+            return Ok(true);
+        }
+        if source_buf[..source_read] != destination_buf[..destination_read] {
+            return Ok(false);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::is_windowsapps_path;
     use super::destination_is_fresh;
     use super::helper_bin_dir;
     use super::copy_from_source_if_needed;
@@ -317,17 +368,18 @@ mod tests {
     }
 
     #[test]
-    fn destination_is_fresh_uses_size_and_mtime() {
+    fn destination_is_fresh_requires_matching_contents() {
         let tmp = TempDir::new().expect("tempdir");
         let source = tmp.path().join("source.exe");
         let destination = tmp.path().join("destination.exe");
 
-        fs::write(&destination, b"same-size").expect("write destination");
+        fs::write(&source, b"runner-v1").expect("write source");
         std::thread::sleep(std::time::Duration::from_secs(1));
-        fs::write(&source, b"same-size").expect("write source");
-        assert!(!destination_is_fresh(&source, &destination).expect("stale metadata"));
+        fs::write(&destination, b"stale--v1").expect("write destination");
 
-        fs::write(&destination, b"same-size").expect("rewrite destination");
+        assert!(!destination_is_fresh(&source, &destination).expect("freshness check"));
+
+        fs::write(&destination, b"runner-v1").expect("rewrite destination");
         assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
     }
 
@@ -365,15 +417,33 @@ mod tests {
         fs::create_dir_all(&source_dir).expect("create source dir");
         let runner_source = source_dir.join("codex-command-runner.exe");
         let runner_destination = helper_bin_dir(&codex_home).join("codex-command-runner.exe");
+        let setup_source = source_dir.join("codex-windows-sandbox-setup.exe");
+        let setup_destination =
+            helper_bin_dir(&codex_home).join("codex-windows-sandbox-setup.exe");
         fs::write(&runner_source, b"runner").expect("runner");
+        fs::write(&setup_source, b"setup").expect("setup");
 
         let runner_outcome =
             copy_from_source_if_needed(&runner_source, &runner_destination).expect("runner copy");
+        let setup_outcome =
+            copy_from_source_if_needed(&setup_source, &setup_destination).expect("setup copy");
 
         assert_eq!(CopyOutcome::ReCopied, runner_outcome);
+        assert_eq!(CopyOutcome::ReCopied, setup_outcome);
         assert_eq!(
             b"runner".as_slice(),
             fs::read(&runner_destination).expect("read runner")
         );
+        assert_eq!(b"setup".as_slice(), fs::read(&setup_destination).expect("read setup"));
+    }
+
+    #[test]
+    fn windowsapps_detection_matches_any_path_segment() {
+        assert!(is_windowsapps_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__abc"
+        )));
+        assert!(!is_windowsapps_path(Path::new(
+            r"C:\Users\example\AppData\Local\Programs\OpenAI"
+        )));
     }
 }
