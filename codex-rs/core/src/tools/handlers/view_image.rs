@@ -93,7 +93,7 @@ impl ToolHandler for ViewImageHandler {
             })?;
         let Some(environment) = turn.environment.as_ref() else {
             return Err(FunctionCallError::RespondToModel(
-                "view_image is unavailable when CODEX_EXEC_SERVER_URL=none".to_string(),
+                "view_image is unavailable in this session".to_string(),
             ));
         };
 

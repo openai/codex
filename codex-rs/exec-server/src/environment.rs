@@ -144,7 +144,7 @@ impl EnvironmentManager {
             })
             .await
             .map(Option::as_ref)
-            .map(Option::cloned)
+            .map(|environment| environment.cloned())
     }
 }
 

@@ -241,8 +241,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 Some(prepared) => {
                     let Some(environment) = ctx.turn.environment.as_ref() else {
                         return Err(ToolError::Rejected(
-                            "exec_command is unavailable when CODEX_EXEC_SERVER_URL=none"
-                                .to_string(),
+                            "exec_command is unavailable in this session".to_string(),
                         ));
                     };
                     if environment.mode().is_remote() {
@@ -289,7 +288,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .map_err(|err| ToolError::Codex(err.into()))?;
         let Some(environment) = ctx.turn.environment.as_ref() else {
             return Err(ToolError::Rejected(
-                "exec_command is unavailable when CODEX_EXEC_SERVER_URL=none".to_string(),
+                "exec_command is unavailable in this session".to_string(),
             ));
         };
         self.manager

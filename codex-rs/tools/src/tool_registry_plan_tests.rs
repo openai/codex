@@ -469,7 +469,7 @@ fn disabled_environment_omits_environment_backed_tools() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
-    .with_has_environment(false);
+    .with_has_environment(/*has_environment*/ false);
     tools_config
         .experimental_supported_tools
         .push("list_dir".to_string());
