@@ -243,7 +243,7 @@ impl Environment {
                     "remote mode should have an exec-server client".to_string(),
                 ));
             }
-            EnvironmentMode::Local => {
+            (EnvironmentMode::Local, _) => {
                 let local_process = LocalProcess::default();
                 local_process
                     .initialize()
@@ -253,7 +253,7 @@ impl Environment {
                     .map_err(ExecServerError::Protocol)?;
                 Arc::new(local_process)
             }
-            EnvironmentMode::Disabled => Arc::new(DisabledExecBackend),
+            (EnvironmentMode::Disabled, _) => Arc::new(DisabledExecBackend),
         };
 
         Ok(Self {
