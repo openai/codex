@@ -165,6 +165,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
