@@ -70,6 +70,9 @@ use rmcp::model::Tool as McpTool;
 
 const AGENT_TOOLS_NAMESPACE: &str = "agents";
 const AGENT_TOOLS_NAMESPACE_DESCRIPTION: &str = "Agent collaboration tools for spawning, messaging, waiting on, listing, and closing subagents.";
+const WATCHDOG_TOOLS_NAMESPACE: &str = "watchdog";
+const WATCHDOG_TOOLS_NAMESPACE_DESCRIPTION: &str =
+    "Watchdog-only tools for parent-thread recovery and watchdog check-in lifecycle control.";
 
 pub fn build_tool_registry_plan(
     config: &ToolsConfig,
@@ -250,6 +253,12 @@ pub fn build_tool_registry_plan(
             search_app_infos.push(ToolSearchAppInfo {
                 name: AGENT_TOOLS_NAMESPACE.to_string(),
                 description: Some(AGENT_TOOLS_NAMESPACE_DESCRIPTION.to_string()),
+            });
+        }
+        if config.agent_watchdog {
+            search_app_infos.push(ToolSearchAppInfo {
+                name: WATCHDOG_TOOLS_NAMESPACE.to_string(),
+                description: Some(WATCHDOG_TOOLS_NAMESPACE_DESCRIPTION.to_string()),
             });
         }
         plan.push_spec(

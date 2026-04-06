@@ -352,6 +352,11 @@ fn agent_watchdog_adds_watchdog_namespace_tools_and_handlers() {
     );
 
     assert_contains_tool_names(&tools, &["agents", "watchdog", TOOL_SEARCH_TOOL_NAME]);
+    let tool_search = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
+    let ToolSpec::ToolSearch { description, .. } = &tool_search.spec else {
+        panic!("tool_search should be present");
+    };
+    assert!(description.contains("watchdog"));
     assert_contains_agent_tool_names(
         &tools,
         &["spawn_agent", "send_input", "wait_agent", "close_agent"],
