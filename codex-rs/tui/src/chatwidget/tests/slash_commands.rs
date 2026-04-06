@@ -103,8 +103,8 @@ async fn slash_copy_state_tracks_turn_complete_final_reply() {
     });
 
     assert_eq!(
-        chat.last_copyable_output,
-        Some("Final reply **markdown**".to_string())
+        chat.last_agent_markdown_text(),
+        Some("Final reply **markdown**")
     );
 }
 
@@ -134,11 +134,11 @@ async fn slash_copy_state_tracks_plan_item_completion() {
         }),
     });
 
-    assert_eq!(chat.last_copyable_output, Some(plan_text));
+    assert_eq!(chat.last_agent_markdown_text(), Some(plan_text.as_str()));
 }
 
 #[tokio::test]
-async fn slash_copy_reports_when_no_copyable_output_exists() {
+async fn slash_copy_reports_when_no_agent_response_exists() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Copy);
@@ -148,9 +148,7 @@ async fn slash_copy_reports_when_no_copyable_output_exists() {
     let rendered = lines_to_single_string(&cells[0]);
     assert_chatwidget_snapshot!("slash_copy_no_output_info_message", rendered);
     assert!(
-        rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
+        rendered.contains("No agent response to copy"),
         "expected no-output message, got {rendered:?}"
     );
 }
@@ -171,8 +169,8 @@ async fn slash_copy_state_is_preserved_during_running_task() {
     chat.on_task_started();
 
     assert_eq!(
-        chat.last_copyable_output,
-        Some("Previous completed reply".to_string())
+        chat.last_agent_markdown_text(),
+        Some("Previous completed reply")
     );
 }
 
@@ -189,16 +187,13 @@ async fn slash_copy_state_clears_on_thread_rollback() {
             duration_ms: None,
         }),
     });
-    chat.handle_codex_event(Event {
-        id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
-    });
+    chat.truncate_agent_turn_markdowns_to_turn_count(/*remaining_turn_count*/ 0, None);
 
-    assert_eq!(chat.last_copyable_output, None);
+    assert_eq!(chat.last_agent_markdown_text(), None);
 }
 
 #[tokio::test]
-async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_turn_complete() {
+async fn slash_copy_tracks_replayed_legacy_agent_message_when_turn_complete_omits_text() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_codex_event_replay(Event {
@@ -221,16 +216,9 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
     });
     let _ = drain_insert_history(&mut rx);
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
-        "expected unavailable message, got {rendered:?}"
+    assert_eq!(
+        chat.last_agent_markdown_text(),
+        Some("Legacy final message")
     );
 }
 
@@ -265,20 +253,9 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
     });
     let _ = drain_insert_history(&mut rx);
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        !rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
-        "expected copy state to be available, got {rendered:?}"
-    );
     assert_eq!(
-        chat.last_copyable_output,
-        Some("Legacy item final message".to_string())
+        chat.last_agent_markdown_text(),
+        Some("Legacy item final message")
     );
 }
 
@@ -313,23 +290,9 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
     });
     let _ = drain_insert_history(&mut rx);
 
-    chat.handle_codex_event(Event {
-        id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
-    });
-    let _ = drain_insert_history(&mut rx);
+    chat.truncate_agent_turn_markdowns_to_turn_count(/*remaining_turn_count*/ 0, None);
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
-        "expected rollback-cleared copy state message, got {rendered:?}"
-    );
+    assert_eq!(chat.last_agent_markdown_text(), None);
 }
 
 #[tokio::test]

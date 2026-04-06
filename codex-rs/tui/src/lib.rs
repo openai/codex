@@ -102,7 +102,6 @@ mod chatwidget;
 mod cli;
 mod clipboard_copy;
 mod clipboard_paste;
-mod clipboard_text;
 mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;

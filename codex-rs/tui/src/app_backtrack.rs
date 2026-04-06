@@ -31,6 +31,7 @@ use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::history_cell::AgentMessageCell;
+use crate::history_cell::HistoryCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
