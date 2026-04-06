@@ -2800,6 +2800,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*network*/ None,
         environment,
         "turn_id".to_string(),
+        /*submission_type*/ None,
         Arc::clone(&js_repl),
         skills_outcome,
     );
@@ -3168,6 +3169,7 @@ async fn user_turn_updates_approvals_reviewer() {
             final_output_json_schema: None,
             collaboration_mode: None,
             personality: config.personality,
+            submission_type: None,
         },
     )
     .await;
@@ -3640,6 +3642,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         /*network*/ None,
         environment,
         "turn_id".to_string(),
+        /*submission_type*/ None,
         Arc::clone(&js_repl),
         skills_outcome,
     ));
