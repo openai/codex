@@ -1789,6 +1789,8 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    #[serde(default)]
+    pub supports_fast_mode: bool,
     // Only one model should be marked as default.
     pub is_default: bool,
 }

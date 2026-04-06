@@ -6078,6 +6078,10 @@
           },
           "type": "array"
         },
+        "supportsFastMode": {
+          "default": false,
+          "type": "boolean"
+        },
         "supportsPersonality": {
           "default": false,
           "type": "boolean"

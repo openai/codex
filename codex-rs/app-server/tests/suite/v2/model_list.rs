@@ -50,6 +50,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         // cache report `supports_personality = false`.
         // todo(sayan): fix, maybe make roundtrip use ModelInfo only
         supports_personality: false,
+        supports_fast_mode: preset.supports_fast_mode,
         is_default: preset.is_default,
     }
 }

@@ -17,6 +17,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
             description: "Balanced".to_string(),
         }],
         supports_personality: false,
+        supports_fast_mode: false,
         is_default: false,
         upgrade: None,
         show_in_picker,

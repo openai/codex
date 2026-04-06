@@ -345,6 +345,58 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.model_catalog = test_model_catalog(&chat.config);
 }
 
+fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
+    serde_json::from_value(json!({
+        "slug": slug,
+        "display_name": slug,
+        "description": format!("{slug} description"),
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [{"effort": "medium", "description": "medium"}],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": priority,
+        "supports_fast_mode": supports_fast_mode,
+        "availability_nux": null,
+        "upgrade": null,
+        "base_instructions": "base instructions",
+        "supports_reasoning_summaries": false,
+        "default_reasoning_summary": "none",
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10_000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "context_window": 272_000,
+        "experimental_supported_tools": [],
+    }))
+    .expect("valid model info")
+}
+
+pub(crate) fn set_fast_mode_test_catalog(chat: &mut ChatWidget) {
+    let models: Vec<ModelPreset> = ModelsResponse {
+        models: vec![
+            test_model_info("gpt-5.4", 0, true),
+            test_model_info("gpt-5.3-codex", 1, false),
+        ],
+    }
+    .models
+    .into_iter()
+    .map(Into::into)
+    .collect();
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(
+        models,
+        CollaborationModesConfig {
+            default_mode_request_user_input: chat
+                .config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        },
+    ));
+}
+
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     ChatWidget,
     AppEventSender,

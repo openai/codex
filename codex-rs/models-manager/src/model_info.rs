@@ -69,6 +69,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         visibility: ModelVisibility::None,
         supported_in_api: true,
         priority: 99,
+        supports_fast_mode: false,
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),

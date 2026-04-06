@@ -67,6 +67,7 @@ fn test_model_info(
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
+        supports_fast_mode: false,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,

@@ -42,6 +42,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         default_reasoning_effort: preset.default_reasoning_effort,
         input_modalities: preset.input_modalities,
         supports_personality: preset.supports_personality,
+        supports_fast_mode: preset.supports_fast_mode,
         is_default: preset.is_default,
     }
 }
