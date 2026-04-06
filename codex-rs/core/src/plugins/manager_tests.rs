@@ -189,6 +189,13 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
         outcome.effective_skill_roots(),
         vec![plugin_root.join("skills")]
     );
+    assert_eq!(
+        effective_plugin_skill_roots(&outcome),
+        vec![crate::loader::PluginSkillRoot {
+            path: plugin_root.join("skills"),
+            plugin_id: "sample@test".to_string(),
+        }]
+    );
     assert_eq!(outcome.effective_mcp_servers().len(), 1);
     assert_eq!(
         outcome.effective_apps(),

@@ -11,6 +11,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
+        plugin_id: None,
         path_to_skills_md: PathBuf::from(path),
         scope: codex_protocol::protocol::SkillScope::User,
     }

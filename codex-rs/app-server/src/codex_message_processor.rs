@@ -8205,6 +8205,7 @@ fn skills_to_info(
                             .collect(),
                     }
                 }),
+                plugin_id: skill.plugin_id.clone(),
                 path: skill.path_to_skills_md.clone(),
                 scope: skill.scope.into(),
                 enabled,

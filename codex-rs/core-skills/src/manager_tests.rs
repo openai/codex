@@ -57,6 +57,7 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
+        plugin_id: None,
         path_to_skills_md: path,
         scope: SkillScope::User,
     }
@@ -122,7 +123,7 @@ fn skills_for_config_with_stack(
     skills_manager: &SkillsManager,
     cwd: &TempDir,
     config_layer_stack: &ConfigLayerStack,
-    effective_skill_roots: &[PathBuf],
+    effective_skill_roots: &[PluginSkillRoot],
 ) -> SkillLoadOutcome {
     let skills_input = SkillsLoadInput::new(
         cwd.path().to_path_buf(),
@@ -198,6 +199,10 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .and_then(std::path::Path::parent)
         .expect("plugin skill should live under a skills root")
         .to_path_buf();
+    let plugin_skill_root = PluginSkillRoot {
+        path: plugin_skill_root,
+        plugin_id: "sample@test".to_string(),
+    };
     let skills_manager = SkillsManager::new(
         codex_home.path().to_path_buf(),
         /*bundled_skills_enabled*/ true,
@@ -217,6 +222,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
     let skill_path = dunce::canonicalize(skill_path).expect("skill path should canonicalize");
 
     assert_eq!(skill.path_to_skills_md, skill_path);
+    assert_eq!(skill.plugin_id, Some("sample@test".to_string()));
     assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
     assert!(
         !outcome

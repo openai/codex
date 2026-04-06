@@ -4837,6 +4837,7 @@ mod tests {
             }),
             dependencies: None,
             policy: None,
+            plugin_id: None,
             path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
             scope: codex_protocol::protocol::SkillScope::Repo,
         }]));
@@ -4935,6 +4936,7 @@ mod tests {
                     }),
                     dependencies: None,
                     policy: None,
+                    plugin_id: None,
                     path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
                     scope: codex_protocol::protocol::SkillScope::Repo,
                 }]));

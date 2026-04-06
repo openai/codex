@@ -26,6 +26,7 @@ use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
+use crate::plugins::effective_plugin_skill_roots;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -489,7 +490,7 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let plugin_outcome = plugins_manager.plugins_for_config(&config);
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let effective_skill_roots = effective_plugin_skill_roots(&plugin_outcome);
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input);
 
@@ -2519,7 +2520,7 @@ impl Session {
             .services
             .plugins_manager
             .plugins_for_config(&per_turn_config);
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let effective_skill_roots = effective_plugin_skill_roots(&plugin_outcome);
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let skills_outcome = Arc::new(
             self.services
@@ -5763,6 +5764,7 @@ fn skills_to_info(
                         .collect(),
                 }
             }),
+            plugin_id: skill.plugin_id.clone(),
             path: skill.path_to_skills_md.clone(),
             scope: skill.scope,
             enabled: !disabled_paths.contains(&skill.path_to_skills_md),

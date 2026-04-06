@@ -40,6 +40,7 @@ pub use manager::PluginRemoteSyncError;
 pub use manager::PluginUninstallError;
 pub use manager::PluginsManager;
 pub use manager::RemotePluginSyncResult;
+pub use manager::effective_plugin_skill_roots;
 pub use manager::installed_plugin_telemetry_metadata;
 pub use manager::load_plugin_apps;
 pub use manager::load_plugin_mcp_servers;

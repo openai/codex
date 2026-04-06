@@ -375,6 +375,7 @@ fn list_skills_response_to_core(response: SkillsListResponse) -> ListSkillsRespo
                                     .collect(),
                             }
                         }),
+                        plugin_id: skill.plugin_id,
                         path: skill.path,
                         scope: match skill.scope {
                             codex_app_server_protocol::SkillScope::User => {

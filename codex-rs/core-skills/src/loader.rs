@@ -147,6 +147,13 @@ impl Error for SkillParseError {}
 pub struct SkillRoot {
     pub path: PathBuf,
     pub scope: SkillScope,
+    pub plugin_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginSkillRoot {
+    pub path: PathBuf,
+    pub plugin_id: String,
 }
 
 pub fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
@@ -155,7 +162,12 @@ where
 {
     let mut outcome = SkillLoadOutcome::default();
     for root in roots {
-        discover_skills_under_root(&root.path, root.scope, &mut outcome);
+        discover_skills_under_root(
+            &root.path,
+            root.scope,
+            root.plugin_id.as_deref(),
+            &mut outcome,
+        );
     }
 
     let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -186,7 +198,7 @@ where
 pub(crate) fn skill_roots(
     config_layer_stack: &ConfigLayerStack,
     cwd: &Path,
-    plugin_skill_roots: Vec<PathBuf>,
+    plugin_skill_roots: Vec<PluginSkillRoot>,
 ) -> Vec<SkillRoot> {
     skill_roots_with_home_dir(
         config_layer_stack,
@@ -200,12 +212,13 @@ fn skill_roots_with_home_dir(
     config_layer_stack: &ConfigLayerStack,
     cwd: &Path,
     home_dir: Option<&Path>,
-    plugin_skill_roots: Vec<PathBuf>,
+    plugin_skill_roots: Vec<PluginSkillRoot>,
 ) -> Vec<SkillRoot> {
     let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir);
-    roots.extend(plugin_skill_roots.into_iter().map(|path| SkillRoot {
-        path,
+    roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
+        path: root.path,
         scope: SkillScope::User,
+        plugin_id: Some(root.plugin_id),
     }));
     roots.extend(repo_agents_skill_roots(config_layer_stack, cwd));
     dedupe_skill_roots_by_path(&mut roots);
@@ -231,6 +244,7 @@ fn skill_roots_from_layer_stack_inner(
                 roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::Repo,
+                    plugin_id: None,
                 });
             }
             ConfigLayerSource::User { .. } => {
@@ -239,6 +253,7 @@ fn skill_roots_from_layer_stack_inner(
                 roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::User,
+                    plugin_id: None,
                 });
 
                 // `$HOME/.agents/skills` (user-installed skills).
@@ -246,6 +261,7 @@ fn skill_roots_from_layer_stack_inner(
                     roots.push(SkillRoot {
                         path: home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
                         scope: SkillScope::User,
+                        plugin_id: None,
                     });
                 }
 
@@ -254,6 +270,7 @@ fn skill_roots_from_layer_stack_inner(
                 roots.push(SkillRoot {
                     path: system_cache_root_dir(config_folder.as_path()),
                     scope: SkillScope::System,
+                    plugin_id: None,
                 });
             }
             ConfigLayerSource::System { .. } => {
@@ -262,6 +279,7 @@ fn skill_roots_from_layer_stack_inner(
                 roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::Admin,
+                    plugin_id: None,
                 });
             }
             ConfigLayerSource::Mdm { .. }
@@ -285,6 +303,7 @@ fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) ->
             roots.push(SkillRoot {
                 path: agents_skills,
                 scope: SkillScope::Repo,
+                plugin_id: None,
             });
         }
     }
@@ -353,7 +372,12 @@ fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
     roots.retain(|root| seen.insert(root.path.clone()));
 }
 
-fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
+fn discover_skills_under_root(
+    root: &Path,
+    scope: SkillScope,
+    plugin_id: Option<&str>,
+    outcome: &mut SkillLoadOutcome,
+) {
     let Ok(root) = canonicalize_path(root) else {
         return;
     };
@@ -466,7 +490,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
             }
 
             if file_type.is_file() && file_name == SKILLS_FILENAME {
-                match parse_skill_file(&path, scope) {
+                match parse_skill_file(&path, scope, plugin_id) {
                     Ok(skill) => {
                         outcome.skills.push(skill);
                     }
@@ -492,7 +516,11 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
     }
 }
 
-fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, SkillParseError> {
+fn parse_skill_file(
+    path: &Path,
+    scope: SkillScope,
+    plugin_id: Option<&str>,
+) -> Result<SkillMetadata, SkillParseError> {
     let contents = fs::read_to_string(path).map_err(SkillParseError::Read)?;
 
     let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
@@ -543,6 +571,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         interface,
         dependencies,
         policy,
+        plugin_id: plugin_id.map(str::to_string),
         path_to_skills_md: resolved_path,
         scope,
     })

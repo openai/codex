@@ -14,6 +14,7 @@ pub use env_var_dependencies::SkillDependencyInfo;
 pub use env_var_dependencies::collect_env_var_dependencies;
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
 pub use invocation_utils::detect_implicit_skill_invocation_for_command;
+pub use loader::PluginSkillRoot;
 pub use manager::SkillsLoadInput;
 pub use manager::SkillsManager;
 pub use mention_counts::build_skill_name_counts;

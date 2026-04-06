@@ -55,6 +55,7 @@ pub(crate) struct SkillInvocationEventRequest {
 #[derive(Serialize)]
 pub(crate) struct SkillInvocationEventParams {
     pub(crate) product_client_id: Option<String>,
+    pub(crate) plugin_id: Option<String>,
     pub(crate) skill_scope: Option<String>,
     pub(crate) repo_url: Option<String>,
     pub(crate) thread_id: Option<String>,

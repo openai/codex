@@ -35,6 +35,7 @@ pub struct SkillInvocation {
     pub skill_name: String,
     pub skill_scope: SkillScope,
     pub skill_path: PathBuf,
+    pub plugin_id: Option<String>,
     pub invocation_type: InvocationType,
 }
 

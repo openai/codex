@@ -2747,7 +2747,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let plugin_outcome = services
         .plugins_manager
         .plugins_for_config(&per_turn_config);
-    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let effective_skill_roots = crate::plugins::effective_plugin_skill_roots(&plugin_outcome);
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&skills_input));
@@ -3587,7 +3587,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let plugin_outcome = services
         .plugins_manager
         .plugins_for_config(&per_turn_config);
-    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let effective_skill_roots = crate::plugins::effective_plugin_skill_roots(&plugin_outcome);
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&skills_input));

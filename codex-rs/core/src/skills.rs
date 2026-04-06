@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::codex::Session;
@@ -43,7 +42,7 @@ pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
-    effective_skill_roots: Vec<PathBuf>,
+    effective_skill_roots: Vec<codex_core_skills::PluginSkillRoot>,
 ) -> SkillsLoadInput {
     SkillsLoadInput::new(
         config.cwd.clone().to_path_buf(),
@@ -185,6 +184,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         skill_name: candidate.name,
         skill_scope: candidate.scope,
         skill_path: candidate.path_to_skills_md,
+        plugin_id: candidate.plugin_id,
         invocation_type: InvocationType::Implicit,
     };
     let skill_scope = match invocation.skill_scope {

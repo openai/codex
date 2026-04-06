@@ -11744,6 +11744,12 @@
           "path": {
             "type": "string"
           },
+          "pluginId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "scope": {
             "$ref": "#/definitions/v2/SkillScope"
           },

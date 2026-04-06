@@ -16,6 +16,7 @@ use crate::build_implicit_skill_path_indexes;
 use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
 use crate::config_rules::skill_config_rules_from_stack;
+use crate::loader::PluginSkillRoot;
 use crate::loader::SkillRoot;
 use crate::loader::load_skills_from_roots;
 use crate::loader::skill_roots;
@@ -26,7 +27,7 @@ use codex_config::SkillsConfig;
 #[derive(Debug, Clone)]
 pub struct SkillsLoadInput {
     pub cwd: PathBuf,
-    pub effective_skill_roots: Vec<PathBuf>,
+    pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
 }
@@ -34,7 +35,7 @@ pub struct SkillsLoadInput {
 impl SkillsLoadInput {
     pub fn new(
         cwd: PathBuf,
-        effective_skill_roots: Vec<PathBuf>,
+        effective_skill_roots: Vec<PluginSkillRoot>,
         config_layer_stack: ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Self {
@@ -154,6 +155,7 @@ impl SkillsManager {
                 .map(|path| SkillRoot {
                     path,
                     scope: SkillScope::User,
+                    plugin_id: None,
                 }),
         );
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);

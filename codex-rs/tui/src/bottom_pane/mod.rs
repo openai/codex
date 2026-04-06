@@ -1682,6 +1682,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
+                plugin_id: None,
                 path_to_skills_md: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

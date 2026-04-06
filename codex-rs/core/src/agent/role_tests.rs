@@ -641,7 +641,7 @@ enabled = false
         /*bundled_skills_enabled*/ true,
     );
     let plugin_outcome = plugins_manager.plugins_for_config(&config);
-    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let effective_skill_roots = crate::plugins::effective_plugin_skill_roots(&plugin_outcome);
     let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
     let outcome = skills_manager.skills_for_config(&skills_input);
     let skill = outcome

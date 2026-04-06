@@ -37,6 +37,7 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
 use crate::config_rules::skill_config_rules_from_stack;
+use crate::loader::PluginSkillRoot;
 use crate::loader::SkillRoot;
 use crate::loader::load_skills_from_roots;
 use codex_analytics::AnalyticsEventsClient;
@@ -187,6 +188,32 @@ pub struct ConfiguredMarketplacePlugin {
 pub struct ConfiguredMarketplaceListOutcome {
     pub marketplaces: Vec<ConfiguredMarketplace>,
     pub errors: Vec<MarketplaceListError>,
+}
+
+pub fn effective_plugin_skill_roots(outcome: &PluginLoadOutcome) -> Vec<PluginSkillRoot> {
+    let mut roots = outcome
+        .plugins()
+        .iter()
+        .filter(|plugin| plugin.is_active())
+        .flat_map(|plugin| {
+            plugin
+                .skill_roots
+                .iter()
+                .cloned()
+                .map(|path| PluginSkillRoot {
+                    path,
+                    plugin_id: plugin.config_name.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    roots.sort_unstable_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.plugin_id.cmp(&right.plugin_id))
+    });
+    let mut seen_paths = HashSet::new();
+    roots.retain(|root| seen_paths.insert(root.path.clone()));
+    roots
 }
 
 impl From<PluginDetail> for PluginCapabilitySummary {
@@ -412,12 +439,16 @@ impl PluginsManager {
         &self,
         config_layer_stack: &ConfigLayerStack,
         plugins_feature_enabled: bool,
-    ) -> Vec<PathBuf> {
+    ) -> Vec<PluginSkillRoot> {
         if !plugins_feature_enabled {
             return Vec::new();
         }
-        load_plugins_from_layer_stack(config_layer_stack, &self.store, self.restriction_product)
-            .effective_skill_roots()
+        let outcome = load_plugins_from_layer_stack(
+            config_layer_stack,
+            &self.store,
+            self.restriction_product,
+        );
+        effective_plugin_skill_roots(&outcome)
     }
 
     fn cached_enabled_outcome(&self) -> Option<PluginLoadOutcome> {
@@ -963,6 +994,7 @@ impl PluginsManager {
         let resolved_skills = load_plugin_skills(
             source_path.as_path(),
             manifest_paths,
+            plugin_key.as_str(),
             self.restriction_product,
             &skill_config_rules,
         );
@@ -1461,6 +1493,7 @@ fn load_plugin(
     let resolved_skills = load_plugin_skills(
         plugin_root.as_path(),
         manifest_paths,
+        loaded_plugin.config_name.as_str(),
         restriction_product,
         skill_config_rules,
     );
@@ -1506,6 +1539,7 @@ impl ResolvedPluginSkills {
 fn load_plugin_skills(
     plugin_root: &Path,
     manifest_paths: &PluginManifestPaths,
+    plugin_id: &str,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
 ) -> ResolvedPluginSkills {
@@ -1515,6 +1549,7 @@ fn load_plugin_skills(
             .map(|path| SkillRoot {
                 path,
                 scope: SkillScope::User,
+                plugin_id: Some(plugin_id.to_string()),
             }),
     );
     let had_errors = !outcome.errors.is_empty();

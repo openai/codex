@@ -9599,6 +9599,12 @@
         "path": {
           "type": "string"
         },
+        "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "scope": {
           "$ref": "#/definitions/SkillScope"
         },

@@ -14,6 +14,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
+    pub plugin_id: Option<String>,
     /// Path to the SKILLS.md file that declares this skill.
     pub path_to_skills_md: PathBuf,
     pub scope: SkillScope,

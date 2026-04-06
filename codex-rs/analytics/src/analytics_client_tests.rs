@@ -709,6 +709,7 @@ async fn reducer_ingests_skill_invoked_fact() {
                     skill_name: "doc".to_string(),
                     skill_scope: codex_protocol::protocol::SkillScope::User,
                     skill_path,
+                    plugin_id: Some("docs@openai".to_string()),
                     invocation_type: InvocationType::Explicit,
                 }],
             })),
@@ -725,6 +726,7 @@ async fn reducer_ingests_skill_invoked_fact() {
             "skill_name": "doc",
             "event_params": {
                 "product_client_id": originator().value,
+                "plugin_id": "docs@openai",
                 "skill_scope": "user",
                 "repo_url": null,
                 "thread_id": "thread-1",
