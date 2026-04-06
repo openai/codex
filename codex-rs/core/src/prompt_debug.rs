@@ -229,7 +229,7 @@ mod tests {
         let mut config = test_config();
         config.codex_home = codex_home.path().to_path_buf();
         config.cwd = AbsolutePathBuf::try_from(cwd.path().to_path_buf()).expect("absolute cwd");
-        config.features.enable(Feature::UnifiedExec);
+        let _ = config.features.enable(Feature::UnifiedExec);
 
         let local_tool_names =
             build_model_visible_tool_names(config.clone(), EnvironmentMode::Local).await;
