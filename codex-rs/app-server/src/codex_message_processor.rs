@@ -2754,6 +2754,24 @@ impl CodexMessageProcessor {
         if state_db_ctx.is_none() {
             state_db_ctx = get_state_db(&self.config).await;
         }
+        if state_db_ctx.is_none() {
+            match StateRuntime::init(
+                self.config.sqlite_home.clone(),
+                self.config.model_provider_id.clone(),
+            )
+            .await
+            {
+                Ok(ctx) => {
+                    state_db_ctx = Some(ctx);
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to initialize state db for thread metadata update at {}: {err}",
+                        self.config.sqlite_home.display()
+                    );
+                }
+            }
+        }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
                 request_id,
