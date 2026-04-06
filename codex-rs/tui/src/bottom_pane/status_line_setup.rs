@@ -14,7 +14,7 @@
 //! - Git information (branch name)
 //! - Context usage (meter, window size)
 //! - Usage limits (5-hour, weekly)
-//! - Session info (ID, tokens used)
+//! - Session info (thread title, ID, tokens used)
 //! - Application version
 
 use ratatui::buffer::Buffer;
@@ -98,6 +98,9 @@ pub(crate) enum StatusLineItem {
 
     /// Whether Fast mode is currently active.
     FastMode,
+
+    /// Current thread title (if set by user).
+    ThreadTitle,
 }
 
 impl StatusLineItem {
@@ -129,6 +132,7 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
+            StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
         }
     }
 }
@@ -149,6 +153,7 @@ const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
     StatusLineItem::TotalOutputTokens,
     StatusLineItem::SessionId,
     StatusLineItem::FastMode,
+    StatusLineItem::ThreadTitle,
 ];
 
 /// Runtime values used to preview the current status-line selection.
@@ -377,6 +382,33 @@ mod tests {
         assert_eq!(
             preview_data.line_for_items(&items),
             Some(Line::from("gpt-5"))
+        );
+    }
+
+    #[test]
+    fn preview_includes_thread_title_in_left_sequence() {
+        let preview_data = StatusLinePreviewData::from_iter([
+            (StatusLineItem::ModelName, "gpt-5".to_string()),
+            (StatusLineItem::ThreadTitle, "Roadmap cleanup".to_string()),
+        ]);
+        let items = vec![
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::ThreadTitle.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            preview_data.line_for_items(&items),
+            Some(Line::from("gpt-5 · Roadmap cleanup"))
         );
     }
 

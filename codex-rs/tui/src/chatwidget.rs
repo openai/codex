@@ -2151,6 +2151,7 @@ impl ChatWidget {
             }
             self.thread_name = event.thread_name;
             self.refresh_terminal_title();
+            self.refresh_status_surfaces();
             self.request_redraw();
         }
     }
