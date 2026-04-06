@@ -4,6 +4,7 @@ Module: runtimes
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
+use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::path_utils;
 use crate::shell::Shell;
 use crate::tools::sandboxing::ToolError;
@@ -53,6 +54,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     session_shell: &Shell,
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
+    env: &HashMap<String, String>,
 ) -> Vec<String> {
     if cfg!(windows) {
         return command.to_vec();
@@ -95,7 +97,11 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .iter()
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
-    let (override_captures, override_exports) = build_override_exports(explicit_env_overrides);
+    let mut override_env = explicit_env_overrides.clone();
+    if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
+        override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+    }
+    let (override_captures, override_exports) = build_override_exports(&override_env);
     let rewritten_script = if override_exports.is_empty() {
         format!(
             "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
