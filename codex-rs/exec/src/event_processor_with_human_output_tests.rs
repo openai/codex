@@ -167,6 +167,9 @@ fn turn_completed_recovers_final_message_from_turn_items() {
                 }],
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         },
     ));
@@ -211,6 +214,9 @@ fn turn_completed_overwrites_stale_final_message_from_turn_items() {
                 }],
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         },
     ));
@@ -251,6 +257,9 @@ fn turn_completed_preserves_streamed_final_message_when_turn_items_are_empty() {
                 items: Vec::new(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         },
     ));
@@ -291,6 +300,9 @@ fn turn_failed_clears_stale_final_message() {
                 items: Vec::new(),
                 status: TurnStatus::Failed,
                 error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         },
     ));
@@ -332,6 +344,9 @@ fn turn_interrupted_clears_stale_final_message() {
                 items: Vec::new(),
                 status: TurnStatus::Interrupted,
                 error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         },
     ));

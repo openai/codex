@@ -3693,6 +3693,15 @@ pub struct Turn {
     pub status: TurnStatus,
     /// Only populated when the Turn's status is failed.
     pub error: Option<TurnError>,
+    /// Unix timestamp (in seconds) when the turn started.
+    #[ts(type = "number | null")]
+    pub started_at: Option<i64>,
+    /// Unix timestamp (in seconds) when the turn completed.
+    #[ts(type = "number | null")]
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and completion in milliseconds, if known.
+    #[ts(type = "number | null")]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
