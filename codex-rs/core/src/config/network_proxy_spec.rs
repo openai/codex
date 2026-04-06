@@ -20,6 +20,8 @@ use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+const GLOBAL_ALLOWLIST_PATTERN: &str = "*";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkProxySpec {
     config: NetworkProxyConfig,
@@ -195,6 +197,8 @@ impl NetworkProxySpec {
         let allowlist_expansion_enabled =
             Self::allowlist_expansion_enabled(sandbox_policy, hard_deny_allowlist_misses);
         let denylist_expansion_enabled = Self::denylist_expansion_enabled(sandbox_policy);
+        let danger_full_access_denylist_only =
+            Self::danger_full_access_denylist_only_enabled(requirements, sandbox_policy);
 
         if let Some(enabled) = requirements.enabled {
             config.network.enabled = enabled;
@@ -225,37 +229,43 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
         }
-        let managed_allowed_domains = if hard_deny_allowlist_misses {
-            Some(
+        if danger_full_access_denylist_only {
+            config
+                .network
+                .set_allowed_domains(vec![GLOBAL_ALLOWLIST_PATTERN.to_string()]);
+        } else {
+            let managed_allowed_domains = if hard_deny_allowlist_misses {
+                Some(
+                    requirements
+                        .domains
+                        .as_ref()
+                        .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
+                        .unwrap_or_default(),
+                )
+            } else {
                 requirements
                     .domains
                     .as_ref()
                     .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
-                    .unwrap_or_default(),
-            )
-        } else {
-            requirements
-                .domains
-                .as_ref()
-                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
-        };
-        if let Some(managed_allowed_domains) = managed_allowed_domains {
-            // Managed requirements seed the baseline allowlist. User additions
-            // can extend that baseline unless managed-only mode pins the
-            // effective allowlist to the managed set.
-            let effective_allowed_domains = if allowlist_expansion_enabled {
-                Self::merge_domain_lists(
-                    managed_allowed_domains.clone(),
-                    config.network.allowed_domains().as_deref().unwrap_or(&[]),
-                )
-            } else {
-                managed_allowed_domains.clone()
             };
-            config
-                .network
-                .set_allowed_domains(effective_allowed_domains);
-            constraints.allowed_domains = Some(managed_allowed_domains);
-            constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
+            if let Some(managed_allowed_domains) = managed_allowed_domains {
+                // Managed requirements seed the baseline allowlist. User additions
+                // can extend that baseline unless managed-only mode pins the
+                // effective allowlist to the managed set.
+                let effective_allowed_domains = if allowlist_expansion_enabled {
+                    Self::merge_domain_lists(
+                        managed_allowed_domains.clone(),
+                        config.network.allowed_domains().as_deref().unwrap_or(&[]),
+                    )
+                } else {
+                    managed_allowed_domains.clone()
+                };
+                config
+                    .network
+                    .set_allowed_domains(effective_allowed_domains);
+                constraints.allowed_domains = Some(managed_allowed_domains);
+                constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
+            }
         }
         let managed_denied_domains = requirements
             .domains
@@ -305,6 +315,16 @@ impl NetworkProxySpec {
 
     fn managed_allowed_domains_only(requirements: &NetworkConstraints) -> bool {
         requirements.managed_allowed_domains_only.unwrap_or(false)
+    }
+
+    fn danger_full_access_denylist_only_enabled(
+        requirements: &NetworkConstraints,
+        sandbox_policy: &SandboxPolicy,
+    ) -> bool {
+        matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+            && requirements
+                .danger_full_access_denylist_only
+                .unwrap_or(false)
     }
 
     fn denylist_expansion_enabled(sandbox_policy: &SandboxPolicy) -> bool {

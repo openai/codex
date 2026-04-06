@@ -179,6 +179,102 @@ fn danger_full_access_keeps_managed_allowlist_and_denylist_fixed() {
 }
 
 #[test]
+fn danger_full_access_denylist_only_allows_all_domains_and_enforces_managed_denies() {
+    let mut config = NetworkProxyConfig::default();
+    config
+        .network
+        .set_allowed_domains(vec!["evil.com".to_string()]);
+    config
+        .network
+        .set_denied_domains(vec!["more-blocked.example.com".to_string()]);
+    let requirements = NetworkConstraints {
+        domains: Some(domain_permissions([
+            ("*.example.com", NetworkDomainPermissionToml::Allow),
+            ("blocked.example.com", NetworkDomainPermissionToml::Deny),
+        ])),
+        danger_full_access_denylist_only: Some(true),
+        ..Default::default()
+    };
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        Some(requirements),
+        &SandboxPolicy::DangerFullAccess,
+    )
+    .expect("denylist-only yolo mode should allow all domains except managed denies");
+
+    assert_eq!(
+        spec.config.network.allowed_domains(),
+        Some(vec!["*".to_string()])
+    );
+    assert_eq!(
+        spec.config.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+    assert_eq!(spec.constraints.allowed_domains, None);
+    assert_eq!(spec.constraints.allowlist_expansion_enabled, None);
+    assert_eq!(
+        spec.constraints.denied_domains,
+        Some(vec!["blocked.example.com".to_string()])
+    );
+    assert_eq!(spec.constraints.denylist_expansion_enabled, Some(false));
+}
+
+#[test]
+fn danger_full_access_denylist_only_does_not_change_workspace_write_behavior() {
+    let mut config = NetworkProxyConfig::default();
+    config
+        .network
+        .set_allowed_domains(vec!["api.example.com".to_string()]);
+    config
+        .network
+        .set_denied_domains(vec!["blocked.example.com".to_string()]);
+    let requirements = NetworkConstraints {
+        domains: Some(domain_permissions([
+            ("*.example.com", NetworkDomainPermissionToml::Allow),
+            (
+                "managed-blocked.example.com",
+                NetworkDomainPermissionToml::Deny,
+            ),
+        ])),
+        danger_full_access_denylist_only: Some(true),
+        ..Default::default()
+    };
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        Some(requirements),
+        &SandboxPolicy::new_workspace_write_policy(),
+    )
+    .expect("denylist-only yolo flag should not affect workspace-write mode");
+
+    assert_eq!(
+        spec.config.network.allowed_domains(),
+        Some(vec![
+            "*.example.com".to_string(),
+            "api.example.com".to_string()
+        ])
+    );
+    assert_eq!(
+        spec.config.network.denied_domains(),
+        Some(vec![
+            "managed-blocked.example.com".to_string(),
+            "blocked.example.com".to_string()
+        ])
+    );
+    assert_eq!(
+        spec.constraints.allowed_domains,
+        Some(vec!["*.example.com".to_string()])
+    );
+    assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(true));
+    assert_eq!(
+        spec.constraints.denied_domains,
+        Some(vec!["managed-blocked.example.com".to_string()])
+    );
+    assert_eq!(spec.constraints.denylist_expansion_enabled, Some(true));
+}
+
+#[test]
 fn managed_allowed_domains_only_disables_default_mode_allowlist_expansion() {
     let mut config = NetworkProxyConfig::default();
     config
