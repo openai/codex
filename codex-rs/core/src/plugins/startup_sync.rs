@@ -37,7 +37,7 @@ const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(30)
 // Keep this comfortably above a normal sync attempt so we do not race another Codex process.
 const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 const STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE: &str = ".tmp/app-server-remote-plugin-sync-v1";
-const STARTUP_REMOTE_PLUGIN_SYNC_PREREQUISITE_TIMEOUT: Duration = Duration::from_secs(5);
+const STARTUP_REMOTE_PLUGIN_SYNC_PREREQUISITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
 struct GitHubRepositorySummary {
@@ -770,10 +770,39 @@ fn read_extracted_backup_archive_git_sha(repo_path: &Path) -> Result<Option<Stri
     }
 
     if let Some(reference) = head.strip_prefix("ref: ") {
-        return read_git_ref_sha(&git_dir, reference.trim()).map(Some);
+        let reference = validate_backup_archive_git_ref(reference.trim())?;
+        return read_git_ref_sha(&git_dir, reference).map(Some);
     }
 
     Ok(Some(head.to_string()))
+}
+
+fn validate_backup_archive_git_ref(reference: &str) -> Result<&str, String> {
+    if !reference.starts_with("refs/") {
+        return Err(format!(
+            "curated plugins backup archive git ref must stay under refs/: {reference}"
+        ));
+    }
+
+    let path = Path::new(reference);
+    if path.is_absolute() {
+        return Err(format!(
+            "curated plugins backup archive git ref must be relative: {reference}"
+        ));
+    }
+
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            _ => {
+                return Err(format!(
+                    "curated plugins backup archive git ref contains invalid path components: {reference}"
+                ));
+            }
+        }
+    }
+
+    Ok(reference)
 }
 
 fn read_git_ref_sha(git_dir: &Path, reference: &str) -> Result<String, String> {
