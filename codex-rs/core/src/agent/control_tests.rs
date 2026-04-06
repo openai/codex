@@ -142,6 +142,16 @@ fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
     })
 }
 
+fn response_item_contains_text(item: &ResponseItem, needle: &str) -> bool {
+    let ResponseItem::Message { content, .. } = item else {
+        return false;
+    };
+    content.iter().any(|content_item| match content_item {
+        ContentItem::InputText { text } | ContentItem::OutputText { text } => text.contains(needle),
+        ContentItem::InputImage { .. } => false,
+    })
+}
+
 /// Returns true when any message item contains `needle` in a text span.
 fn history_contains_text(history_items: &[ResponseItem], needle: &str) -> bool {
     history_items.iter().any(|item| {
@@ -996,6 +1006,205 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let _ = harness
         .control
         .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn watchdog_fork_injects_boot_context_after_parent_fork_items() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .inject_user_message_without_turn("parent seed context".to_string())
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread.codex.session.flush_rollout().await;
+
+    let child_thread_id = harness
+        .control
+        .fork_agent(
+            harness.config.clone(),
+            vec![UserInput::Text {
+                text: "watchdog helper prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            parent_thread_id,
+            usize::MAX,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("watchdog".to_string()),
+            }),
+        )
+        .await
+        .expect("watchdog helper fork should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+    let raw_items = history.raw_items();
+
+    let tool_search_call_index = raw_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ResponseItem::ToolSearchCall { call_id: Some(call_id), .. }
+                    if call_id == WATCHDOG_BOOT_TOOL_SEARCH_CALL_ID
+            )
+        })
+        .expect("watchdog helper should receive synthetic tool_search call");
+    let tool_search_output_index = raw_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ResponseItem::ToolSearchOutput { call_id: Some(call_id), .. }
+                    if call_id == WATCHDOG_BOOT_TOOL_SEARCH_CALL_ID
+            )
+        })
+        .expect("watchdog helper should receive synthetic tool_search output");
+    let list_agents_call_index = raw_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCall { namespace: Some(namespace), name, call_id, .. }
+                    if namespace == "agents"
+                        && name == "list_agents"
+                        && call_id == WATCHDOG_BOOT_LIST_AGENTS_CALL_ID
+            )
+        })
+        .expect("watchdog helper should receive synthetic list_agents call");
+    let list_agents_output = raw_items
+        .iter()
+        .find_map(|item| match item {
+            ResponseItem::FunctionCallOutput { call_id, output }
+                if call_id == WATCHDOG_BOOT_LIST_AGENTS_CALL_ID =>
+            {
+                output.text_content()
+            }
+            _ => None,
+        })
+        .expect("watchdog helper should receive synthetic list_agents output");
+
+    let parent_seed_index = raw_items
+        .iter()
+        .position(|item| response_item_contains_text(item, "parent seed context"))
+        .expect("forked parent content should be present");
+    assert!(parent_seed_index < tool_search_call_index);
+    assert!(tool_search_call_index < tool_search_output_index);
+    assert!(tool_search_output_index < list_agents_call_index);
+
+    let ResponseItem::ToolSearchOutput { tools, .. } = &raw_items[tool_search_output_index] else {
+        panic!("expected synthetic tool_search output");
+    };
+    let watchdog_namespace = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(serde_json::Value::as_str) == Some("watchdog"))
+        .expect("tool_search output should load watchdog namespace");
+    assert_eq!(
+        watchdog_namespace["tools"]
+            .as_array()
+            .expect("watchdog namespace should contain tools")
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>(),
+        vec!["compact_parent_context", "watchdog_self_close"]
+    );
+
+    let list_payload: serde_json::Value =
+        serde_json::from_str(list_agents_output).expect("list_agents output should be json");
+    assert_eq!(list_payload["source"], "pre_injected_agents_list");
+    assert_eq!(
+        list_payload["owner_thread_id"],
+        parent_thread_id.to_string()
+    );
+    assert!(list_payload["generated_at"].is_u64());
+    assert!(list_payload["agents"].is_array());
+
+    let _ = harness
+        .control
+        .shutdown_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn non_watchdog_fork_does_not_inject_watchdog_boot_context() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .inject_user_message_without_turn("parent seed context".to_string())
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread.codex.session.flush_rollout().await;
+
+    let child_thread_id = harness
+        .control
+        .fork_agent(
+            harness.config.clone(),
+            vec![UserInput::Text {
+                text: "ordinary helper prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            parent_thread_id,
+            usize::MAX,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+        )
+        .await
+        .expect("ordinary fork should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+    let raw_items = history.raw_items();
+
+    assert!(history_contains_text(raw_items, "parent seed context"));
+    assert!(!raw_items.iter().any(|item| matches!(
+        item,
+        ResponseItem::ToolSearchCall { call_id: Some(call_id), .. }
+            if call_id == WATCHDOG_BOOT_TOOL_SEARCH_CALL_ID
+    )));
+    assert!(!raw_items.iter().any(|item| matches!(
+        item,
+        ResponseItem::FunctionCall { call_id, .. }
+            if call_id == WATCHDOG_BOOT_LIST_AGENTS_CALL_ID
+    )));
+
+    let _ = harness
+        .control
+        .shutdown_agent(child_thread_id)
         .await
         .expect("child shutdown should submit");
     let _ = parent_thread

@@ -50,8 +50,11 @@ When you detect these, prescribe the corrective action explicitly.
 You have access to the standard agent tools, plus:
 
 - `send_input`.
+- `tool_search` to load watchdog-only tools when they are not already loaded.
 - `watchdog.compact_parent_context` (watchdog-only recovery tool; see below).
 - `watchdog.watchdog_self_close` (watchdog-only shutdown tool; see below).
+
+The watchdog namespace tools may be deferred. If the current context includes an injected `tool_search` result for the `watchdog` namespace, treat those tools as loaded. If not, call `tool_search` for the watchdog namespace before using `watchdog.compact_parent_context` or `watchdog.watchdog_self_close`.
 
 When recommending watchdogs to the root agent, keep `agent_type` at the default.
 

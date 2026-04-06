@@ -311,7 +311,7 @@ impl WatchdogManager {
             depth: snapshot.child_depth,
             agent_path: None,
             agent_nickname: None,
-            agent_role: None,
+            agent_role: Some("watchdog".to_string()),
         });
         let mut helper_config = snapshot.config.clone();
         helper_config.ephemeral = true;
