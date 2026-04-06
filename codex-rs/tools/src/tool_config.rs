@@ -102,6 +102,7 @@ pub struct ToolsConfig {
     pub js_repl_tools_only: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
+    pub agent_watchdog: bool,
     pub multi_agent_v2: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
@@ -139,6 +140,8 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_agent_watchdog =
+            include_collab_tools && features.enabled(Feature::AgentWatchdog);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = true;
@@ -216,6 +219,7 @@ impl ToolsConfig {
             js_repl_tools_only: include_js_repl_tools_only,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
+            agent_watchdog: include_agent_watchdog,
             multi_agent_v2: include_multi_agent_v2,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
