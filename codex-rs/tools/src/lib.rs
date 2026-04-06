@@ -55,6 +55,8 @@ pub use js_repl_tool::create_js_repl_reset_tool;
 pub use js_repl_tool::create_js_repl_tool;
 pub use json_schema::AdditionalProperties;
 pub use json_schema::JsonSchema;
+pub use json_schema::JsonSchemaPrimitiveType;
+pub use json_schema::JsonSchemaType;
 pub use json_schema::parse_tool_input_schema;
 pub use local_tool::CommandToolOptions;
 pub use local_tool::ShellToolOptions;

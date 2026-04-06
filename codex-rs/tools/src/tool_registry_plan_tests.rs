@@ -5,6 +5,8 @@ use crate::DiscoverablePluginInfo;
 use crate::DiscoverableTool;
 use crate::FreeformTool;
 use crate::JsonSchema;
+use crate::JsonSchemaPrimitiveType;
+use crate::JsonSchemaType;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
@@ -172,9 +174,7 @@ fn test_build_specs_collab_tools_enabled() {
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &spawn_agent.spec else {
         panic!("spawn_agent should be a function tool");
     };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("spawn_agent should use object params");
-    };
+    let (properties, _) = expect_object_schema(parameters);
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
 }
@@ -223,21 +223,14 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     else {
         panic!("spawn_agent should be a function tool");
     };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("spawn_agent should use object params");
-    };
+    let (properties, required) = expect_object_schema(parameters);
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
-        required.as_ref(),
+        required,
         Some(&vec!["task_name".to_string(), "message".to_string()])
     );
     let output_schema = output_schema
@@ -255,20 +248,13 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("send_message should be a function tool");
     };
     assert_eq!(output_schema, &None);
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("send_message should use object params");
-    };
+    let (properties, required) = expect_object_schema(parameters);
     assert!(properties.contains_key("target"));
     assert!(!properties.contains_key("interrupt"));
     assert!(properties.contains_key("message"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
-        required.as_ref(),
+        required,
         Some(&vec!["target".to_string(), "message".to_string()])
     );
 
@@ -282,19 +268,12 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("followup_task should be a function tool");
     };
     assert_eq!(output_schema, &None);
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("followup_task should use object params");
-    };
+    let (properties, required) = expect_object_schema(parameters);
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
-        required.as_ref(),
+        required,
         Some(&vec!["target".to_string(), "message".to_string()])
     );
 
@@ -307,17 +286,10 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     else {
         panic!("wait_agent should be a function tool");
     };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("wait_agent should use object params");
-    };
+    let (properties, required) = expect_object_schema(parameters);
     assert!(!properties.contains_key("targets"));
     assert!(properties.contains_key("timeout_ms"));
-    assert_eq!(required, &None);
+    assert_eq!(required, None);
     let output_schema = output_schema
         .as_ref()
         .expect("wait_agent should define output schema");
@@ -335,16 +307,9 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     else {
         panic!("list_agents should be a function tool");
     };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("list_agents should use object params");
-    };
+    let (properties, required) = expect_object_schema(parameters);
     assert!(properties.contains_key("path_prefix"));
-    assert_eq!(required.as_ref(), None);
+    assert_eq!(required, None);
     let output_schema = output_schema
         .as_ref()
         .expect("list_agents should define output schema");
@@ -416,9 +381,7 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
         panic!("view_image should be a function tool");
     };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("view_image should use an object schema");
-    };
+    let (properties, _) = expect_object_schema(parameters);
     assert!(!properties.contains_key("detail"));
 }
 
@@ -448,16 +411,13 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
         panic!("view_image should be a function tool");
     };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("view_image should use an object schema");
-    };
+    let (properties, _) = expect_object_schema(parameters);
     assert!(properties.contains_key("detail"));
-    let Some(JsonSchema::String {
-        description: Some(description),
-    }) = properties.get("detail")
-    else {
-        panic!("view_image detail should include a description");
-    };
+    let description = expect_string_description(
+        properties
+            .get("detail")
+            .expect("view_image detail should include a description"),
+    );
     assert!(description.contains("only supported value is `original`"));
     assert!(description.contains("omit this field for default resized behavior"));
 }
@@ -1118,40 +1078,40 @@ fn test_build_specs_mcp_tools_converted() {
         &tool.spec,
         &ToolSpec::Function(ResponsesApiTool {
             name: "test_server/do_something_cool".to_string(),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(
+                BTreeMap::from([
                     (
                         "string_argument".to_string(),
-                        JsonSchema::String { description: None }
+                        JsonSchema::string(/*description*/ None),
                     ),
                     (
                         "number_argument".to_string(),
-                        JsonSchema::Number { description: None }
+                        JsonSchema::number(/*description*/ None),
                     ),
                     (
                         "object_argument".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([
+                        JsonSchema::object(
+                            BTreeMap::from([
                                 (
                                     "string_property".to_string(),
-                                    JsonSchema::String { description: None }
+                                    JsonSchema::string(/*description*/ None),
                                 ),
                                 (
                                     "number_property".to_string(),
-                                    JsonSchema::Number { description: None }
+                                    JsonSchema::number(/*description*/ None),
                                 ),
                             ]),
-                            required: Some(vec![
+                            Some(vec![
                                 "string_property".to_string(),
                                 "number_property".to_string(),
                             ]),
-                            additional_properties: Some(false.into()),
-                        },
+                            Some(false.into()),
+                        ),
                     ),
                 ]),
-                required: None,
-                additional_properties: None,
-            },
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             description: "Do something cool".to_string(),
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
@@ -1524,11 +1484,9 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
-    let JsonSchema::Object { required, .. } = parameters else {
-        panic!("expected object parameters");
-    };
+    let (_, required) = expect_object_schema(parameters);
     assert_eq!(
-        required.as_ref(),
+        required,
         Some(&vec![
             "tool_type".to_string(),
             "action_type".to_string(),
@@ -1586,6 +1544,91 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
         description,
         "Echo text\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```"
     );
+}
+
+#[test]
+fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            "mcp__sample__fn".to_string(),
+            mcp_tool(
+                "fn",
+                "Sample fn",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "open": {
+                            "anyOf": [
+                                {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "ref_id": {"type": "string"},
+                                            "lineno": {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+                                        },
+                                        "required": ["ref_id"],
+                                        "additionalProperties": false
+                                    }
+                                },
+                                {"type": "null"}
+                            ]
+                        },
+                        "tagged_list": {
+                            "anyOf": [
+                                {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "kind": {"type": "const", "const": "tagged"},
+                                            "variant": {"type": "enum", "enum": ["alpha", "beta"]},
+                                            "scope": {"type": "enum", "enum": ["one", "two"]}
+                                        },
+                                        "required": ["kind", "variant", "scope"]
+                                    }
+                                },
+                                {"type": "null"}
+                            ]
+                        },
+                        "response_length": {"type": "enum", "enum": ["short", "medium", "long"]}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+        )])),
+        /*app_tools*/ None,
+        &[],
+    );
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        &find_tool(&tools, "mcp__sample__fn").spec
+    else {
+        panic!("expected function tool");
+    };
+
+    assert!(description.contains(
+        r#"exec tool declaration:
+```ts
+declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+```"#
+    ));
 }
 
 #[test]
@@ -1884,30 +1927,46 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
 }
 
+fn expect_object_schema(
+    schema: &JsonSchema,
+) -> (&BTreeMap<String, JsonSchema>, Option<&Vec<String>>) {
+    assert_eq!(
+        schema.schema_type,
+        Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
+    );
+    let properties = schema
+        .properties
+        .as_ref()
+        .expect("expected object properties");
+    (properties, schema.required.as_ref())
+}
+
+fn expect_string_description(schema: &JsonSchema) -> &str {
+    assert_eq!(
+        schema.schema_type,
+        Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::String))
+    );
+    schema.description.as_deref().expect("expected description")
+}
+
 fn strip_descriptions_schema(schema: &mut JsonSchema) {
-    match schema {
-        JsonSchema::Boolean { description }
-        | JsonSchema::String { description }
-        | JsonSchema::Number { description } => {
-            *description = None;
-        }
-        JsonSchema::Array { items, description } => {
-            strip_descriptions_schema(items);
-            *description = None;
-        }
-        JsonSchema::Object {
-            properties,
-            required: _,
-            additional_properties,
-        } => {
-            for value in properties.values_mut() {
-                strip_descriptions_schema(value);
-            }
-            if let Some(AdditionalProperties::Schema(schema)) = additional_properties {
-                strip_descriptions_schema(schema);
-            }
+    if let Some(variants) = &mut schema.any_of {
+        for variant in variants {
+            strip_descriptions_schema(variant);
         }
     }
+    if let Some(items) = &mut schema.items {
+        strip_descriptions_schema(items);
+    }
+    if let Some(properties) = &mut schema.properties {
+        for value in properties.values_mut() {
+            strip_descriptions_schema(value);
+        }
+    }
+    if let Some(AdditionalProperties::Schema(schema)) = &mut schema.additional_properties {
+        strip_descriptions_schema(schema);
+    }
+    schema.description = None;
 }
 
 fn strip_descriptions_tool(spec: &mut ToolSpec) {
