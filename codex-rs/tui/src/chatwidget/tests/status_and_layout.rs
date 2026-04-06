@@ -148,12 +148,10 @@ async fn on_terminal_resize_initial_width_requests_redraw() {
 async fn add_to_history_does_not_commit_transient_stream_tail_after_controller_clear() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.active_cell = Some(Box::new(
-        crate::history_cell::StreamingAgentTailCell::new(
-            vec![ratatui::text::Line::from("transient table tail preview")],
-            true,
-        ),
-    ));
+    chat.active_cell = Some(Box::new(crate::history_cell::StreamingAgentTailCell::new(
+        vec![ratatui::text::Line::from("transient table tail preview")],
+        true,
+    )));
     // Interrupt/error cleanup paths clear the controller before appending history.
     chat.stream_controller = None;
 
@@ -200,12 +198,10 @@ async fn on_error_does_not_persist_transient_stream_tail_during_finalize_turn() 
         chat.config.cwd.as_path(),
         false,
     ));
-    chat.active_cell = Some(Box::new(
-        crate::history_cell::StreamingAgentTailCell::new(
-            vec![ratatui::text::Line::from("transient stream tail preview")],
-            true,
-        ),
-    ));
+    chat.active_cell = Some(Box::new(crate::history_cell::StreamingAgentTailCell::new(
+        vec![ratatui::text::Line::from("transient stream tail preview")],
+        true,
+    )));
 
     chat.on_error("stream failed".to_string());
 

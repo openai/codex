@@ -275,7 +275,10 @@ pub(crate) enum AppEvent {
     /// to find the `AgentMessageCell` run and splices in the consolidated cell.
     /// The `cwd` keeps local file-link display stable across the final re-render.
     /// If `reflow_ran_during_stream` is set, a follow-up reflow is scheduled.
-    ConsolidateAgentMessage { source: String, cwd: PathBuf },
+    ConsolidateAgentMessage {
+        source: String,
+        cwd: PathBuf,
+    },
 
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
     /// end of the transcript with a single source-backed `ProposedPlanCell`.

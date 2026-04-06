@@ -162,7 +162,6 @@ use codex_protocol::protocol::ErrorEvent;
 #[cfg(test)]
 use codex_protocol::protocol::Event;
 #[cfg(test)]
-#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -177,8 +176,6 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
-#[cfg(test)]
-use codex_protocol::protocol::EventMsg;
 #[cfg(test)]
 use codex_protocol::protocol::McpListToolsResponseEvent;
 #[cfg(test)]

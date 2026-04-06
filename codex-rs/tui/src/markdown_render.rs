@@ -2113,7 +2113,7 @@ mod tests {
         cell.hard_break();
         cell.push_span("second line".into());
 
-        let writer = W::new(std::iter::empty(), Some(80));
+        let writer = W::new(std::iter::empty(), Some(80), None);
         let wrapped = writer.wrap_cell(&cell, 40);
         let rendered = wrapped
             .iter()

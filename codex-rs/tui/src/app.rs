@@ -466,9 +466,9 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         message.push_str(&format!("       {reason}\n"));
     }
 
-app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-    history_cell::new_warning_event(message),
-)));
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_warning_event(message),
+    )));
 }
 
 fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {

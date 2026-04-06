@@ -4821,7 +4821,7 @@ mod tests {
     #[test]
     fn agent_markdown_cell_narrow_width_shows_prefix_only() {
         let source = "| Name | Role |\n|------|------|\n| Alice | Engineer |\n";
-        let cell = AgentMarkdownCell::new(source.to_string());
+        let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
 
         let lines = render_lines(&cell.display_lines(2));
         assert_eq!(lines, vec!["• ".to_string()]);
@@ -4839,10 +4839,11 @@ mod tests {
         let reasoning_cell = ReasoningSummaryCell::new(
             "Plan".to_string(),
             "Reasoning summary content for tiny widths.".to_string(),
+            &test_cwd(),
             false,
         );
         let agent_markdown_cell =
-            AgentMarkdownCell::new("| A | B |\n|---|---|\n| x | y |\n".to_string());
+            AgentMarkdownCell::new("| A | B |\n|---|---|\n| x | y |\n".to_string(), &test_cwd());
 
         for width in 1..=4 {
             assert!(

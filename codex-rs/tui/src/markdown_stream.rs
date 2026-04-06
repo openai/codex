@@ -239,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn peek_uncommitted_tracks_buffer_after_commits() {
-        let mut c = super::MarkdownStreamCollector::new(None);
+        let mut c = super::MarkdownStreamCollector::new(None, &super::test_cwd());
 
         c.push_delta("alpha");
         assert_eq!(c.peek_uncommitted(), "alpha");
@@ -514,7 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn table_header_commits_without_holdback() {
-        let mut c = super::MarkdownStreamCollector::new(None);
+        let mut c = super::MarkdownStreamCollector::new(None, &super::test_cwd());
         c.push_delta("| A | B |\n");
         let out1 = c.commit_complete_lines();
         let out1_str = lines_to_plain_strings(&out1);
@@ -541,7 +541,7 @@ mod tests {
 
     #[tokio::test]
     async fn pipe_text_without_table_prefix_is_not_delayed() {
-        let mut c = super::MarkdownStreamCollector::new(None);
+        let mut c = super::MarkdownStreamCollector::new(None, &super::test_cwd());
         c.push_delta("Escaped pipe in text: a | b | c\n");
         let out = c.commit_complete_lines();
         let out_str = lines_to_plain_strings(&out);
@@ -869,7 +869,7 @@ mod tests {
             "| 1 | 2 |\n",
             "```\n",
         ];
-        let mut collector = super::MarkdownStreamCollector::new(None);
+        let mut collector = super::MarkdownStreamCollector::new(None, &super::test_cwd());
         let mut raw_source = String::new();
 
         for delta in deltas {
