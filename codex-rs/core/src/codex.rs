@@ -8046,9 +8046,8 @@ async fn should_stop_watchdog_turn_after_terminal_action(
 
     sess.services
         .agent_control
-        .watchdog_owner_for_active_helper(sess.conversation_id)
+        .watchdog_helper_is_active_or_suppressed(sess.conversation_id)
         .await
-        .is_some()
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {

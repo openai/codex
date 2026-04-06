@@ -62,6 +62,7 @@ pub(crate) struct WatchdogManager {
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
     registrations: Mutex<HashMap<ThreadId, WatchdogEntry>>,
+    suppressed_helpers: Mutex<HashSet<ThreadId>>,
     started: AtomicBool,
     next_generation: AtomicI64,
 }
@@ -72,6 +73,7 @@ impl WatchdogManager {
             manager,
             state,
             registrations: Mutex::new(HashMap::new()),
+            suppressed_helpers: Mutex::new(HashSet::new()),
             started: AtomicBool::new(false),
             next_generation: AtomicI64::new(1),
         })
@@ -132,6 +134,9 @@ impl WatchdogManager {
         let mut superseded = Vec::new();
         for superseded_target in superseded_targets {
             if let Some(removed) = registrations.remove(&superseded_target) {
+                if let Some(helper_id) = removed.active_helper_id {
+                    self.suppressed_helpers.lock().await.remove(&helper_id);
+                }
                 superseded.push(RemovedWatchdog {
                     target_thread_id: superseded_target,
                     active_helper_id: removed.active_helper_id,
@@ -537,12 +542,19 @@ impl WatchdogManager {
 
     pub(crate) async fn unregister(&self, target_thread_id: ThreadId) -> Option<RemovedWatchdog> {
         let mut registrations = self.registrations.lock().await;
-        registrations
-            .remove(&target_thread_id)
-            .map(|removed| RemovedWatchdog {
-                target_thread_id,
-                active_helper_id: removed.active_helper_id,
-            })
+        let removed = registrations.remove(&target_thread_id);
+        let active_helper_id = removed
+            .as_ref()
+            .and_then(|removed| removed.active_helper_id);
+        let removed = removed.map(|removed| RemovedWatchdog {
+            target_thread_id,
+            active_helper_id: removed.active_helper_id,
+        });
+        drop(registrations);
+        if let Some(helper_id) = active_helper_id {
+            self.suppressed_helpers.lock().await.remove(&helper_id);
+        }
+        removed
     }
 
     pub(crate) async fn owner_for_active_helper(
@@ -566,6 +578,27 @@ impl WatchdogManager {
         })
     }
 
+    pub(crate) async fn helper_is_active_or_suppressed(&self, helper_thread_id: ThreadId) -> bool {
+        if self
+            .owner_for_active_helper(helper_thread_id)
+            .await
+            .is_some()
+        {
+            return true;
+        }
+        self.suppressed_helpers
+            .lock()
+            .await
+            .contains(&helper_thread_id)
+    }
+
+    pub(crate) async fn take_suppressed_helper(&self, helper_thread_id: ThreadId) -> bool {
+        self.suppressed_helpers
+            .lock()
+            .await
+            .remove(&helper_thread_id)
+    }
+
     pub(crate) async fn snooze_active_helper(
         &self,
         helper_thread_id: ThreadId,
@@ -583,6 +616,11 @@ impl WatchdogManager {
             .map(|seconds| seconds.clamp(WATCHDOG_MIN_SNOOZE_SECONDS, WATCHDOG_MAX_SNOOZE_SECONDS))
             .unwrap_or_else(|| entry.interval.as_secs().max(1));
         entry.snoozed_until = Some(Instant::now() + Duration::from_secs(delay_seconds));
+        entry.active_helper_id = None;
+        self.suppressed_helpers
+            .lock()
+            .await
+            .insert(helper_thread_id);
         Some(WatchdogSnoozeResult {
             owner_thread_id: entry.registration.owner_thread_id,
             target_thread_id,

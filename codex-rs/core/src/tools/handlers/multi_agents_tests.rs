@@ -3601,7 +3601,12 @@ async fn watchdog_snooze_keeps_handle_registered_and_suppresses_fallback() {
         agent_control
             .watchdog_target_for_active_helper(helper_thread_id)
             .await,
-        Some(target_thread_id)
+        None
+    );
+    assert!(
+        agent_control
+            .watchdog_helper_is_active_or_suppressed(helper_thread_id)
+            .await
     );
     assert_ne!(
         agent_control.get_status(target_thread_id).await,

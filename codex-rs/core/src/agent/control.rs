@@ -1327,6 +1327,13 @@ impl AgentControl {
                 let _ = owner_thread_id;
                 return;
             }
+            if control
+                .watchdogs
+                .take_suppressed_helper(child_thread_id)
+                .await
+            {
+                return;
+            }
 
             let Ok(state) = control.upgrade() else {
                 return;
@@ -1515,6 +1522,15 @@ impl AgentControl {
     ) -> Option<WatchdogSnoozeResult> {
         self.watchdogs
             .snooze_active_helper(helper_thread_id, requested_delay_seconds)
+            .await
+    }
+
+    pub(crate) async fn watchdog_helper_is_active_or_suppressed(
+        &self,
+        helper_thread_id: ThreadId,
+    ) -> bool {
+        self.watchdogs
+            .helper_is_active_or_suppressed(helper_thread_id)
             .await
     }
 
