@@ -228,6 +228,13 @@ inject_repo(crate, "zstd")
 use_repo(crate, "argument_comment_lint_crates")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
+single_version_override(
+    module_name = "bzip2",
+    patch_strip = 1,
+    patches = [
+        "//patches:bzip2_windows_stack_args.patch",
+    ],
+)
 
 crate.annotation(
     crate = "bzip2-sys",
@@ -246,6 +253,13 @@ crate.annotation(
 inject_repo(crate, "zlib")
 
 bazel_dep(name = "xz", version = "5.4.5.bcr.8")
+single_version_override(
+    module_name = "xz",
+    patch_strip = 1,
+    patches = [
+        "//patches:xz_windows_stack_args.patch",
+    ],
+)
 
 crate.annotation(
     crate = "lzma-sys",

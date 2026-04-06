@@ -1,0 +1,15 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -28,4 +28,11 @@ cc_library(
+     defines = [
+         "_FILE_OFFSET_BITS=64",
+     ],
++    copts = select({
++        "@platforms//os:windows": [
++            "-fno-stack-protector",
++            "-mno-stack-arg-probe",
++        ],
++        "//conditions:default": [],
++    }),
+     includes = ["."],
