@@ -1837,6 +1837,41 @@ mod tests {
     }
 
     #[test]
+    fn thread_alarm_create_is_marked_experimental() {
+        let request = ClientRequest::ThreadAlarmCreate {
+            request_id: RequestId::Integer(1),
+            params: v2::ThreadAlarmCreateParams {
+                thread_id: "thr_123".to_string(),
+                cron_expression: "@after-turn".to_string(),
+                prompt: "run tests".to_string(),
+                run_once: Some(false),
+                delivery: v2::AlarmDelivery::AfterTurn,
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("thread/alarm/create"));
+    }
+
+    #[test]
+    fn thread_alarm_fired_notification_is_marked_experimental() {
+        let notification = ServerNotification::ThreadAlarmFired(v2::ThreadAlarmFiredNotification {
+            thread_id: "thr_123".to_string(),
+            alarm: v2::ThreadAlarm {
+                id: "alarm_123".to_string(),
+                cron_expression: "@after-turn".to_string(),
+                prompt: "run tests".to_string(),
+                run_once: false,
+                delivery: v2::AlarmDelivery::AfterTurn,
+                created_at: 1,
+                next_run_at: None,
+                last_run_at: None,
+            },
+        });
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
+        assert_eq!(reason, Some("thread/alarm/fired"));
+    }
+
+    #[test]
     fn command_execution_request_approval_additional_permissions_is_marked_experimental() {
         let params = v2::CommandExecutionRequestApprovalParams {
             thread_id: "thr_123".to_string(),
