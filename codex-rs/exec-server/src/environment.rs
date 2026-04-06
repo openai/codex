@@ -14,14 +14,6 @@ use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
-/// Provides access to the exec backend for a selected environment.
-///
-/// Implementations are expected to return the backend that matches the current
-/// environment mode, including disabled backends that reject execution.
-pub trait ExecutorEnvironment: Send + Sync {
-    fn get_exec_backend(&self) -> Arc<dyn ExecBackend>;
-}
-
 /// Lazily creates and caches the active environment for a session.
 ///
 /// The manager keeps the session's environment mode stable so subagents and
@@ -210,13 +202,6 @@ fn normalize_exec_server_url(exec_server_url: Option<String>) -> (Option<String>
         Some(url) => (Some(url.to_string()), false),
     }
 }
-
-impl ExecutorEnvironment for Environment {
-    fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
-        Arc::clone(&self.exec_backend)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
