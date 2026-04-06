@@ -57,6 +57,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
     use crate::tools::handlers::multi_agents::CompactParentContextHandler;
+    use crate::tools::handlers::multi_agents::ListAgentsHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
@@ -165,6 +166,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::JsReplReset => {
                 builder.register_handler(handler.name, js_repl_reset_handler.clone());
+            }
+            ToolHandlerKind::ListAgentsV1 => {
+                builder.register_handler(handler.name, Arc::new(ListAgentsHandler));
             }
             ToolHandlerKind::ListAgentsV2 => {
                 builder.register_handler(handler.name, Arc::new(ListAgentsHandlerV2));

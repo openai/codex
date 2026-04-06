@@ -113,6 +113,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             create_resume_agent_tool(),
             create_wait_agent_tool_v1(wait_agent_timeout_options()),
             create_close_agent_tool_v1(),
+            create_list_agents_tool(),
         ]
     };
     let spec = create_agent_tools_namespace(collab_specs);

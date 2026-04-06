@@ -396,6 +396,7 @@ pub fn build_tool_registry_plan(
                 create_resume_agent_tool(),
                 create_wait_agent_tool_v1(params.wait_agent_timeouts),
                 create_close_agent_tool_v1(),
+                create_list_agents_tool(),
             ];
             plan.push_spec(
                 create_agent_tools_namespace(agent_tools),
@@ -407,6 +408,7 @@ pub fn build_tool_registry_plan(
             register_agent_tool_handler(&mut plan, "resume_agent", ToolHandlerKind::ResumeAgentV1);
             register_agent_tool_handler(&mut plan, "wait_agent", ToolHandlerKind::WaitAgentV1);
             register_agent_tool_handler(&mut plan, "close_agent", ToolHandlerKind::CloseAgentV1);
+            register_agent_tool_handler(&mut plan, "list_agents", ToolHandlerKind::ListAgentsV1);
         }
     }
 

@@ -21,6 +21,7 @@ pub enum ToolHandlerKind {
     FollowupTaskV2,
     JsRepl,
     JsReplReset,
+    ListAgentsV1,
     ListAgentsV2,
     ListDir,
     Mcp,
