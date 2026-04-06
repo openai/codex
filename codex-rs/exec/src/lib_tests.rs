@@ -309,6 +309,9 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
                 items: Vec::new(),
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         });
 
