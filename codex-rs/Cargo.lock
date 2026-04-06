@@ -2095,7 +2095,6 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "codex-app-server-protocol",
- "codex-protocol",
  "codex-sandboxing",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
