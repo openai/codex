@@ -164,6 +164,49 @@ async fn loads_api_key_from_auth_json() {
     assert!(auth.get_token_data().is_err());
 }
 
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn loads_chatgpt_auth_without_id_token() {
+    let dir = tempdir().unwrap();
+    let auth_file = dir.path().join("auth.json");
+    std::fs::write(
+        auth_file,
+        serde_json::to_string_pretty(&json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "access_token": "test-access-token",
+                "refresh_token": "test-refresh-token",
+                "account_id": "account-id"
+            },
+            "last_refresh": Utc::now(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let auth = super::load_auth(
+        dir.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(auth.auth_mode(), AuthMode::Chatgpt);
+    assert_eq!(auth.get_account_id().as_deref(), Some("account-id"));
+    assert_eq!(auth.get_account_email(), None);
+    assert_eq!(
+        auth.get_token_data().unwrap(),
+        TokenData {
+            id_token: IdTokenInfo::default(),
+            access_token: "test-access-token".to_string(),
+            refresh_token: "test-refresh-token".to_string(),
+            account_id: Some("account-id".to_string()),
+        }
+    );
+}
+
 #[test]
 fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let dir = tempdir()?;
