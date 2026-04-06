@@ -27,6 +27,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
+use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use opentelemetry::global;
@@ -234,6 +235,8 @@ fn build_test_processor(
 ) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+    let auth_manager =
+        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false);
     let processor = MessageProcessor::new(MessageProcessorArgs {
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
@@ -246,7 +249,7 @@ fn build_test_processor(
         log_db: None,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
-        enable_codex_api_key_env: false,
+        auth_manager,
         rpc_transport: AppServerRpcTransport::Stdio,
     });
     (processor, outgoing_rx)

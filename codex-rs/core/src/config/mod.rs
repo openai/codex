@@ -58,6 +58,7 @@ use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManagerConfig;
 use codex_mcp::mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -591,6 +592,20 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+}
+
+impl AuthManagerConfig for Config {
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home.clone()
+    }
+
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        self.cli_auth_credentials_store_mode
+    }
+
+    fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+        self.forced_chatgpt_workspace_id.clone()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
