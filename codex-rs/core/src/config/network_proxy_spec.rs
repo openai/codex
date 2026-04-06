@@ -284,7 +284,7 @@ impl NetworkProxySpec {
             constraints.denied_domains = Some(managed_denied_domains);
             constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
-        if requirements.unix_sockets.is_some() {
+        if requirements.unix_sockets.is_some() && !danger_full_access_denylist_only {
             let allow_unix_sockets = requirements
                 .unix_sockets
                 .as_ref()
@@ -298,6 +298,14 @@ impl NetworkProxySpec {
         if let Some(allow_local_binding) = requirements.allow_local_binding {
             config.network.allow_local_binding = allow_local_binding;
             constraints.allow_local_binding = Some(allow_local_binding);
+        }
+        if danger_full_access_denylist_only {
+            config.network.allow_upstream_proxy = true;
+            constraints.allow_upstream_proxy = Some(true);
+            config.network.dangerously_allow_all_unix_sockets = true;
+            constraints.dangerously_allow_all_unix_sockets = Some(true);
+            config.network.allow_local_binding = true;
+            constraints.allow_local_binding = Some(true);
         }
 
         (config, constraints)

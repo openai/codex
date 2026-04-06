@@ -1,8 +1,11 @@
 use super::*;
 use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
+use crate::config_loader::NetworkUnixSocketPermissionToml;
+use crate::config_loader::NetworkUnixSocketPermissionsToml;
 use codex_network_proxy::NetworkDomainPermission;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
 fn domain_permissions(
     entries: impl IntoIterator<Item = (&'static str, NetworkDomainPermissionToml)>,
@@ -188,11 +191,20 @@ fn danger_full_access_denylist_only_allows_all_domains_and_enforces_managed_deni
         .network
         .set_denied_domains(vec!["more-blocked.example.com".to_string()]);
     let requirements = NetworkConstraints {
+        allow_upstream_proxy: Some(false),
+        dangerously_allow_all_unix_sockets: Some(false),
         domains: Some(domain_permissions([
             ("*.example.com", NetworkDomainPermissionToml::Allow),
             ("blocked.example.com", NetworkDomainPermissionToml::Deny),
         ])),
         danger_full_access_denylist_only: Some(true),
+        unix_sockets: Some(NetworkUnixSocketPermissionsToml {
+            entries: BTreeMap::from([(
+                "/tmp/managed.sock".to_string(),
+                NetworkUnixSocketPermissionToml::Allow,
+            )]),
+        }),
+        allow_local_binding: Some(false),
         ..Default::default()
     };
 
@@ -211,6 +223,16 @@ fn danger_full_access_denylist_only_allows_all_domains_and_enforces_managed_deni
         spec.config.network.denied_domains(),
         Some(vec!["blocked.example.com".to_string()])
     );
+    assert!(spec.config.network.allow_upstream_proxy);
+    assert!(spec.config.network.dangerously_allow_all_unix_sockets);
+    assert!(spec.config.network.allow_local_binding);
+    assert_eq!(spec.constraints.allow_upstream_proxy, Some(true));
+    assert_eq!(
+        spec.constraints.dangerously_allow_all_unix_sockets,
+        Some(true)
+    );
+    assert_eq!(spec.constraints.allow_unix_sockets, None);
+    assert_eq!(spec.constraints.allow_local_binding, Some(true));
     assert_eq!(spec.constraints.allowed_domains, None);
     assert_eq!(spec.constraints.allowlist_expansion_enabled, None);
     assert_eq!(
@@ -230,6 +252,8 @@ fn danger_full_access_denylist_only_does_not_change_workspace_write_behavior() {
         .network
         .set_denied_domains(vec!["blocked.example.com".to_string()]);
     let requirements = NetworkConstraints {
+        allow_upstream_proxy: Some(false),
+        dangerously_allow_all_unix_sockets: Some(false),
         domains: Some(domain_permissions([
             ("*.example.com", NetworkDomainPermissionToml::Allow),
             (
@@ -238,6 +262,13 @@ fn danger_full_access_denylist_only_does_not_change_workspace_write_behavior() {
             ),
         ])),
         danger_full_access_denylist_only: Some(true),
+        unix_sockets: Some(NetworkUnixSocketPermissionsToml {
+            entries: BTreeMap::from([(
+                "/tmp/managed.sock".to_string(),
+                NetworkUnixSocketPermissionToml::Allow,
+            )]),
+        }),
+        allow_local_binding: Some(false),
         ..Default::default()
     };
 
@@ -262,6 +293,23 @@ fn danger_full_access_denylist_only_does_not_change_workspace_write_behavior() {
             "blocked.example.com".to_string()
         ])
     );
+    assert!(!spec.config.network.allow_upstream_proxy);
+    assert!(!spec.config.network.dangerously_allow_all_unix_sockets);
+    assert_eq!(
+        spec.config.network.allow_unix_sockets(),
+        vec!["/tmp/managed.sock".to_string()]
+    );
+    assert!(!spec.config.network.allow_local_binding);
+    assert_eq!(spec.constraints.allow_upstream_proxy, Some(false));
+    assert_eq!(
+        spec.constraints.dangerously_allow_all_unix_sockets,
+        Some(false)
+    );
+    assert_eq!(
+        spec.constraints.allow_unix_sockets,
+        Some(vec!["/tmp/managed.sock".to_string()])
+    );
+    assert_eq!(spec.constraints.allow_local_binding, Some(false));
     assert_eq!(
         spec.constraints.allowed_domains,
         Some(vec!["*.example.com".to_string()])

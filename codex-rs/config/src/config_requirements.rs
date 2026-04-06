@@ -237,7 +237,7 @@ pub struct NetworkRequirementsToml {
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
-    /// In danger-full-access mode, allow all domains and enforce managed deny entries.
+    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
     pub danger_full_access_denylist_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
@@ -257,7 +257,7 @@ struct RawNetworkRequirementsToml {
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     managed_allowed_domains_only: Option<bool>,
-    /// In danger-full-access mode, allow all domains and enforce managed deny entries.
+    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
     danger_full_access_denylist_only: Option<bool>,
     #[serde(default)]
     denied_domains: Option<Vec<String>>,
@@ -365,7 +365,7 @@ pub struct NetworkConstraints {
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
-    /// In danger-full-access mode, allow all domains and enforce managed deny entries.
+    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
     pub danger_full_access_denylist_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
