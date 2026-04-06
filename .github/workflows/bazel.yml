@@ -223,7 +223,7 @@ jobs:
       # Save bazel repository cache explicitly; make non-fatal so cache uploading
       # never fails the overall job. Only save when key wasn't hit.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.cache_bazel_repository_restore.outputs.cache-hit != 'true'
+        if: always()
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
