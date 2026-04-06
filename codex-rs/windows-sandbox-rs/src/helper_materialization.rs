@@ -16,18 +16,21 @@ use crate::sandbox_bin_dir;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup-helper",
         }
     }
 }
@@ -44,16 +47,39 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
     sandbox_bin_dir(codex_home)
 }
 
-pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(kind.file_name());
-            if candidate.exists() {
-                return candidate;
-            }
+fn is_windowsapps_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
+}
+
+fn helper_read_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    (!is_windowsapps_path(dir)).then(|| dir.to_path_buf())
+}
+
+pub(crate) fn current_exe_helper_read_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    helper_read_root_from_exe_path(&exe)
+}
+
+fn legacy_lookup_from_exe_path(kind: HelperExecutable, exe: &Path) -> PathBuf {
+    if let Some(dir) = helper_read_root_from_exe_path(exe) {
+        let candidate = dir.join(kind.file_name());
+        if candidate.exists() {
+            return candidate;
         }
     }
     PathBuf::from(kind.file_name())
+}
+
+pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
+    std::env::current_exe()
+        .map(|exe| legacy_lookup_from_exe_path(kind, &exe))
+        .unwrap_or_else(|_| PathBuf::from(kind.file_name()))
 }
 
 pub(crate) fn resolve_helper_for_launch(
@@ -287,19 +313,38 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         .modified()
         .with_context(|| format!("read helper destination mtime {}", destination.display()))?;
 
-    Ok(destination_modified >= source_modified)
+    if destination_modified < source_modified {
+        return Ok(false);
+    }
+
+    files_match(source, destination)
+}
+
+fn files_match(source: &Path, destination: &Path) -> Result<bool> {
+    Ok(
+        fs::read(source).with_context(|| format!("read helper source {}", source.display()))?
+            == fs::read(destination)
+                .with_context(|| format!("read helper destination {}", destination.display()))?,
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::destination_is_fresh;
-    use super::helper_bin_dir;
     use super::copy_from_source_if_needed;
+    use super::destination_is_fresh;
     use super::CopyOutcome;
+    use super::HelperExecutable;
+    use super::helper_bin_dir;
+    use super::helper_read_root_from_exe_path;
+    use super::legacy_lookup_from_exe_path;
     use pretty_assertions::assert_eq;
+    use std::fs::File;
+    use std::fs::FileTimes;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::time::Duration;
+    use std::time::SystemTime;
     use tempfile::TempDir;
 
     #[test]
@@ -329,6 +374,33 @@ mod tests {
 
         fs::write(&destination, b"same-size").expect("rewrite destination");
         assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
+    }
+
+    #[test]
+    fn destination_is_fresh_rejects_same_size_same_mtime_content_drift() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = tmp.path().join("source.exe");
+        let destination = tmp.path().join("destination.exe");
+        let shared_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        fs::write(&source, b"runner-v2").expect("write source");
+        fs::write(&destination, b"runner-v1").expect("write destination");
+
+        let times = FileTimes::new().set_modified(shared_time);
+        File::options()
+            .write(true)
+            .open(&source)
+            .expect("open source")
+            .set_times(times)
+            .expect("set source time");
+        File::options()
+            .write(true)
+            .open(&destination)
+            .expect("open destination")
+            .set_times(times)
+            .expect("set destination time");
+
+        assert!(!destination_is_fresh(&source, &destination).expect("detect content drift"));
     }
 
     #[test]
@@ -376,5 +448,36 @@ mod tests {
             fs::read(&runner_destination).expect("read runner")
         );
     }
-}
 
+    #[test]
+    fn helper_read_root_skips_windowsapps_install_dirs() {
+        let tmp = TempDir::new().expect("tempdir");
+        let windowsapps = tmp.path().join("Program Files").join("WindowsApps");
+        let packaged_exe = windowsapps.join("codex.exe");
+        let normal_dir = tmp.path().join("bin");
+        let normal_exe = normal_dir.join("codex.exe");
+
+        fs::create_dir_all(&windowsapps).expect("create windowsapps dir");
+        fs::create_dir_all(&normal_dir).expect("create normal dir");
+
+        assert_eq!(None, helper_read_root_from_exe_path(&packaged_exe));
+        assert_eq!(Some(normal_dir), helper_read_root_from_exe_path(&normal_exe));
+    }
+
+    #[test]
+    fn legacy_lookup_avoids_windowsapps_sibling_helpers() {
+        let tmp = TempDir::new().expect("tempdir");
+        let windowsapps = tmp.path().join("Program Files").join("WindowsApps");
+        let packaged_exe = windowsapps.join("codex.exe");
+        let sibling_helper = windowsapps.join("codex-windows-sandbox-setup.exe");
+
+        fs::create_dir_all(&windowsapps).expect("create windowsapps dir");
+        fs::write(&packaged_exe, b"codex").expect("write packaged exe");
+        fs::write(&sibling_helper, b"setup").expect("write sibling helper");
+
+        assert_eq!(
+            PathBuf::from("codex-windows-sandbox-setup.exe"),
+            legacy_lookup_from_exe_path(HelperExecutable::Setup, &packaged_exe)
+        );
+    }
+}
