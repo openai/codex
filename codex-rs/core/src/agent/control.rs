@@ -1,6 +1,7 @@
 use super::watchdog::RemovedWatchdog;
 use super::watchdog::WatchdogManager;
 use super::watchdog::WatchdogRegistration;
+use super::watchdog::WatchdogSnoozeResult;
 use crate::agent::AgentStatus;
 use crate::agent::registry::AgentMetadata;
 use crate::agent::registry::AgentRegistry;
@@ -45,6 +46,7 @@ use codex_rollout::state_db;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_tools::create_compact_parent_context_tool;
 use codex_tools::create_watchdog_self_close_tool;
+use codex_tools::create_watchdog_snooze_tool;
 use codex_tools::create_watchdog_tools_namespace;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -165,6 +167,7 @@ fn unix_timestamp_seconds() -> u64 {
 fn synthetic_watchdog_tool_search_items() -> Vec<RolloutItem> {
     let namespace = create_watchdog_tools_namespace(vec![
         create_compact_parent_context_tool(),
+        create_watchdog_snooze_tool(),
         create_watchdog_self_close_tool(),
     ]);
     let Ok(namespace) = serde_json::to_value(namespace) else {
@@ -1447,6 +1450,36 @@ impl AgentControl {
     }
 
     #[cfg(test)]
+    pub(crate) async fn watchdog_owner_idle_since_is_none_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        self.watchdogs
+            .owner_idle_since_is_none_for_tests(target_thread_id)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn watchdog_snoozed_until_is_none_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        self.watchdogs
+            .snoozed_until_is_none_for_tests(target_thread_id)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn watchdog_snoozed_until_is_some_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        self.watchdogs
+            .snoozed_until_is_some_for_tests(target_thread_id)
+            .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn set_watchdog_active_helper_for_tests(
         &self,
         target_thread_id: ThreadId,
@@ -1472,6 +1505,16 @@ impl AgentControl {
     ) -> Option<ThreadId> {
         self.watchdogs
             .target_for_active_helper(helper_thread_id)
+            .await
+    }
+
+    pub(crate) async fn snooze_watchdog_helper(
+        &self,
+        helper_thread_id: ThreadId,
+        requested_delay_seconds: Option<u64>,
+    ) -> Option<WatchdogSnoozeResult> {
+        self.watchdogs
+            .snooze_active_helper(helper_thread_id, requested_delay_seconds)
             .await
     }
 

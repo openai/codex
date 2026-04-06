@@ -65,6 +65,7 @@ pub(crate) use send_input::Handler as SendInputHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
 pub(crate) use watchdog_self_close::Handler as WatchdogSelfCloseHandler;
+pub(crate) use watchdog_snooze::Handler as WatchdogSnoozeHandler;
 
 pub mod close_agent;
 mod compact_parent_context;
@@ -74,6 +75,7 @@ mod send_input;
 mod spawn;
 pub(crate) mod wait;
 mod watchdog_self_close;
+mod watchdog_snooze;
 
 #[cfg(test)]
 #[path = "multi_agents_tests.rs"]

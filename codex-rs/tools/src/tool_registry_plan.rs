@@ -56,6 +56,7 @@ use crate::create_wait_agent_tool_v1;
 use crate::create_wait_agent_tool_v2;
 use crate::create_wait_tool;
 use crate::create_watchdog_self_close_tool;
+use crate::create_watchdog_snooze_tool;
 use crate::create_watchdog_tools_namespace;
 use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
@@ -426,6 +427,7 @@ pub fn build_tool_registry_plan(
             create_watchdog_tools_namespace(vec![
                 create_compact_parent_context_tool(),
                 create_watchdog_self_close_tool(),
+                create_watchdog_snooze_tool(),
             ]),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -438,6 +440,7 @@ pub fn build_tool_registry_plan(
             "watchdog:watchdog_self_close",
             ToolHandlerKind::WatchdogSelfClose,
         );
+        plan.register_handler("watchdog:snooze", ToolHandlerKind::WatchdogSnooze);
     }
 
     if config.agent_jobs_tools {

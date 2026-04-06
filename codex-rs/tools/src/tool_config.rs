@@ -140,8 +140,10 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
-        let include_agent_watchdog =
-            include_collab_tools && features.enabled(Feature::AgentWatchdog);
+        let include_agent_watchdog = include_collab_tools
+            && features.enabled(Feature::AgentWatchdog)
+            && model_info.supports_search_tool
+            && features.enabled(Feature::ToolSearch);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = true;

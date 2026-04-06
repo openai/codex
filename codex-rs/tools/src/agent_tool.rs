@@ -341,6 +341,40 @@ pub fn create_watchdog_self_close_tool() -> ToolSpec {
     })
 }
 
+pub fn create_watchdog_snooze_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "delay_seconds".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Optional snooze delay in seconds. If omitted, the watchdog uses its configured interval."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "reason".to_string(),
+            JsonSchema::String {
+                description: Some("Optional short reason for snoozing this check-in.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "snooze".to_string(),
+        description: "Watchdog-only: keep this watchdog running, skip reporting anything for this check-in, and wait before the next wakeup."
+            .to_string(),
+        strict: false,
+        defer_loading: Some(true),
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(watchdog_snooze_output_schema()),
+    })
+}
+
 pub fn create_compact_parent_context_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -373,6 +407,24 @@ pub fn create_compact_parent_context_tool() -> ToolSpec {
             additional_properties: Some(false.into()),
         },
         output_schema: None,
+    })
+}
+
+fn watchdog_snooze_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target_thread_id": {
+                "type": "string",
+                "description": "Watchdog handle that was snoozed."
+            },
+            "delay_seconds": {
+                "type": "number",
+                "description": "Effective snooze delay in seconds."
+            }
+        },
+        "required": ["target_thread_id", "delay_seconds"],
+        "additionalProperties": false
     })
 }
 

@@ -156,6 +156,40 @@ fn subagents_keep_request_user_input_schema_and_agent_jobs_workers_opt_in_by_lab
 }
 
 #[test]
+fn agent_watchdog_requires_tool_search_capable_model() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AgentWatchdog);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+
+    let unsupported_model_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info(),
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let supported_model_info = ModelInfo {
+        supports_search_tool: true,
+        ..model_info()
+    };
+    let supported_model_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &supported_model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert!(!unsupported_model_config.agent_watchdog);
+    assert!(supported_model_config.agent_watchdog);
+}
+
+#[test]
 fn image_generation_requires_feature_and_supported_model() {
     let supported_model_info = model_info();
     let mut unsupported_model_info = supported_model_info.clone();

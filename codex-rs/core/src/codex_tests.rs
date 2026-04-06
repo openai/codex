@@ -2792,6 +2792,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         js_repl,
         turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
         last_completed_turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
+        turn_used_watchdog_terminal_tool: std::sync::atomic::AtomicBool::new(false),
+        last_completed_turn_used_watchdog_terminal_tool: std::sync::atomic::AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -2803,7 +2805,7 @@ async fn should_stop_watchdog_turn_after_send_input_only_for_active_watchdog_hel
     let (session, mut turn_context) = make_session_and_context().await;
 
     session.mark_turn_used_agent_send_input();
-    assert!(!should_stop_watchdog_turn_after_send_input(&session, &turn_context).await);
+    assert!(!should_stop_watchdog_turn_after_terminal_action(&session, &turn_context).await);
 
     let owner_thread_id = ThreadId::new();
     let target_thread_id = ThreadId::new();
@@ -2834,7 +2836,10 @@ async fn should_stop_watchdog_turn_after_send_input_only_for_active_watchdog_hel
         .set_watchdog_active_helper_for_tests(target_thread_id, session.conversation_id)
         .await;
 
-    assert!(should_stop_watchdog_turn_after_send_input(&session, &turn_context).await);
+    assert!(should_stop_watchdog_turn_after_terminal_action(&session, &turn_context).await);
+
+    session.mark_turn_used_watchdog_terminal_tool();
+    assert!(should_stop_watchdog_turn_after_terminal_action(&session, &turn_context).await);
 }
 
 #[tokio::test]
@@ -3673,6 +3678,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         js_repl,
         turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
         last_completed_turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
+        turn_used_watchdog_terminal_tool: std::sync::atomic::AtomicBool::new(false),
+        last_completed_turn_used_watchdog_terminal_tool: std::sync::atomic::AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     });
 

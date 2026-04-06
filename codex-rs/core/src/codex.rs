@@ -933,6 +933,8 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
     turn_used_agent_send_input: AtomicBool,
     last_completed_turn_used_agent_send_input: AtomicBool,
+    turn_used_watchdog_terminal_tool: AtomicBool,
+    last_completed_turn_used_watchdog_terminal_tool: AtomicBool,
 }
 
 #[derive(Clone, Debug)]
@@ -2093,6 +2095,8 @@ impl Session {
             next_internal_sub_id: AtomicU64::new(0),
             turn_used_agent_send_input: AtomicBool::new(false),
             last_completed_turn_used_agent_send_input: AtomicBool::new(false),
+            turn_used_watchdog_terminal_tool: AtomicBool::new(false),
+            last_completed_turn_used_watchdog_terminal_tool: AtomicBool::new(false),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -2261,8 +2265,20 @@ impl Session {
         self.turn_used_agent_send_input.load(Ordering::Acquire)
     }
 
+    pub(crate) fn mark_turn_used_watchdog_terminal_tool(&self) {
+        self.turn_used_watchdog_terminal_tool
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn current_turn_used_watchdog_terminal_tool(&self) -> bool {
+        self.turn_used_watchdog_terminal_tool
+            .load(Ordering::Acquire)
+    }
+
     pub(crate) fn reset_turn_agent_send_input_flag(&self) {
         self.turn_used_agent_send_input
+            .store(false, Ordering::Release);
+        self.turn_used_watchdog_terminal_tool
             .store(false, Ordering::Release);
     }
 
@@ -2272,10 +2288,20 @@ impl Session {
             .swap(false, Ordering::AcqRel);
         self.last_completed_turn_used_agent_send_input
             .store(used_agent_send_input, Ordering::Release);
+        let used_watchdog_terminal_tool = self
+            .turn_used_watchdog_terminal_tool
+            .swap(false, Ordering::AcqRel);
+        self.last_completed_turn_used_watchdog_terminal_tool
+            .store(used_watchdog_terminal_tool, Ordering::Release);
     }
 
     pub(crate) fn last_completed_turn_used_agent_send_input(&self) -> bool {
         self.last_completed_turn_used_agent_send_input
+            .load(Ordering::Acquire)
+    }
+
+    pub(crate) fn last_completed_turn_used_watchdog_terminal_tool(&self) -> bool {
+        self.last_completed_turn_used_watchdog_terminal_tool
             .load(Ordering::Acquire)
     }
 
@@ -7986,7 +8012,7 @@ async fn try_run_sampling_request(
         return Err(CodexErr::TurnAborted);
     }
 
-    if should_stop_watchdog_turn_after_send_input(sess.as_ref(), turn_context.as_ref()).await {
+    if should_stop_watchdog_turn_after_terminal_action(sess.as_ref(), turn_context.as_ref()).await {
         return Ok(SamplingRequestResult {
             needs_follow_up: false,
             last_agent_message: None,
@@ -8007,11 +8033,12 @@ async fn try_run_sampling_request(
     outcome
 }
 
-async fn should_stop_watchdog_turn_after_send_input(
+async fn should_stop_watchdog_turn_after_terminal_action(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> bool {
-    if !sess.current_turn_used_agent_send_input()
+    if !(sess.current_turn_used_agent_send_input()
+        || sess.current_turn_used_watchdog_terminal_tool())
         || !matches!(turn_context.session_source, SessionSource::SubAgent(_))
     {
         return false;

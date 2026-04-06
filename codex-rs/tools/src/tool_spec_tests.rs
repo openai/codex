@@ -147,6 +147,48 @@ fn watchdog_self_close_tool_spec_is_deferred_and_can_send_a_final_message() {
 }
 
 #[test]
+fn watchdog_snooze_tool_spec_is_deferred() {
+    let ToolSpec::Function(ResponsesApiTool {
+        name,
+        defer_loading,
+        parameters,
+        ..
+    }) = crate::create_watchdog_snooze_tool()
+    else {
+        panic!("snooze should be a function tool");
+    };
+
+    assert_eq!(name, "snooze");
+    assert_eq!(defer_loading, Some(true));
+    assert_eq!(
+        parameters,
+        JsonSchema::Object {
+            properties: BTreeMap::from([
+                (
+                    "delay_seconds".to_string(),
+                    JsonSchema::Number {
+                        description: Some(
+                            "Optional snooze delay in seconds. If omitted, the watchdog uses its configured interval."
+                                .to_string(),
+                        ),
+                    },
+                ),
+                (
+                    "reason".to_string(),
+                    JsonSchema::String {
+                        description: Some(
+                            "Optional short reason for snoozing this check-in.".to_string(),
+                        ),
+                    },
+                ),
+            ]),
+            required: None,
+            additional_properties: Some(AdditionalProperties::Boolean(false)),
+        }
+    );
+}
+
+#[test]
 fn web_search_config_converts_to_responses_api_types() {
     assert_eq!(
         ResponsesApiWebSearchFilters::from(ConfigWebSearchFilters {

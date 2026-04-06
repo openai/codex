@@ -27,6 +27,8 @@ use tracing::info;
 use tracing::warn;
 
 const WATCHDOG_TICK_SECONDS: i64 = 1;
+const WATCHDOG_MIN_SNOOZE_SECONDS: u64 = 30;
+const WATCHDOG_MAX_SNOOZE_SECONDS: u64 = 60 * 60;
 
 #[derive(Clone)]
 pub(crate) struct WatchdogRegistration {
@@ -49,6 +51,7 @@ struct WatchdogEntry {
     interval: Duration,
     last_trigger: Instant,
     active_helper_id: Option<ThreadId>,
+    snoozed_until: Option<Instant>,
     owner_idle_since: Option<Instant>,
     owner_was_running: bool,
     force_due_once: bool,
@@ -110,6 +113,7 @@ impl WatchdogManager {
             interval,
             last_trigger: now,
             active_helper_id: None,
+            snoozed_until: None,
             owner_idle_since: Some(now),
             owner_was_running: false,
             force_due_once: false,
@@ -241,7 +245,10 @@ impl WatchdogManager {
             let helper_sent_input = manager_state
                 .get_thread(helper_id)
                 .await
-                .map(|thread| thread.last_completed_turn_used_agent_send_input())
+                .map(|thread| {
+                    thread.last_completed_turn_used_agent_send_input()
+                        || thread.last_completed_turn_used_watchdog_terminal_tool()
+                })
                 .unwrap_or(false);
             // A watchdog helper should wake the owner through `send_input` or a
             // final assistant report. If neither exists, emit nothing here and
@@ -300,6 +307,14 @@ impl WatchdogManager {
             )
             .await;
             return;
+        }
+
+        if let Some(snoozed_until) = snapshot.snoozed_until {
+            if now < snoozed_until {
+                return;
+            }
+            self.clear_snooze_if_generation(target_thread_id, generation)
+                .await;
         }
 
         if now.duration_since(snapshot.last_trigger) < snapshot.interval {
@@ -387,6 +402,7 @@ impl WatchdogManager {
             interval: entry.interval,
             last_trigger: entry.last_trigger,
             active_helper_id: entry.active_helper_id,
+            snoozed_until: entry.snoozed_until,
             owner_idle_since: entry.owner_idle_since,
         })
     }
@@ -411,6 +427,7 @@ impl WatchdogManager {
 
         if owner_running {
             entry.owner_idle_since = None;
+            entry.snoozed_until = None;
             entry.owner_was_running = true;
             return None;
         }
@@ -438,12 +455,66 @@ impl WatchdogManager {
         true
     }
 
+    async fn clear_snooze_if_generation(&self, target_thread_id: ThreadId, generation: i64) {
+        let mut registrations = self.registrations.lock().await;
+        let Some(entry) = registrations.get_mut(&target_thread_id) else {
+            return;
+        };
+        if entry.generation == generation {
+            entry.snoozed_until = None;
+        }
+    }
+
+    pub(crate) async fn note_owner_input(&self, owner_thread_id: ThreadId) {
+        let mut registrations = self.registrations.lock().await;
+        for entry in registrations.values_mut() {
+            if entry.registration.owner_thread_id == owner_thread_id {
+                entry.owner_idle_since = None;
+                entry.snoozed_until = None;
+                entry.owner_was_running = true;
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) async fn force_due_for_tests(&self, target_thread_id: ThreadId) {
         let mut registrations = self.registrations.lock().await;
         if let Some(entry) = registrations.get_mut(&target_thread_id) {
             entry.force_due_once = true;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn owner_idle_since_is_none_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        let registrations = self.registrations.lock().await;
+        registrations
+            .get(&target_thread_id)
+            .map(|entry| entry.owner_idle_since.is_none())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn snoozed_until_is_none_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        let registrations = self.registrations.lock().await;
+        registrations
+            .get(&target_thread_id)
+            .map(|entry| entry.snoozed_until.is_none())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn snoozed_until_is_some_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<bool> {
+        let registrations = self.registrations.lock().await;
+        registrations
+            .get(&target_thread_id)
+            .map(|entry| entry.snoozed_until.is_some())
     }
 
     async fn update_after_spawn(
@@ -495,6 +566,30 @@ impl WatchdogManager {
         })
     }
 
+    pub(crate) async fn snooze_active_helper(
+        &self,
+        helper_thread_id: ThreadId,
+        requested_delay_seconds: Option<u64>,
+    ) -> Option<WatchdogSnoozeResult> {
+        let mut registrations = self.registrations.lock().await;
+        let (target_thread_id, entry) =
+            registrations
+                .iter_mut()
+                .find_map(|(target_thread_id, entry)| {
+                    (entry.active_helper_id == Some(helper_thread_id))
+                        .then_some((*target_thread_id, entry))
+                })?;
+        let delay_seconds = requested_delay_seconds
+            .map(|seconds| seconds.clamp(WATCHDOG_MIN_SNOOZE_SECONDS, WATCHDOG_MAX_SNOOZE_SECONDS))
+            .unwrap_or_else(|| entry.interval.as_secs().max(1));
+        entry.snoozed_until = Some(Instant::now() + Duration::from_secs(delay_seconds));
+        Some(WatchdogSnoozeResult {
+            owner_thread_id: entry.registration.owner_thread_id,
+            target_thread_id,
+            delay_seconds,
+        })
+    }
+
     pub(crate) async fn registered_targets(&self, candidate_ids: &[ThreadId]) -> HashSet<ThreadId> {
         let registrations = self.registrations.lock().await;
         candidate_ids
@@ -540,7 +635,15 @@ impl WatchdogManager {
         entry.owner_idle_since = Some(due_at);
         entry.owner_was_running = false;
         entry.active_helper_id = Some(helper_thread_id);
+        entry.snoozed_until = None;
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WatchdogSnoozeResult {
+    pub(crate) owner_thread_id: ThreadId,
+    pub(crate) target_thread_id: ThreadId,
+    pub(crate) delay_seconds: u64,
 }
 
 #[derive(Clone)]
@@ -552,6 +655,7 @@ struct WatchdogSnapshot {
     interval: Duration,
     last_trigger: Instant,
     active_helper_id: Option<ThreadId>,
+    snoozed_until: Option<Instant>,
     owner_idle_since: Option<Instant>,
 }
 

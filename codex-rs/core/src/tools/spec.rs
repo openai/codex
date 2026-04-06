@@ -63,6 +63,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
     use crate::tools::handlers::multi_agents::WatchdogSelfCloseHandler;
+    use crate::tools::handlers::multi_agents::WatchdogSnoozeHandler;
     use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -70,6 +71,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WatchdogSelfCloseHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::WatchdogSnoozeHandlerV2;
 
     let mut builder = ToolRegistryBuilder::new();
     let app_tool_sources = app_tools.as_ref().map(|app_tools| {
@@ -247,6 +249,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     builder.register_handler(handler.name, Arc::new(WatchdogSelfCloseHandlerV2));
                 } else {
                     builder.register_handler(handler.name, Arc::new(WatchdogSelfCloseHandler));
+                }
+            }
+            ToolHandlerKind::WatchdogSnooze => {
+                if config.multi_agent_v2 {
+                    builder.register_handler(handler.name, Arc::new(WatchdogSnoozeHandlerV2));
+                } else {
+                    builder.register_handler(handler.name, Arc::new(WatchdogSnoozeHandler));
                 }
             }
         }

@@ -133,6 +133,21 @@ fn watchdog_tool_infos() -> HashMap<String, ToolInfo> {
                 }),
             ),
         ),
+        (
+            "watchdog:snooze".to_string(),
+            watchdog_tool_info(
+                "snooze",
+                "Watchdog-only: keep this watchdog running, skip reporting anything for this check-in, and wait before the next wakeup.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "delay_seconds": {"type": "number"},
+                        "reason": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+        ),
     ])
 }
 

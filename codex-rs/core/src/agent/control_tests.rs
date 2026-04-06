@@ -450,6 +450,130 @@ async fn send_input_submits_user_message() {
     assert_eq!(captured, Some(expected));
 }
 
+#[tokio::test]
+async fn send_input_resets_watchdog_owner_idle_state() {
+    let harness = AgentControlHarness::new().await;
+    let (owner_thread_id, _thread) = harness.start_thread().await;
+    let target_thread_id = ThreadId::new();
+
+    harness
+        .control
+        .register_watchdog(WatchdogRegistration {
+            owner_thread_id,
+            target_thread_id,
+            child_depth: 0,
+            interval_s: 30,
+            prompt: String::new(),
+            config: harness.config.clone(),
+        })
+        .await
+        .expect("watchdog registration should succeed");
+
+    let helper_thread_id = ThreadId::new();
+    harness
+        .control
+        .set_watchdog_active_helper_for_tests(target_thread_id, helper_thread_id)
+        .await;
+    harness
+        .control
+        .snooze_watchdog_helper(helper_thread_id, Some(60))
+        .await
+        .expect("watchdog helper should snooze");
+
+    assert_eq!(
+        harness
+            .control
+            .watchdog_snoozed_until_is_none_for_tests(target_thread_id)
+            .await,
+        Some(false)
+    );
+
+    assert_eq!(
+        harness
+            .control
+            .watchdog_owner_idle_since_is_none_for_tests(target_thread_id)
+            .await,
+        Some(false)
+    );
+
+    harness
+        .control
+        .send_input(owner_thread_id, text_input("ping"))
+        .await
+        .expect("send_input should succeed");
+
+    assert_eq!(
+        harness
+            .control
+            .watchdog_owner_idle_since_is_none_for_tests(target_thread_id)
+            .await,
+        Some(true)
+    );
+    assert_eq!(
+        harness
+            .control
+            .watchdog_snoozed_until_is_none_for_tests(target_thread_id)
+            .await,
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn note_owner_input_resets_watchdog_owner_idle_state() {
+    let harness = AgentControlHarness::new().await;
+    let (owner_thread_id, _thread) = harness.start_thread().await;
+    let target_thread_id = ThreadId::new();
+
+    harness
+        .control
+        .register_watchdog(WatchdogRegistration {
+            owner_thread_id,
+            target_thread_id,
+            child_depth: 0,
+            interval_s: 30,
+            prompt: String::new(),
+            config: harness.config.clone(),
+        })
+        .await
+        .expect("watchdog registration should succeed");
+
+    let helper_thread_id = ThreadId::new();
+    harness
+        .control
+        .set_watchdog_active_helper_for_tests(target_thread_id, helper_thread_id)
+        .await;
+    harness
+        .control
+        .snooze_watchdog_helper(helper_thread_id, Some(60))
+        .await
+        .expect("watchdog helper should snooze");
+
+    assert_eq!(
+        harness
+            .control
+            .watchdog_owner_idle_since_is_none_for_tests(target_thread_id)
+            .await,
+        Some(false)
+    );
+
+    harness.control.note_owner_input(owner_thread_id).await;
+
+    assert_eq!(
+        harness
+            .control
+            .watchdog_owner_idle_since_is_none_for_tests(target_thread_id)
+            .await,
+        Some(true)
+    );
+    assert_eq!(
+        harness
+            .control
+            .watchdog_snoozed_until_is_none_for_tests(target_thread_id)
+            .await,
+        Some(true)
+    );
+}
+
 #[test]
 fn build_agent_inbox_items_emits_function_call_and_output() {
     let sender_thread_id = ThreadId::new();
@@ -1123,7 +1247,7 @@ async fn watchdog_fork_injects_boot_context_after_parent_fork_items() {
             .iter()
             .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
             .collect::<Vec<_>>(),
-        vec!["compact_parent_context", "watchdog_self_close"]
+        vec!["compact_parent_context", "snooze", "watchdog_self_close"],
     );
 
     let list_payload: serde_json::Value =

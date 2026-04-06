@@ -11,6 +11,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents::WatchdogSelfCloseHandler;
+use crate::tools::handlers::multi_agents::WatchdogSnoozeHandler;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -18,6 +19,7 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WatchdogSelfCloseHandlerV2;
+use crate::tools::handlers::multi_agents_v2::WatchdogSnoozeHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_features::Feature;
@@ -3535,6 +3537,135 @@ async fn watchdog_self_close_rejects_non_watchdog_thread() {
         FunctionCallError::RespondToModel(
             "watchdog_self_close is only available in watchdog check-in threads.".to_string(),
         )
+    );
+}
+
+#[tokio::test]
+async fn watchdog_snooze_rejects_non_watchdog_thread() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let agent_control = manager.agent_control();
+    let thread = manager
+        .start_thread(turn.config.as_ref().clone())
+        .await
+        .expect("thread should start");
+    session.services.agent_control = agent_control;
+    session.conversation_id = thread.thread_id;
+
+    let err = WatchdogSnoozeHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "snooze",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect_err("non-watchdog threads should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "watchdog.snooze is only available in watchdog check-in threads.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn watchdog_snooze_keeps_handle_registered_and_suppresses_fallback() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let agent_control = manager.agent_control();
+    session.services.agent_control = agent_control.clone();
+    let (owner_thread_id, target_thread_id, helper_thread_id) =
+        attach_watchdog_helper_for_tests(&manager, &agent_control, turn.config.as_ref()).await;
+    session.conversation_id = helper_thread_id;
+    let session = Arc::new(session);
+
+    let output = WatchdogSnoozeHandler
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::new(turn),
+            "snooze",
+            function_payload(json!({"delay_seconds": 5, "reason": "no work yet"})),
+        ))
+        .await
+        .expect("watchdog helper should snooze");
+    let (content, success) = expect_text_output(output);
+    let payload: serde_json::Value = serde_json::from_str(&content).expect("snooze output json");
+
+    assert_eq!(success, Some(true));
+    assert_eq!(payload["target_thread_id"], target_thread_id.to_string());
+    assert_eq!(payload["delay_seconds"], 30);
+    assert!(session.current_turn_used_watchdog_terminal_tool());
+    assert_eq!(
+        agent_control
+            .watchdog_target_for_active_helper(helper_thread_id)
+            .await,
+        Some(target_thread_id)
+    );
+    assert_ne!(
+        agent_control.get_status(target_thread_id).await,
+        AgentStatus::NotFound
+    );
+    assert_eq!(
+        agent_control
+            .watchdog_snoozed_until_is_some_for_tests(target_thread_id)
+            .await,
+        Some(true)
+    );
+
+    agent_control.note_owner_input(owner_thread_id).await;
+
+    assert_eq!(
+        agent_control
+            .watchdog_snoozed_until_is_some_for_tests(target_thread_id)
+            .await,
+        Some(false)
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_watchdog_snooze_keeps_handle_registered_and_suppresses_fallback() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let agent_control = manager.agent_control();
+    session.services.agent_control = agent_control.clone();
+    let mut config = turn.config.as_ref().clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let (_owner_thread_id, target_thread_id, helper_thread_id) =
+        attach_watchdog_helper_for_tests(&manager, &agent_control, &config).await;
+    session.conversation_id = helper_thread_id;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+
+    let output = WatchdogSnoozeHandlerV2
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::new(turn),
+            "snooze",
+            function_payload(json!({"delay_seconds": 45})),
+        ))
+        .await
+        .expect("watchdog helper should snooze");
+    let (content, success) = expect_text_output(output);
+    let payload: serde_json::Value = serde_json::from_str(&content).expect("snooze output json");
+
+    assert_eq!(success, Some(true));
+    assert_eq!(payload["target_thread_id"], target_thread_id.to_string());
+    assert_eq!(payload["delay_seconds"], 45);
+    assert!(session.current_turn_used_watchdog_terminal_tool());
+    assert_ne!(
+        agent_control.get_status(target_thread_id).await,
+        AgentStatus::NotFound
+    );
+    assert_eq!(
+        agent_control
+            .watchdog_snoozed_until_is_some_for_tests(target_thread_id)
+            .await,
+        Some(true)
     );
 }
 
