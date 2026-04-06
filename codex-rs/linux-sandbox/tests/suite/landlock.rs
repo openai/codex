@@ -311,13 +311,14 @@ async fn bwrap_dev_nodes_work_when_workspace_dot_codex_is_missing() {
     }
 
     let tmpdir = tempfile::tempdir().expect("tempdir");
+    let writable_roots = vec![tmpdir.path().to_path_buf()];
     let output = run_cmd_result_with_writable_roots_in_cwd(
         &[
             "bash",
             "-lc",
             ": >/dev/null && head -c 8 /dev/zero | od -An -tx1",
         ],
-        &[],
+        &writable_roots,
         tmpdir.path(),
         LONG_TIMEOUT_MS,
         /*use_legacy_landlock*/ false,
