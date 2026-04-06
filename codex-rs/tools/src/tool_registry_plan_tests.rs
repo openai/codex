@@ -491,7 +491,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "report_agent_job_result",
         ],
     );
-    assert_lacks_tool_name(&tools, "request_user_input");
+    assert_contains_tool_names(&tools, &["request_user_input"]);
 }
 
 #[test]
