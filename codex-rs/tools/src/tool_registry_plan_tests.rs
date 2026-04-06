@@ -328,6 +328,48 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
 }
 
 #[test]
+fn agent_watchdog_adds_watchdog_namespace_tools_and_handlers() {
+    let model_info = model_info_with_search_tool();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AgentWatchdog);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_contains_tool_names(&tools, &["agents", "watchdog", TOOL_SEARCH_TOOL_NAME]);
+    assert_contains_agent_tool_names(
+        &tools,
+        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
+    );
+    assert_contains_namespace_tool_names(
+        &tools,
+        "watchdog",
+        &["compact_parent_context", "watchdog_self_close"],
+    );
+    assert_contains_handler_names(
+        &handlers,
+        &[
+            "watchdog:compact_parent_context",
+            "watchdog:watchdog_self_close",
+        ],
+    );
+}
+
+#[test]
 fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -1660,6 +1702,13 @@ fn model_info() -> ModelInfo {
     .expect("deserialize test model")
 }
 
+fn model_info_with_search_tool() -> ModelInfo {
+    ModelInfo {
+        supports_search_tool: true,
+        ..model_info()
+    }
+}
+
 fn search_capable_model_info() -> ModelInfo {
     ModelInfo {
         supports_search_tool: true,
@@ -1784,6 +1833,48 @@ fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
         !names.contains(&expected_absent),
         "expected tool {expected_absent} to be absent; had: {names:?}"
     );
+}
+
+fn assert_contains_namespace_tool_names(
+    tools: &[ConfiguredToolSpec],
+    namespace_name: &str,
+    expected_subset: &[&str],
+) {
+    for expected in expected_subset {
+        let _ = find_namespace_tool(tools, namespace_name, expected);
+    }
+}
+
+fn find_namespace_tool<'a>(
+    tools: &'a [ConfiguredToolSpec],
+    namespace_name: &str,
+    expected_name: &str,
+) -> &'a ResponsesApiTool {
+    let namespace_spec = find_tool(tools, namespace_name);
+    let ToolSpec::Namespace(namespace) = &namespace_spec.spec else {
+        panic!("{namespace_name} should be a namespace tool");
+    };
+    namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => Some(tool),
+            ResponsesApiNamespaceTool::Function(_) => None,
+        })
+        .unwrap_or_else(|| panic!("expected {namespace_name} tool {expected_name}"))
+}
+
+fn assert_contains_handler_names(handlers: &[ToolHandlerSpec], expected_subset: &[&str]) {
+    let names = handlers
+        .iter()
+        .map(|handler| handler.name.as_str())
+        .collect::<Vec<_>>();
+    for expected in expected_subset {
+        assert!(
+            names.contains(expected),
+            "expected handler {expected} to be present; had: {names:?}"
+        );
+    }
 }
 
 fn assert_contains_agent_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
