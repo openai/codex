@@ -1638,7 +1638,7 @@ async fn code_mode_can_resume_after_set_timeout() -> Result<()> {
 await new Promise((resolve) => setTimeout(resolve, 10));
 text("timer done");
 "#,
-        false,
+        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -2628,7 +2628,7 @@ text(JSON.stringify({
   waited_long_enough: end_ms - start_ms >= 100,
 }));
 "#,
-        false,
+        /*include_apply_patch*/ false,
     )
     .await?;
 
