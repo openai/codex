@@ -262,7 +262,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             req.process_id,
                             &prepared.exec_request,
                             req.tty,
-                            None,
+                            /*startup_exec_approval*/ None,
                             prepared.spawn_lifecycle,
                             ctx.turn.environment.as_ref(),
                         )

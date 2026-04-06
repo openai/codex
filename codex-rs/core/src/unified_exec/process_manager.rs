@@ -115,7 +115,7 @@ fn exec_server_process_id(process_id: i32) -> String {
 fn startup_exec_approval_request(
     context: &UnifiedExecContext,
     request: &ExecCommandRequest,
-    cwd: &PathBuf,
+    cwd: &Path,
     exec_approval_requirement: &crate::tools::sandboxing::ExecApprovalRequirement,
 ) -> Option<codex_exec_server::ExecApprovalRequest> {
     match exec_approval_requirement {
@@ -127,7 +127,7 @@ fn startup_exec_approval_request(
             approval_id: None,
             turn_id: context.turn.sub_id.clone(),
             command: request.command.clone(),
-            cwd: cwd.clone(),
+            cwd: cwd.to_path_buf(),
             reason: reason.clone().or_else(|| request.justification.clone()),
             additional_permissions: request.additional_permissions.clone().map(Into::into),
             proposed_execpolicy_amendment: proposed_execpolicy_amendment
