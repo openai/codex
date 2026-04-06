@@ -719,6 +719,7 @@ impl PluginsManager {
             ));
         }
 
+        let mut missing_remote_plugins = Vec::<String>::new();
         let mut remote_installed_plugin_names = HashSet::<String>::new();
         for plugin in remote_plugins {
             if plugin.marketplace_name != marketplace_name {
@@ -727,11 +728,7 @@ impl PluginsManager {
                 });
             }
             if !local_plugin_names.contains(&plugin.name) {
-                warn!(
-                    plugin = plugin.name,
-                    marketplace = %marketplace_name,
-                    "ignoring remote plugin missing from local marketplace during sync"
-                );
+                missing_remote_plugins.push(plugin.name);
                 continue;
             }
             // For now, sync treats remote `enabled = false` as uninstall rather than a distinct
@@ -753,6 +750,19 @@ impl PluginsManager {
         let mut result = RemotePluginSyncResult::default();
         let remote_plugin_count = remote_installed_plugin_names.len();
         let local_plugin_count = local_plugins.len();
+        if !missing_remote_plugins.is_empty() {
+            let sample_missing_plugins = missing_remote_plugins
+                .iter()
+                .take(10)
+                .cloned()
+                .collect::<Vec<_>>();
+            warn!(
+                marketplace = %marketplace_name,
+                missing_remote_plugin_count = missing_remote_plugins.len(),
+                missing_remote_plugin_examples = ?sample_missing_plugins,
+                "ignoring remote plugins missing from local marketplace during sync"
+            );
+        }
 
         for (
             plugin_name,

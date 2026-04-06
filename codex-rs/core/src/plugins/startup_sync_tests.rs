@@ -147,6 +147,7 @@ exit 1
         tmp.path(),
         git_path.to_str().expect("utf8 path"),
         "http://127.0.0.1:9",
+        "http://127.0.0.1:9/backend-api/plugins/export/curated",
     )
     .expect("git sync should succeed");
 
@@ -158,6 +159,137 @@ exit 1
             .is_file()
     );
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().expect("tempdir");
+    let repo_root = tempfile::Builder::new()
+        .prefix("curated-repo-success-")
+        .tempdir()
+        .expect("tempdir");
+    let work_repo = repo_root.path().join("work/plugins");
+    let remote_repo = repo_root.path().join("remotes/openai/plugins.git");
+    std::fs::create_dir_all(work_repo.join(".agents/plugins")).expect("create marketplace dir");
+    std::fs::create_dir_all(work_repo.join("plugins/gmail/.codex-plugin"))
+        .expect("create plugin dir");
+    std::fs::write(
+        work_repo.join(".agents/plugins/marketplace.json"),
+        r#"{"name":"openai-curated","plugins":[{"name":"gmail","source":{"source":"local","path":"./plugins/gmail"}}]}"#,
+    )
+    .expect("write marketplace");
+    std::fs::write(
+        work_repo.join("plugins/gmail/.codex-plugin/plugin.json"),
+        r#"{"name":"gmail"}"#,
+    )
+    .expect("write plugin manifest");
+
+    let init_status = Command::new("git")
+        .arg("-C")
+        .arg(&work_repo)
+        .arg("init")
+        .status()
+        .expect("run git init");
+    assert!(init_status.success());
+
+    let add_status = Command::new("git")
+        .arg("-C")
+        .arg(&work_repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("run git add");
+    assert!(add_status.success());
+
+    let commit_status = Command::new("git")
+        .arg("-C")
+        .arg(&work_repo)
+        .arg("-c")
+        .arg("user.name=Codex Test")
+        .arg("-c")
+        .arg("user.email=codex@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("init")
+        .status()
+        .expect("run git commit");
+    assert!(commit_status.success());
+
+    std::fs::create_dir_all(remote_repo.parent().expect("remote parent"))
+        .expect("create remote parent");
+    let clone_status = Command::new("git")
+        .arg("clone")
+        .arg("--bare")
+        .arg(&work_repo)
+        .arg(&remote_repo)
+        .status()
+        .expect("run git clone --bare");
+    assert!(clone_status.success());
+
+    let sha_output = Command::new("git")
+        .arg("-C")
+        .arg(&work_repo)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .expect("run git rev-parse");
+    assert!(sha_output.status.success());
+    let sha = String::from_utf8_lossy(&sha_output.stdout)
+        .trim()
+        .to_string();
+
+    let git_config_path = repo_root.path().join("git-rewrite.conf");
+    std::fs::write(
+        &git_config_path,
+        format!(
+            "[url \"file://{}/\"]\n    insteadOf = https://github.com/\n",
+            repo_root.path().join("remotes").display()
+        ),
+    )
+    .expect("write git config");
+
+    let bin_dir = tempfile::Builder::new()
+        .prefix("git-rewrite-wrapper-")
+        .tempdir()
+        .expect("tempdir");
+    let git_wrapper = bin_dir.path().join("git");
+    std::fs::write(
+        &git_wrapper,
+        format!(
+            "#!/bin/sh\nGIT_CONFIG_GLOBAL='{}' exec git \"$@\"\n",
+            git_config_path.display()
+        ),
+    )
+    .expect("write git wrapper");
+    let mut permissions = std::fs::metadata(&git_wrapper)
+        .expect("metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&git_wrapper, permissions).expect("chmod");
+
+    let synced_sha =
+        sync_openai_plugins_repo_via_git(tmp.path(), git_wrapper.to_str().expect("utf8 path"))
+            .expect("git sync should succeed");
+
+    assert_eq!(synced_sha, sha);
+    assert!(
+        curated_plugins_repo_path(tmp.path())
+            .join(".agents/plugins/marketplace.json")
+            .is_file()
+    );
+    assert!(
+        curated_plugins_repo_path(tmp.path())
+            .join("plugins/gmail/.codex-plugin/plugin.json")
+            .is_file()
+    );
+    assert_eq!(
+        read_curated_plugins_sha(tmp.path()).as_deref(),
+        Some(sha.as_str())
+    );
+    assert!(!has_plugins_clone_dirs(tmp.path()));
 }
 
 #[tokio::test]
@@ -196,6 +328,7 @@ async fn sync_openai_plugins_repo_falls_back_to_http_when_git_is_unavailable() {
             tmp_path.as_path(),
             "missing-git-for-test",
             &server_uri,
+            "http://127.0.0.1:9/backend-api/plugins/export/curated",
         )
     })
     .await
@@ -271,6 +404,7 @@ exit 1
             tmp_path.as_path(),
             git_path.to_str().expect("utf8 path"),
             &server_uri,
+            "http://127.0.0.1:9/backend-api/plugins/export/curated",
         )
     })
     .await
@@ -412,6 +546,7 @@ async fn sync_openai_plugins_repo_skips_archive_download_when_sha_matches() {
             tmp_path.as_path(),
             "missing-git-for-test",
             &server_uri,
+            "http://127.0.0.1:9/backend-api/plugins/export/curated",
         )
     })
     .await
@@ -420,6 +555,147 @@ async fn sync_openai_plugins_repo_skips_archive_download_when_sha_matches() {
 
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
     assert!(repo_path.join(".agents/plugins/marketplace.json").is_file());
+}
+
+#[tokio::test]
+async fn sync_openai_plugins_repo_falls_back_to_export_archive_when_no_snapshot_exists() {
+    let tmp = tempdir().expect("tempdir");
+    let server = MockServer::start().await;
+    let export_api_url = format!("{}/backend-api/plugins/export/curated", server.uri());
+    let export_sha = "1111111111111111111111111111111111111111";
+
+    Mock::given(method("GET"))
+        .and(path("/repos/openai/plugins"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("github repo lookup failed"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/export/curated"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"download_url":"{}/files/curated-plugins.zip"}}"#,
+            server.uri()
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/curated-plugins.zip"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/zip")
+                .set_body_bytes(curated_repo_backup_archive_zip_bytes(export_sha)),
+        )
+        .mount(&server)
+        .await;
+
+    let server_uri = server.uri();
+    let tmp_path = tmp.path().to_path_buf();
+    let synced_sha = tokio::task::spawn_blocking(move || {
+        sync_openai_plugins_repo_with_transport_overrides(
+            tmp_path.as_path(),
+            "missing-git-for-test",
+            &server_uri,
+            &export_api_url,
+        )
+    })
+    .await
+    .expect("sync task should join")
+    .expect("export fallback sync should succeed");
+
+    let repo_path = curated_plugins_repo_path(tmp.path());
+    assert_eq!(synced_sha, export_sha);
+    assert!(repo_path.join(".agents/plugins/marketplace.json").is_file());
+    assert!(
+        repo_path
+            .join("plugins/gmail/.codex-plugin/plugin.json")
+            .is_file()
+    );
+    assert_eq!(
+        read_curated_plugins_sha(tmp.path()).as_deref(),
+        Some(export_sha)
+    );
+}
+
+#[tokio::test]
+async fn sync_openai_plugins_repo_skips_export_archive_when_snapshot_exists() {
+    let tmp = tempdir().expect("tempdir");
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &["linear"]);
+    write_curated_plugin_sha(tmp.path());
+
+    let plugin_manifest_path = curated_root.join("plugins/linear/.codex-plugin/plugin.json");
+    let original_manifest =
+        std::fs::read_to_string(&plugin_manifest_path).expect("read existing plugin manifest");
+
+    let server = MockServer::start().await;
+    let export_api_url = format!("{}/backend-api/plugins/export/curated", server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/repos/openai/plugins"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("github repo lookup failed"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/export/curated"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"download_url":"{}/files/curated-plugins.zip"}}"#,
+            server.uri()
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/curated-plugins.zip"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/zip")
+                .set_body_bytes(curated_repo_backup_archive_zip_bytes(
+                    "2222222222222222222222222222222222222222",
+                )),
+        )
+        .mount(&server)
+        .await;
+
+    let server_uri = server.uri();
+    let tmp_path = tmp.path().to_path_buf();
+    let err = tokio::task::spawn_blocking(move || {
+        sync_openai_plugins_repo_with_transport_overrides(
+            tmp_path.as_path(),
+            "missing-git-for-test",
+            &server_uri,
+            &export_api_url,
+        )
+    })
+    .await
+    .expect("sync task should join")
+    .expect_err("existing snapshot should suppress export fallback");
+
+    assert!(err.contains("export archive fallback skipped"));
+    assert_eq!(
+        std::fs::read_to_string(&plugin_manifest_path).expect("read plugin manifest after sync"),
+        original_manifest
+    );
+    assert_eq!(
+        read_curated_plugins_sha(tmp.path()).as_deref(),
+        Some(TEST_CURATED_PLUGIN_SHA)
+    );
+}
+
+#[test]
+fn read_extracted_backup_archive_git_sha_reads_head_ref_from_extracted_repo() {
+    let tmp = tempdir().expect("tempdir");
+    let git_dir = tmp.path().join(".git/refs/heads");
+    std::fs::create_dir_all(&git_dir).expect("create git ref dir");
+    std::fs::write(tmp.path().join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    std::fs::write(
+        git_dir.join("main"),
+        "3333333333333333333333333333333333333333\n",
+    )
+    .expect("write main ref");
+
+    assert_eq!(
+        read_extracted_backup_archive_git_sha(tmp.path())
+            .expect("read extracted backup archive git sha"),
+        Some("3333333333333333333333333333333333333333".to_string())
+    );
 }
 
 #[tokio::test]
@@ -521,6 +797,52 @@ fn curated_repo_zipball_bytes(sha: &str) -> Vec<u8> {
             format!("{root}/plugins/gmail/.codex-plugin/plugin.json"),
             options,
         )
+        .expect("start plugin manifest entry");
+    writer
+        .write_all(br#"{"name":"gmail"}"#)
+        .expect("write plugin manifest");
+
+    writer.finish().expect("finish zip writer").into_inner()
+}
+
+fn curated_repo_backup_archive_zip_bytes(sha: &str) -> Vec<u8> {
+    let cursor = std::io::Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+
+    writer
+        .start_file("plugins/.git/HEAD", options)
+        .expect("start HEAD entry");
+    writer
+        .write_all(b"ref: refs/heads/main\n")
+        .expect("write HEAD");
+    writer
+        .start_file("plugins/.git/refs/heads/main", options)
+        .expect("start main ref entry");
+    writer
+        .write_all(format!("{sha}\n").as_bytes())
+        .expect("write main ref");
+    writer
+        .start_file("plugins/.agents/plugins/marketplace.json", options)
+        .expect("start marketplace entry");
+    writer
+        .write_all(
+            br#"{
+  "name": "openai-curated",
+  "plugins": [
+    {
+      "name": "gmail",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gmail"
+      }
+    }
+  ]
+}"#,
+        )
+        .expect("write marketplace");
+    writer
+        .start_file("plugins/plugins/gmail/.codex-plugin/plugin.json", options)
         .expect("start plugin manifest entry");
     writer
         .write_all(br#"{"name":"gmail"}"#)
