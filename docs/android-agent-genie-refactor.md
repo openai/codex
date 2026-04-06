@@ -126,6 +126,16 @@ The current repo now contains these implementation slices:
   - pressing `Done` on a direct-parent result consumes only the parent HOME icon
     via `consumeHomeSessionPresentation(parentSessionId)` and leaves the parent
     session inspectable in `Codex Manager`
+- Planner `request_user_input` calls now pause the direct parent session before
+  any child Genie needs to exist:
+  - the Agent stores the pending planner request, moves the parent framework
+    session to `WAITING_FOR_USER`, and uses the parent Agent HOME icon /
+    notification as the question surface
+  - answering the parent question resolves the hosted planner tool request and
+    returns the parent session to `RUNNING` so the same planner turn can finish
+    selecting packages and delegated Genie objectives
+  - child Genie questions are still represented as child-session questions and
+    roll up to the parent only when they need user escalation
 - Codex Agent still uses `cancelSession(sessionId)` for user-driven cancellation
   because it is the AGENT-role app, not a HOME-role surface. The
   HOME-only `cancelHomeSession(sessionId)` API is reserved for Launcher/HOME
@@ -317,7 +327,7 @@ the Android Agent/Genie flow.
 - `android/app/src/main/java/com/openai/codex/agent/SessionPopupActivity.kt`
   - dialog-style question/result surfaces for HOME icon and notification
     entrypoints; question cancel only dismisses the dialog, while final results
-    render in a scrollable text view with an OK button that clears HOME
+    render in a scrollable text view with a Done button that clears HOME
     presentation state for top-level HOME sessions
 - `android/app/src/main/java/com/openai/codex/agent/AgentQuestionNotifier.kt`
   - token-aware Agent-side renderer for delegated framework notifications,
@@ -325,7 +335,12 @@ the Android Agent/Genie flow.
 - `android/app/src/main/java/com/openai/codex/agent/AgentNotificationReplyReceiver.kt`
   - inline reply receiver for Agent-rendered question notifications
 - `android/app/src/main/java/com/openai/codex/agent/AgentUserInputPrompter.kt`
-  - Android dialog bridge for hosted Agent `request_user_input` calls
+  - shared rendering and answer encoding helpers for hosted `request_user_input`
+    calls
+- `android/app/src/main/java/com/openai/codex/agent/AgentPlannerQuestionRegistry.kt`
+  - parent-session question registry that pauses hosted planner
+    `request_user_input` calls until the user answers through Agent UI or
+    notification surfaces
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
   - Genie lifecycle host for the embedded `codex app-server`
 - `android/genie/src/main/java/com/openai/codex/genie/CodexAppServerHost.kt`

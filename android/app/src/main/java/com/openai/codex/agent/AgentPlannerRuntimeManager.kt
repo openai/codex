@@ -185,6 +185,8 @@ object AgentPlannerRuntimeManager {
                     CodexCliBinaryLocator.resolve(context).absolutePath,
                     "-c",
                     "enable_request_compression=false",
+                    "-c",
+                    "features.default_mode_request_user_input=true",
                     "app-server",
                     "--listen",
                     "stdio://",

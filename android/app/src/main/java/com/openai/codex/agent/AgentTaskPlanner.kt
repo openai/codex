@@ -62,6 +62,7 @@ object AgentTaskPlanner {
         - Verify each chosen package by inspecting focused query-activities or resolve-activity output before returning it.
         - Only choose packages that directly own the requested app behavior. Never choose helper packages such as `com.android.shell`, `com.android.systemui`, or the Codex Agent/Genie packages unless the user explicitly asked for them.
         - If the user objective already names a specific installed package, use it directly after verification.
+        - If the user objective is too ambiguous to choose target packages or delegated objectives safely, call request_user_input before returning JSON. Do not guess a task for vague prompts like "do something".
         - `pm list packages PACKAGE_NAME` alone is not sufficient verification.
         - Prefer focused verification commands such as `pm list packages clock`, `cmd package query-activities --brief -p PACKAGE -a android.intent.action.MAIN`, and `cmd package resolve-activity --brief -a RELEVANT_ACTION PACKAGE`.
         - Do not enumerate every launcher activity on the device. Query specific candidate packages instead.
@@ -152,12 +153,20 @@ object AgentTaskPlanner {
             executionSettings = executionSettings,
         )
         val sessionStartResult = try {
+            val effectiveRequestUserInputHandler = requestUserInputHandler ?: { questions: JSONArray ->
+                AgentPlannerQuestionRegistry.requestUserInput(
+                    context = context,
+                    sessionController = sessionController,
+                    sessionId = pendingSession.parentSessionId,
+                    questions = questions,
+                )
+            }
             val request = planSession(
                 context = context,
                 userObjective = userObjective,
                 executionSettings = executionSettings,
                 sessionController = sessionController,
-                requestUserInputHandler = requestUserInputHandler,
+                requestUserInputHandler = effectiveRequestUserInputHandler,
                 frameworkSessionId = pendingSession.parentSessionId,
             )
             sessionController.startDirectSessionChildren(

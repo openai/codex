@@ -125,6 +125,15 @@ stub SDK docs and the local refactor doc:
   - if delegated rendering is unavailable, the framework may post a generic
     fallback notification, so app-side notification code must remain
     token-aware and idempotent
+- Direct AGENT planning can ask user-facing questions before any child Genie is
+  created:
+  - hosted planner `request_user_input` calls are stored by the Agent, the
+    parent session is moved to `WAITING_FOR_USER`, and the parent Agent icon /
+    notification becomes the user-facing question surface
+  - answering the parent question resolves the pending planner tool request so
+    the same planner turn can continue and produce the child-Genie plan
+  - child Genie questions remain separate child-session questions that roll up
+    through the parent session when user escalation is needed
 - HOME icon / notification taps for question or final-result states should route
   to `SessionPopupActivity`, which uses one dialog-style popup shape for both
   question answering and result follow-up.

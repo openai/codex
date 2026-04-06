@@ -207,9 +207,6 @@ class MainActivity : Activity() {
                         finalPresentationPolicyOverride = finalPresentationPolicy,
                         executionSettings = SessionExecutionSettings.default,
                         sessionController = agentSessionController,
-                        requestUserInputHandler = { questions ->
-                            AgentUserInputPrompter.promptForAnswers(this, questions)
-                        },
                     )
                 }
             }

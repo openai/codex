@@ -41,6 +41,10 @@ class CodexAgentService : AgentService() {
             }
         }
         if (isTerminalSessionState(session.state) && !DesktopInspectionRegistry.isPlannerAttached(session.sessionId)) {
+            AgentPlannerQuestionRegistry.cancelQuestion(
+                sessionId = session.sessionId,
+                reason = "Planner session ended before the question was answered",
+            )
             AgentPlannerRuntimeManager.closeSession(session.sessionId)
         }
         if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
@@ -63,6 +67,10 @@ class CodexAgentService : AgentService() {
         AgentSessionBridgeServer.closeSession(sessionId)
         AgentPlannerRuntimeManager.closeSession(sessionId)
         DesktopInspectionRegistry.removeSession(sessionId)
+        AgentPlannerQuestionRegistry.cancelQuestion(
+            sessionId = sessionId,
+            reason = "Planner session was removed before the question was answered",
+        )
         AgentQuestionNotifier.cancel(this, sessionId)
         AgentQuestionNotifier.clearSessionState(sessionId)
         presentationPolicyStore.removePolicy(sessionId)
@@ -283,12 +291,14 @@ class CodexAgentService : AgentService() {
                 }
                 return@thread
             }
+            val effectiveNotificationText =
+                AgentPlannerQuestionRegistry.latestQuestion(session.sessionId) ?: notificationText
             val posted = runCatching {
                 AgentQuestionNotifier.showOrUpdateDelegatedNotification(
                     context = this,
                     session = session,
                     notificationToken = notificationToken,
-                    notificationText = notificationText,
+                    notificationText = effectiveNotificationText,
                 )
             }.onFailure { err ->
                 Log.w(

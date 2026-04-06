@@ -221,6 +221,8 @@ internal class AgentPlannerDesktopSessionHost(
                 CodexCliBinaryLocator.resolve(context).absolutePath,
                 "-c",
                 "enable_request_compression=false",
+                "-c",
+                "features.default_mode_request_user_input=true",
                 "app-server",
                 "--listen",
                 "stdio://",
@@ -303,11 +305,23 @@ internal class AgentPlannerDesktopSessionHost(
         val method = message.optString("method")
         when (method) {
             "item/tool/requestUserInput" -> {
-                sendError(
-                    requestId = requestId,
-                    code = -32601,
-                    message = "Planner desktop attach does not support request_user_input yet",
-                )
+                val questions = message.optJSONObject("params")?.optJSONArray("questions") ?: JSONArray()
+                val result = runCatching {
+                    AgentPlannerQuestionRegistry.requestUserInput(
+                        context = context,
+                        sessionController = sessionController,
+                        sessionId = sessionId,
+                        questions = questions,
+                    )
+                }.getOrElse { err ->
+                    sendError(
+                        requestId = requestId,
+                        code = -32000,
+                        message = err.message ?: "Planner user input request failed",
+                    )
+                    return
+                }
+                sendResult(requestId, result)
             }
             else -> {
                 sendError(

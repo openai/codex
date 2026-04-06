@@ -335,9 +335,6 @@ class CreateSessionActivity : Activity() {
                         existingSessionId = existingSessionId,
                     ),
                     sessionController = sessionController,
-                    requestUserInputHandler = { questions ->
-                        AgentUserInputPrompter.promptForAnswers(this, questions)
-                    },
                 )
             }.onFailure { err ->
                 runOnUiThread {

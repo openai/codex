@@ -117,6 +117,14 @@ class AgentSessionController(context: Context) {
         sessionDetails = sessionDetails.map { session ->
             diagnosticsBySessionId[session.sessionId]?.let(session::withDiagnostics) ?: session
         }
+        sessionDetails = sessionDetails.map { session ->
+            AgentPlannerQuestionRegistry.latestQuestion(session.sessionId)?.let { plannerQuestion ->
+                session.copy(
+                    latestQuestion = plannerQuestion,
+                    latestTrace = session.latestTrace ?: "Planner waiting for user input.",
+                )
+            } ?: session
+        }
         sessionDetails = deriveDirectParentUiState(sessionDetails)
         val selectedSession = chooseSelectedSession(sessionDetails, focusedSessionId)
         val parentSession = findParentSession(sessionDetails, selectedSession)
@@ -531,6 +539,12 @@ class AgentSessionController(context: Context) {
 
     fun answerQuestion(sessionId: String, answer: String, parentSessionId: String?) {
         val manager = requireAgentManager()
+        if (AgentPlannerQuestionRegistry.answerQuestion(sessionId, answer)) {
+            manager.publishTrace(sessionId, "Answered planner question: $answer")
+            manager.updateSessionState(sessionId, AgentSessionInfo.STATE_RUNNING)
+            AgentQuestionNotifier.cancel(appContext, sessionId)
+            return
+        }
         repeat(QUESTION_ANSWER_RETRY_COUNT) { attempt ->
             runCatching {
                 manager.answerQuestion(sessionId, answer)
@@ -562,6 +576,12 @@ class AgentSessionController(context: Context) {
         parentSessionId: String?,
     ) {
         val manager = requireAgentManager()
+        if (AgentPlannerQuestionRegistry.answerQuestion(sessionId, answer)) {
+            manager.publishTrace(sessionId, "Answered planner question from notification: $answer")
+            manager.updateSessionState(sessionId, AgentSessionInfo.STATE_RUNNING)
+            runCatching { manager.ackSessionNotification(sessionId, notificationToken) }
+            return
+        }
         manager.answerQuestionFromNotification(sessionId, notificationToken, answer)
         if (parentSessionId != null) {
             manager.publishTrace(parentSessionId, "Answered question for $sessionId: $answer")
@@ -765,6 +785,9 @@ class AgentSessionController(context: Context) {
             .groupBy { it.parentSessionId }
         return sessions.map { session ->
             if (!isDirectParentSession(session)) {
+                return@map session
+            }
+            if (!session.latestQuestion.isNullOrBlank()) {
                 return@map session
             }
             val childSessions = childrenByParent[session.sessionId].orEmpty()

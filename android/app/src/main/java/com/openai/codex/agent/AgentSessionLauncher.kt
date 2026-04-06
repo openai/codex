@@ -144,12 +144,20 @@ object AgentSessionLauncher {
         val applicationContext = context.applicationContext
         thread(name = "CodexAgentPlanner-${pendingSession.parentSessionId}") {
             runCatching {
+                val effectiveRequestUserInputHandler = requestUserInputHandler ?: { questions: JSONArray ->
+                    AgentPlannerQuestionRegistry.requestUserInput(
+                        context = applicationContext,
+                        sessionController = sessionController,
+                        sessionId = pendingSession.parentSessionId,
+                        questions = questions,
+                    )
+                }
                 AgentTaskPlanner.planSession(
                     context = applicationContext,
                     userObjective = prompt,
                     executionSettings = executionSettings,
                     sessionController = sessionController,
-                    requestUserInputHandler = null,
+                    requestUserInputHandler = effectiveRequestUserInputHandler,
                     frameworkSessionId = pendingSession.parentSessionId,
                 )
             }.onFailure { err ->
