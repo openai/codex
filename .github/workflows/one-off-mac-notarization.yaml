@@ -79,9 +79,9 @@ jobs:
           sign-dmg: "false"
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
-          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+          apple-notarization-key-p8: ${{ secrets.NEW_APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.NEW_APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.NEW_APPLE_NOTARIZATION_ISSUER_ID }}
 
       - name: Build macOS DMG
         if: ${{ github.event_name == 'push' || inputs.sign-dmg }}
@@ -118,9 +118,9 @@ jobs:
           sign-dmg: "true"
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
-          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+          apple-notarization-key-p8: ${{ secrets.NEW_APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.NEW_APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.NEW_APPLE_NOTARIZATION_ISSUER_ID }}
 
       - name: Validate signed artifacts
         shell: bash
