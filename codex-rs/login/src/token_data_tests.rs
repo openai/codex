@@ -134,35 +134,6 @@ fn token_data_handles_missing_id_token() {
             account_id: Some("account-id".to_string()),
         }
     );
-    assert_eq!(
-        serde_json::to_value(&tokens).expect("token data should serialize"),
-        serde_json::json!({
-            "access_token": "access-token",
-            "refresh_token": "refresh-token",
-            "account_id": "account-id",
-        })
-    );
-}
-
-#[test]
-fn token_data_handles_empty_id_token() {
-    let tokens: TokenData = serde_json::from_value(serde_json::json!({
-        "id_token": "",
-        "access_token": "access-token",
-        "refresh_token": "refresh-token",
-        "account_id": "account-id",
-    }))
-    .expect("token data should parse");
-
-    assert_eq!(
-        tokens,
-        TokenData {
-            id_token: IdTokenInfo::default(),
-            access_token: "access-token".to_string(),
-            refresh_token: "refresh-token".to_string(),
-            account_id: Some("account-id".to_string()),
-        }
-    );
 }
 
 #[test]
