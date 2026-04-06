@@ -2948,7 +2948,7 @@ mod tests {
                     id: event_turn_id,
                     msg: EventMsg::GuardianAssessment(assessment),
                 },
-                self.conversation_id,
+                self.conversation_id.clone(),
                 self.conversation.clone(),
                 self.thread_manager.clone(),
                 self.outgoing.clone(),
