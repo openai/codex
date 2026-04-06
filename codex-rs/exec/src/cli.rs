@@ -2,6 +2,7 @@ use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
+use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
@@ -43,6 +44,10 @@ pub struct Cli {
     #[arg(long = "sandbox", short = 's', value_enum)]
     pub sandbox_mode: Option<codex_utils_cli::SandboxModeCliArg>,
 
+    /// Configure when the model requires human approval before executing a command.
+    #[arg(long = "ask-for-approval", short = 'a', global = true)]
+    pub approval_policy: Option<ApprovalModeCliArg>,
+
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
@@ -58,7 +63,7 @@ pub struct Cli {
         alias = "yolo",
         default_value_t = false,
         global = true,
-        conflicts_with = "full_auto"
+        conflicts_with_all = ["approval_policy", "full_auto"]
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
 

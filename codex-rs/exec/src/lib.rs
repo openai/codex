@@ -174,6 +174,30 @@ fn exec_root_span() -> tracing::Span {
     )
 }
 
+fn resolve_execution_policies(
+    approval_policy_cli_arg: Option<codex_utils_cli::ApprovalModeCliArg>,
+    sandbox_mode_cli_arg: Option<codex_utils_cli::SandboxModeCliArg>,
+    full_auto: bool,
+    dangerously_bypass_approvals_and_sandbox: bool,
+) -> (Option<AskForApproval>, Option<SandboxMode>) {
+    if full_auto {
+        (
+            Some(AskForApproval::OnRequest),
+            Some(SandboxMode::WorkspaceWrite),
+        )
+    } else if dangerously_bypass_approvals_and_sandbox {
+        (
+            Some(AskForApproval::Never),
+            Some(SandboxMode::DangerFullAccess),
+        )
+    } else {
+        (
+            approval_policy_cli_arg.map(Into::into),
+            sandbox_mode_cli_arg.map(Into::into),
+        )
+    }
+}
+
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
@@ -196,6 +220,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         last_message_file,
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
+        approval_policy: approval_policy_cli_arg,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
@@ -222,13 +247,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .with_writer(std::io::stderr)
         .with_filter(env_filter);
 
-    let sandbox_mode = if full_auto {
-        Some(SandboxMode::WorkspaceWrite)
-    } else if dangerously_bypass_approvals_and_sandbox {
-        Some(SandboxMode::DangerFullAccess)
-    } else {
-        sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
-    };
+    let (approval_policy, sandbox_mode) = resolve_execution_policies(
+        approval_policy_cli_arg,
+        sandbox_mode_cli_arg,
+        full_auto,
+        dangerously_bypass_approvals_and_sandbox,
+    );
 
     // Parse `-c` overrides from the CLI.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -333,7 +357,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         review_model: None,
         config_profile,
         // Default to never ask for approvals in headless mode. Feature flags can override.
-        approval_policy: Some(AskForApproval::Never),
+        approval_policy: approval_policy.or(Some(AskForApproval::Never)),
         approvals_reviewer: None,
         sandbox_mode,
         cwd: resolved_cwd,

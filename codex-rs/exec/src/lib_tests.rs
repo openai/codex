@@ -1,4 +1,5 @@
 use super::*;
+use clap::Parser;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use opentelemetry::trace::TraceContextExt;
@@ -18,6 +19,44 @@ fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
 #[test]
 fn exec_defaults_analytics_to_enabled() {
     assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+}
+
+#[test]
+fn exec_cli_accepts_ask_for_approval_flag() {
+    let cli = Cli::try_parse_from(["codex-exec", "--ask-for-approval", "never", "test"])
+        .expect("parse exec cli");
+
+    assert!(matches!(
+        cli.approval_policy,
+        Some(codex_utils_cli::ApprovalModeCliArg::Never)
+    ));
+    assert_eq!(cli.prompt, Some("test".to_string()));
+}
+
+#[test]
+fn resolve_execution_policies_uses_explicit_approval_policy() {
+    let (approval_policy, sandbox_mode) = resolve_execution_policies(
+        Some(codex_utils_cli::ApprovalModeCliArg::Never),
+        Some(codex_utils_cli::SandboxModeCliArg::ReadOnly),
+        /*full_auto*/ false,
+        /*dangerously_bypass_approvals_and_sandbox*/ false,
+    );
+
+    assert_eq!(approval_policy, Some(AskForApproval::Never));
+    assert_eq!(sandbox_mode, Some(SandboxMode::ReadOnly));
+}
+
+#[test]
+fn resolve_execution_policies_prioritizes_full_auto() {
+    let (approval_policy, sandbox_mode) = resolve_execution_policies(
+        Some(codex_utils_cli::ApprovalModeCliArg::Never),
+        Some(codex_utils_cli::SandboxModeCliArg::ReadOnly),
+        /*full_auto*/ true,
+        /*dangerously_bypass_approvals_and_sandbox*/ false,
+    );
+
+    assert_eq!(approval_policy, Some(AskForApproval::OnRequest));
+    assert_eq!(sandbox_mode, Some(SandboxMode::WorkspaceWrite));
 }
 
 #[test]
