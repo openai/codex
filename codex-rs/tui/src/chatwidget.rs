@@ -774,6 +774,7 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
     /// Raw markdown of the most recently completed agent response.
     last_agent_markdown: Option<String>,
     /// Raw markdown for each completed agent response in this session timeline.
@@ -4702,6 +4703,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            clipboard_lease: None,
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
@@ -5073,18 +5075,26 @@ impl ChatWidget {
 
     /// Copy the last agent response (raw markdown) to the system clipboard.
     pub(crate) fn copy_last_agent_markdown(&mut self) {
-        match &self.last_agent_markdown {
-            Some(markdown) if !markdown.is_empty() => {
-                match crate::clipboard_copy::copy_to_clipboard(markdown) {
-                    Ok(()) => self.add_to_history(history_cell::new_info_event(
+        self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    fn copy_last_agent_markdown_with(
+        &mut self,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match self.last_agent_markdown.clone() {
+            Some(markdown) if !markdown.is_empty() => match copy_fn(&markdown) {
+                Ok(lease) => {
+                    self.clipboard_lease = lease;
+                    self.add_to_history(history_cell::new_info_event(
                         "Copied last message to clipboard".into(),
                         None,
-                    )),
-                    Err(error) => self.add_to_history(history_cell::new_error_event(format!(
-                        "Copy failed: {error}"
-                    ))),
+                    ));
                 }
-            }
+                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                    "Copy failed: {error}"
+                ))),
+            },
             _ => self.add_to_history(history_cell::new_error_event(
                 "No agent response to copy".into(),
             )),

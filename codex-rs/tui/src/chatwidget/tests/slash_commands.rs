@@ -154,6 +154,40 @@ async fn slash_copy_reports_when_no_agent_response_exists() {
 }
 
 #[tokio::test]
+async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.last_agent_markdown = Some("copy me".to_string());
+
+    chat.copy_last_agent_markdown_with(|markdown| {
+        assert_eq!(markdown, "copy me");
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one success message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copied last message to clipboard"),
+        "expected success message, got {rendered:?}"
+    );
+
+    chat.copy_last_agent_markdown_with(|markdown| {
+        assert_eq!(markdown, "copy me");
+        Err("blocked".into())
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one failure message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copy failed: blocked"),
+        "expected failure message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

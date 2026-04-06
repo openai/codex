@@ -14,31 +14,54 @@ static STDERR_SUPPRESSION_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> =
 /// falls back to OSC 52 if that fails.
 ///
 /// OSC 52 is supported by kitty, WezTerm, iTerm2, Ghostty, and others.
-pub(crate) fn copy_to_clipboard(text: &str) -> Result<(), String> {
+pub(crate) fn copy_to_clipboard(text: &str) -> Result<Option<ClipboardLease>, String> {
     copy_to_clipboard_with(text, is_ssh_session(), osc52_copy, arboard_copy)
+}
+
+/// Keeps a platform clipboard owner alive when the backend requires one.
+pub(crate) struct ClipboardLease {
+    #[cfg(target_os = "linux")]
+    _clipboard: Option<arboard::Clipboard>,
+}
+
+impl ClipboardLease {
+    #[cfg(target_os = "linux")]
+    fn native_linux(clipboard: arboard::Clipboard) -> Self {
+        Self {
+            _clipboard: Some(clipboard),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test() -> Self {
+        Self {
+            #[cfg(target_os = "linux")]
+            _clipboard: None,
+        }
+    }
 }
 
 fn copy_to_clipboard_with(
     text: &str,
     ssh_session: bool,
     osc52_copy_fn: impl Fn(&str) -> Result<(), String>,
-    arboard_copy_fn: impl Fn(&str) -> Result<(), String>,
-) -> Result<(), String> {
+    arboard_copy_fn: impl Fn(&str) -> Result<Option<ClipboardLease>, String>,
+) -> Result<Option<ClipboardLease>, String> {
     if ssh_session {
         // Over SSH the native clipboard writes to the remote machine which is
         // useless. Use OSC 52, which travels through the SSH tunnel to the
         // local terminal emulator.
-        return osc52_copy_fn(text).map_err(|osc_err| {
+        return osc52_copy_fn(text).map(|()| None).map_err(|osc_err| {
             tracing::warn!("OSC 52 clipboard copy failed over SSH: {osc_err}");
             format!("OSC 52 clipboard copy failed over SSH: {osc_err}")
         });
     }
 
     match arboard_copy_fn(text) {
-        Ok(()) => Ok(()),
+        Ok(lease) => Ok(lease),
         Err(native_err) => {
             tracing::warn!("native clipboard copy failed: {native_err}, falling back to OSC 52");
-            osc52_copy_fn(text).map_err(|osc_err| {
+            osc52_copy_fn(text).map(|()| None).map_err(|osc_err| {
                 format!("native clipboard: {native_err}; OSC 52 fallback: {osc_err}")
             })
         }
@@ -56,8 +79,8 @@ fn is_ssh_session() -> bool {
 /// triggers `os_log` / `NSLog` output on stderr. Because the TUI owns the
 /// terminal, that stray output corrupts the display. We temporarily redirect
 /// fd 2 to `/dev/null` around the call to keep the screen clean.
-#[cfg(not(target_os = "android"))]
-fn arboard_copy(text: &str) -> Result<(), String> {
+#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
+fn arboard_copy(text: &str) -> Result<Option<ClipboardLease>, String> {
     #[cfg(target_os = "macos")]
     let _stderr_lock = STDERR_SUPPRESSION_MUTEX
         .get_or_init(|| std::sync::Mutex::new(()))
@@ -68,11 +91,28 @@ fn arboard_copy(text: &str) -> Result<(), String> {
         arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
     clipboard
         .set_text(text)
-        .map_err(|e| format!("failed to set clipboard text: {e}"))
+        .map_err(|e| format!("failed to set clipboard text: {e}"))?;
+    Ok(None)
+}
+
+/// Run arboard with stderr suppressed.
+///
+/// On Linux/X11 and some Wayland setups, clipboard contents are served by the
+/// process that last wrote them. Keep the `Clipboard` alive so the copied text
+/// remains pasteable while the TUI is running.
+#[cfg(target_os = "linux")]
+fn arboard_copy(text: &str) -> Result<Option<ClipboardLease>, String> {
+    let _guard = SuppressStderr::new();
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| format!("failed to set clipboard text: {e}"))?;
+    Ok(Some(ClipboardLease::native_linux(clipboard)))
 }
 
 #[cfg(target_os = "android")]
-fn arboard_copy(_text: &str) -> Result<(), String> {
+fn arboard_copy(_text: &str) -> Result<Option<ClipboardLease>, String> {
     Err("native clipboard unavailable on Android".to_string())
 }
 
@@ -232,11 +272,11 @@ mod tests {
             },
             |_| {
                 native_calls.set(native_calls.get() + 1);
-                Ok(())
+                Ok(None)
             },
         );
 
-        assert_eq!(result, Ok(()));
+        assert!(matches!(result, Ok(None)));
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 0);
     }
@@ -254,14 +294,14 @@ mod tests {
             },
             |_| {
                 native_calls.set(native_calls.get() + 1);
-                Ok(())
+                Ok(None)
             },
         );
 
-        assert_eq!(
-            result,
-            Err("OSC 52 clipboard copy failed over SSH: blocked".into())
-        );
+        let Err(error) = result else {
+            panic!("expected OSC 52 error");
+        };
+        assert_eq!(error, "OSC 52 clipboard copy failed over SSH: blocked");
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 0);
     }
@@ -279,11 +319,11 @@ mod tests {
             },
             |_| {
                 native_calls.set(native_calls.get() + 1);
-                Ok(())
+                Ok(Some(super::ClipboardLease::test()))
             },
         );
 
-        assert_eq!(result, Ok(()));
+        assert!(matches!(result, Ok(Some(_))));
         assert_eq!(osc_calls.get(), 0);
         assert_eq!(native_calls.get(), 1);
     }
@@ -305,7 +345,7 @@ mod tests {
             },
         );
 
-        assert_eq!(result, Ok(()));
+        assert!(matches!(result, Ok(None)));
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 1);
     }
@@ -327,9 +367,12 @@ mod tests {
             },
         );
 
+        let Err(error) = result else {
+            panic!("expected native and OSC 52 errors");
+        };
         assert_eq!(
-            result,
-            Err("native clipboard: native unavailable; OSC 52 fallback: osc blocked".into())
+            error,
+            "native clipboard: native unavailable; OSC 52 fallback: osc blocked"
         );
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 1);
