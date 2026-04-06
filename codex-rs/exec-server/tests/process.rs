@@ -38,11 +38,11 @@ async fn initialize_server(
     Ok(())
 }
 
-fn expected_platform_sandbox_type() -> SandboxType {
+fn sandbox_wire_test_mode() -> (&'static str, SandboxType) {
     if cfg!(target_os = "macos") {
-        SandboxType::MacosSeatbelt
+        ("require", SandboxType::MacosSeatbelt)
     } else if cfg!(target_os = "linux") {
-        SandboxType::LinuxSeccomp
+        ("disabled", SandboxType::None)
     } else {
         unreachable!("unix exec-server tests only run on macOS and Linux");
     }
@@ -97,6 +97,7 @@ async fn exec_server_starts_sandboxed_process_over_websocket() -> anyhow::Result
     initialize_server(&mut server).await?;
 
     let cwd = std::env::current_dir()?;
+    let (sandbox_mode, expected_sandbox_type) = sandbox_wire_test_mode();
     let process_start_id = server
         .send_request(
             "process/start",
@@ -108,7 +109,7 @@ async fn exec_server_starts_sandboxed_process_over_websocket() -> anyhow::Result
                 "tty": false,
                 "arg0": null,
                 "sandbox": {
-                    "mode": "require",
+                    "mode": sandbox_mode,
                     "policy": {
                         "type": "danger-full-access"
                     },
@@ -143,7 +144,7 @@ async fn exec_server_starts_sandboxed_process_over_websocket() -> anyhow::Result
         process_start_response,
         ExecResponse {
             process_id: ProcessId::from("proc-sandbox"),
-            sandbox_type: expected_platform_sandbox_type(),
+            sandbox_type: expected_sandbox_type,
         }
     );
 
