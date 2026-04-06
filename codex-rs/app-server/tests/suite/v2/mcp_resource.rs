@@ -9,6 +9,7 @@ use app_test_support::write_chatgpt_auth;
 use axum::Router;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpResourceContent;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::RequestId;
@@ -29,13 +30,14 @@ use rmcp::service::RoleServer;
 use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_RESOURCE_URI: &str = "test://codex/resource";
+const TEST_BLOB_RESOURCE_URI: &str = "test://codex/resource.bin";
+const TEST_RESOURCE_BLOB: &str = "YmluYXJ5LXJlc291cmNl";
 const TEST_RESOURCE_TEXT: &str = "Resource body from the MCP server.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -122,11 +124,20 @@ stream_max_retries = 0
     assert_eq!(
         to_response::<McpResourceReadResponse>(read_response)?,
         McpResourceReadResponse {
-            contents: vec![json!({
-                "uri": TEST_RESOURCE_URI,
-                "mimeType": "text/markdown",
-                "text": TEST_RESOURCE_TEXT,
-            })],
+            contents: vec![
+                McpResourceContent::Text {
+                    uri: TEST_RESOURCE_URI.to_string(),
+                    mime_type: Some("text/markdown".to_string()),
+                    text: TEST_RESOURCE_TEXT.to_string(),
+                    meta: None,
+                },
+                McpResourceContent::Blob {
+                    uri: TEST_BLOB_RESOURCE_URI.to_string(),
+                    mime_type: Some("application/octet-stream".to_string()),
+                    blob: TEST_RESOURCE_BLOB.to_string(),
+                    meta: None,
+                },
+            ],
         }
     );
 
@@ -188,12 +199,20 @@ impl ServerHandler for ResourceAppsMcpServer {
         }
 
         Ok(ReadResourceResult {
-            contents: vec![ResourceContents::TextResourceContents {
-                uri: TEST_RESOURCE_URI.to_string(),
-                mime_type: Some("text/markdown".to_string()),
-                text: TEST_RESOURCE_TEXT.to_string(),
-                meta: None,
-            }],
+            contents: vec![
+                ResourceContents::TextResourceContents {
+                    uri: TEST_RESOURCE_URI.to_string(),
+                    mime_type: Some("text/markdown".to_string()),
+                    text: TEST_RESOURCE_TEXT.to_string(),
+                    meta: None,
+                },
+                ResourceContents::BlobResourceContents {
+                    uri: TEST_BLOB_RESOURCE_URI.to_string(),
+                    mime_type: Some("application/octet-stream".to_string()),
+                    blob: TEST_RESOURCE_BLOB.to_string(),
+                    meta: None,
+                },
+            ],
         })
     }
 }

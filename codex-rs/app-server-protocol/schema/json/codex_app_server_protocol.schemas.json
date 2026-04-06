@@ -8978,7 +8978,9 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "contents": {
-            "items": true,
+            "items": {
+              "$ref": "#/definitions/v2/ResourceContent"
+            },
             "type": "array"
           }
         },
@@ -10701,6 +10703,57 @@
           "uri"
         ],
         "type": "object"
+      },
+      "ResourceContent": {
+        "anyOf": [
+          {
+            "properties": {
+              "_meta": true,
+              "mimeType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "uri": {
+                "description": "The URI of this resource.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "uri"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "_meta": true,
+              "blob": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "uri": {
+                "description": "The URI of this resource.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "blob",
+              "uri"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Contents returned when reading a resource from an MCP server."
       },
       "ResourceTemplate": {
         "description": "A template description for resources available on the server.",
