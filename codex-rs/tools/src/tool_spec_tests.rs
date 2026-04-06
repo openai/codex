@@ -6,6 +6,7 @@ use crate::AdditionalProperties;
 use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
+use crate::ResponsesApiNamespace;
 use crate::ResponsesApiTool;
 use crate::create_tools_json_for_responses_api;
 use codex_protocol::config_types::WebSearchContextSize;
@@ -46,6 +47,15 @@ fn tool_spec_name_covers_all_variants() {
         }
         .name(),
         "tool_search"
+    );
+    assert_eq!(
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "agents".to_string(),
+            description: "Agent tools".to_string(),
+            tools: Vec::new(),
+        })
+        .name(),
+        "agents"
     );
     assert_eq!(ToolSpec::LocalShell {}.name(), "local_shell");
     assert_eq!(
@@ -163,6 +173,24 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
                 },
             },
         })]
+    );
+}
+
+#[test]
+fn namespace_tool_spec_serializes_expected_wire_shape() {
+    assert_eq!(
+        serde_json::to_value(ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "agents".to_string(),
+            description: "Agent collaboration tools.".to_string(),
+            tools: Vec::new(),
+        }))
+        .expect("serialize namespace"),
+        json!({
+            "type": "namespace",
+            "name": "agents",
+            "description": "Agent collaboration tools.",
+            "tools": []
+        })
     );
 }
 

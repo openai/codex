@@ -145,6 +145,7 @@ fn code_mode_tool_definition_for_spec(spec: &ToolSpec) -> Option<CodeModeToolDef
             output_schema: None,
         }),
         ToolSpec::LocalShell {}
+        | ToolSpec::Namespace(_)
         | ToolSpec::ImageGeneration { .. }
         | ToolSpec::ToolSearch { .. }
         | ToolSpec::WebSearch { .. } => None,
