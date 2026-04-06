@@ -11,9 +11,9 @@ use codex_sandboxing::SandboxType;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
-    let mut server = exec_server().await?;
+async fn initialize_server(
+    server: &mut common::exec_server::ExecServerHarness,
+) -> anyhow::Result<()> {
     let initialize_id = server
         .send_request(
             "initialize",
@@ -34,6 +34,24 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
     server
         .send_notification("initialized", serde_json::json!({}))
         .await?;
+
+    Ok(())
+}
+
+fn expected_platform_sandbox_type() -> SandboxType {
+    if cfg!(target_os = "macos") {
+        SandboxType::MacosSeatbelt
+    } else if cfg!(target_os = "linux") {
+        SandboxType::LinuxSeccomp
+    } else {
+        unreachable!("unix exec-server tests only run on macOS and Linux");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    initialize_server(&mut server).await?;
 
     let process_start_id = server
         .send_request(
@@ -66,6 +84,66 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
         ExecResponse {
             process_id: ProcessId::from("proc-1"),
             sandbox_type: SandboxType::None,
+        }
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_starts_sandboxed_process_over_websocket() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    initialize_server(&mut server).await?;
+
+    let cwd = std::env::current_dir()?;
+    let process_start_id = server
+        .send_request(
+            "process/start",
+            serde_json::json!({
+                "processId": "proc-sandbox",
+                "argv": ["true"],
+                "cwd": cwd,
+                "env": {},
+                "tty": false,
+                "arg0": null,
+                "sandbox": {
+                    "mode": "require",
+                    "policy": {
+                        "type": "danger-full-access"
+                    },
+                    "fileSystemPolicy": {
+                        "kind": "unrestricted",
+                        "entries": []
+                    },
+                    "networkPolicy": "enabled",
+                    "sandboxPolicyCwd": cwd,
+                    "enforceManagedNetwork": false,
+                    "windowsSandboxLevel": "disabled",
+                    "windowsSandboxPrivateDesktop": false,
+                    "useLegacyLandlock": false
+                }
+            }),
+        )
+        .await?;
+    let response = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &process_start_id
+            )
+        })
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = response else {
+        panic!("expected process/start response");
+    };
+    assert_eq!(id, process_start_id);
+    let process_start_response: ExecResponse = serde_json::from_value(result)?;
+    assert_eq!(
+        process_start_response,
+        ExecResponse {
+            process_id: ProcessId::from("proc-sandbox"),
+            sandbox_type: expected_platform_sandbox_type(),
         }
     );
 
