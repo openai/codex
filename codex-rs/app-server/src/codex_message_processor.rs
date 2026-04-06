@@ -6594,9 +6594,10 @@ impl CodexMessageProcessor {
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::UserInput {
+                Op::UserInputWithMetadata {
                     items: mapped_items,
                     final_output_json_schema: params.output_schema,
+                    submission_type: params.submission_type,
                 },
             )
             .await;
@@ -9111,6 +9112,7 @@ mod tests {
             reasoning_effort: None,
             personality: None,
             session_source: SessionSource::Cli,
+            initialization_mode: codex_analytics::ThreadInitializationMode::New,
         };
 
         assert_eq!(

@@ -368,6 +368,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -978,6 +979,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1060,6 +1062,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1212,6 +1215,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1277,6 +1281,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1350,6 +1355,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1423,6 +1429,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 

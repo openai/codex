@@ -14,6 +14,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
@@ -44,6 +45,9 @@ pub struct TurnResolvedConfigFact {
     pub thread_id: String,
     pub num_input_images: usize,
     pub submission_type: Option<TurnSubmissionType>,
+    pub ephemeral: bool,
+    pub session_source: SessionSource,
+    pub initialization_mode: ThreadInitializationMode,
     pub model: String,
     pub model_provider: String,
     pub sandbox_policy: SandboxPolicy,
@@ -67,10 +71,45 @@ pub enum TurnSubmissionType {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ThreadInitializationMode {
+    New,
+    Forked,
+    Resumed,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
     Completed,
     Failed,
     Interrupted,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnSteerEvent {
+    pub expected_turn_id: Option<String>,
+    pub accepted_turn_id: Option<String>,
+    pub num_input_images: usize,
+    pub result: TurnSteerResult,
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub created_at: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -133,11 +172,17 @@ pub(crate) enum AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnSteer(TurnSteerInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
+}
+
+pub(crate) struct TurnSteerInput {
+    pub tracking: TrackEventsContext,
+    pub turn_steer: CodexTurnSteerEvent,
 }
 
 pub(crate) struct SkillInvokedInput {

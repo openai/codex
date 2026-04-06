@@ -7,18 +7,21 @@ use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CodexTurnSteerEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
-use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
+use crate::events::codex_turn_steer_event_params;
 use crate::events::plugin_state_event_type;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
+use crate::events::turn_parent_thread_id;
+use crate::events::turn_subagent_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
@@ -28,14 +31,18 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
+use crate::facts::TurnSteerInput;
+use crate::facts::TurnSteerResult;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::UserInput;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
@@ -85,7 +92,9 @@ struct TurnState {
     num_input_images: Option<usize>,
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
+    token_usage: Option<TokenUsageBreakdown>,
     completed: Option<CompletedTurnState>,
+    steer_count: usize,
 }
 
 impl AnalyticsReducer {
@@ -128,6 +137,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
                     self.ingest_turn_resolved_config(*input, out);
+                }
+                CustomAnalyticsFact::TurnSteer(input) => {
+                    self.ingest_turn_steer(input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -221,7 +233,9 @@ impl AnalyticsReducer {
             num_input_images: None,
             resolved_config: None,
             started_at: None,
+            token_usage: None,
             completed: None,
+            steer_count: 0,
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
@@ -373,7 +387,9 @@ impl AnalyticsReducer {
                     num_input_images: None,
                     resolved_config: None,
                     started_at: None,
+                    token_usage: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
@@ -397,12 +413,27 @@ impl AnalyticsReducer {
                     num_input_images: None,
                     resolved_config: None,
                     started_at: None,
+                    token_usage: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.started_at = notification
                     .turn
                     .started_at
                     .and_then(|started_at| u64::try_from(started_at).ok());
+            }
+            ServerNotification::ThreadTokenUsageUpdated(notification) => {
+                let turn_state = self.turns.entry(notification.turn_id).or_insert(TurnState {
+                    connection_id: None,
+                    thread_id: None,
+                    num_input_images: None,
+                    resolved_config: None,
+                    started_at: None,
+                    token_usage: None,
+                    completed: None,
+                    steer_count: 0,
+                });
+                turn_state.token_usage = Some(notification.token_usage.last);
             }
             ServerNotification::TurnCompleted(notification) => {
                 let turn_state =
@@ -414,7 +445,9 @@ impl AnalyticsReducer {
                             num_input_images: None,
                             resolved_config: None,
                             started_at: None,
+                            token_usage: None,
                             completed: None,
+                            steer_count: 0,
                         });
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
@@ -470,6 +503,23 @@ impl AnalyticsReducer {
         ));
     }
 
+    fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {
+        let TurnSteerInput {
+            tracking,
+            turn_steer,
+        } = input;
+        if matches!(turn_steer.result, TurnSteerResult::Accepted)
+            && let Some(accepted_turn_id) = turn_steer.accepted_turn_id.as_ref()
+            && let Some(turn_state) = self.turns.get_mut(accepted_turn_id)
+        {
+            turn_state.steer_count += 1;
+        }
+        out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+            event_type: "codex_turn_steer_event",
+            event_params: codex_turn_steer_event_params(&tracking, turn_steer),
+        }));
+    }
+
     fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
         let Some(turn_state) = self.turns.get(turn_id) else {
             return;
@@ -519,6 +569,9 @@ fn codex_turn_event_params(
         thread_id: _resolved_thread_id,
         num_input_images: _resolved_num_input_images,
         submission_type,
+        ephemeral,
+        session_source,
+        initialization_mode,
         model,
         model_provider,
         sandbox_policy,
@@ -532,11 +585,17 @@ fn codex_turn_event_params(
         personality,
         is_first_turn,
     } = resolved_config;
+    let token_usage = turn_state.token_usage.clone();
     CodexTurnEventParams {
         thread_id,
         turn_id,
         product_client_id,
         submission_type,
+        ephemeral,
+        thread_source: thread_source_name(&session_source).map(str::to_string),
+        initialization_mode,
+        subagent_source: turn_subagent_source_name(&session_source),
+        parent_thread_id: turn_parent_thread_id(&session_source),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),
@@ -554,7 +613,7 @@ fn codex_turn_event_params(
         is_first_turn,
         status: completed.status,
         turn_error: completed.turn_error,
-        steer_count: None,
+        steer_count: Some(turn_state.steer_count),
         total_tool_call_count: None,
         shell_command_count: None,
         file_change_count: None,
@@ -563,6 +622,21 @@ fn codex_turn_event_params(
         subagent_tool_call_count: None,
         web_search_count: None,
         image_generation_count: None,
+        input_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.input_tokens),
+        cached_input_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.cached_input_tokens),
+        output_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.output_tokens),
+        reasoning_output_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.reasoning_output_tokens),
+        total_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.total_tokens),
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),
