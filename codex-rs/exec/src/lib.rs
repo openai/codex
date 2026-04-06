@@ -42,6 +42,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -719,7 +720,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let _ = event_processor.process_server_notification(ServerNotification::TurnStarted(
                 TurnStartedNotification {
                     thread_id: response.review_thread_id.clone(),
-                    turn: response.turn.clone(),
+                    turn: Turn {
+                        started_at: Some(0),
+                        ..response.turn.clone()
+                    },
                 },
             ));
             let task_id = response.turn.id;
