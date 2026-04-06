@@ -59,6 +59,7 @@ pub(crate) struct ThreadState {
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    completed_turn_snapshot: Option<Turn>,
     listener_thread: Option<Weak<CodexThread>>,
 }
 
@@ -91,6 +92,7 @@ impl ThreadState {
         }
         self.listener_command_tx = None;
         self.current_turn_history.reset();
+        self.completed_turn_snapshot = None;
         self.listener_thread = None;
     }
 
@@ -108,9 +110,17 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    pub(crate) fn take_terminal_turn_snapshot(&mut self) -> Option<Turn> {
+        self.completed_turn_snapshot
+            .take()
+            .or_else(|| self.active_turn_snapshot())
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {
+        self.completed_turn_snapshot = None;
         self.current_turn_history.handle_event(event);
         if !self.current_turn_history.has_active_turn() {
+            self.completed_turn_snapshot = self.current_turn_history.active_turn_snapshot();
             self.current_turn_history.reset();
         }
     }
