@@ -1,3 +1,4 @@
+use crate::alarm_sidecar::thread_preview_from_alarm_sidecar;
 use crate::config::RolloutConfig;
 use crate::config::RolloutConfigView;
 use crate::list::Cursor;
@@ -243,11 +244,22 @@ pub async fn list_threads_db(
     {
         Ok(mut page) => {
             let mut valid_items = Vec::with_capacity(page.items.len());
-            for item in page.items {
+            for mut item in page.items {
                 if tokio::fs::try_exists(&item.rollout_path)
                     .await
                     .unwrap_or(false)
                 {
+                    let missing_preview =
+                        item.first_user_message.as_deref().is_none_or(str::is_empty);
+                    if missing_preview {
+                        if let Some(alarm_preview) =
+                            thread_preview_from_alarm_sidecar(&item.rollout_path).await
+                        {
+                            item.first_user_message = Some(alarm_preview);
+                        } else {
+                            continue;
+                        }
+                    }
                     valid_items.push(item);
                 } else {
                     warn!(

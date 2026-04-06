@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use codex_protocol::protocol::SessionSource;
 
+mod alarm_sidecar;
 pub mod config;
 pub mod list;
 pub mod metadata;

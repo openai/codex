@@ -883,7 +883,6 @@ pub(super) fn push_thread_filters<'a>(
     } else {
         builder.push(" AND archived = 0");
     }
-    builder.push(" AND first_user_message <> ''");
     if !allowed_sources.is_empty() {
         builder.push(" AND source IN (");
         let mut separated = builder.separated(", ");
