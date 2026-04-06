@@ -115,6 +115,38 @@ fn configured_tool_spec_name_delegates_to_tool_spec() {
 }
 
 #[test]
+fn watchdog_self_close_tool_spec_is_deferred_and_can_send_a_final_message() {
+    let ToolSpec::Function(ResponsesApiTool {
+        name,
+        defer_loading,
+        parameters,
+        ..
+    }) = crate::create_watchdog_self_close_tool()
+    else {
+        panic!("watchdog_self_close should be a function tool");
+    };
+
+    assert_eq!(name, "watchdog_self_close");
+    assert_eq!(defer_loading, Some(true));
+    assert_eq!(
+        parameters,
+        JsonSchema::Object {
+            properties: BTreeMap::from([(
+                "message".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional final message to send to the parent/root thread before closing this watchdog handle and ending this check-in immediately."
+                            .to_string(),
+                    ),
+                },
+            )]),
+            required: None,
+            additional_properties: Some(AdditionalProperties::Boolean(false)),
+        }
+    );
+}
+
+#[test]
 fn web_search_config_converts_to_responses_api_types() {
     assert_eq!(
         ResponsesApiWebSearchFilters::from(ConfigWebSearchFilters {

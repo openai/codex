@@ -313,6 +313,32 @@ pub fn create_close_agent_tool_v2() -> ToolSpec {
     })
 }
 
+pub fn create_watchdog_self_close_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional final message to send to the parent/root thread before closing this watchdog handle and ending this check-in immediately."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "watchdog_self_close".to_string(),
+        description: "Watchdog-only: send an optional final message to the parent/root thread, close this watchdog's persistent handle, and end this check-in immediately."
+            .to_string(),
+        strict: false,
+        defer_loading: Some(true),
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(close_agent_output_schema()),
+    })
+}
+
 fn agent_status_output_schema() -> Value {
     json!({
         "oneOf": [
