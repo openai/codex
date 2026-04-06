@@ -344,7 +344,12 @@ fn create_filesystem_args(
             .collect();
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
-            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
+            append_read_only_subpath_args(
+                &mut args,
+                &mut preserved_files,
+                &subpath,
+                &allowed_write_paths,
+            )?;
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -424,25 +429,20 @@ fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Pa
 
 fn append_read_only_subpath_args(
     args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
-) {
+) -> Result<()> {
     if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
-        return;
+        append_empty_file_read_only_bind_args(args, preserved_files, &symlink_path)?;
+        return Ok(());
     }
 
     if !subpath.exists() {
-        if let Some(first_missing_component) = find_first_non_existent_component(subpath)
-            && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
-        {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&first_missing_component));
-        }
-        return;
+        // Bubblewrap must create bind targets before mounting over them. If the
+        // missing path lives under a writable host bind, that target creation
+        // leaks a real host-side placeholder or fails before command startup.
+        return Ok(());
     }
 
     if is_within_allowed_write_paths(subpath, allowed_write_paths) {
@@ -450,6 +450,8 @@ fn append_read_only_subpath_args(
         args.push(path_to_string(subpath));
         args.push(path_to_string(subpath));
     }
+
+    Ok(())
 }
 
 fn append_unreadable_root_args(
@@ -459,9 +461,7 @@ fn append_unreadable_root_args(
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
     if let Some(symlink_path) = find_symlink_in_path(unreadable_root, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
+        append_empty_file_read_only_bind_args(args, preserved_files, &symlink_path)?;
         return Ok(());
     }
 
@@ -469,9 +469,7 @@ fn append_unreadable_root_args(
         if let Some(first_missing_component) = find_first_non_existent_component(unreadable_root)
             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
         {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&first_missing_component));
+            append_empty_file_read_only_bind_args(args, preserved_files, &first_missing_component)?;
         }
         return Ok(());
     }
@@ -506,15 +504,24 @@ fn append_unreadable_root_args(
         return Ok(());
     }
 
+    args.push("--perms".to_string());
+    args.push("000".to_string());
+    append_empty_file_read_only_bind_args(args, preserved_files, unreadable_root)?;
+    Ok(())
+}
+
+fn append_empty_file_read_only_bind_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    mount_target: &Path,
+) -> Result<()> {
     if preserved_files.is_empty() {
         preserved_files.push(File::open("/dev/null")?);
     }
     let null_fd = preserved_files[0].as_raw_fd().to_string();
-    args.push("--perms".to_string());
-    args.push("000".to_string());
     args.push("--ro-bind-data".to_string());
     args.push(null_fd);
-    args.push(path_to_string(unreadable_root));
+    args.push(path_to_string(mount_target));
     Ok(())
 }
 
@@ -529,7 +536,7 @@ fn is_within_allowed_write_paths(path: &Path, allowed_write_paths: &[PathBuf]) -
 ///
 /// This blocks symlink replacement attacks where a protected path is a symlink
 /// inside a writable root (e.g., `.codex -> ./decoy`). In that case we mount
-/// `/dev/null` on the symlink itself to prevent rewiring it.
+/// an inherited empty file on the symlink itself to prevent rewiring it.
 fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> Option<PathBuf> {
     let mut current = PathBuf::new();
 
@@ -566,8 +573,8 @@ fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> 
 
 /// Find the first missing path component while walking `target_path`.
 ///
-/// Mounting `/dev/null` on the first missing component prevents the sandboxed
-/// process from creating the protected path hierarchy.
+/// Mounting an inherited empty file on the first missing component prevents the
+/// sandboxed process from creating the protected path hierarchy.
 fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
     let mut current = PathBuf::new();
 
@@ -767,32 +774,34 @@ mod tests {
             Path::new("/"),
         )
         .expect("bwrap fs args");
+        assert_eq!(args.preserved_files.len(), 0);
         assert_eq!(
-            args.args,
-            vec![
+            &args.args[..8],
+            [
                 // Start from a read-only view of the full filesystem.
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
+                "--ro-bind",
+                "/",
+                "/",
                 // Recreate a writable /dev inside the sandbox.
-                "--dev".to_string(),
-                "/dev".to_string(),
+                "--dev",
+                "/dev",
                 // Make the writable root itself writable again.
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Mask the default protected .codex subpath under that writable
-                // root. Because the root is `/` in this test, the carveout path
-                // appears as `/.codex`.
-                "--ro-bind".to_string(),
-                "/dev/null".to_string(),
-                "/.codex".to_string(),
-                // Rebind /dev after the root bind so device nodes remain
-                // writable/usable inside the writable root.
-                "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
+                "--bind",
+                "/",
+                "/",
             ]
+        );
+        assert!(
+            !args.args.iter().any(|arg| arg == "/.codex"),
+            "missing protected .codex should not be masked under bwrap: {:#?}",
+            args.args
+        );
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| window == ["--bind", "/dev", "/dev"]),
+            "expected /dev to be rebound after the writable root: {:#?}",
+            args.args
         );
     }
 

@@ -313,15 +313,10 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
     assert!(allowed_exists, "allowed path should exist");
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_blocks_first_time_dot_codex_creation() {
     core_test_support::skip_if_sandbox!();
-    #[cfg(target_os = "linux")]
-    let sandbox_env = match linux_sandbox_test_env().await {
-        Some(env) => env,
-        None => return,
-    };
-    #[cfg(not(target_os = "linux"))]
     let sandbox_env = HashMap::new();
 
     let temp = tempfile::tempdir().expect("should be able to create temp dir");

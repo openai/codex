@@ -21,6 +21,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
@@ -82,6 +83,26 @@ async fn run_cmd_result_with_writable_roots(
     use_legacy_landlock: bool,
     network_access: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    run_cmd_result_with_writable_roots_in_cwd(
+        cmd,
+        writable_roots,
+        cwd.as_path(),
+        timeout_ms,
+        use_legacy_landlock,
+        network_access,
+    )
+    .await
+}
+
+async fn run_cmd_result_with_writable_roots_in_cwd(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    cwd: &Path,
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+    network_access: bool,
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: writable_roots
             .iter()
@@ -97,11 +118,12 @@ async fn run_cmd_result_with_writable_roots(
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    run_cmd_result_with_policies(
+    run_cmd_result_with_policies_in_cwd(
         cmd,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        cwd,
         timeout_ms,
         use_legacy_landlock,
     )
@@ -118,6 +140,29 @@ async fn run_cmd_result_with_policies(
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
+    run_cmd_result_with_policies_in_cwd(
+        cmd,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        cwd.as_path(),
+        timeout_ms,
+        use_legacy_landlock,
+    )
+    .await
+}
+
+#[expect(clippy::expect_used)]
+async fn run_cmd_result_with_policies_in_cwd(
+    cmd: &[&str],
+    sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    cwd: &Path,
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
+    let cwd = cwd.to_path_buf();
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
@@ -256,6 +301,40 @@ async fn bwrap_populates_minimal_dev_nodes() {
     .expect("sandboxed command should execute");
 
     assert_eq!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn bwrap_dev_nodes_work_when_workspace_dot_codex_is_missing() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let output = run_cmd_result_with_writable_roots_in_cwd(
+        &[
+            "bash",
+            "-lc",
+            ": >/dev/null && head -c 8 /dev/zero | od -An -tx1",
+        ],
+        &[],
+        tmpdir.path(),
+        LONG_TIMEOUT_MS,
+        false,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(
+        output.stdout.text.split_whitespace().collect::<Vec<_>>(),
+        vec!["00", "00", "00", "00", "00", "00", "00", "00"]
+    );
+    assert!(
+        !tmpdir.path().join(".codex").exists(),
+        "missing workspace .codex should not be materialized by bwrap startup"
+    );
 }
 
 #[tokio::test]

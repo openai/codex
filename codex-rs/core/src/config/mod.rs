@@ -148,6 +148,7 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const PROJECT_LOCAL_CODEX_DIR: &str = ".codex";
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     OPENAI_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
@@ -166,6 +167,42 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     } else {
         Some(resolved_cwd.join(path))
     }
+}
+
+fn maybe_warn_missing_project_dot_codex_for_linux_bwrap(
+    startup_warnings: &mut Vec<String>,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) {
+    if !cfg!(target_os = "linux")
+        || !should_warn_missing_project_dot_codex_for_linux_bwrap(file_system_sandbox_policy, cwd)
+    {
+        return;
+    }
+
+    let dot_codex = cwd.join(PROJECT_LOCAL_CODEX_DIR);
+    let dot_codex_display = dot_codex.display();
+    let warning = format!(
+        "Project-local `.codex` does not exist at `{dot_codex_display}`. On Linux, Codex will not create a sandbox mount target for it, so shell commands may create `.codex` without approval until it exists; existing `.codex` paths and `apply_patch` edits remain protected."
+    );
+    tracing::warn!("{warning}");
+    startup_warnings.push(warning);
+}
+
+fn should_warn_missing_project_dot_codex_for_linux_bwrap(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> bool {
+    let dot_codex = cwd.join(PROJECT_LOCAL_CODEX_DIR);
+    let dot_codex_is_missing = match dot_codex.symlink_metadata() {
+        Ok(_) => false,
+        Err(err) if err.kind() == ErrorKind::NotFound => true,
+        Err(_) => false,
+    };
+
+    dot_codex_is_missing
+        && file_system_sandbox_policy.can_write_path_with_cwd(cwd, cwd)
+        && !file_system_sandbox_policy.can_write_path_with_cwd(&dot_codex, cwd)
 }
 
 #[cfg(test)]
@@ -2642,6 +2679,11 @@ impl Config {
             } else {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
+        maybe_warn_missing_project_dot_codex_for_linux_bwrap(
+            &mut startup_warnings,
+            &effective_file_system_sandbox_policy,
+            resolved_cwd.as_path(),
+        );
         let config = Self {
             model,
             service_tier,

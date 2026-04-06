@@ -1182,6 +1182,52 @@ exclude_slash_tmp = true
 }
 
 #[test]
+fn missing_project_dot_codex_warning_condition_matches_workspace_policy() -> std::io::Result<()> {
+    let cwd = TempDir::new()?;
+    let workspace_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_workspace_write_policy(),
+        cwd.path(),
+    );
+
+    assert!(should_warn_missing_project_dot_codex_for_linux_bwrap(
+        &workspace_policy,
+        cwd.path()
+    ));
+
+    let read_only_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    assert!(!should_warn_missing_project_dot_codex_for_linux_bwrap(
+        &read_only_policy,
+        cwd.path()
+    ));
+
+    std::fs::create_dir(cwd.path().join(".codex"))?;
+    assert!(!should_warn_missing_project_dot_codex_for_linux_bwrap(
+        &workspace_policy,
+        cwd.path()
+    ));
+
+    #[cfg(unix)]
+    {
+        let cwd = TempDir::new()?;
+        let workspace_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+            cwd.path(),
+        );
+        std::os::unix::fs::symlink(cwd.path().join("missing-target"), cwd.path().join(".codex"))?;
+
+        assert!(!should_warn_missing_project_dot_codex_for_linux_bwrap(
+            &workspace_policy,
+            cwd.path()
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
     const MISMATCHED_COMMAND_SERVER: &str = "mismatched-command-should-disable";
     const MISMATCHED_URL_SERVER: &str = "mismatched-url-should-disable";
