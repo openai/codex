@@ -671,7 +671,9 @@ fn try_derive_execpolicy_amendment_for_prompt_rules(
             RuleMatch::HeuristicsRuleMatch {
                 command,
                 decision: Decision::Prompt,
-            } => Some(ExecPolicyAmendment::from(command.clone())),
+            } => Some(ExecPolicyAmendment::from(
+                simplify_auto_execpolicy_amendment(command),
+            )),
             _ => None,
         })
 }
@@ -692,9 +694,90 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
             RuleMatch::HeuristicsRuleMatch {
                 command,
                 decision: Decision::Allow,
-            } => Some(ExecPolicyAmendment::from(command.clone())),
+            } => Some(ExecPolicyAmendment::from(
+                simplify_auto_execpolicy_amendment(command),
+            )),
             _ => None,
         })
+}
+
+fn simplify_auto_execpolicy_amendment(command: &[String]) -> Vec<String> {
+    if !is_windows_absolute_executable_path(command.first().map(String::as_str).unwrap_or_default())
+    {
+        return command.to_vec();
+    }
+
+    let Some(program) = command.first() else {
+        return Vec::new();
+    };
+    if is_shell_like_program(program) {
+        return command.to_vec();
+    }
+
+    let mut prefix = vec![program.clone()];
+    for token in command.iter().skip(1) {
+        if token.starts_with('-')
+            || token.contains(['\\', '/'])
+            || token.starts_with('.')
+            || token.starts_with('~')
+            || token.chars().all(|ch| ch.is_ascii_digit())
+        {
+            break;
+        }
+        prefix.push(token.clone());
+    }
+
+    if prefix.len() > 1 {
+        prefix
+    } else {
+        command.to_vec()
+    }
+}
+
+fn is_windows_absolute_executable_path(program: &str) -> bool {
+    let program = program.trim();
+    let has_drive_prefix = matches!(
+        program.as_bytes(),
+        [drive, b':', slash, ..]
+            if drive.is_ascii_alphabetic() && matches!(slash, b'\\' | b'/')
+    );
+    let is_unc = program.starts_with("\\\\");
+    (has_drive_prefix || is_unc)
+        && program
+            .rsplit(['\\', '/'])
+            .next()
+            .is_some_and(|name| name.contains('.'))
+}
+
+fn is_shell_like_program(program: &str) -> bool {
+    let base = program
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "bash"
+            | "bash.exe"
+            | "sh"
+            | "sh.exe"
+            | "zsh"
+            | "zsh.exe"
+            | "cmd"
+            | "cmd.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "pwsh"
+            | "pwsh.exe"
+            | "python"
+            | "python.exe"
+            | "python3"
+            | "python3.exe"
+            | "node"
+            | "node.exe"
+            | "deno"
+            | "deno.exe"
+    )
 }
 
 fn derive_requested_execpolicy_amendment_from_prefix_rule(

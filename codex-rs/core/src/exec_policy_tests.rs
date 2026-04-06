@@ -1209,6 +1209,63 @@ async fn proposed_execpolicy_amendment_is_present_for_single_command_without_pol
 }
 
 #[tokio::test]
+async fn proposed_execpolicy_amendment_compacts_windows_absolute_executable_paths() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                r"C:\Program Files\GitHub CLI\gh.exe".to_string(),
+                "issue".to_string(),
+                "view".to_string(),
+                "41".to_string(),
+                "--repo".to_string(),
+                "openai/codex".to_string(),
+            ],
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                r"C:\Program Files\GitHub CLI\gh.exe".to_string(),
+                "issue".to_string(),
+                "view".to_string(),
+            ])),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_keeps_shell_like_windows_executables_specific() {
+    let command = vec![
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".to_string(),
+        "-Command".to_string(),
+        "Write-Host hi".to_string(),
+    ];
+
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: command.clone(),
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
