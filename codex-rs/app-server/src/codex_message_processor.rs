@@ -474,22 +474,23 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
-    pub(crate) fn clear_plugin_related_caches(&self) {
+    pub(crate) async fn handle_config_mutation(&self) {
+        self.clear_plugin_related_caches();
+        match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => self.maybe_start_plugin_startup_tasks_for_latest_config(&config),
+            Err(err) => warn!("failed to load latest config after mutation: {err:?}"),
+        }
+    }
+
+    fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
     }
 
-    pub(crate) async fn maybe_start_plugin_startup_tasks_for_latest_config(&self) {
-        match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => self
-                .thread_manager
-                .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(
-                    &config,
-                    self.thread_manager.auth_manager(),
-                ),
-            Err(err) => warn!("failed to load latest config for plugin startup tasks: {err:?}"),
-        }
+    fn maybe_start_plugin_startup_tasks_for_latest_config(&self, config: &Config) {
+        self.thread_manager
+            .plugins_manager()
+            .maybe_start_plugin_startup_tasks_for_config(config, self.thread_manager.auth_manager())
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
