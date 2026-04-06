@@ -44,6 +44,18 @@ const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
 const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
 
+#[expect(clippy::expect_used)]
+fn codex_linux_sandbox_exe() -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .expect("cwd should exist")
+            .join(path)
+    }
+}
+
 fn create_env_from_core_vars() -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
     create_env(&policy, /*thread_id*/ None)
@@ -177,8 +189,7 @@ async fn run_cmd_result_with_policies_in_cwd(
         justification: None,
         arg0: None,
     };
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+    let codex_linux_sandbox_exe = Some(codex_linux_sandbox_exe());
 
     process_exec_tool_call(
         params,
@@ -474,8 +485,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     };
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
+    let codex_linux_sandbox_exe: Option<PathBuf> = Some(codex_linux_sandbox_exe());
     let result = process_exec_tool_call(
         params,
         &sandbox_policy,
@@ -634,7 +644,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
     let blocked_target = blocked.join("secret.txt");
     // These tests bypass the usual legacy-policy bridge, so explicitly keep
     // the sandbox helper binary and minimal runtime paths readable.
-    let sandbox_helper_dir = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+    let sandbox_helper_dir = codex_linux_sandbox_exe()
         .parent()
         .expect("sandbox helper should have a parent")
         .to_path_buf();
@@ -707,7 +717,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
     let allowed_target = allowed.join("note.txt");
     // These tests bypass the usual legacy-policy bridge, so explicitly keep
     // the sandbox helper binary and minimal runtime paths readable.
-    let sandbox_helper_dir = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+    let sandbox_helper_dir = codex_linux_sandbox_exe()
         .parent()
         .expect("sandbox helper should have a parent")
         .to_path_buf();
