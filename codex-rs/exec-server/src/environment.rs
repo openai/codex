@@ -38,37 +38,6 @@ pub enum EnvironmentMode {
     Disabled,
 }
 
-/// Feature-style view of what a selected environment supports.
-///
-/// Tool building and runtime guards should prefer these booleans over
-/// re-interpreting environment URLs so future environment modes can evolve
-/// without touching every call site.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct EnvironmentCapabilities {
-    exec_enabled: bool,
-    filesystem_enabled: bool,
-}
-
-impl EnvironmentCapabilities {
-    /// Creates a capability set for a concrete environment mode.
-    pub fn new(exec_enabled: bool, filesystem_enabled: bool) -> Self {
-        Self {
-            exec_enabled,
-            filesystem_enabled,
-        }
-    }
-
-    /// Returns whether process execution should be exposed.
-    pub fn exec_enabled(self) -> bool {
-        self.exec_enabled
-    }
-
-    /// Returns whether filesystem-backed tools should be exposed.
-    pub fn filesystem_enabled(self) -> bool {
-        self.filesystem_enabled
-    }
-}
-
 impl EnvironmentMode {
     /// Returns the remote exec-server URL when this mode is remote.
     pub fn exec_server_url(&self) -> Option<&str> {
@@ -86,18 +55,6 @@ impl EnvironmentMode {
     /// Returns whether this mode disables environment-backed APIs.
     pub fn is_disabled(&self) -> bool {
         matches!(self, Self::Disabled)
-    }
-
-    /// Returns the tool/runtime capabilities implied by this mode.
-    pub fn capabilities(&self) -> EnvironmentCapabilities {
-        match self {
-            Self::Local | Self::Remote { .. } => EnvironmentCapabilities::new(
-                /*exec_enabled*/ true, /*filesystem_enabled*/ true,
-            ),
-            Self::Disabled => EnvironmentCapabilities::new(
-                /*exec_enabled*/ false, /*filesystem_enabled*/ false,
-            ),
-        }
     }
 
     fn from_exec_server_url(exec_server_url: Option<String>) -> Self {
@@ -126,7 +83,7 @@ pub trait ExecutorEnvironment: Send + Sync {
 #[derive(Debug)]
 pub struct EnvironmentManager {
     mode: EnvironmentMode,
-    current_environment: OnceCell<Arc<Environment>>,
+    current_environment: OnceCell<Option<Arc<Environment>>>,
 }
 
 impl Default for EnvironmentManager {
@@ -154,6 +111,15 @@ impl EnvironmentManager {
         Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
     }
 
+    /// Builds a manager from the currently selected environment, or from the
+    /// disabled mode when no environment is available.
+    pub fn from_environment(environment: Option<&Environment>) -> Self {
+        match environment {
+            Some(environment) => Self::from_mode(environment.mode().clone()),
+            None => Self::from_mode(EnvironmentMode::Disabled),
+        }
+    }
+
     /// Returns the stable mode for this manager.
     pub fn mode(&self) -> &EnvironmentMode {
         &self.mode
@@ -165,15 +131,20 @@ impl EnvironmentManager {
     }
 
     /// Returns the cached environment, creating it on first access.
-    pub async fn current(&self) -> Result<Arc<Environment>, ExecServerError> {
+    pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
         self.current_environment
             .get_or_try_init(|| async {
-                Ok(Arc::new(
-                    Environment::create_for_mode(self.mode.clone()).await?,
-                ))
+                if self.mode.is_disabled() {
+                    Ok(None)
+                } else {
+                    Ok(Some(Arc::new(
+                        Environment::create_for_mode(self.mode.clone()).await?,
+                    )))
+                }
             })
             .await
-            .map(Arc::clone)
+            .map(Option::as_ref)
+            .map(Option::cloned)
     }
 }
 
@@ -266,21 +237,6 @@ impl Environment {
     /// Returns the selected mode for this environment.
     pub fn mode(&self) -> &EnvironmentMode {
         &self.mode
-    }
-
-    /// Returns the capabilities exposed by this environment.
-    pub fn capabilities(&self) -> EnvironmentCapabilities {
-        self.mode.capabilities()
-    }
-
-    /// Returns whether process execution is available.
-    pub fn exec_enabled(&self) -> bool {
-        self.capabilities().exec_enabled()
-    }
-
-    /// Returns whether filesystem-backed operations are available.
-    pub fn filesystem_enabled(&self) -> bool {
-        self.capabilities().filesystem_enabled()
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
@@ -415,14 +371,6 @@ mod tests {
         assert_eq!(manager.exec_server_url(), None);
     }
 
-    #[test]
-    fn disabled_mode_capabilities_are_off() {
-        let capabilities = EnvironmentMode::Disabled.capabilities();
-
-        assert!(!capabilities.exec_enabled());
-        assert!(!capabilities.filesystem_enabled());
-    }
-
     #[tokio::test]
     async fn environment_manager_current_caches_environment() {
         let manager = EnvironmentManager::new(/*exec_server_url*/ None);
@@ -430,7 +378,23 @@ mod tests {
         let first = manager.current().await.expect("get current environment");
         let second = manager.current().await.expect("get current environment");
 
+        let first = first.expect("local environment");
+        let second = second.expect("local environment");
+
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn disabled_environment_manager_has_no_current_environment() {
+        let manager = EnvironmentManager::new(Some("none".to_string()));
+
+        assert!(
+            manager
+                .current()
+                .await
+                .expect("get current environment")
+                .is_none()
+        );
     }
 
     #[tokio::test]

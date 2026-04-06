@@ -593,12 +593,6 @@ impl UnifiedExecProcessManager {
             .ok_or(UnifiedExecError::MissingCommandLine)?;
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
-        if !environment.exec_enabled() {
-            return Err(UnifiedExecError::create_process(
-                "environment is disabled; exec_command is unavailable".to_string(),
-            ));
-        }
-
         if environment.mode().is_remote() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(

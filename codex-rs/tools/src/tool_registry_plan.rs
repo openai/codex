@@ -107,7 +107,7 @@ pub fn build_tool_registry_plan(
         );
     }
 
-    if config.environment_capabilities.exec_enabled() {
+    if config.has_environment {
         match &config.shell_type {
             ConfigShellToolType::Default => {
                 plan.push_spec(
@@ -156,9 +156,7 @@ pub fn build_tool_registry_plan(
         }
     }
 
-    if config.environment_capabilities.exec_enabled()
-        && config.shell_type != ConfigShellToolType::Disabled
-    {
+    if config.has_environment && config.shell_type != ConfigShellToolType::Disabled {
         plan.register_handler("shell", ToolHandlerKind::Shell);
         plan.register_handler("container.exec", ToolHandlerKind::Shell);
         plan.register_handler("local_shell", ToolHandlerKind::Shell);
@@ -193,7 +191,7 @@ pub fn build_tool_registry_plan(
     );
     plan.register_handler("update_plan", ToolHandlerKind::Plan);
 
-    if config.environment_capabilities.exec_enabled() && config.js_repl_enabled {
+    if config.has_environment && config.js_repl_enabled {
         plan.push_spec(
             create_js_repl_tool(),
             /*supports_parallel_tool_calls*/ false,
@@ -269,7 +267,7 @@ pub fn build_tool_registry_plan(
         plan.register_handler(TOOL_SUGGEST_TOOL_NAME, ToolHandlerKind::ToolSuggest);
     }
 
-    if config.environment_capabilities.filesystem_enabled()
+    if config.has_environment
         && let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
     {
         match apply_patch_tool_type {
@@ -291,7 +289,7 @@ pub fn build_tool_registry_plan(
         plan.register_handler("apply_patch", ToolHandlerKind::ApplyPatch);
     }
 
-    if config.environment_capabilities.filesystem_enabled()
+    if config.has_environment
         && config
             .experimental_supported_tools
             .iter()
@@ -338,7 +336,7 @@ pub fn build_tool_registry_plan(
         );
     }
 
-    if config.environment_capabilities.filesystem_enabled() {
+    if config.has_environment {
         plan.push_spec(
             create_view_image_tool(ViewImageToolOptions {
                 can_request_original_image_detail: config.can_request_original_image_detail,

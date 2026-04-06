@@ -78,8 +78,8 @@ pub(crate) async fn run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::from_mode(
-            parent_ctx.environment.mode().clone(),
+        environment_manager: Arc::new(EnvironmentManager::from_environment(
+            parent_ctx.environment.as_deref(),
         )),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),

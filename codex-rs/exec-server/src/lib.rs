@@ -33,7 +33,6 @@ pub use codex_app_server_protocol::FsWriteFileParams;
 pub use codex_app_server_protocol::FsWriteFileResponse;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 pub use environment::Environment;
-pub use environment::EnvironmentCapabilities;
 pub use environment::EnvironmentManager;
 pub use environment::EnvironmentMode;
 pub use environment::ExecutorEnvironment;
