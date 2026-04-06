@@ -9186,13 +9186,19 @@ guardian_approval = true
             items,
             status,
             error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         }
     }
 
     fn turn_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
         ServerNotification::TurnStarted(TurnStartedNotification {
             thread_id: thread_id.to_string(),
-            turn: test_turn(turn_id, TurnStatus::InProgress, Vec::new()),
+            turn: Turn {
+                started_at: Some(0),
+                ..test_turn(turn_id, TurnStatus::InProgress, Vec::new())
+            },
         })
     }
 
@@ -9203,7 +9209,11 @@ guardian_approval = true
     ) -> ServerNotification {
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: thread_id.to_string(),
-            turn: test_turn(turn_id, status, Vec::new()),
+            turn: Turn {
+                completed_at: Some(0),
+                duration_ms: Some(1),
+                ..test_turn(turn_id, status, Vec::new())
+            },
         })
     }
 
@@ -10424,6 +10434,9 @@ guardian_approval = true
                         }],
                         status: TurnStatus::Completed,
                         error: None,
+                        started_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                     Turn {
                         id: "turn-2".to_string(),
@@ -10444,6 +10457,9 @@ guardian_approval = true
                         ],
                         status: TurnStatus::Completed,
                         error: None,
+                        started_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                 ],
                 events: Vec::new(),
