@@ -12,7 +12,9 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
@@ -172,7 +174,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home);
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -330,10 +332,14 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
+fn gather_helper_read_roots_for_current_exe(
+    current_exe: Option<PathBuf>,
+    codex_home: &Path,
+) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
+    if let Some(exe) = current_exe
         && let Some(dir) = exe.parent()
+        && !is_windows_apps_path(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -341,6 +347,10 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
+    gather_helper_read_roots_for_current_exe(std::env::current_exe().ok(), codex_home)
 }
 
 fn gather_legacy_full_read_roots(
@@ -569,16 +579,18 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+fn find_setup_exe(codex_home: &Path) -> PathBuf {
+    let log_dir = sandbox_dir(codex_home);
+    resolve_helper_for_launch(HelperExecutable::Setup, codex_home, Some(&log_dir))
+}
+
+fn is_windows_apps_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 fn report_helper_failure(
@@ -611,7 +623,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -802,8 +814,11 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use super::gather_helper_read_roots;
+    use super::gather_helper_read_roots_for_current_exe;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::is_windows_apps_path;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -816,6 +831,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1007,6 +1023,61 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn helper_read_roots_always_include_materialized_helper_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+
+        let roots = gather_helper_read_roots(&codex_home);
+        let expected =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+
+        assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn helper_read_roots_skip_windows_apps_parent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let exe =
+            PathBuf::from(r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64__abc\codex.exe");
+        let roots = gather_helper_read_roots_for_current_exe(Some(exe), &codex_home);
+        let expected =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+
+        assert_eq!(vec![expected], roots);
+    }
+
+    #[test]
+    fn helper_read_roots_include_non_windows_apps_parent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let install_dir = tmp.path().join("OpenAI").join("Codex");
+        fs::create_dir_all(&install_dir).expect("create install dir");
+        let exe = install_dir.join("codex.exe");
+
+        let roots = gather_helper_read_roots_for_current_exe(Some(exe), &codex_home);
+        let install_dir = dunce::canonicalize(&install_dir).expect("canonical install dir");
+        let expected =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+
+        assert!(roots.contains(&install_dir));
+        assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn windows_apps_paths_are_detected_case_insensitively() {
+        assert!(is_windows_apps_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe"
+        )));
+        assert!(is_windows_apps_path(Path::new(
+            r"c:\program files\windowsapps\OpenAI.Codex"
+        )));
+        assert!(!is_windows_apps_path(Path::new(
+            r"C:\Users\example\.codex\.sandbox-bin"
+        )));
     }
 
     #[test]
