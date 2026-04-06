@@ -265,6 +265,25 @@ impl Client {
         Ok(Self::rate_limit_snapshots_from_payload(payload))
     }
 
+    pub async fn send_add_credits_nudge_email(&self) -> std::result::Result<(), RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => {
+                format!(
+                    "{}/api/codex/accounts/send_add_credits_nudge_email",
+                    self.base_url
+                )
+            }
+            PathStyle::ChatGptApi => {
+                format!("{}/accounts/send_add_credits_nudge_email", self.base_url)
+            }
+        };
+        let req = self.http.post(&url).headers(self.headers());
+        let _ = self
+            .exec_request_detailed(req, "POST", &url)
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_tasks(
         &self,
         limit: Option<i32>,
@@ -648,5 +667,32 @@ mod tests {
             .cloned()
             .unwrap_or_else(|| snapshots[0].clone());
         assert_eq!(preferred.limit_id.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn add_credits_nudge_email_uses_expected_paths() {
+        let codex_api = Client::new("https://example.com").expect("codex api client");
+        assert_eq!(
+            match codex_api.path_style {
+                PathStyle::CodexApi => format!(
+                    "{}/api/codex/accounts/send_add_credits_nudge_email",
+                    codex_api.base_url
+                ),
+                PathStyle::ChatGptApi => unreachable!("plain host should use codex api paths"),
+            },
+            "https://example.com/api/codex/accounts/send_add_credits_nudge_email"
+        );
+
+        let chatgpt_api = Client::new("https://chatgpt.com").expect("chatgpt backend api client");
+        assert_eq!(
+            match chatgpt_api.path_style {
+                PathStyle::CodexApi => unreachable!("chatgpt host should use backend-api paths"),
+                PathStyle::ChatGptApi => format!(
+                    "{}/accounts/send_add_credits_nudge_email",
+                    chatgpt_api.base_url
+                ),
+            },
+            "https://chatgpt.com/backend-api/accounts/send_add_credits_nudge_email"
+        );
     }
 }

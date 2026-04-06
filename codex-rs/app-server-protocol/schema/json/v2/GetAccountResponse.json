@@ -73,6 +73,12 @@
         }
       ]
     },
+    "isWorkspaceOwner": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "requiresOpenaiAuth": {
       "type": "boolean"
     }

@@ -485,6 +485,11 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
+    SendAddCreditsNudgeEmail => "account/sendAddCreditsNudgeEmail" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::SendAddCreditsNudgeEmailResponse,
+    },
+
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,

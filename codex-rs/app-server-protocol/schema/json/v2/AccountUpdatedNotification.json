@@ -55,6 +55,12 @@
         }
       ]
     },
+    "isWorkspaceOwner": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "planType": {
       "anyOf": [
         {

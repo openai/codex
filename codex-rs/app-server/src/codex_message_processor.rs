@@ -23,6 +23,7 @@ use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -102,6 +103,7 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SkillSummary;
@@ -494,6 +496,7 @@ impl CodexMessageProcessor {
         AccountUpdatedNotification {
             auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+            is_workspace_owner: auth.as_ref().and_then(CodexAuth::is_workspace_owner),
         }
     }
 
@@ -975,6 +978,13 @@ impl CodexMessageProcessor {
                 self.get_account_rate_limits(to_connection_request_id(request_id))
                     .await;
             }
+            ClientRequest::SendAddCreditsNudgeEmail {
+                request_id,
+                params: _,
+            } => {
+                self.send_add_credits_nudge_email(to_connection_request_id(request_id))
+                    .await;
+            }
             ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(to_connection_request_id(request_id), params)
                     .await;
@@ -1223,6 +1233,9 @@ impl CodexMessageProcessor {
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                                is_workspace_owner: auth
+                                    .as_ref()
+                                    .and_then(CodexAuth::is_workspace_owner),
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1336,6 +1349,9 @@ impl CodexMessageProcessor {
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                                is_workspace_owner: auth
+                                    .as_ref()
+                                    .and_then(CodexAuth::is_workspace_owner),
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1527,6 +1543,7 @@ impl CodexMessageProcessor {
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
                     plan_type: None,
+                    is_workspace_owner: None,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -1625,6 +1642,7 @@ impl CodexMessageProcessor {
         if !requires_openai_auth {
             let response = GetAccountResponse {
                 account: None,
+                is_workspace_owner: None,
                 requires_openai_auth,
             };
             self.outgoing.send_response(request_id, response).await;
@@ -1661,6 +1679,11 @@ impl CodexMessageProcessor {
 
         let response = GetAccountResponse {
             account,
+            is_workspace_owner: self
+                .auth_manager
+                .auth_cached()
+                .as_ref()
+                .and_then(CodexAuth::is_workspace_owner),
             requires_openai_auth,
         };
         self.outgoing.send_response(request_id, response).await;
@@ -1684,6 +1707,79 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn send_add_credits_nudge_email(&self, request_id: ConnectionRequestId) {
+        let Some(auth) = self.auth_manager.auth().await else {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "codex account authentication required to notify workspace owner"
+                            .to_string(),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        };
+
+        if !auth.is_chatgpt_auth() {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "chatgpt authentication required to notify workspace owner"
+                            .to_string(),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        let client = match BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth) {
+            Ok(client) => client,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to construct backend client: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        let status = match client.send_add_credits_nudge_email().await {
+            Ok(()) => AddCreditsNudgeEmailStatus::Sent,
+            Err(err) if err.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
+                AddCreditsNudgeEmailStatus::CooldownActive
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to notify workspace owner: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        self.outgoing
+            .send_response(request_id, SendAddCreditsNudgeEmailResponse { status })
+            .await;
     }
 
     async fn fetch_account_rate_limits(

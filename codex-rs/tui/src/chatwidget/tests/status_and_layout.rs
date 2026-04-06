@@ -129,6 +129,7 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        initial_is_workspace_owner: None,
         initial_plan_type: None,
         model: Some(resolved_model),
         startup_tooltip_override: None,

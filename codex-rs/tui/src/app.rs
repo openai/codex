@@ -54,6 +54,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -72,6 +73,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
@@ -1072,6 +1074,7 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
+            initial_is_workspace_owner: self.chat_widget.current_is_workspace_owner(),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
@@ -1888,6 +1891,17 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::RateLimitsLoaded { request_id, result });
+        });
+    }
+
+    fn notify_workspace_owner(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = notify_workspace_owner(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::NotifyWorkspaceOwnerLoaded { result });
         });
     }
 
@@ -3556,6 +3570,7 @@ impl App {
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
         let status_account_display = bootstrap.status_account_display.clone();
+        let initial_is_workspace_owner = bootstrap.is_workspace_owner;
         let initial_plan_type = bootstrap.plan_type;
         let startup_rate_limit_snapshots = bootstrap.rate_limit_snapshots;
         let session_telemetry = SessionTelemetry::new(
@@ -3606,6 +3621,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    initial_is_workspace_owner,
                     initial_plan_type,
                     model: Some(model.clone()),
                     startup_tooltip_override,
@@ -3640,6 +3656,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    initial_is_workspace_owner,
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
@@ -3679,6 +3696,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    initial_is_workspace_owner,
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
@@ -4395,6 +4413,12 @@ impl App {
                         .finish_status_rate_limit_refresh(request_id);
                 }
             },
+            AppEvent::NotifyWorkspaceOwner => {
+                self.notify_workspace_owner(app_server);
+            }
+            AppEvent::NotifyWorkspaceOwnerLoaded { result } => {
+                self.chat_widget.finish_notify_workspace_owner(result);
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -6000,6 +6024,21 @@ async fn fetch_account_rate_limits(
     Ok(app_server_rate_limit_snapshots_to_core(response))
 }
 
+async fn notify_workspace_owner(
+    request_handle: AppServerRequestHandle,
+) -> Result<AddCreditsNudgeEmailStatus> {
+    let request_id = RequestId::String(format!("notify-workspace-owner-{}", Uuid::new_v4()));
+    let response: SendAddCreditsNudgeEmailResponse = request_handle
+        .request_typed(ClientRequest::SendAddCreditsNudgeEmail {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/sendAddCreditsNudgeEmail failed in TUI")?;
+
+    Ok(response.status)
+}
+
 async fn fetch_plugins_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
@@ -6495,6 +6534,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             is_first_run: false,
             status_account_display: None,
+            initial_is_workspace_owner: None,
             initial_plan_type: None,
             model: Some(model),
             startup_tooltip_override: None,
@@ -10359,6 +10399,7 @@ guardian_approval = true
             feedback: app.feedback.clone(),
             is_first_run: false,
             status_account_display: app.chat_widget.status_account_display().cloned(),
+            initial_is_workspace_owner: app.chat_widget.current_is_workspace_owner(),
             initial_plan_type: app.chat_widget.current_plan_type(),
             model: Some(app.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,

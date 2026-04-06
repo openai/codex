@@ -35,6 +35,8 @@ pub struct IdTokenInfo {
     pub chatgpt_user_id: Option<String>,
     /// Organization/workspace identifier associated with the token, if present.
     pub chatgpt_account_id: Option<String>,
+    /// Whether the current user owns the workspace, when present in the token.
+    pub is_org_owner: Option<bool>,
     pub raw_jwt: String,
 }
 
@@ -176,6 +178,8 @@ struct AuthClaims {
     user_id: Option<String>,
     #[serde(default)]
     chatgpt_account_id: Option<String>,
+    #[serde(default)]
+    is_org_owner: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +231,7 @@ pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoErr
             chatgpt_plan_type: auth.chatgpt_plan_type,
             chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
             chatgpt_account_id: auth.chatgpt_account_id,
+            is_org_owner: auth.is_org_owner,
         }),
         None => Ok(IdTokenInfo {
             email,
@@ -234,6 +239,7 @@ pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoErr
             chatgpt_plan_type: None,
             chatgpt_user_id: None,
             chatgpt_account_id: None,
+            is_org_owner: None,
         }),
     }
 }

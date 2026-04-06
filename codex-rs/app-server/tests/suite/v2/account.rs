@@ -262,6 +262,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     };
     assert_eq!(payload.auth_mode, Some(AuthMode::ChatgptAuthTokens));
     assert_eq!(payload.plan_type, Some(AccountPlanType::Pro));
+    assert_eq!(payload.is_workspace_owner, None);
 
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -281,6 +282,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
                 email: "embedded@example.com".to_string(),
                 plan_type: AccountPlanType::Pro,
             }),
+            is_workspace_owner: None,
             requires_openai_auth: true,
         }
     );
@@ -348,6 +350,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
                 email: "embedded@example.com".to_string(),
                 plan_type: AccountPlanType::Pro,
             }),
+            is_workspace_owner: None,
             requires_openai_auth: true,
         }
     );
@@ -1505,6 +1508,7 @@ async fn get_account_with_api_key() -> Result<()> {
 
     let expected = GetAccountResponse {
         account: Some(Account::ApiKey {}),
+        is_workspace_owner: None,
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
@@ -1539,6 +1543,7 @@ async fn get_account_when_auth_not_required() -> Result<()> {
 
     let expected = GetAccountResponse {
         account: None,
+        is_workspace_owner: None,
         requires_openai_auth: false,
     };
     assert_eq!(received, expected);
@@ -1559,7 +1564,8 @@ async fn get_account_with_chatgpt() -> Result<()> {
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt")
             .email("user@example.com")
-            .plan_type("pro"),
+            .plan_type("pro")
+            .is_org_owner(true),
         AuthCredentialsStoreMode::File,
     )?;
 
@@ -1583,6 +1589,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
             email: "user@example.com".to_string(),
             plan_type: AccountPlanType::Pro,
         }),
+        is_workspace_owner: Some(true),
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
@@ -1625,6 +1632,7 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
             email: "user@example.com".to_string(),
             plan_type: AccountPlanType::Unknown,
         }),
+        is_workspace_owner: None,
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);

@@ -1279,6 +1279,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(GetAccountResponse {
                         account: None,
+                        is_workspace_owner: None,
                         requires_openai_auth: false,
                     })
                     .expect("response should serialize"),
@@ -1387,6 +1388,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(GetAccountResponse {
                         account: None,
+                        is_workspace_owner: None,
                         requires_openai_auth: false,
                     })
                     .expect("response should serialize"),
@@ -1440,6 +1442,7 @@ mod tests {
             first_response,
             GetAccountResponse {
                 account: None,
+                is_workspace_owner: None,
                 requires_openai_auth: false,
             }
         );
@@ -1459,6 +1462,7 @@ mod tests {
                             AccountUpdatedNotification {
                                 auth_mode: None,
                                 plan_type: None,
+                                is_workspace_owner: None,
                             },
                         ))
                         .expect("notification should serialize"),

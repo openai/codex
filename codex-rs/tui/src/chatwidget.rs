@@ -66,6 +66,7 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
@@ -554,6 +555,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) initial_is_workspace_owner: Option<bool>,
     pub(crate) initial_plan_type: Option<PlanType>,
     pub(crate) model: Option<String>,
     pub(crate) startup_tooltip_override: Option<String>,
@@ -598,6 +600,23 @@ enum RateLimitErrorKind {
     ServerOverloaded,
     UsageLimit,
     Generic,
+}
+
+pub(crate) const CODEX_USAGE_SETTINGS_URL: &str = "https://chatgpt.com/codex/settings/usage";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UsageBasedWorkspaceRateLimitState {
+    OwnerCreditsDepleted,
+    OwnerSpendCapReached,
+    MemberCreditsDepleted,
+    MemberSpendCapReached,
+}
+
+fn is_usage_based_workspace_plan(plan_type: PlanType) -> bool {
+    matches!(
+        plan_type,
+        PlanType::SelfServeBusinessUsageBased | PlanType::EnterpriseCbpUsageBased
+    )
 }
 
 #[cfg(test)]
@@ -755,6 +774,7 @@ pub(crate) struct ChatWidget {
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     has_chatgpt_account: bool,
+    is_workspace_owner: Option<bool>,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
@@ -765,6 +785,7 @@ pub(crate) struct ChatWidget {
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
+    notify_workspace_owner_in_flight: bool,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     adaptive_chunking: AdaptiveChunkingPolicy,
@@ -2770,7 +2791,8 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.on_error(message)
+                    self.on_error(message);
+                    self.maybe_add_usage_limit_follow_up_message();
                 }
             }
         } else {
@@ -4640,6 +4662,7 @@ impl ChatWidget {
             feedback,
             is_first_run,
             status_account_display,
+            initial_is_workspace_owner,
             initial_plan_type,
             model,
             startup_tooltip_override,
@@ -4701,6 +4724,7 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
+            is_workspace_owner: initial_is_workspace_owner,
             model_catalog,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
@@ -4711,6 +4735,7 @@ impl ChatWidget {
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
+            notify_workspace_owner_in_flight: false,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
@@ -5332,6 +5357,11 @@ impl ChatWidget {
             SlashCommand::Skills => {
                 self.open_skills_menu();
             }
+            SlashCommand::Usage => {
+                self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
+                    url: CODEX_USAGE_SETTINGS_URL.to_string(),
+                });
+            }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
                     let request_id = self.next_status_refresh_request_id;
@@ -5345,6 +5375,9 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
+            }
+            SlashCommand::NotifyOwner => {
+                self.notify_workspace_owner_from_ui();
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
@@ -9534,17 +9567,142 @@ impl ChatWidget {
         self.plan_type
     }
 
+    pub(crate) fn current_is_workspace_owner(&self) -> Option<bool> {
+        self.is_workspace_owner
+    }
+
     pub(crate) fn has_chatgpt_account(&self) -> bool {
         self.has_chatgpt_account
+    }
+
+    fn usage_based_workspace_rate_limit_state(&self) -> Option<UsageBasedWorkspaceRateLimitState> {
+        let plan_type = self.plan_type?;
+        if !is_usage_based_workspace_plan(plan_type) {
+            return None;
+        }
+
+        let is_workspace_owner = self.is_workspace_owner?;
+        let codex_snapshot = self.rate_limit_snapshots_by_limit_id.get("codex")?;
+        let credits_depleted = codex_snapshot
+            .credits
+            .as_ref()
+            .is_some_and(|credits| !credits.has_credits);
+
+        Some(match (is_workspace_owner, credits_depleted) {
+            (true, true) => UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted,
+            (true, false) => UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached,
+            (false, true) => UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted,
+            (false, false) => UsageBasedWorkspaceRateLimitState::MemberSpendCapReached,
+        })
+    }
+
+    fn maybe_add_usage_limit_follow_up_message(&mut self) {
+        let Some((message, hint)) = self.usage_limit_follow_up_message() else {
+            return;
+        };
+        self.add_info_message(message, hint);
+    }
+
+    fn usage_limit_follow_up_message(&self) -> Option<(String, Option<String>)> {
+        match self.usage_based_workspace_rate_limit_state()? {
+            UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted => Some((
+                "Run `/usage` to add workspace credits and continue using Codex.".to_string(),
+                None,
+            )),
+            UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached => Some((
+                "Run `/usage` to increase your workspace spend cap and continue using Codex."
+                    .to_string(),
+                None,
+            )),
+            UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => Some((
+                "Run `/notify-owner` to ask your workspace owner to add credits and continue using Codex."
+                    .to_string(),
+                None,
+            )),
+            UsageBasedWorkspaceRateLimitState::MemberSpendCapReached => Some((
+                "Ask an admin to increase your workspace spend cap. Run `/usage` to open usage settings in your browser."
+                    .to_string(),
+                None,
+            )),
+        }
+    }
+
+    fn notify_workspace_owner_from_ui(&mut self) {
+        if self.notify_workspace_owner_in_flight {
+            self.add_info_message(
+                "A workspace owner notification is already in progress.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        match self.usage_based_workspace_rate_limit_state() {
+            Some(UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted) => {
+                self.notify_workspace_owner_in_flight = true;
+                self.app_event_tx.send(AppEvent::NotifyWorkspaceOwner);
+            }
+            Some(
+                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted
+                | UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached,
+            ) => {
+                self.add_info_message(
+                    "You are the workspace owner. Run `/usage` to manage credits or spend cap."
+                        .to_string(),
+                    None,
+                );
+            }
+            Some(UsageBasedWorkspaceRateLimitState::MemberSpendCapReached) => {
+                self.add_info_message(
+                    "`/notify-owner` is unavailable because your workspace still has credits."
+                        .to_string(),
+                    Some(
+                        "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
+                            .to_string(),
+                    ),
+                );
+            }
+            None => {
+                self.add_info_message(
+                    "`/notify-owner` is only available when a usage-based workspace member is blocked because the workspace is out of credits."
+                        .to_string(),
+                    Some("Run `/status` for current rate-limit details.".to_string()),
+                );
+            }
+        }
+    }
+
+    pub(crate) fn finish_notify_workspace_owner(
+        &mut self,
+        result: Result<AddCreditsNudgeEmailStatus, String>,
+    ) {
+        self.notify_workspace_owner_in_flight = false;
+        match result {
+            Ok(AddCreditsNudgeEmailStatus::Sent) => {
+                self.add_info_message("Workspace owner notified.".to_string(), None);
+            }
+            Ok(AddCreditsNudgeEmailStatus::CooldownActive) => {
+                self.add_info_message(
+                    "Workspace owner was already notified recently.".to_string(),
+                    None,
+                );
+            }
+            Err(_) => {
+                self.add_error_message(
+                    "Could not notify your workspace owner. Please try again.".to_string(),
+                );
+            }
+        }
     }
 
     pub(crate) fn update_account_state(
         &mut self,
         status_account_display: Option<StatusAccountDisplay>,
+        is_workspace_owner: Option<bool>,
         plan_type: Option<PlanType>,
         has_chatgpt_account: bool,
     ) {
         self.status_account_display = status_account_display;
+        self.is_workspace_owner = is_workspace_owner;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
         self.bottom_pane
