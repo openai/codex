@@ -795,6 +795,7 @@ impl ThreadManagerState {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn resume_thread_from_rollout_with_source(
         &self,
         config: Config,
