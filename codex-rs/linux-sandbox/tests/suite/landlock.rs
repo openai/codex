@@ -320,8 +320,8 @@ async fn bwrap_dev_nodes_work_when_workspace_dot_codex_is_missing() {
         &[],
         tmpdir.path(),
         LONG_TIMEOUT_MS,
-        false,
-        true,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
     )
     .await
     .expect("sandboxed command should execute");
