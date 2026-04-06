@@ -485,6 +485,16 @@ impl WatchdogManager {
         })
     }
 
+    pub(crate) async fn target_for_active_helper(
+        &self,
+        helper_thread_id: ThreadId,
+    ) -> Option<ThreadId> {
+        let registrations = self.registrations.lock().await;
+        registrations.iter().find_map(|(target_thread_id, entry)| {
+            (entry.active_helper_id == Some(helper_thread_id)).then_some(*target_thread_id)
+        })
+    }
+
     pub(crate) async fn registered_targets(&self, candidate_ids: &[ThreadId]) -> HashSet<ThreadId> {
         let registrations = self.registrations.lock().await;
         candidate_ids

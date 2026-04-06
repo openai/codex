@@ -56,16 +56,19 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    use crate::tools::handlers::multi_agents::CompactParentContextHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    use crate::tools::handlers::multi_agents::WatchdogSelfCloseHandler;
     use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::WatchdogSelfCloseHandlerV2;
 
     let mut builder = ToolRegistryBuilder::new();
     let app_tool_sources = app_tools.as_ref().map(|app_tools| {
@@ -148,6 +151,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolHandlerKind::CodeModeWait => {
                 builder.register_handler(handler.name, code_mode_wait_handler.clone());
             }
+            ToolHandlerKind::CompactParentContext => {
+                builder.register_handler(handler.name, Arc::new(CompactParentContextHandler));
+            }
             ToolHandlerKind::DynamicTool => {
                 builder.register_handler(handler.name, dynamic_tool_handler.clone());
             }
@@ -229,6 +235,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::WaitAgentV2 => {
                 builder.register_handler(handler.name, Arc::new(WaitAgentHandlerV2));
+            }
+            ToolHandlerKind::WatchdogSelfClose => {
+                if config.multi_agent_v2 {
+                    builder.register_handler(handler.name, Arc::new(WatchdogSelfCloseHandlerV2));
+                } else {
+                    builder.register_handler(handler.name, Arc::new(WatchdogSelfCloseHandler));
+                }
             }
         }
     }

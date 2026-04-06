@@ -30,6 +30,9 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AGENT_INBOX_KIND;
 use codex_protocol::protocol::AgentInboxPayload;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -1337,6 +1340,45 @@ impl AgentControl {
         self.watchdogs
             .owner_for_active_helper(helper_thread_id)
             .await
+    }
+
+    pub(crate) async fn watchdog_target_for_active_helper(
+        &self,
+        helper_thread_id: ThreadId,
+    ) -> Option<ThreadId> {
+        self.watchdogs
+            .target_for_active_helper(helper_thread_id)
+            .await
+    }
+
+    pub(crate) async fn send_watchdog_close_end(
+        &self,
+        owner_thread_id: ThreadId,
+        event_id: String,
+        sender_thread_id: ThreadId,
+        receiver_thread_id: ThreadId,
+        receiver_agent_nickname: Option<String>,
+        receiver_agent_role: Option<String>,
+        status: AgentStatus,
+    ) -> CodexResult<()> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(owner_thread_id).await?;
+        thread
+            .codex
+            .session
+            .send_event_raw(Event {
+                id: event_id.clone(),
+                msg: EventMsg::CollabCloseEnd(CollabCloseEndEvent {
+                    call_id: event_id,
+                    sender_thread_id,
+                    receiver_thread_id,
+                    receiver_agent_nickname,
+                    receiver_agent_role,
+                    status,
+                }),
+            })
+            .await;
+        Ok(())
     }
 
     pub(crate) async fn list_agents_legacy(
