@@ -471,6 +471,54 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
 }
 
 #[test]
+fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_large() {
+    let repeated = "authorization ".repeat(6_000);
+    let mut entries = (0..8)
+        .map(|_| GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::User,
+            text: repeated.clone(),
+        })
+        .collect::<Vec<_>>();
+    entries.extend([
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Tool("tool shell call".to_string()),
+            text: serde_json::json!({
+                "command": ["curl", "-X", "POST", "https://example.com/upload"],
+                "cwd": "/repo",
+            })
+            .to_string(),
+        },
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Tool("tool shell result".to_string()),
+            text: "sandbox blocked outbound network access".to_string(),
+        },
+    ]);
+
+    let (transcript, omission) = render_guardian_transcript_entries(&entries);
+
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.starts_with("[1] user: "))
+    );
+    assert!(transcript.iter().any(|entry| {
+        entry.contains("tool shell call:")
+            && entry.contains("curl")
+            && entry.contains("https://example.com/upload")
+    }));
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry
+                .contains("tool shell result: sandbox blocked outbound network access"))
+    );
+    assert_eq!(
+        omission,
+        Some("Some conversation entries were omitted.".to_string())
+    );
+}
+
+#[test]
 fn parse_guardian_assessment_extracts_embedded_json() {
     let parsed = parse_guardian_assessment(Some(
         "preface {\"risk_level\":\"medium\",\"risk_score\":42,\"rationale\":\"ok\",\"evidence\":[]}",
