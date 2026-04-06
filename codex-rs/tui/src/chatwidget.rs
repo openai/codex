@@ -1737,10 +1737,29 @@ impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
+            let scrollback_reflow = if controller.has_live_tail() {
+                crate::app_event::ConsolidationScrollbackReflow::Required
+            } else {
+                crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+            };
             self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            if let Some(cell) = cell {
-                self.add_boxed_history(cell);
+            let deferred_history_cell =
+                if scrollback_reflow == crate::app_event::ConsolidationScrollbackReflow::Required {
+                    cell
+                } else {
+                    if let Some(cell) = cell {
+                        self.add_boxed_history(cell);
+                    }
+                    None
+                };
+            if let Some(cell) = deferred_history_cell.as_ref() {
+                debug_assert!(
+                    cell.as_any()
+                        .downcast_ref::<history_cell::AgentMessageCell>()
+                        .is_some(),
+                    "only agent message stream tails should be deferred for consolidation",
+                );
             }
             // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
             // that can re-render from source on resize.
@@ -1748,7 +1767,11 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
+                    scrollback_reflow,
+                    deferred_history_cell,
                 });
+            } else if let Some(cell) = deferred_history_cell {
+                self.add_boxed_history(cell);
             }
         }
         self.adaptive_chunking.reset();
