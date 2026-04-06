@@ -338,6 +338,8 @@ pub(crate) struct ChatComposer {
     status_line_enabled: bool,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
+    // User-provided thread name shown in the footer's right-side context slot.
+    thread_name_label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -459,6 +461,7 @@ impl ChatComposer {
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
+            thread_name_label: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -3334,6 +3337,18 @@ impl ChatComposer {
         self.active_agent_label = active_agent_label;
         true
     }
+
+    pub(crate) fn set_thread_name_label(&mut self, thread_name_label: Option<String>) -> bool {
+        let thread_name_label = thread_name_label.and_then(|name| {
+            let trimmed = name.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        if self.thread_name_label == thread_name_label {
+            return false;
+        }
+        self.thread_name_label = thread_name_label;
+        true
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -3521,6 +3536,10 @@ impl ChatComposer {
                 } else {
                     self.collaboration_mode_indicator
                 };
+                let thread_name_line = self
+                    .thread_name_label
+                    .as_ref()
+                    .map(|name| Line::from(vec![Span::from(name.clone()).dim()]));
                 let mut left_width = if self.footer_flash_visible() {
                     self.footer_flash
                         .as_ref()
@@ -3544,11 +3563,13 @@ impl ChatComposer {
                 };
                 let right_line = if status_line_active {
                     let full =
-                        mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
+                        mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
+                            .or_else(|| thread_name_line.clone());
                     let compact = mode_indicator_line(
                         self.collaboration_mode_indicator,
                         /*show_cycle_hint*/ false,
-                    );
+                    )
+                    .or_else(|| thread_name_line.clone());
                     let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                     if can_show_left_with_context(hint_rect, left_width, full_width) {
                         full
@@ -3556,10 +3577,12 @@ impl ChatComposer {
                         compact
                     }
                 } else {
-                    Some(context_window_line(
-                        footer_props.context_window_percent,
-                        footer_props.context_window_used_tokens,
-                    ))
+                    thread_name_line.or_else(|| {
+                        Some(context_window_line(
+                            footer_props.context_window_percent,
+                            footer_props.context_window_used_tokens,
+                        ))
+                    })
                 };
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                 if status_line_active

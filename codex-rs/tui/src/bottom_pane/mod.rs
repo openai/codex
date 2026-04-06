@@ -1185,6 +1185,12 @@ impl BottomPane {
             self.request_redraw();
         }
     }
+
+    pub(crate) fn set_thread_name_label(&mut self, thread_name_label: Option<String>) {
+        if self.composer.set_thread_name_label(thread_name_label) {
+            self.request_redraw();
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]

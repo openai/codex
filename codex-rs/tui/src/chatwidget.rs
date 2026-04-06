@@ -1938,6 +1938,8 @@ impl ChatWidget {
         self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
+        self.bottom_pane
+            .set_thread_name_label(event.thread_name.clone());
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
@@ -2090,7 +2092,8 @@ impl ChatWidget {
 
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
-            self.thread_name = event.thread_name;
+            self.thread_name = event.thread_name.clone();
+            self.bottom_pane.set_thread_name_label(event.thread_name);
             self.refresh_terminal_title();
             self.request_redraw();
         }
