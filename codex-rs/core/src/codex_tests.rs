@@ -2620,6 +2620,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
+        /*analytics_events_client*/ None,
     )
     .await;
 
