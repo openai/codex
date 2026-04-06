@@ -229,6 +229,7 @@ impl ChatWidget {
             ConversationStartParams {
                 prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
                 session_id: None,
+                transport: Default::default(),
             },
         ));
         self.request_redraw();

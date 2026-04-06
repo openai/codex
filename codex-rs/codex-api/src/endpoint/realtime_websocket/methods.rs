@@ -463,7 +463,34 @@ impl RealtimeWebsocketClient {
             config.event_parser,
             config.session_mode,
         )?;
+        self.connect_with_url(ws_url, config, extra_headers, default_headers)
+            .await
+    }
 
+    pub async fn connect_to_call_id(
+        &self,
+        config: RealtimeSessionConfig,
+        call_id: &str,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        ensure_rustls_crypto_provider();
+        let ws_url = websocket_url_from_api_url_with_call_id(
+            self.provider.base_url.as_str(),
+            self.provider.query_params.as_ref(),
+            call_id,
+        )?;
+        self.connect_with_url(ws_url, config, extra_headers, default_headers)
+            .await
+    }
+
+    async fn connect_with_url(
+        &self,
+        ws_url: Url,
+        config: RealtimeSessionConfig,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
         let mut request = ws_url
             .as_str()
             .into_client_request()
@@ -509,7 +536,7 @@ impl RealtimeWebsocketClient {
     }
 }
 
-fn merge_request_headers(
+pub(super) fn merge_request_headers(
     provider_headers: &HeaderMap,
     extra_headers: HeaderMap,
     default_headers: HeaderMap,
@@ -586,6 +613,46 @@ fn websocket_url_from_api_url(
         if let Some(query_params) = query_params {
             for (key, value) in query_params {
                 if key == "intent" || (key == "model" && model.is_some()) {
+                    continue;
+                }
+                query.append_pair(key, value);
+            }
+        }
+    }
+
+    Ok(url)
+}
+
+fn websocket_url_from_api_url_with_call_id(
+    api_url: &str,
+    query_params: Option<&HashMap<String, String>>,
+    call_id: &str,
+) -> Result<Url, ApiError> {
+    let mut url = Url::parse(api_url)
+        .map_err(|err| ApiError::Stream(format!("failed to parse realtime api_url: {err}")))?;
+
+    normalize_realtime_path(&mut url);
+
+    match url.scheme() {
+        "ws" | "wss" => {}
+        "http" | "https" => {
+            let scheme = if url.scheme() == "http" { "ws" } else { "wss" };
+            let _ = url.set_scheme(scheme);
+        }
+        scheme => {
+            return Err(ApiError::Stream(format!(
+                "unsupported realtime api_url scheme: {scheme}"
+            )));
+        }
+    }
+
+    url.set_query(None);
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("call_id", call_id);
+        if let Some(query_params) = query_params {
+            for (key, value) in query_params {
+                if matches!(key.as_str(), "call_id" | "intent" | "model") {
                     continue;
                 }
                 query.append_pair(key, value);
@@ -1092,6 +1159,25 @@ mod tests {
         )
         .expect("build ws url");
         assert_eq!(url.as_str(), "wss://example.com/v1/realtime");
+    }
+
+    #[test]
+    fn websocket_url_with_call_id_uses_call_id_only_for_session_selectors() {
+        let url = websocket_url_from_api_url_with_call_id(
+            "https://example.com/v1/realtime?model=old&foo=bar",
+            Some(&HashMap::from([
+                ("trace".to_string(), "1".to_string()),
+                ("intent".to_string(), "ignored".to_string()),
+                ("model".to_string(), "ignored".to_string()),
+            ])),
+            "rtc_123",
+        )
+        .expect("build ws url");
+
+        assert_eq!(
+            url.as_str(),
+            "wss://example.com/v1/realtime?call_id=rtc_123&trace=1"
+        );
     }
 
     #[tokio::test]

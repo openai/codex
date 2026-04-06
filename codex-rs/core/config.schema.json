@@ -437,6 +437,9 @@
             "realtime_conversation": {
               "type": "boolean"
             },
+            "realtime_rtc": {
+              "type": "boolean"
+            },
             "remote_models": {
               "type": "boolean"
             },
@@ -2142,6 +2145,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "realtime_rtc": {
           "type": "boolean"
         },
         "remote_models": {

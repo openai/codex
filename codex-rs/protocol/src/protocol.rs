@@ -135,6 +135,18 @@ pub struct ConversationStartParams {
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub transport: RealtimeConversationTransport,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RealtimeConversationTransport {
+    #[default]
+    Websocket,
+    Rtc {
+        offer_sdp: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -4395,6 +4407,7 @@ mod tests {
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "be helpful".to_string(),
             session_id: Some("conv_1".to_string()),
+            transport: Default::default(),
         });
         let text = Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),

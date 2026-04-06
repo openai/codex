@@ -176,6 +176,8 @@ pub enum Feature {
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
+    /// Switch realtime conversation setup to the WebRTC sideband protocol.
+    RealtimeRtc,
     /// Removed compatibility flag. The TUI now always uses the app-server implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
@@ -822,6 +824,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RealtimeRtc,
+        key: "realtime_rtc",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

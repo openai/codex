@@ -118,6 +118,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
+            transport: Default::default(),
         }))
         .await?;
 

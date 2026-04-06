@@ -13518,6 +13518,88 @@
         "title": "ThreadRealtimeOutputAudioDeltaNotification",
         "type": "object"
       },
+      "ThreadRealtimeStartProtocol": {
+        "description": "EXPERIMENTAL - realtime start protocol selected by the client.",
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "jsonRpcPcm"
+                ],
+                "title": "JsonRpcPcmThreadRealtimeStartProtocolType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "JsonRpcPcmThreadRealtimeStartProtocol",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "offerSdp": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "rtc"
+                ],
+                "title": "RtcThreadRealtimeStartProtocolType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "offerSdp",
+              "type"
+            ],
+            "title": "RtcThreadRealtimeStartProtocol",
+            "type": "object"
+          }
+        ]
+      },
+      "ThreadRealtimeStartResponseProtocol": {
+        "description": "EXPERIMENTAL - realtime start response protocol payload.",
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "jsonRpcPcm"
+                ],
+                "title": "JsonRpcPcmThreadRealtimeStartResponseProtocolType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "JsonRpcPcmThreadRealtimeStartResponseProtocol",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "answerSdp": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "rtc"
+                ],
+                "title": "RtcThreadRealtimeStartResponseProtocolType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "answerSdp",
+              "type"
+            ],
+            "title": "RtcThreadRealtimeStartResponseProtocol",
+            "type": "object"
+          }
+        ]
+      },
       "ThreadRealtimeStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",

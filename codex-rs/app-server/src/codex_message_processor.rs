@@ -142,7 +142,9 @@ use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartProtocol;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
+use codex_app_server_protocol::ThreadRealtimeStartResponseProtocol;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -273,6 +275,7 @@ use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
+use codex_protocol::protocol::RealtimeConversationTransport;
 use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
@@ -6795,29 +6798,100 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let submit = self
-            .submit_core_op(
-                &request_id,
-                thread.as_ref(),
-                Op::RealtimeConversationStart(ConversationStartParams {
-                    prompt: params.prompt,
-                    session_id: params.session_id,
-                }),
-            )
-            .await;
-
-        match submit {
-            Ok(_) => {
-                self.outgoing
-                    .send_response(request_id, ThreadRealtimeStartResponse::default())
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(
+        let realtime_rtc_enabled = thread.enabled(Feature::RealtimeRtc);
+        match params.protocol {
+            ThreadRealtimeStartProtocol::JsonRpcPcm if realtime_rtc_enabled => {
+                self.send_invalid_request_error(
                     request_id,
-                    format!("failed to start realtime conversation: {err}"),
+                    "thread/realtime/start requires rtc protocol when features.realtime_rtc is enabled"
+                        .to_string(),
                 )
                 .await;
+            }
+            ThreadRealtimeStartProtocol::JsonRpcPcm => {
+                let submit = self
+                    .submit_core_op(
+                        &request_id,
+                        thread.as_ref(),
+                        Op::RealtimeConversationStart(ConversationStartParams {
+                            prompt: params.prompt,
+                            session_id: params.session_id,
+                            transport: RealtimeConversationTransport::Websocket,
+                        }),
+                    )
+                    .await;
+
+                match submit {
+                    Ok(_) => {
+                        self.outgoing
+                            .send_response(
+                                request_id,
+                                ThreadRealtimeStartResponse {
+                                    protocol: ThreadRealtimeStartResponseProtocol::JsonRpcPcm,
+                                },
+                            )
+                            .await;
+                    }
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to start realtime conversation: {err}"),
+                        )
+                        .await;
+                    }
+                }
+            }
+            ThreadRealtimeStartProtocol::Rtc { .. } if !realtime_rtc_enabled => {
+                self.send_invalid_request_error(
+                    request_id,
+                    "thread/realtime/start rtc protocol requires features.realtime_rtc".to_string(),
+                )
+                .await;
+            }
+            ThreadRealtimeStartProtocol::Rtc { offer_sdp } => {
+                let sub_id = format!("{}:{}", request_id.connection_id, request_id.request_id);
+                let trace = self.request_trace_context(&request_id).await;
+                let start = thread
+                    .start_realtime_conversation(
+                        sub_id,
+                        ConversationStartParams {
+                            prompt: params.prompt,
+                            session_id: params.session_id,
+                            transport: RealtimeConversationTransport::Rtc { offer_sdp },
+                        },
+                        trace,
+                    )
+                    .await;
+
+                match start {
+                    Ok(result) => {
+                        let Some(answer_sdp) = result.answer_sdp else {
+                            self.send_internal_error(
+                                request_id,
+                                "realtime rtc start did not return an SDP answer".to_string(),
+                            )
+                            .await;
+                            return;
+                        };
+                        self.outgoing
+                            .send_response(
+                                request_id,
+                                ThreadRealtimeStartResponse {
+                                    protocol: ThreadRealtimeStartResponseProtocol::Rtc {
+                                        answer_sdp,
+                                    },
+                                },
+                            )
+                            .await;
+                    }
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to start realtime conversation: {err}"),
+                        )
+                        .await;
+                    }
+                }
             }
         }
     }
@@ -6833,6 +6907,16 @@ impl CodexMessageProcessor {
         else {
             return;
         };
+
+        if thread.enabled(Feature::RealtimeRtc) {
+            self.send_invalid_request_error(
+                request_id,
+                "thread/realtime/appendAudio is unavailable when features.realtime_rtc is enabled"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
 
         let submit = self
             .submit_core_op(

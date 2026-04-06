@@ -9,6 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
+use codex_api::RealtimeCallClient;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
@@ -34,6 +35,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::protocol::RealtimeConversationTransport;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -117,6 +119,10 @@ struct RealtimeInputTask {
     session_kind: RealtimeSessionKind,
 }
 
+pub struct RealtimeConversationStartResult {
+    pub answer_sdp: Option<String>,
+}
+
 impl RealtimeHandoffState {
     fn new(output_tx: Sender<HandoffOutput>, session_kind: RealtimeSessionKind) -> Self {
         Self {
@@ -159,6 +165,7 @@ impl RealtimeConversationManager {
         api_provider: ApiProvider,
         extra_headers: Option<HeaderMap>,
         session_config: RealtimeSessionConfig,
+        sideband_call_id: Option<String>,
     ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
         let previous_state = {
             let mut guard = self.state.lock().await;
@@ -173,14 +180,20 @@ impl RealtimeConversationManager {
         };
 
         let client = RealtimeWebsocketClient::new(api_provider);
-        let connection = client
-            .connect(
-                session_config,
-                extra_headers.unwrap_or_default(),
-                default_headers(),
-            )
-            .await
-            .map_err(map_api_error)?;
+        let headers = extra_headers.unwrap_or_default();
+        let connection = match sideband_call_id {
+            Some(call_id) => {
+                client
+                    .connect_to_call_id(session_config, &call_id, headers, default_headers())
+                    .await
+            }
+            None => {
+                client
+                    .connect(session_config, headers, default_headers())
+                    .await
+            }
+        }
+        .map_err(map_api_error)?;
 
         let writer = connection.writer();
         let events = connection.events();
@@ -406,39 +419,32 @@ async fn stop_conversation_state(
     }
 }
 
-pub(crate) async fn handle_start(
+pub(crate) async fn send_start_error(sess: &Arc<Session>, sub_id: String, err: CodexErr) {
+    error!("failed to start realtime conversation: {err}");
+    let message = err.to_string();
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }),
+    })
+    .await;
+}
+
+pub(crate) async fn start_and_send_events(
     sess: &Arc<Session>,
-    sub_id: String,
+    sub_id: &str,
     params: ConversationStartParams,
-) -> CodexResult<()> {
+) -> CodexResult<RealtimeConversationStartResult> {
     let prepared_start = match prepare_realtime_start(sess, params).await {
         Ok(prepared_start) => prepared_start,
         Err(err) => {
             error!("failed to prepare realtime conversation: {err}");
-            let message = err.to_string();
-            sess.send_event_raw(Event {
-                id: sub_id,
-                msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-                    payload: RealtimeEvent::Error(message),
-                }),
-            })
-            .await;
-            return Ok(());
+            return Err(err);
         }
     };
 
-    if let Err(err) = handle_start_inner(sess, &sub_id, prepared_start).await {
-        error!("failed to start realtime conversation: {err}");
-        let message = err.to_string();
-        sess.send_event_raw(Event {
-            id: sub_id.clone(),
-            msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-                payload: RealtimeEvent::Error(message),
-            }),
-        })
-        .await;
-    }
-    Ok(())
+    handle_start_inner(sess, sub_id, prepared_start).await
 }
 
 struct PreparedRealtimeConversationStart {
@@ -447,6 +453,7 @@ struct PreparedRealtimeConversationStart {
     requested_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
+    transport: RealtimeConversationTransport,
 }
 
 async fn prepare_realtime_start(
@@ -484,7 +491,11 @@ async fn prepare_realtime_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-    let version = config.realtime.version;
+    let transport = params.transport;
+    let version = match transport {
+        RealtimeConversationTransport::Rtc { .. } => RealtimeWsVersion::V2,
+        RealtimeConversationTransport::Websocket => config.realtime.version,
+    };
     let event_parser = match version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
@@ -509,6 +520,7 @@ async fn prepare_realtime_start(
         requested_session_id,
         version,
         session_config,
+        transport,
     })
 }
 
@@ -516,18 +528,39 @@ async fn handle_start_inner(
     sess: &Arc<Session>,
     sub_id: &str,
     prepared_start: PreparedRealtimeConversationStart,
-) -> CodexResult<()> {
+) -> CodexResult<RealtimeConversationStartResult> {
     let PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
         requested_session_id,
         version,
         session_config,
+        transport,
     } = prepared_start;
+    let (answer_sdp, sideband_call_id) = match transport {
+        RealtimeConversationTransport::Websocket => (None, None),
+        RealtimeConversationTransport::Rtc { offer_sdp } => {
+            let call = RealtimeCallClient::new(api_provider.clone())
+                .create(
+                    &session_config,
+                    offer_sdp,
+                    extra_headers.clone().unwrap_or_default(),
+                    default_headers(),
+                )
+                .await
+                .map_err(map_api_error)?;
+            (Some(call.answer_sdp), Some(call.call_id))
+        }
+    };
     info!("starting realtime conversation");
     let (events_rx, realtime_active) = sess
         .conversation
-        .start(api_provider, extra_headers, session_config)
+        .start(
+            api_provider,
+            extra_headers,
+            session_config,
+            sideband_call_id,
+        )
         .await?;
 
     info!("realtime conversation started");
@@ -601,7 +634,7 @@ async fn handle_start_inner(
         .register_fanout_task(&realtime_active, fanout_task)
         .await;
 
-    Ok(())
+    Ok(RealtimeConversationStartResult { answer_sdp })
 }
 
 pub(crate) async fn handle_audio(

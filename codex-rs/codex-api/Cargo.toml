@@ -23,6 +23,7 @@ tungstenite = { workspace = true }
 tracing = { workspace = true }
 eventsource-stream = { workspace = true }
 regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
 tokio-util = { workspace = true, features = ["codec"] }
 url = { workspace = true }
 
@@ -32,7 +33,6 @@ assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio-test = { workspace = true }
 wiremock = { workspace = true }
-reqwest = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,3 +1,4 @@
+mod calls;
 pub mod methods;
 mod methods_common;
 mod methods_v1;
@@ -7,6 +8,8 @@ mod protocol_common;
 mod protocol_v1;
 mod protocol_v2;
 
+pub use calls::RealtimeCallClient;
+pub use calls::RealtimeCallCreateResponse;
 pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
 pub use methods::RealtimeWebsocketClient;

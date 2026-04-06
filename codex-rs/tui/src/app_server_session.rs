@@ -41,6 +41,7 @@ use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartProtocol;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
@@ -658,6 +659,7 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     prompt: params.prompt,
                     session_id: params.session_id,
+                    protocol: ThreadRealtimeStartProtocol::JsonRpcPcm,
                 },
             })
             .await

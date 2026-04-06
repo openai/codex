@@ -291,6 +291,8 @@ export type { ThreadRealtimeClosedNotification } from "./ThreadRealtimeClosedNot
 export type { ThreadRealtimeErrorNotification } from "./ThreadRealtimeErrorNotification";
 export type { ThreadRealtimeItemAddedNotification } from "./ThreadRealtimeItemAddedNotification";
 export type { ThreadRealtimeOutputAudioDeltaNotification } from "./ThreadRealtimeOutputAudioDeltaNotification";
+export type { ThreadRealtimeStartProtocol } from "./ThreadRealtimeStartProtocol";
+export type { ThreadRealtimeStartResponseProtocol } from "./ThreadRealtimeStartResponseProtocol";
 export type { ThreadRealtimeStartedNotification } from "./ThreadRealtimeStartedNotification";
 export type { ThreadRealtimeTranscriptUpdatedNotification } from "./ThreadRealtimeTranscriptUpdatedNotification";
 export type { ThreadResumeParams } from "./ThreadResumeParams";

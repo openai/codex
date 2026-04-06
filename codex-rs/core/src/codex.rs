@@ -27,10 +27,12 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
+use crate::realtime_conversation::RealtimeConversationStartResult;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
-use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
+use crate::realtime_conversation::send_start_error as send_realtime_conversation_start_error;
+use crate::realtime_conversation::start_and_send_events as start_realtime_conversation_and_send_events;
 use crate::render_skills_section;
 use crate::rollout::session_index;
 use crate::session_prefix::format_subagent_notification_message;
@@ -346,6 +348,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -734,6 +737,36 @@ impl Codex {
         Ok(())
     }
 
+    pub async fn start_realtime_conversation(
+        &self,
+        sub_id: String,
+        params: ConversationStartParams,
+        trace: Option<W3cTraceContext>,
+    ) -> CodexResult<RealtimeConversationStartResult> {
+        let (tx_result, rx_result) = oneshot::channel();
+        self.session
+            .realtime_start_waiters
+            .lock()
+            .await
+            .insert(sub_id.clone(), tx_result);
+        let submit_result = self
+            .submit_with_id(Submission {
+                id: sub_id.clone(),
+                op: Op::RealtimeConversationStart(params),
+                trace,
+            })
+            .await;
+        if let Err(err) = submit_result {
+            self.session
+                .realtime_start_waiters
+                .lock()
+                .await
+                .remove(&sub_id);
+            return Err(err);
+        }
+        rx_result.await.map_err(|_| CodexErr::InternalAgentDied)?
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         let session_loop_termination = self.session_loop_termination.clone();
         match self.submit(Op::Shutdown).await {
@@ -823,6 +856,8 @@ pub(crate) struct Session {
     features: ManagedFeatures,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
+    realtime_start_waiters:
+        Mutex<HashMap<String, oneshot::Sender<CodexResult<RealtimeConversationStartResult>>>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
@@ -1978,6 +2013,7 @@ impl Session {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
+            realtime_start_waiters: Mutex::new(HashMap::new()),
             active_turn: Mutex::new(None),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
@@ -4512,17 +4548,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     false
                 }
                 Op::RealtimeConversationStart(params) => {
-                    if let Err(err) =
-                        handle_realtime_conversation_start(&sess, sub.id.clone(), params).await
-                    {
-                        sess.send_event_raw(Event {
-                            id: sub.id.clone(),
-                            msg: EventMsg::Error(ErrorEvent {
-                                message: err.to_string(),
-                                codex_error_info: Some(CodexErrorInfo::Other),
-                            }),
-                        })
-                        .await;
+                    let result =
+                        start_realtime_conversation_and_send_events(&sess, &sub.id, params).await;
+                    match sess.realtime_start_waiters.lock().await.remove(&sub.id) {
+                        Some(tx_result) => {
+                            let _ = tx_result.send(result);
+                        }
+                        None => {
+                            if let Err(err) = result {
+                                send_realtime_conversation_start_error(&sess, sub.id.clone(), err)
+                                    .await;
+                            }
+                        }
                     }
                     false
                 }

@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartProtocol;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
@@ -121,6 +122,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             prompt: "backend prompt".to_string(),
             session_id: None,
+            protocol: ThreadRealtimeStartProtocol::JsonRpcPcm,
         })
         .await?;
     let start_response: JSONRPCResponse = timeout(
@@ -330,6 +332,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             prompt: "backend prompt".to_string(),
             session_id: None,
+            protocol: ThreadRealtimeStartProtocol::JsonRpcPcm,
         })
         .await?;
     let start_response: JSONRPCResponse = timeout(
@@ -401,6 +404,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             prompt: "backend prompt".to_string(),
             session_id: None,
+            protocol: ThreadRealtimeStartProtocol::JsonRpcPcm,
         })
         .await?;
     let error = timeout(

@@ -151,8 +151,8 @@ Example with notification opt-out:
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `thread/realtime/start` — start a thread-scoped realtime session (experimental); returns `{}` and streams `thread/realtime/*` notifications.
-- `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/start` — start a thread-scoped realtime session (experimental). With `features.realtime_rtc=false`, clients send `{ protocol: { type: "jsonRpcPcm" } }`, receive `{ protocol: { type: "jsonRpcPcm" } }`, and stream audio over JSON-RPC. With `features.realtime_rtc=true`, clients send `{ protocol: { type: "rtc", offerSdp } }`, receive `{ protocol: { type: "rtc", answerSdp } }`, and media flows over WebRTC while the harness keeps handling realtime events and tool calls.
+- `thread/realtime/appendAudio` — append an input audio chunk to the active JSON-RPC PCM realtime session (experimental); returns `{}`. Unavailable when `features.realtime_rtc=true`.
 - `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.

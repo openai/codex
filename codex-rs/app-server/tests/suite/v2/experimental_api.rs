@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartProtocol;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use pretty_assertions::assert_eq;
@@ -75,6 +76,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             thread_id: "thr_123".to_string(),
             prompt: "hello".to_string(),
             session_id: None,
+            protocol: ThreadRealtimeStartProtocol::JsonRpcPcm,
         })
         .await?;
     let error = timeout(

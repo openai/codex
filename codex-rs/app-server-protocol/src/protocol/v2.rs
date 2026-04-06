@@ -3807,7 +3807,7 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 }
 
 /// EXPERIMENTAL - start a thread-scoped realtime session.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
@@ -3815,13 +3815,44 @@ pub struct ThreadRealtimeStartParams {
     pub prompt: String,
     #[ts(optional = nullable)]
     pub session_id: Option<String>,
+    pub protocol: ThreadRealtimeStartProtocol,
+}
+
+/// EXPERIMENTAL - realtime start protocol selected by the client.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+#[ts(tag = "type")]
+pub enum ThreadRealtimeStartProtocol {
+    JsonRpcPcm,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Rtc {
+        offer_sdp: String,
+    },
 }
 
 /// EXPERIMENTAL - response for starting thread realtime.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadRealtimeStartResponse {}
+pub struct ThreadRealtimeStartResponse {
+    pub protocol: ThreadRealtimeStartResponseProtocol,
+}
+
+/// EXPERIMENTAL - realtime start response protocol payload.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+#[ts(tag = "type")]
+pub enum ThreadRealtimeStartResponseProtocol {
+    JsonRpcPcm,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Rtc {
+        answer_sdp: String,
+    },
+}
 
 /// EXPERIMENTAL - append audio input to thread realtime.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]

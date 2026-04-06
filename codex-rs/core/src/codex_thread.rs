@@ -3,6 +3,7 @@ use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::realtime_conversation::RealtimeConversationStartResult;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
@@ -14,6 +15,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -90,6 +92,17 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
         self.codex.submit_with_trace(op, trace).await
+    }
+
+    pub async fn start_realtime_conversation(
+        &self,
+        sub_id: String,
+        params: ConversationStartParams,
+        trace: Option<W3cTraceContext>,
+    ) -> CodexResult<RealtimeConversationStartResult> {
+        self.codex
+            .start_realtime_conversation(sub_id, params, trace)
+            .await
     }
 
     pub async fn steer_input(

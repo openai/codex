@@ -14,6 +14,7 @@ pub mod codex;
 mod realtime_context;
 mod realtime_conversation;
 pub use codex::SteerInputError;
+pub use realtime_conversation::RealtimeConversationStartResult;
 mod codex_thread;
 mod compact_remote;
 pub use codex_thread::CodexThread;

@@ -1695,6 +1695,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: Some("sess_456".to_string()),
+                protocol: v2::ThreadRealtimeStartProtocol::JsonRpcPcm,
             },
         };
         assert_eq!(
@@ -1704,7 +1705,37 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456"
+                    "sessionId": "sess_456",
+                    "protocol": { "type": "jsonRpcPcm" }
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_start_rtc_protocol() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: "You are on a call".to_string(),
+                session_id: None,
+                protocol: v2::ThreadRealtimeStartProtocol::Rtc {
+                    offer_sdp: "v=0".to_string(),
+                },
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "prompt": "You are on a call",
+                    "sessionId": null,
+                    "protocol": { "type": "rtc", "offerSdp": "v=0" }
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1784,6 +1815,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: None,
+                protocol: v2::ThreadRealtimeStartProtocol::JsonRpcPcm,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);

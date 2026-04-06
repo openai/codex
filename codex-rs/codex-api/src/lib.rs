@@ -31,6 +31,8 @@ pub use crate::common::response_create_client_metadata;
 pub use crate::endpoint::compact::CompactClient;
 pub use crate::endpoint::memories::MemoriesClient;
 pub use crate::endpoint::models::ModelsClient;
+pub use crate::endpoint::realtime_websocket::RealtimeCallClient;
+pub use crate::endpoint::realtime_websocket::RealtimeCallCreateResponse;
 pub use crate::endpoint::realtime_websocket::RealtimeEventParser;
 pub use crate::endpoint::realtime_websocket::RealtimeSessionConfig;
 pub use crate::endpoint::realtime_websocket::RealtimeSessionMode;
