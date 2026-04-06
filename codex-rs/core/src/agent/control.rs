@@ -1525,6 +1525,10 @@ impl AgentControl {
             .await
     }
 
+    pub(crate) async fn note_owner_input(&self, owner_thread_id: ThreadId) {
+        self.watchdogs.note_owner_input(owner_thread_id).await;
+    }
+
     pub(crate) async fn watchdog_helper_is_active_or_suppressed(
         &self,
         helper_thread_id: ThreadId,

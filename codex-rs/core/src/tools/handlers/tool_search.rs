@@ -223,3 +223,64 @@ fn build_search_text(name: &str, info: &ToolInfo) -> String {
 
     parts.join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::make_session_and_context;
+    use crate::tools::context::ToolInvocation;
+    use crate::tools::context::ToolPayload;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::models::SearchToolCallParams;
+    use codex_tools::ResponsesApiNamespaceTool;
+    use codex_tools::ToolSearchOutputTool;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn watchdog_tool_search_corpus_includes_snooze() {
+        let (session, turn) = make_session_and_context().await;
+        let output = ToolSearchHandler::new(HashMap::new(), /*include_watchdog_tools*/ true)
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                turn: Arc::new(turn),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
+                call_id: "call-1".to_string(),
+                tool_name: TOOL_SEARCH_TOOL_NAME.to_string(),
+                tool_namespace: None,
+                payload: ToolPayload::ToolSearch {
+                    arguments: SearchToolCallParams {
+                        query: "watchdog snooze".to_string(),
+                        limit: Some(5),
+                    },
+                },
+            })
+            .await
+            .expect("watchdog tool search should succeed");
+
+        let names = output
+            .tools
+            .iter()
+            .filter_map(|tool| match tool {
+                ToolSearchOutputTool::Function(_) => None,
+                ToolSearchOutputTool::Namespace(namespace) => Some((
+                    namespace.name.as_str(),
+                    namespace
+                        .tools
+                        .iter()
+                        .map(|tool| match tool {
+                            ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            names
+                .iter()
+                .any(|(namespace, tools)| *namespace == "watchdog" && tools.contains(&"snooze")),
+            "expected watchdog.snooze in tool_search output, got {names:?}"
+        );
+    }
+}

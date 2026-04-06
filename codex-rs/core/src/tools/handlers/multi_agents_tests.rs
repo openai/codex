@@ -3662,6 +3662,17 @@ async fn multi_agent_v2_watchdog_snooze_keeps_handle_registered_and_suppresses_f
     assert_eq!(payload["target_thread_id"], target_thread_id.to_string());
     assert_eq!(payload["delay_seconds"], 45);
     assert!(session.current_turn_used_watchdog_terminal_tool());
+    assert_eq!(
+        agent_control
+            .watchdog_target_for_active_helper(helper_thread_id)
+            .await,
+        None
+    );
+    assert!(
+        agent_control
+            .watchdog_helper_is_active_or_suppressed(helper_thread_id)
+            .await
+    );
     assert_ne!(
         agent_control.get_status(target_thread_id).await,
         AgentStatus::NotFound
