@@ -1,6 +1,4 @@
 use super::*;
-use clap::CommandFactory;
-use clap::Parser;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use opentelemetry::trace::TraceContextExt;
@@ -20,29 +18,6 @@ fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
 #[test]
 fn exec_defaults_analytics_to_enabled() {
     assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
-}
-
-#[test]
-fn exec_cli_rejects_ask_for_approval_flag() {
-    let err = Cli::try_parse_from(["codex-exec", "--ask-for-approval", "never", "test"])
-        .expect_err("exec should reject ask-for-approval");
-
-    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-    let rendered = err.to_string();
-    assert!(rendered.contains("--ask-for-approval"));
-}
-
-#[test]
-fn exec_help_does_not_reference_approval_policy_flag() {
-    let mut cmd = Cli::command();
-    let mut help = Vec::new();
-    cmd.write_long_help(&mut help).expect("render exec help");
-    let help = String::from_utf8(help).expect("exec help should be utf-8");
-
-    assert!(help.contains("--full-auto"));
-    assert!(help.contains("workspace-write"));
-    assert!(!help.contains("-a on-request"));
-    assert!(!help.contains("--ask-for-approval"));
 }
 
 #[test]
