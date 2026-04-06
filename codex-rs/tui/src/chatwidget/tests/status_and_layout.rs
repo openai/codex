@@ -1565,6 +1565,77 @@ printf 'fenced within fenced\n'
 }
 
 #[tokio::test]
+async fn chatwidget_percent_encoded_local_link_vt100_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.cwd = PathBuf::from("/Users/example/code/codex").abs();
+
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    let width: u16 = 80;
+    let height: u16 = 20;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+    let source = "See [random](/Users/example/code/codex/docs/random_%C3%9F.md:1).";
+    let mut it = source.chars();
+    loop {
+        let mut delta = String::new();
+        match it.next() {
+            Some(c) => delta.push(c),
+            None => break,
+        }
+        if let Some(c2) = it.next() {
+            delta.push(c2);
+        }
+
+        chat.handle_codex_event(Event {
+            id: "t1".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+        });
+        loop {
+            chat.on_commit_tick();
+            let mut inserted_any = false;
+            while let Ok(app_ev) = rx.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                    let lines = cell.display_lines(width);
+                    crate::insert_history::insert_history_lines(&mut term, lines)
+                        .expect("Failed to insert history lines in test");
+                    inserted_any = true;
+                }
+            }
+            if !inserted_any {
+                break;
+            }
+        }
+    }
+
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    assert_chatwidget_snapshot!(
+        "chatwidget_percent_encoded_local_link_vt100_snapshot",
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
+    );
+}
+
+#[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

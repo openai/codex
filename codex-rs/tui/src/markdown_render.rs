@@ -789,7 +789,8 @@ fn parse_local_link_target(dest_url: &str) -> Option<(String, Option<String>)> {
         location_suffix = Some(suffix);
     }
 
-    Some((expand_local_link_path(path_text), location_suffix))
+    let decoded_path_text = decode_percent_encoded_path_text(path_text);
+    Some((expand_local_link_path(&decoded_path_text), location_suffix))
 }
 
 /// Normalize a hash fragment like `L12` or `L12C3-L14C9` into the display suffix we render.
@@ -828,6 +829,49 @@ fn expand_local_link_path(path_text: &str) -> String {
     }
 
     normalize_local_link_path_text(path_text)
+}
+
+/// Decode `%XX` path escapes for non-`file://` local links.
+///
+/// If any escape is malformed or decoded bytes are not UTF-8, the original text is returned
+/// unchanged so rendering stays lossless.
+fn decode_percent_encoded_path_text(path_text: &str) -> String {
+    let bytes = path_text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    let mut saw_escape = false;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return path_text.to_string();
+            }
+            let hi = bytes[i + 1];
+            let lo = bytes[i + 2];
+            let Some(hi_val) = (hi as char).to_digit(16) else {
+                return path_text.to_string();
+            };
+            let Some(lo_val) = (lo as char).to_digit(16) else {
+                return path_text.to_string();
+            };
+            let decoded_byte = ((hi_val << 4) | lo_val) as u8;
+            if decoded_byte.is_ascii() {
+                return path_text.to_string();
+            }
+            decoded.push(decoded_byte);
+            saw_escape = true;
+            i += 3;
+            continue;
+        }
+
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+
+    if !saw_escape {
+        return path_text.to_string();
+    }
+
+    String::from_utf8(decoded).unwrap_or_else(|_| path_text.to_string())
 }
 
 /// Convert a `file://` URL into the normalized local-path text used for transcript rendering.
