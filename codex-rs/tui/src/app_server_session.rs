@@ -322,7 +322,11 @@ impl AppServerSession {
 
     pub(crate) async fn start_ephemeral_thread(&mut self, config: &Config) -> Result<Thread> {
         let request_id = self.next_request_id();
-        let mut params = thread_start_params_from_config(config, self.thread_params_mode());
+        let mut params = thread_start_params_from_config(
+            config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+        );
         params.ephemeral = Some(true);
         let response: ThreadStartResponse = self
             .client
