@@ -96,6 +96,7 @@ pub fn create_wait_tool() -> ToolSpec {
 
 pub fn create_code_mode_tool(
     enabled_tools: &[(String, String)],
+    namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
     code_mode_only_enabled: bool,
 ) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
@@ -112,6 +113,7 @@ SOURCE: /[\s\S]+/
         name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
         description: codex_code_mode::build_exec_tool_description(
             enabled_tools,
+            namespace_descriptions,
             code_mode_only_enabled,
         ),
         format: FreeformToolFormat {

@@ -181,6 +181,7 @@ fn build_specs(
         config,
         mcp_tools,
         app_tools,
+        /*tool_namespaces*/ None,
         /*discoverable_tools*/ None,
         dynamic_tools,
     )
@@ -261,6 +262,7 @@ fn assert_model_tools(
         &tools_config,
         ToolRouterParams {
             mcp_tools: None,
+            tool_namespaces: None,
             app_tools: None,
             discoverable_tools: None,
             dynamic_tools: &[],
@@ -628,6 +630,7 @@ fn tool_suggest_requires_apps_and_plugins_features() {
             &tools_config,
             /*mcp_tools*/ None,
             /*app_tools*/ None,
+            /*tool_namespaces*/ None,
             discoverable_tools.clone(),
             &[],
         )
@@ -701,6 +704,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 tool_name: "_create_event".to_string(),
                 tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                server_instructions: None,
                 tool: mcp_tool(
                     "calendar_create_event",
                     "Create calendar event",
@@ -751,6 +755,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_create_event".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                    server_instructions: None,
                     tool: mcp_tool(
                         "calendar-create-event",
                         "Create calendar event",
@@ -768,6 +773,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_list_events".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                    server_instructions: None,
                     tool: mcp_tool(
                         "calendar-list-events",
                         "List calendar events",

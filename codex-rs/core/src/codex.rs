@@ -6888,16 +6888,18 @@ pub(crate) async fn built_tools(
     } else {
         app_tools
     };
+    let mcp_tool_router_inputs =
+        has_mcp_servers.then(|| crate::tools::router::map_mcp_tool_infos(&mcp_tools));
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: has_mcp_servers.then(|| {
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect()
-            }),
+            mcp_tools: mcp_tool_router_inputs
+                .as_ref()
+                .map(|inputs| inputs.mcp_tools.clone()),
+            tool_namespaces: mcp_tool_router_inputs
+                .as_ref()
+                .map(|inputs| inputs.tool_namespaces.clone()),
             app_tools,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

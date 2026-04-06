@@ -11,6 +11,7 @@ use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
+use crate::ToolNamespace;
 use crate::ToolRegistryPlanAppTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
@@ -1332,6 +1333,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
         &tools_config,
         /*mcp_tools*/ None,
         /*app_tools*/ None,
+        /*tool_namespaces*/ None,
         Some(vec![discoverable_connector(
             "connector_2128aebfecb84f64a069897515042a44",
             "Google Calendar",
@@ -1371,6 +1373,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         &tools_config,
         /*mcp_tools*/ None,
         /*app_tools*/ None,
+        /*tool_namespaces*/ None,
         Some(vec![discoverable_connector(
             "connector_2128aebfecb84f64a069897515042a44",
             "Google Calendar",
@@ -1438,6 +1441,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         &tools_config,
         /*mcp_tools*/ None,
         /*app_tools*/ None,
+        /*tool_namespaces*/ None,
         Some(discoverable_tools),
         &[],
     );
@@ -1501,6 +1505,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
     features.enable(Feature::UnifiedExec);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1542,7 +1547,12 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
     assert_eq!(
         description,
-        "Echo text\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```"
+        r#"Echo text
+
+exec tool declaration:
+```ts
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+```"#
     );
 }
 
@@ -1789,6 +1799,7 @@ fn build_specs<'a>(
         config,
         mcp_tools,
         app_tools,
+        /*tool_namespaces*/ None,
         /*discoverable_tools*/ None,
         dynamic_tools,
     )
@@ -1798,6 +1809,25 @@ fn build_specs_with_discoverable_tools<'a>(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<Vec<ToolRegistryPlanAppTool<'a>>>,
+    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
+    discoverable_tools: Option<Vec<DiscoverableTool>>,
+    dynamic_tools: &[DynamicToolSpec],
+) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
+    build_specs_with_optional_tool_namespaces(
+        config,
+        mcp_tools,
+        tool_namespaces,
+        app_tools,
+        discoverable_tools,
+        dynamic_tools,
+    )
+}
+
+fn build_specs_with_optional_tool_namespaces<'a>(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
+    app_tools: Option<Vec<ToolRegistryPlanAppTool<'a>>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
@@ -1805,6 +1835,7 @@ fn build_specs_with_discoverable_tools<'a>(
         config,
         ToolRegistryPlanParams {
             mcp_tools: mcp_tools.as_ref(),
+            tool_namespaces: tool_namespaces.as_ref(),
             app_tools: app_tools.as_deref(),
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,

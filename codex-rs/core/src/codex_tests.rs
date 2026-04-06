@@ -121,7 +121,7 @@ mod guardian_tests;
 
 struct InstructionsTestCase {
     slug: &'static str,
-    expects_apply_patch_instructions: bool,
+    expects_apply_patch_description: bool,
 }
 
 fn user_message(text: &str) -> ResponseItem {
@@ -305,6 +305,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
+            tool_namespaces: None,
             app_tools: None,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -413,6 +414,7 @@ fn make_mcp_tool(
         server_name: server_name.to_string(),
         tool_name: tool_name.to_string(),
         tool_namespace,
+        server_instructions: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
@@ -695,19 +697,19 @@ async fn get_base_instructions_no_user_content() {
     let test_cases = vec![
         InstructionsTestCase {
             slug: "gpt-5",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
         InstructionsTestCase {
             slug: "gpt-5.1",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
         InstructionsTestCase {
             slug: "gpt-5.1-codex",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
         InstructionsTestCase {
             slug: "gpt-5.1-codex-max",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
     ];
 
@@ -716,7 +718,7 @@ async fn get_base_instructions_no_user_content() {
 
     for test_case in test_cases {
         let model_info = model_info_for_slug(test_case.slug, &config);
-        if test_case.expects_apply_patch_instructions {
+        if test_case.expects_apply_patch_description {
             assert_eq!(
                 model_info.base_instructions.as_str(),
                 prompt_with_apply_patch_instructions
@@ -5292,15 +5294,12 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .await
     };
     let app_tools = Some(tools.clone());
+    let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&tools);
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            mcp_tools: Some(
-                tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
+            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
             app_tools,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

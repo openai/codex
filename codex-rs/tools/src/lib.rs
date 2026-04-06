@@ -114,6 +114,7 @@ pub use tool_discovery::filter_tool_suggest_discoverable_tools_for_client;
 pub use tool_registry_plan::build_tool_registry_plan;
 pub use tool_registry_plan_types::ToolHandlerKind;
 pub use tool_registry_plan_types::ToolHandlerSpec;
+pub use tool_registry_plan_types::ToolNamespace;
 pub use tool_registry_plan_types::ToolRegistryPlan;
 pub use tool_registry_plan_types::ToolRegistryPlanAppTool;
 pub use tool_registry_plan_types::ToolRegistryPlanParams;

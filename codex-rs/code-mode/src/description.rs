@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 
 use crate::PUBLIC_TOOL_NAME;
 
@@ -55,6 +56,12 @@ pub struct ToolDefinition {
     pub kind: CodeModeToolKind,
     pub input_schema: Option<JsonValue>,
     pub output_schema: Option<JsonValue>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolNamespaceDescription {
+    pub name: String,
+    pub description: String,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
@@ -163,6 +170,7 @@ pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
 
 pub fn build_exec_tool_description(
     enabled_tools: &[(String, String)],
+    namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
     code_mode_only: bool,
 ) -> String {
     if !code_mode_only {
@@ -175,17 +183,38 @@ pub fn build_exec_tool_description(
     ];
 
     if !enabled_tools.is_empty() {
-        let nested_tool_reference = enabled_tools
-            .iter()
-            .map(|(name, nested_description)| {
-                let global_name = normalize_code_mode_identifier(name);
-                format!(
-                    "### `{global_name}` (`{name}`)\n{}",
-                    nested_description.trim()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let mut current_namespace: Option<&str> = None;
+        let mut nested_tool_sections = Vec::with_capacity(enabled_tools.len());
+
+        for (name, nested_description) in enabled_tools {
+            let next_namespace = namespace_descriptions
+                .get(name)
+                .map(|namespace_description| namespace_description.name.as_str());
+            if next_namespace != current_namespace {
+                if let Some(namespace_description) = namespace_descriptions.get(name) {
+                    let namespace_description_text = namespace_description.description.trim();
+                    if !namespace_description_text.is_empty() {
+                        nested_tool_sections.push(format!(
+                            "## {}\n{namespace_description_text}",
+                            namespace_description.name
+                        ));
+                    }
+                }
+                current_namespace = next_namespace;
+            }
+
+            let global_name = normalize_code_mode_identifier(name);
+            let nested_description = nested_description.trim();
+            if nested_description.is_empty() {
+                nested_tool_sections.push(format!("### `{global_name}` (`{name}`)"));
+            } else {
+                nested_tool_sections.push(format!(
+                    "### `{global_name}` (`{name}`)\n{nested_description}"
+                ));
+            }
+        }
+
+        let nested_tool_reference = nested_tool_sections.join("\n\n");
         sections.push(nested_tool_reference);
     }
 
@@ -524,12 +553,14 @@ mod tests {
     use super::CodeModeToolKind;
     use super::ParsedExecSource;
     use super::ToolDefinition;
+    use super::ToolNamespaceDescription;
     use super::augment_tool_definition;
     use super::build_exec_tool_description;
     use super::normalize_code_mode_identifier;
     use super::parse_exec_source;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn parse_exec_source_without_pragma() {
@@ -646,6 +677,7 @@ mod tests {
     fn code_mode_only_description_includes_nested_tools() {
         let description = build_exec_tool_description(
             &[("foo".to_string(), "bar".to_string())],
+            &BTreeMap::new(),
             /*code_mode_only*/ true,
         );
         assert!(description.contains("### `foo` (`foo`)"));
@@ -653,8 +685,67 @@ mod tests {
 
     #[test]
     fn exec_description_mentions_timeout_helpers() {
-        let description = build_exec_tool_description(&[], /*code_mode_only*/ false);
+        let description =
+            build_exec_tool_description(&[], &BTreeMap::new(), /*code_mode_only*/ false);
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
+    }
+
+    #[test]
+    fn code_mode_only_description_groups_namespace_instructions_once() {
+        let namespace_descriptions = BTreeMap::from([
+            (
+                "mcp__sample__alpha".to_string(),
+                ToolNamespaceDescription {
+                    name: "mcp__sample".to_string(),
+                    description: "Shared namespace guidance.".to_string(),
+                },
+            ),
+            (
+                "mcp__sample__beta".to_string(),
+                ToolNamespaceDescription {
+                    name: "mcp__sample".to_string(),
+                    description: "Shared namespace guidance.".to_string(),
+                },
+            ),
+        ]);
+        let description = build_exec_tool_description(
+            &[
+                ("mcp__sample__alpha".to_string(), "First tool".to_string()),
+                ("mcp__sample__beta".to_string(), "Second tool".to_string()),
+            ],
+            &namespace_descriptions,
+            /*code_mode_only*/ true,
+        );
+        assert_eq!(description.matches("## mcp__sample").count(), 1);
+        assert!(description.contains(
+            r#"## mcp__sample
+Shared namespace guidance.
+
+### `mcp__sample__alpha` (`mcp__sample__alpha`)
+First tool
+
+### `mcp__sample__beta` (`mcp__sample__beta`)
+Second tool"#
+        ));
+    }
+
+    #[test]
+    fn code_mode_only_description_omits_empty_namespace_sections() {
+        let namespace_descriptions = BTreeMap::from([(
+            "mcp__sample__alpha".to_string(),
+            ToolNamespaceDescription {
+                name: "mcp__sample".to_string(),
+                description: String::new(),
+            },
+        )]);
+        let description = build_exec_tool_description(
+            &[("mcp__sample__alpha".to_string(), "First tool".to_string())],
+            &namespace_descriptions,
+            /*code_mode_only*/ true,
+        );
+
+        assert!(!description.contains("## mcp__sample"));
+        assert!(description.contains("### `mcp__sample__alpha` (`mcp__sample__alpha`)"));
     }
 }

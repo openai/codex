@@ -20,10 +20,14 @@ fn augment_tool_spec_for_code_mode_augments_function_tools() {
             description: "Look up an order".to_string(),
             strict: false,
             defer_loading: Some(true),
-            parameters: JsonSchema::object(BTreeMap::from([(
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
                     "order_id".to_string(),
                     JsonSchema::string(/*description*/ None),
-                )]), Some(vec!["order_id".to_string()]), Some(AdditionalProperties::Boolean(false))),
+                )]),
+                Some(vec!["order_id".to_string()]),
+                Some(AdditionalProperties::Boolean(false))
+            ),
             output_schema: Some(json!({
                 "type": "object",
                 "properties": {
@@ -34,13 +38,23 @@ fn augment_tool_spec_for_code_mode_augments_function_tools() {
         })),
         ToolSpec::Function(ResponsesApiTool {
             name: "lookup_order".to_string(),
-            description: "Look up an order\n\nexec tool declaration:\n```ts\ndeclare const tools: { lookup_order(args: { order_id: string; }): Promise<{ ok: boolean; }>; };\n```".to_string(),
+            description: r#"Look up an order
+
+exec tool declaration:
+```ts
+declare const tools: { lookup_order(args: { order_id: string; }): Promise<{ ok: boolean; }>; };
+```"#
+                .to_string(),
             strict: false,
             defer_loading: Some(true),
-            parameters: JsonSchema::object(BTreeMap::from([(
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
                     "order_id".to_string(),
                     JsonSchema::string(/*description*/ None),
-                )]), Some(vec!["order_id".to_string()]), Some(AdditionalProperties::Boolean(false))),
+                )]),
+                Some(vec!["order_id".to_string()]),
+                Some(AdditionalProperties::Boolean(false))
+            ),
             output_schema: Some(json!({
                 "type": "object",
                 "properties": {
@@ -92,7 +106,13 @@ fn tool_spec_to_code_mode_tool_definition_returns_augmented_nested_tools() {
         tool_spec_to_code_mode_tool_definition(&spec),
         Some(codex_code_mode::ToolDefinition {
             name: "apply_patch".to_string(),
-            description: "Apply a patch\n\nexec tool declaration:\n```ts\ndeclare const tools: { apply_patch(input: string): Promise<unknown>; };\n```".to_string(),
+            description: r#"Apply a patch
+
+exec tool declaration:
+```ts
+declare const tools: { apply_patch(input: string): Promise<unknown>; };
+```"#
+                .to_string(),
             kind: codex_code_mode::CodeModeToolKind::Freeform,
             input_schema: None,
             output_schema: None,
@@ -165,11 +185,16 @@ fn create_code_mode_tool_matches_expected_spec() {
     let enabled_tools = vec![("update_plan".to_string(), "Update the plan".to_string())];
 
     assert_eq!(
-        create_code_mode_tool(&enabled_tools, /*code_mode_only_enabled*/ true),
+        create_code_mode_tool(
+            &enabled_tools,
+            &BTreeMap::new(),
+            /*code_mode_only_enabled*/ true,
+        ),
         ToolSpec::Freeform(FreeformTool {
             name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             description: codex_code_mode::build_exec_tool_description(
                 &enabled_tools,
+                &BTreeMap::new(),
                 /*code_mode_only*/ true
             ),
             format: FreeformToolFormat {
