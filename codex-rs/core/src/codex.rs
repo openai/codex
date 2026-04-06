@@ -2018,7 +2018,6 @@ impl Session {
             let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
         }
-        sess.restore_alarms_from_sidecar().await;
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
@@ -2047,6 +2046,7 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+        sess.restore_alarms_from_sidecar().await;
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
@@ -2899,6 +2899,9 @@ impl Session {
     }
 
     async fn restore_alarms_from_sidecar(self: &Arc<Self>) {
+        if !self.features.enabled(Feature::AlarmScheduler) {
+            return;
+        }
         let Some(rollout_path) = self.current_rollout_path().await else {
             return;
         };

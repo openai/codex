@@ -484,15 +484,43 @@ pub(crate) async fn write_alarm_sidecar(
             tmp_path.display()
         )
     })?;
-    tokio::fs::rename(&tmp_path, &sidecar_path)
-        .await
-        .map_err(|err| {
-            format!(
-                "failed to atomically replace alarm sidecar `{}`: {err}",
-                sidecar_path.display()
-            )
-        })?;
-    Ok(())
+    match tokio::fs::rename(&tmp_path, &sidecar_path).await {
+        Ok(()) => Ok(()),
+        Err(initial_error) => {
+            #[cfg(target_os = "windows")]
+            {
+                match tokio::fs::remove_file(&sidecar_path).await {
+                    Ok(()) => {
+                        tokio::fs::rename(&tmp_path, &sidecar_path)
+                            .await
+                            .map_err(|err| {
+                                format!(
+                                    "failed to replace alarm sidecar `{}` with `{}`: {err}",
+                                    sidecar_path.display(),
+                                    tmp_path.display()
+                                )
+                            })?;
+                        return Ok(());
+                    }
+                    Err(err) if err.kind() == ErrorKind::NotFound => {}
+                    Err(err) => {
+                        let _ = tokio::fs::remove_file(&tmp_path).await;
+                        return Err(format!(
+                            "failed to remove existing alarm sidecar `{}` before replace: {err}",
+                            sidecar_path.display()
+                        ));
+                    }
+                }
+            }
+
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            Err(format!(
+                "failed to atomically replace alarm sidecar `{}` with `{}`: {initial_error}",
+                sidecar_path.display(),
+                tmp_path.display()
+            ))
+        }
+    }
 }
 
 fn parse_duration_literal(raw: &str) -> Option<u64> {
@@ -791,5 +819,49 @@ mod tests {
             alarm_sidecar_path_for_rollout(&rollout_path),
             tempdir.path().join("rollout.jsonl.alarms.json")
         );
+    }
+
+    #[tokio::test]
+    async fn alarm_sidecar_overwrites_existing_file() {
+        let tempdir = TempDir::new().expect("tempdir");
+        let rollout_path = tempdir.path().join("rollout.jsonl");
+        let original = vec![PersistedAlarm {
+            alarm: super::ThreadAlarm {
+                id: "alarm-1".to_string(),
+                cron_expression: "@after-turn".to_string(),
+                prompt: "run tests".to_string(),
+                run_once: false,
+                delivery: AlarmDelivery::AfterTurn,
+                created_at: 1,
+                next_run_at: None,
+                last_run_at: None,
+            },
+            pending_run: true,
+        }];
+        let replacement = vec![PersistedAlarm {
+            alarm: super::ThreadAlarm {
+                id: "alarm-2".to_string(),
+                cron_expression: "@after-turn".to_string(),
+                prompt: "run different tests".to_string(),
+                run_once: true,
+                delivery: AlarmDelivery::SteerCurrentTurn,
+                created_at: 2,
+                next_run_at: None,
+                last_run_at: Some(3),
+            },
+            pending_run: false,
+        }];
+
+        write_alarm_sidecar(&rollout_path, &original)
+            .await
+            .expect("write original sidecar");
+        write_alarm_sidecar(&rollout_path, &replacement)
+            .await
+            .expect("overwrite sidecar");
+
+        let loaded = load_alarm_sidecar(&rollout_path)
+            .await
+            .expect("load overwritten sidecar");
+        assert_eq!(loaded, replacement);
     }
 }
