@@ -42,6 +42,7 @@ use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
+use crate::notifications::warp_cli_agent_protocol_detected;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
@@ -364,7 +365,9 @@ impl Tui {
     /// Emit a desktop notification now if the terminal is unfocused.
     /// Returns true if a notification was posted.
     pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
-        if self.terminal_focused.load(Ordering::Relaxed) {
+        // Warp handles notification visibility itself but does not relay focus
+        // events to the PTY, so Codex should not suppress its notifications here.
+        if self.terminal_focused.load(Ordering::Relaxed) && !warp_cli_agent_protocol_detected() {
             return false;
         }
 

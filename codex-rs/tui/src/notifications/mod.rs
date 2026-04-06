@@ -8,6 +8,8 @@ use bel::BelBackend;
 use codex_config::types::NotificationMethod;
 use osc9::Osc9Backend;
 
+const WARP_CLI_AGENT_PROTOCOL_VERSION_ENV_VAR: &str = "WARP_CLI_AGENT_PROTOCOL_VERSION";
+
 #[derive(Debug)]
 pub enum DesktopNotificationBackend {
     Osc9(Osc9Backend),
@@ -48,9 +50,18 @@ pub fn detect_backend(method: NotificationMethod) -> DesktopNotificationBackend 
     DesktopNotificationBackend::for_method(method)
 }
 
+pub(crate) fn warp_cli_agent_protocol_detected() -> bool {
+    env::var_os(WARP_CLI_AGENT_PROTOCOL_VERSION_ENV_VAR).is_some()
+}
+
 fn supports_osc9() -> bool {
     if env::var_os("WT_SESSION").is_some() {
         return false;
+    }
+    // Warp declares OSC 9 support via its CLI agent protocol env var. This also
+    // covers supported Warp sessions across SSH where TERM_PROGRAM is absent.
+    if warp_cli_agent_protocol_detected() {
+        return true;
     }
     // Prefer TERM_PROGRAM when present, but keep fallbacks for shells/launchers
     // that don't set it (e.g., tmux/ssh) to avoid regressing OSC 9 support.
@@ -73,6 +84,7 @@ fn supports_osc9() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::WARP_CLI_AGENT_PROTOCOL_VERSION_ENV_VAR;
     use super::detect_backend;
     use codex_config::types::NotificationMethod;
     use serial_test::serial;
@@ -133,6 +145,7 @@ mod tests {
     fn auto_prefers_bel_without_hints() {
         let _term = EnvVarGuard::remove("TERM");
         let _term_program = EnvVarGuard::remove("TERM_PROGRAM");
+        let _warp_protocol = EnvVarGuard::remove(WARP_CLI_AGENT_PROTOCOL_VERSION_ENV_VAR);
         let _iterm = EnvVarGuard::remove("ITERM_SESSION_ID");
         let _wt = EnvVarGuard::remove("WT_SESSION");
         assert!(matches!(
@@ -143,9 +156,24 @@ mod tests {
 
     #[test]
     #[serial]
+    fn auto_uses_osc9_for_warp_cli_agent_protocol() {
+        let _term = EnvVarGuard::remove("TERM");
+        let _term_program = EnvVarGuard::remove("TERM_PROGRAM");
+        let _warp_protocol = EnvVarGuard::set(WARP_CLI_AGENT_PROTOCOL_VERSION_ENV_VAR, "1");
+        let _iterm = EnvVarGuard::remove("ITERM_SESSION_ID");
+        let _wt = EnvVarGuard::remove("WT_SESSION");
+        assert!(matches!(
+            detect_backend(NotificationMethod::Auto),
+            super::DesktopNotificationBackend::Osc9(_)
+        ));
+    }
+
+    #[test]
+    #[serial]
     fn auto_uses_osc9_for_iterm() {
         let _term = EnvVarGuard::remove("TERM");
         let _term_program = EnvVarGuard::remove("TERM_PROGRAM");
+        let _warp_protocol = EnvVarGuard::remove(WARP_CLI_AGENT_PROTOCOL_VERSION_ENV_VAR);
         let _iterm = EnvVarGuard::set("ITERM_SESSION_ID", "abc");
         let _wt = EnvVarGuard::remove("WT_SESSION");
         assert!(matches!(
