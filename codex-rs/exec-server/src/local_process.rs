@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_utils_pty::ExecCommandSession;
+use codex_utils_pty::SpawnedPty;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -20,6 +21,7 @@ use crate::ExecServerError;
 use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::protocol::EXEC_CLOSED_METHOD;
+use crate::protocol::ExecApprovalRequest;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
@@ -30,6 +32,8 @@ use crate::protocol::InitializeResponse;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::ResolveExecApprovalParams;
+use crate::protocol::ResolveExecApprovalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -56,7 +60,7 @@ struct RetainedOutputChunk {
 }
 
 struct RunningProcess {
-    session: ExecCommandSession,
+    session: Option<ExecCommandSession>,
     tty: bool,
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
@@ -66,6 +70,9 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
+    failure: Option<String>,
+    pending_exec_approval: Option<ExecApprovalRequest>,
+    pending_start: Option<ExecParams>,
 }
 
 enum ProcessEntry {
@@ -124,7 +131,9 @@ impl LocalProcess {
                 .collect::<Vec<_>>()
         };
         for process in remaining {
-            process.session.terminate();
+            if let Some(session) = process.session.as_ref() {
+                session.terminate();
+            }
         }
     }
 
@@ -162,16 +171,41 @@ impl LocalProcess {
         Ok(())
     }
 
+    async fn spawn_process_session(params: &ExecParams) -> Result<SpawnedPty, JSONRPCErrorError> {
+        let (program, args) = params
+            .argv
+            .split_first()
+            .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+        if params.tty {
+            codex_utils_pty::spawn_pty_process(
+                program,
+                args,
+                params.cwd.as_path(),
+                &params.env,
+                &params.arg0,
+                TerminalSize::default(),
+            )
+            .await
+            .map_err(|err| internal_error(err.to_string()))
+        } else {
+            codex_utils_pty::spawn_pipe_process_no_stdin(
+                program,
+                args,
+                params.cwd.as_path(),
+                &params.env,
+                &params.arg0,
+            )
+            .await
+            .map_err(|err| internal_error(err.to_string()))
+        }
+    }
+
     async fn start_process(
         &self,
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>), JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
-        let (program, args) = params
-            .argv
-            .split_first()
-            .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
 
         {
             let mut process_map = self.inner.processes.lock().await;
@@ -183,45 +217,14 @@ impl LocalProcess {
             process_map.insert(process_id.clone(), ProcessEntry::Starting);
         }
 
-        let spawned_result = if params.tty {
-            codex_utils_pty::spawn_pty_process(
-                program,
-                args,
-                params.cwd.as_path(),
-                &params.env,
-                &params.arg0,
-                TerminalSize::default(),
-            )
-            .await
-        } else {
-            codex_utils_pty::spawn_pipe_process_no_stdin(
-                program,
-                args,
-                params.cwd.as_path(),
-                &params.env,
-                &params.arg0,
-            )
-            .await
-        };
-        let spawned = match spawned_result {
-            Ok(spawned) => spawned,
-            Err(err) => {
-                let mut process_map = self.inner.processes.lock().await;
-                if matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
-                    process_map.remove(&process_id);
-                }
-                return Err(internal_error(err.to_string()));
-            }
-        };
-
         let output_notify = Arc::new(Notify::new());
         let (wake_tx, _wake_rx) = watch::channel(0);
-        {
+        if let Some(startup_exec_approval) = params.startup_exec_approval.clone() {
             let mut process_map = self.inner.processes.lock().await;
             process_map.insert(
                 process_id.clone(),
                 ProcessEntry::Running(Box::new(RunningProcess {
-                    session: spawned.session,
+                    session: None,
                     tty: params.tty,
                     output: VecDeque::new(),
                     retained_bytes: 0,
@@ -229,40 +232,76 @@ impl LocalProcess {
                     exit_code: None,
                     wake_tx: wake_tx.clone(),
                     output_notify: Arc::clone(&output_notify),
-                    open_streams: 2,
+                    open_streams: 0,
                     closed: false,
+                    failure: None,
+                    pending_exec_approval: Some(startup_exec_approval),
+                    pending_start: Some(params),
                 })),
             );
-        }
+        } else {
+            let spawned = match Self::spawn_process_session(&params).await {
+                Ok(spawned) => spawned,
+                Err(err) => {
+                    let mut process_map = self.inner.processes.lock().await;
+                    if matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
+                        process_map.remove(&process_id);
+                    }
+                    return Err(err);
+                }
+            };
 
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            if params.tty {
-                ExecOutputStream::Pty
-            } else {
-                ExecOutputStream::Stdout
-            },
-            spawned.stdout_rx,
-            Arc::clone(&self.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            if params.tty {
-                ExecOutputStream::Pty
-            } else {
-                ExecOutputStream::Stderr
-            },
-            spawned.stderr_rx,
-            Arc::clone(&self.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(watch_exit(
-            process_id.clone(),
-            spawned.exit_rx,
-            Arc::clone(&self.inner),
-            output_notify,
-        ));
+            {
+                let mut process_map = self.inner.processes.lock().await;
+                process_map.insert(
+                    process_id.clone(),
+                    ProcessEntry::Running(Box::new(RunningProcess {
+                        session: Some(spawned.session),
+                        tty: params.tty,
+                        output: VecDeque::new(),
+                        retained_bytes: 0,
+                        next_seq: 1,
+                        exit_code: None,
+                        wake_tx: wake_tx.clone(),
+                        output_notify: Arc::clone(&output_notify),
+                        open_streams: 2,
+                        closed: false,
+                        failure: None,
+                        pending_exec_approval: None,
+                        pending_start: None,
+                    })),
+                );
+            }
+
+            tokio::spawn(stream_output(
+                process_id.clone(),
+                if params.tty {
+                    ExecOutputStream::Pty
+                } else {
+                    ExecOutputStream::Stdout
+                },
+                spawned.stdout_rx,
+                Arc::clone(&self.inner),
+                Arc::clone(&output_notify),
+            ));
+            tokio::spawn(stream_output(
+                process_id.clone(),
+                if params.tty {
+                    ExecOutputStream::Pty
+                } else {
+                    ExecOutputStream::Stderr
+                },
+                spawned.stderr_rx,
+                Arc::clone(&self.inner),
+                Arc::clone(&output_notify),
+            ));
+            tokio::spawn(watch_exit(
+                process_id.clone(),
+                spawned.exit_rx,
+                Arc::clone(&self.inner),
+                output_notify,
+            ));
+        }
 
         Ok((ExecResponse { process_id }, wake_tx))
     }
@@ -324,14 +363,18 @@ impl LocalProcess {
                         exited: process.exit_code.is_some(),
                         exit_code: process.exit_code,
                         closed: process.closed,
-                        failure: None,
+                        failure: process.failure.clone(),
+                        exec_approval: process.pending_exec_approval.clone(),
                     },
                     Arc::clone(&process.output_notify),
                 )
             };
 
             if !response.chunks.is_empty()
+                || response.exec_approval.is_some()
+                || response.failure.is_some()
                 || response.exited
+                || response.closed
                 || tokio::time::Instant::now() >= deadline
             {
                 let _total_bytes: usize = response
@@ -374,7 +417,12 @@ impl LocalProcess {
                     status: WriteStatus::StdinClosed,
                 });
             }
-            process.session.writer_sender()
+            let Some(session) = process.session.as_ref() else {
+                return Ok(WriteResponse {
+                    status: WriteStatus::Starting,
+                });
+            };
+            session.writer_sender()
         };
 
         writer_tx
@@ -385,6 +433,151 @@ impl LocalProcess {
         Ok(WriteResponse {
             status: WriteStatus::Accepted,
         })
+    }
+
+    pub(crate) async fn resolve_exec_approval(
+        &self,
+        params: ResolveExecApprovalParams,
+    ) -> Result<ResolveExecApprovalResponse, JSONRPCErrorError> {
+        self.require_initialized_for("exec")?;
+        let allows_spawn = matches!(
+            params.decision,
+            codex_app_server_protocol::CommandExecutionApprovalDecision::Accept
+                | codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession
+                | codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment { .. }
+                | codex_app_server_protocol::CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment { .. }
+        );
+        let pending_start = {
+            let mut process_map = self.inner.processes.lock().await;
+            let Some(process) = process_map.get_mut(&params.process_id) else {
+                return Err(invalid_request(format!(
+                    "unknown process id {}",
+                    params.process_id
+                )));
+            };
+            let ProcessEntry::Running(process) = process else {
+                return Err(invalid_request(format!(
+                    "process id {} is starting",
+                    params.process_id
+                )));
+            };
+            let Some(pending) = process.pending_exec_approval.as_ref() else {
+                return Err(invalid_request(format!(
+                    "process id {} has no pending exec approval",
+                    params.process_id
+                )));
+            };
+            let effective_approval_id = pending
+                .approval_id
+                .as_deref()
+                .unwrap_or(pending.call_id.as_str());
+            if effective_approval_id != params.approval_id {
+                return Err(invalid_request(format!(
+                    "process id {} has no pending approval {}",
+                    params.process_id, params.approval_id
+                )));
+            }
+            process.pending_exec_approval = None;
+
+            if allows_spawn {
+                process.pending_start.take()
+            } else {
+                process.failure = Some("rejected by user".to_string());
+                process.exit_code = Some(1);
+                process.closed = true;
+                process.pending_start = None;
+                process.output_notify.notify_waiters();
+                let _ = process.wake_tx.send(process.next_seq);
+                None
+            }
+        };
+
+        if let Some(pending_start) = pending_start {
+            let output_notify = {
+                let process_map = self.inner.processes.lock().await;
+                let Some(ProcessEntry::Running(process)) = process_map.get(&params.process_id)
+                else {
+                    return Err(invalid_request(format!(
+                        "process id {} disappeared while resolving approval",
+                        params.process_id
+                    )));
+                };
+                Arc::clone(&process.output_notify)
+            };
+            match Self::spawn_process_session(&pending_start).await {
+                Ok(spawned) => {
+                    {
+                        let mut process_map = self.inner.processes.lock().await;
+                        let Some(ProcessEntry::Running(process)) =
+                            process_map.get_mut(&params.process_id)
+                        else {
+                            return Err(invalid_request(format!(
+                                "process id {} disappeared while spawning",
+                                params.process_id
+                            )));
+                        };
+                        process.session = Some(spawned.session);
+                        process.open_streams = 2;
+                    }
+                    let process_id = params.process_id.clone();
+                    let inner = Arc::clone(&self.inner);
+                    tokio::spawn(stream_output(
+                        process_id.clone(),
+                        if pending_start.tty {
+                            ExecOutputStream::Pty
+                        } else {
+                            ExecOutputStream::Stdout
+                        },
+                        spawned.stdout_rx,
+                        Arc::clone(&inner),
+                        Arc::clone(&output_notify),
+                    ));
+                    tokio::spawn(stream_output(
+                        process_id.clone(),
+                        if pending_start.tty {
+                            ExecOutputStream::Pty
+                        } else {
+                            ExecOutputStream::Stderr
+                        },
+                        spawned.stderr_rx,
+                        Arc::clone(&inner),
+                        Arc::clone(&output_notify),
+                    ));
+                    tokio::spawn(watch_exit(
+                        process_id,
+                        spawned.exit_rx,
+                        inner,
+                        Arc::clone(&output_notify),
+                    ));
+                    let process_map = self.inner.processes.lock().await;
+                    let Some(ProcessEntry::Running(process)) = process_map.get(&params.process_id)
+                    else {
+                        return Err(invalid_request(format!(
+                            "process id {} disappeared after spawning",
+                            params.process_id
+                        )));
+                    };
+                    process.output_notify.notify_waiters();
+                    let _ = process.wake_tx.send(process.next_seq);
+                }
+                Err(err) => {
+                    let mut process_map = self.inner.processes.lock().await;
+                    let Some(ProcessEntry::Running(process)) =
+                        process_map.get_mut(&params.process_id)
+                    else {
+                        return Err(invalid_request(format!(
+                            "process id {} disappeared after failed spawn",
+                            params.process_id
+                        )));
+                    };
+                    process.failure = Some(err.message.clone());
+                    process.closed = true;
+                    process.output_notify.notify_waiters();
+                    let _ = process.wake_tx.send(process.next_seq);
+                }
+            }
+        }
+        Ok(ResolveExecApprovalResponse { accepted: true })
     }
 
     pub(crate) async fn terminate_process(
@@ -400,7 +593,9 @@ impl LocalProcess {
                     if process.exit_code.is_some() {
                         return Ok(TerminateResponse { running: false });
                     }
-                    process.session.terminate();
+                    if let Some(session) = process.session.as_ref() {
+                        session.terminate();
+                    }
                     true
                 }
                 Some(ProcessEntry::Starting) | None => false,
@@ -455,6 +650,21 @@ impl ExecProcess for LocalExecProcess {
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
         self.backend.terminate(&self.process_id).await
+    }
+
+    async fn resolve_exec_approval(
+        &self,
+        approval_id: String,
+        decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
+    ) -> Result<ResolveExecApprovalResponse, ExecServerError> {
+        self.backend
+            .resolve_exec_approval(ResolveExecApprovalParams {
+                process_id: self.process_id.clone(),
+                approval_id,
+                decision,
+            })
+            .await
+            .map_err(map_handler_error)
     }
 }
 

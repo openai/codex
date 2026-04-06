@@ -6,6 +6,8 @@ use crate::protocol::ExecResponse;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::ResolveExecApprovalParams;
+use crate::protocol::ResolveExecApprovalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -52,6 +54,13 @@ impl ProcessHandler {
         params: ReadParams,
     ) -> Result<ReadResponse, JSONRPCErrorError> {
         self.process.exec_read(params).await
+    }
+
+    pub(crate) async fn resolve_exec_approval(
+        &self,
+        params: ResolveExecApprovalParams,
+    ) -> Result<ResolveExecApprovalResponse, JSONRPCErrorError> {
+        self.process.resolve_exec_approval(params).await
     }
 
     pub(crate) async fn exec_write(

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
+use crate::protocol::EXEC_RESOLVE_APPROVAL_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::ExecParams;
@@ -16,6 +17,7 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::ReadParams;
+use crate::protocol::ResolveExecApprovalParams;
 use crate::protocol::TerminateParams;
 use crate::protocol::WriteParams;
 use crate::rpc::RpcRouter;
@@ -50,6 +52,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         EXEC_READ_METHOD,
         |handler: Arc<ExecServerHandler>, params: ReadParams| async move {
             handler.exec_read(params).await
+        },
+    );
+    router.request(
+        EXEC_RESOLVE_APPROVAL_METHOD,
+        |handler: Arc<ExecServerHandler>, params: ResolveExecApprovalParams| async move {
+            handler.resolve_exec_approval(params).await
         },
     );
     router.request(

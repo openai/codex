@@ -10,6 +10,7 @@ use crate::ProcessId;
 pub const INITIALIZE_METHOD: &str = "initialize";
 pub const INITIALIZED_METHOD: &str = "initialized";
 pub const EXEC_METHOD: &str = "process/start";
+pub const EXEC_RESOLVE_APPROVAL_METHOD: &str = "process/resolveApproval";
 pub const EXEC_READ_METHOD: &str = "process/read";
 pub const EXEC_WRITE_METHOD: &str = "process/write";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
@@ -50,7 +51,7 @@ pub struct InitializeParams {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecParams {
     /// Client-chosen logical process handle scoped to this connection/session.
@@ -61,12 +62,28 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub tty: bool,
     pub arg0: Option<String>,
+    pub startup_exec_approval: Option<ExecApprovalRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: ProcessId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecApprovalRequest {
+    pub call_id: String,
+    pub approval_id: Option<String>,
+    pub turn_id: String,
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+    pub reason: Option<String>,
+    pub additional_permissions: Option<codex_app_server_protocol::AdditionalPermissionProfile>,
+    pub proposed_execpolicy_amendment: Option<codex_app_server_protocol::ExecPolicyAmendment>,
+    pub available_decisions:
+        Option<Vec<codex_app_server_protocol::CommandExecutionApprovalDecision>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,7 +103,7 @@ pub struct ProcessOutputChunk {
     pub chunk: ByteChunk,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadResponse {
     pub chunks: Vec<ProcessOutputChunk>,
@@ -95,6 +112,7 @@ pub struct ReadResponse {
     pub exit_code: Option<i32>,
     pub closed: bool,
     pub failure: Option<String>,
+    pub exec_approval: Option<ExecApprovalRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +147,20 @@ pub struct TerminateParams {
 #[serde(rename_all = "camelCase")]
 pub struct TerminateResponse {
     pub running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveExecApprovalParams {
+    pub process_id: ProcessId,
+    pub approval_id: String,
+    pub decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveExecApprovalResponse {
+    pub accepted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

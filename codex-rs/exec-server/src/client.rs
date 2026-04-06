@@ -35,6 +35,7 @@ use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
+use crate::protocol::EXEC_RESOLVE_APPROVAL_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::ExecClosedNotification;
@@ -55,6 +56,8 @@ use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::ResolveExecApprovalParams;
+use crate::protocol::ResolveExecApprovalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -251,6 +254,26 @@ impl ExecServerClient {
                 EXEC_TERMINATE_METHOD,
                 &TerminateParams {
                     process_id: process_id.clone(),
+                },
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn resolve_exec_approval(
+        &self,
+        process_id: &ProcessId,
+        approval_id: String,
+        decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
+    ) -> Result<ResolveExecApprovalResponse, ExecServerError> {
+        self.inner
+            .client
+            .call(
+                EXEC_RESOLVE_APPROVAL_METHOD,
+                &ResolveExecApprovalParams {
+                    process_id: process_id.clone(),
+                    approval_id,
+                    decision,
                 },
             )
             .await
@@ -464,6 +487,7 @@ impl SessionState {
             exit_code: None,
             closed: true,
             failure: Some(message),
+            exec_approval: None,
         }
     }
 }
@@ -514,6 +538,16 @@ impl Session {
     pub(crate) async fn terminate(&self) -> Result<(), ExecServerError> {
         self.client.terminate(&self.process_id).await?;
         Ok(())
+    }
+
+    pub(crate) async fn resolve_exec_approval(
+        &self,
+        approval_id: String,
+        decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
+    ) -> Result<ResolveExecApprovalResponse, ExecServerError> {
+        self.client
+            .resolve_exec_approval(&self.process_id, approval_id, decision)
+            .await
     }
 
     pub(crate) async fn unregister(&self) {

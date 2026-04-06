@@ -13,6 +13,7 @@ use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::exec::is_likely_sandbox_denied;
+use codex_exec_server::ExecApprovalRequest;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ReadResponse as ExecReadResponse;
 use codex_exec_server::StartedExecProcess;
@@ -224,6 +225,32 @@ impl UnifiedExecProcess {
         self.state_rx.borrow().failure_message.clone()
     }
 
+    pub(super) async fn take_pending_exec_approval(&self) -> Option<ExecApprovalRequest> {
+        let state = self.state_rx.borrow().clone();
+        let pending_exec_approval = state.pending_exec_approval.clone();
+        let _ = self
+            .state_tx
+            .send_replace(state.clear_pending_exec_approval());
+        pending_exec_approval
+    }
+
+    pub(super) async fn resolve_exec_approval(
+        &self,
+        approval_id: String,
+        decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
+    ) -> Result<(), UnifiedExecError> {
+        match &self.process_handle {
+            ProcessHandle::Local(_) => Err(UnifiedExecError::create_process(
+                "local unified exec process cannot resolve remote exec approvals".to_string(),
+            )),
+            ProcessHandle::Remote(process_handle) => process_handle
+                .resolve_exec_approval(approval_id, decision)
+                .await
+                .map_err(|err| UnifiedExecError::create_process(err.to_string()))
+                .map(|_| ()),
+        }
+    }
+
     pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
         let _ =
             tokio::time::timeout(Duration::from_millis(20), self.output_notify.notified()).await;
@@ -349,7 +376,10 @@ impl UnifiedExecProcess {
         if tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, async {
             loop {
                 let state = state_rx.borrow().clone();
-                if state.has_exited || state.failure_message.is_some() {
+                if state.has_exited
+                    || state.failure_message.is_some()
+                    || state.pending_exec_approval.is_some()
+                {
                     break;
                 }
                 if state_rx.changed().await.is_err() {
@@ -396,6 +426,7 @@ impl UnifiedExecProcess {
                             exit_code,
                             closed,
                             failure,
+                            exec_approval,
                         } = response;
 
                         for chunk in chunks {
@@ -414,6 +445,13 @@ impl UnifiedExecProcess {
                             output_closed_notify.notify_waiters();
                             cancellation_token.cancel();
                             break;
+                        }
+
+                        if let Some(exec_approval) = exec_approval {
+                            let state = state_tx.borrow().clone();
+                            let _ = state_tx
+                                .send_replace(state.with_pending_exec_approval(exec_approval));
+                            output_notify.notify_waiters();
                         }
 
                         if exited {

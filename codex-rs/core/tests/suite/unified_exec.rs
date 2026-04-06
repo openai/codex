@@ -9,9 +9,11 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
+use core_test_support::get_remote_test_env;
 use core_test_support::process::process_is_alive;
 use core_test_support::process::wait_for_pid_file;
 use core_test_support::process::wait_for_process_exit;
@@ -348,6 +350,120 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     assert_eq!(begin_event.cwd, cwd.path());
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_unified_exec_smoke_requests_approval_before_running_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    if get_remote_test_env().is_none() {
+        return Ok(());
+    }
+
+    let builder = test_codex().with_model("gpt-5").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let server = start_mock_server().await;
+    let mut builder = builder;
+    let test = builder.build_remote_aware(&server).await?;
+
+    let call_id = "uexec-remote-approval-smoke";
+    let smoke_target = "/tmp/nonexistent";
+    let smoke_command = format!("rm -rf {smoke_target}");
+    let args = json!({
+        "cmd": smoke_command,
+        "yield_time_ms": 250,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "approved"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let codex = test.codex.clone();
+    let cwd = test.cwd_path().to_path_buf();
+    let session_model = test.session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run remote unified exec approval smoke".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let approval_or_completion = wait_for_event(&codex, |msg| {
+        matches!(
+            msg,
+            EventMsg::ExecApprovalRequest(approval) if approval.call_id == call_id
+        ) || matches!(msg, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_or_completion else {
+        let bodies: Vec<Value> = server
+            .received_requests()
+            .await
+            .expect("mock server should not fail")
+            .into_iter()
+            .filter_map(|req| serde_json::from_slice::<Value>(&req.body).ok())
+            .collect();
+        panic!("remote smoke completed without approval event; bodies={bodies:?}");
+    };
+
+    codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let bodies: Vec<Value> = server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter_map(|req| serde_json::from_slice::<Value>(&req.body).ok())
+        .collect();
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing function call output for remote smoke");
+    assert!(
+        output.process_id.is_some() || output.exit_code.is_some(),
+        "expected approved remote unified exec metadata, got: {output:?}"
+    );
 
     Ok(())
 }
