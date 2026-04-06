@@ -145,14 +145,16 @@ impl ThreadHistoryBuilder {
     ///
     /// This function should handle all EventMsg variants that can be persisted in a rollout file.
     /// See `should_persist_event_msg` in `codex-rs/core/rollout/policy.rs`.
-    pub fn handle_event(&mut self, event: &EventMsg) {
+    pub fn handle_event(&mut self, event: &EventMsg) -> Option<Turn> {
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
-            EventMsg::AgentMessage(payload) => self.handle_agent_message(
-                payload.message.clone(),
-                payload.phase.clone(),
-                payload.memory_citation.clone().map(Into::into),
-            ),
+            EventMsg::AgentMessage(payload) => {
+                self.handle_agent_message(
+                    payload.message.clone(),
+                    payload.phase.clone(),
+                    payload.memory_citation.clone().map(Into::into),
+                );
+            }
             EventMsg::AgentReasoning(payload) => self.handle_agent_reasoning(payload),
             EventMsg::AgentReasoningRawContent(payload) => {
                 self.handle_agent_reasoning_raw_content(payload)
@@ -204,10 +206,22 @@ impl ThreadHistoryBuilder {
             EventMsg::TokenCount(_) => {}
             EventMsg::ThreadRolledBack(payload) => self.handle_thread_rollback(payload),
             EventMsg::UndoCompleted(_) => {}
-            EventMsg::TurnAborted(payload) => self.handle_turn_aborted(payload),
+            EventMsg::TurnAborted(payload) => return self.handle_turn_aborted(payload),
             EventMsg::TurnStarted(payload) => self.handle_turn_started(payload),
-            EventMsg::TurnComplete(payload) => self.handle_turn_complete(payload),
+            EventMsg::TurnComplete(payload) => return self.handle_turn_complete(payload),
             _ => {}
+        }
+        None
+    }
+
+    pub fn handle_event_without_completed_turn(&mut self, event: &EventMsg) -> bool {
+        match event {
+            EventMsg::TurnAborted(payload) => self.handle_turn_aborted_without_snapshot(payload),
+            EventMsg::TurnComplete(payload) => self.handle_turn_complete_without_snapshot(payload),
+            _ => {
+                self.handle_event(event);
+                false
+            }
         }
     }
 
@@ -215,7 +229,9 @@ impl ThreadHistoryBuilder {
         self.current_rollout_index = self.next_rollout_index;
         self.next_rollout_index += 1;
         match item {
-            RolloutItem::EventMsg(event) => self.handle_event(event),
+            RolloutItem::EventMsg(event) => {
+                self.handle_event(event);
+            }
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
             RolloutItem::ResponseItem(item) => self.handle_response_item(item),
             RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {}
@@ -863,24 +879,62 @@ impl ThreadHistoryBuilder {
         });
     }
 
-    fn handle_turn_aborted(&mut self, payload: &TurnAbortedEvent) {
+    fn handle_turn_aborted(&mut self, payload: &TurnAbortedEvent) -> Option<Turn> {
+        let apply_abort = |turn: &mut PendingTurn| {
+            turn.status = TurnStatus::Interrupted;
+            turn.completed_at = payload.completed_at;
+            turn.duration_ms = payload.duration_ms;
+        };
         if let Some(turn_id) = payload.turn_id.as_deref() {
             // Prefer an exact ID match so we interrupt the turn explicitly targeted by the event.
             if let Some(turn) = self.current_turn.as_mut().filter(|turn| turn.id == turn_id) {
-                turn.status = TurnStatus::Interrupted;
-                return;
+                apply_abort(turn);
+                return Some(Turn::from(&*turn));
             }
 
             if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
                 turn.status = TurnStatus::Interrupted;
-                return;
+                turn.completed_at = payload.completed_at;
+                turn.duration_ms = payload.duration_ms;
+                return Some(turn.clone());
             }
         }
 
         // If the event has no ID (or refers to an unknown turn), fall back to the active turn.
         if let Some(turn) = self.current_turn.as_mut() {
-            turn.status = TurnStatus::Interrupted;
+            apply_abort(turn);
+            return Some(Turn::from(&*turn));
         }
+        None
+    }
+
+    fn handle_turn_aborted_without_snapshot(&mut self, payload: &TurnAbortedEvent) -> bool {
+        let apply_abort = |turn: &mut PendingTurn| {
+            turn.status = TurnStatus::Interrupted;
+            turn.completed_at = payload.completed_at;
+            turn.duration_ms = payload.duration_ms;
+        };
+        if let Some(turn_id) = payload.turn_id.as_deref() {
+            // Prefer an exact ID match so we interrupt the turn explicitly targeted by the event.
+            if let Some(turn) = self.current_turn.as_mut().filter(|turn| turn.id == turn_id) {
+                apply_abort(turn);
+                return true;
+            }
+
+            if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
+                turn.status = TurnStatus::Interrupted;
+                turn.completed_at = payload.completed_at;
+                turn.duration_ms = payload.duration_ms;
+                return true;
+            }
+        }
+
+        // If the event has no ID (or refers to an unknown turn), fall back to the active turn.
+        if let Some(turn) = self.current_turn.as_mut() {
+            apply_abort(turn);
+            return true;
+        }
+        false
     }
 
     fn handle_turn_started(&mut self, payload: &TurnStartedEvent) {
@@ -888,15 +942,18 @@ impl ThreadHistoryBuilder {
         self.current_turn = Some(
             self.new_turn(Some(payload.turn_id.clone()))
                 .with_status(TurnStatus::InProgress)
+                .with_started_at(payload.started_at)
                 .opened_explicitly(),
         );
     }
 
-    fn handle_turn_complete(&mut self, payload: &TurnCompleteEvent) {
-        let mark_completed = |status: &mut TurnStatus| {
-            if matches!(*status, TurnStatus::Completed | TurnStatus::InProgress) {
-                *status = TurnStatus::Completed;
+    fn handle_turn_complete(&mut self, payload: &TurnCompleteEvent) -> Option<Turn> {
+        let mark_completed = |turn: &mut PendingTurn| {
+            if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
+                turn.status = TurnStatus::Completed;
             }
+            turn.completed_at = payload.completed_at;
+            turn.duration_ms = payload.duration_ms;
         };
 
         // Prefer an exact ID match from the active turn and then close it.
@@ -905,9 +962,8 @@ impl ThreadHistoryBuilder {
             .as_mut()
             .filter(|turn| turn.id == payload.turn_id)
         {
-            mark_completed(&mut current_turn.status);
-            self.finish_current_turn();
-            return;
+            mark_completed(current_turn);
+            return self.finish_current_turn();
         }
 
         if let Some(turn) = self
@@ -915,15 +971,60 @@ impl ThreadHistoryBuilder {
             .iter_mut()
             .find(|turn| turn.id == payload.turn_id)
         {
-            mark_completed(&mut turn.status);
-            return;
+            if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
+                turn.status = TurnStatus::Completed;
+            }
+            turn.completed_at = payload.completed_at;
+            turn.duration_ms = payload.duration_ms;
+            return Some(turn.clone());
         }
 
         // If the completion event cannot be matched, apply it to the active turn.
         if let Some(current_turn) = self.current_turn.as_mut() {
-            mark_completed(&mut current_turn.status);
-            self.finish_current_turn();
+            mark_completed(current_turn);
+            return self.finish_current_turn();
         }
+        None
+    }
+
+    fn handle_turn_complete_without_snapshot(&mut self, payload: &TurnCompleteEvent) -> bool {
+        let mark_completed = |turn: &mut PendingTurn| {
+            if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
+                turn.status = TurnStatus::Completed;
+            }
+            turn.completed_at = payload.completed_at;
+            turn.duration_ms = payload.duration_ms;
+        };
+
+        // Prefer an exact ID match from the active turn and then close it.
+        if let Some(current_turn) = self
+            .current_turn
+            .as_mut()
+            .filter(|turn| turn.id == payload.turn_id)
+        {
+            mark_completed(current_turn);
+            return self.finish_current_turn_without_snapshot();
+        }
+
+        if let Some(turn) = self
+            .turns
+            .iter_mut()
+            .find(|turn| turn.id == payload.turn_id)
+        {
+            if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
+                turn.status = TurnStatus::Completed;
+            }
+            turn.completed_at = payload.completed_at;
+            turn.duration_ms = payload.duration_ms;
+            return true;
+        }
+
+        // If the completion event cannot be matched, apply it to the active turn.
+        if let Some(current_turn) = self.current_turn.as_mut() {
+            mark_completed(current_turn);
+            return self.finish_current_turn_without_snapshot();
+        }
+        false
     }
 
     /// Marks the current turn as containing a persisted compaction marker.
@@ -949,13 +1050,27 @@ impl ThreadHistoryBuilder {
         self.next_item_index = i64::try_from(item_count.saturating_add(1)).unwrap_or(i64::MAX);
     }
 
-    fn finish_current_turn(&mut self) {
+    fn finish_current_turn(&mut self) -> Option<Turn> {
         if let Some(turn) = self.current_turn.take() {
             if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
-                return;
+                return None;
             }
-            self.turns.push(turn.into());
+            let turn = Turn::from(turn);
+            self.turns.push(turn.clone());
+            return Some(turn);
         }
+        None
+    }
+
+    fn finish_current_turn_without_snapshot(&mut self) -> bool {
+        if let Some(turn) = self.current_turn.take() {
+            if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
+                return false;
+            }
+            self.turns.push(Turn::from(turn));
+            return true;
+        }
+        false
     }
 
     fn new_turn(&mut self, id: Option<String>) -> PendingTurn {
@@ -964,6 +1079,9 @@ impl ThreadHistoryBuilder {
             items: Vec::new(),
             error: None,
             status: TurnStatus::Completed,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
             opened_explicitly: false,
             saw_compaction: false,
             rollout_start_index: self.current_rollout_index,
@@ -1082,6 +1200,9 @@ struct PendingTurn {
     items: Vec<ThreadItem>,
     error: Option<TurnError>,
     status: TurnStatus,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+    duration_ms: Option<i64>,
     /// True when this turn originated from an explicit `turn_started`/`turn_complete`
     /// boundary, so we preserve it even if it has no renderable items.
     opened_explicitly: bool,
@@ -1102,6 +1223,11 @@ impl PendingTurn {
         self.status = status;
         self
     }
+
+    fn with_started_at(mut self, started_at: Option<i64>) -> Self {
+        self.started_at = started_at;
+        self
+    }
 }
 
 impl From<PendingTurn> for Turn {
@@ -1111,6 +1237,9 @@ impl From<PendingTurn> for Turn {
             items: value.items,
             error: value.error,
             status: value.status,
+            started_at: value.started_at,
+            completed_at: value.completed_at,
+            duration_ms: value.duration_ms,
         }
     }
 }
@@ -1122,6 +1251,9 @@ impl From<&PendingTurn> for Turn {
             items: value.items.clone(),
             error: value.error.clone(),
             status: value.status.clone(),
+            started_at: value.started_at,
+            completed_at: value.completed_at,
+            duration_ms: value.duration_ms,
         }
     }
 }
@@ -1273,6 +1405,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -1293,6 +1426,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn_id.to_string(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
         ];
 
@@ -1345,6 +1480,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-image".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             })),
@@ -1364,6 +1500,8 @@ mod tests {
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-image".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             })),
         ];
 
@@ -1375,6 +1513,9 @@ mod tests {
                 id: "turn-image".into(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
                 items: vec![
                     ThreadItem::UserMessage {
                         id: "item-1".into(),
@@ -1464,6 +1605,8 @@ mod tests {
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("turn-1".into()),
                 reason: TurnAbortReason::Replaced,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Let's try again".into(),
@@ -1661,6 +1804,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -1679,6 +1823,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
         ];
 
@@ -1715,6 +1861,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -1820,6 +1967,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -1879,6 +2027,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -1966,6 +2115,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2038,6 +2188,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2096,6 +2247,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2108,9 +2260,12 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2142,6 +2297,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
         ];
 
@@ -2179,6 +2336,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2191,9 +2349,12 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2225,6 +2386,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
         ];
 
@@ -2257,6 +2420,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2320,6 +2484,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2382,6 +2547,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2394,9 +2560,12 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2409,6 +2578,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "still in b".into(),
@@ -2418,6 +2589,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
         ];
 
@@ -2437,6 +2610,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2449,9 +2623,12 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2464,6 +2641,8 @@ mod tests {
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("turn-a".into()),
                 reason: TurnAbortReason::Replaced,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "still in b".into(),
@@ -2489,6 +2668,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-compact".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             })),
@@ -2499,6 +2679,8 @@ mod tests {
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-compact".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             })),
         ];
 
@@ -2509,6 +2691,9 @@ mod tests {
                 id: "turn-compact".into(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
                 items: Vec::new(),
             }]
         );
@@ -2726,6 +2911,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2738,6 +2924,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
             EventMsg::Error(ErrorEvent {
                 message: "request-level failure".into(),
@@ -2757,6 +2945,9 @@ mod tests {
                 id: "turn-a".into(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
                 items: vec![ThreadItem::UserMessage {
                     id: "item-1".into(),
                     content: vec![UserInput::Text {
@@ -2773,6 +2964,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
@@ -2791,6 +2983,8 @@ mod tests {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             }),
         ];
 
@@ -2826,6 +3020,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             })),
@@ -2839,6 +3034,8 @@ mod tests {
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             })),
         ];
 
@@ -2869,6 +3066,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             })),
@@ -2884,6 +3082,8 @@ mod tests {
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
                 last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
             })),
         ];
 
