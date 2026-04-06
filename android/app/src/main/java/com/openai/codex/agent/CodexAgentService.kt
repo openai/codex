@@ -266,6 +266,23 @@ class CodexAgentService : AgentService() {
         notificationText: String,
     ) {
         thread(name = "CodexAgentNotificationShow-${session.sessionId}") {
+            if (shouldSuppressDelegatedChildNotification(session)) {
+                AgentQuestionNotifier.suppress(
+                    context = this,
+                    sessionId = session.sessionId,
+                    notificationToken = notificationToken,
+                )
+                runCatching {
+                    sessionController.ackSessionNotification(session.sessionId, notificationToken)
+                }.onFailure { err ->
+                    Log.w(
+                        TAG,
+                        "Failed to ack suppressed child notification sessionId=${session.sessionId} token=$notificationToken",
+                        err,
+                    )
+                }
+                return@thread
+            }
             val posted = runCatching {
                 AgentQuestionNotifier.showOrUpdateDelegatedNotification(
                     context = this,
@@ -293,6 +310,23 @@ class CodexAgentService : AgentService() {
                 )
             }
         }
+    }
+
+    private fun shouldSuppressDelegatedChildNotification(session: AgentSessionInfo): Boolean {
+        val parentSessionId = session.parentSessionId?.trim()?.ifEmpty { null } ?: return false
+        val manager = agentManager ?: return false
+        val parentSession = runCatching {
+            manager.getSessions(currentUserId()).firstOrNull { candidate ->
+                candidate.sessionId == parentSessionId
+            }
+        }.onFailure { err ->
+            Log.w(
+                TAG,
+                "Failed to resolve parent notification policy for child sessionId=${session.sessionId} parentSessionId=$parentSessionId",
+                err,
+            )
+        }.getOrNull() ?: return false
+        return isDirectParentSession(parentSession)
     }
 
     private fun cancelSessionNotification(

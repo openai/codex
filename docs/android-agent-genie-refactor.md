@@ -82,7 +82,10 @@ The current repo now contains these implementation slices:
   in time. Inline reply actions route through
   `answerQuestionFromNotification(sessionId, notificationToken, response)`.
   Running-session callbacks are ACKed but intentionally suppressed so the Agent
-  only notifies when user input is needed or a terminal outcome is ready.
+  only notifies when user input is needed or a terminal outcome is ready. For
+  child Genies under a direct AGENT parent, delegated notification callbacks are
+  also ACKed but not rendered; the parent session notification/icon is the
+  single user-facing surface for Agent-anchored questions and results.
 - The Agent now records an explicit per-child final presentation policy
   (`ATTACHED`, `DETACHED_HIDDEN`, `DETACHED_SHOWN`, or `AGENT_CHOICE`) and
   uses the framework-authoritative `AgentSessionInfo.getTargetPresentation()`

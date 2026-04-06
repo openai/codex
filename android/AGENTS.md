@@ -115,6 +115,9 @@ stub SDK docs and the local refactor doc:
   - user-facing question/result/error notifications should be rendered by the
     Agent app when the framework calls `onShowOrUpdateSessionNotification(...)`
     and cancelled when it calls `onCancelSessionNotification(...)`
+  - child Genie notification callbacks under a direct AGENT parent should be
+    ACKed but not rendered; the parent session icon/notification is the only
+    user-facing notification surface for Agent-anchored work
   - RUNNING/CREATED/QUEUED callbacks should be ACKed but suppressed so the
     Agent only notifies for user action or terminal outcomes
   - the Agent must ACK a posted notification with `ackSessionNotification(...)`
