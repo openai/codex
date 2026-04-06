@@ -1,24 +1,14 @@
-use std::io;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::sync::OnceCell;
 
-use crate::CopyOptions;
-use crate::CreateDirectoryOptions;
 use crate::ExecServerClient;
 use crate::ExecServerError;
-use crate::ReadDirectoryEntry;
 use crate::RemoteExecServerConnectArgs;
-use crate::RemoveOptions;
-use crate::StartedExecProcess;
 use crate::file_system::ExecutorFileSystem;
-use crate::file_system::FileMetadata;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
-use crate::protocol::ExecParams;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 
@@ -224,7 +214,11 @@ impl Environment {
                     .map_err(ExecServerError::Protocol)?;
                 Arc::new(local_process)
             }
-            (EnvironmentMode::Disabled, _) => Arc::new(DisabledExecBackend),
+            (EnvironmentMode::Disabled, _) => {
+                return Err(ExecServerError::Protocol(
+                    "disabled mode does not create an Environment".to_string(),
+                ));
+            }
         };
 
         Ok(Self {
@@ -257,75 +251,11 @@ impl Environment {
                 panic!("remote mode should have an exec-server client")
             }
             (EnvironmentMode::Local, _) => Arc::new(LocalFileSystem),
-            (EnvironmentMode::Disabled, _) => Arc::new(DisabledFileSystem),
+            (EnvironmentMode::Disabled, _) => {
+                panic!("disabled mode does not have an Environment")
+            }
         }
     }
-}
-
-#[derive(Debug)]
-struct DisabledExecBackend;
-
-#[async_trait]
-impl ExecBackend for DisabledExecBackend {
-    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
-        Err(ExecServerError::Protocol(format!(
-            "environment is disabled; cannot start process `{}`",
-            params.process_id
-        )))
-    }
-}
-
-#[derive(Debug)]
-struct DisabledFileSystem;
-
-#[async_trait]
-impl ExecutorFileSystem for DisabledFileSystem {
-    async fn read_file(&self, path: &AbsolutePathBuf) -> io::Result<Vec<u8>> {
-        Err(disabled_filesystem_error(path))
-    }
-
-    async fn write_file(&self, path: &AbsolutePathBuf, _contents: Vec<u8>) -> io::Result<()> {
-        Err(disabled_filesystem_error(path))
-    }
-
-    async fn create_directory(
-        &self,
-        path: &AbsolutePathBuf,
-        _options: CreateDirectoryOptions,
-    ) -> io::Result<()> {
-        Err(disabled_filesystem_error(path))
-    }
-
-    async fn get_metadata(&self, path: &AbsolutePathBuf) -> io::Result<FileMetadata> {
-        Err(disabled_filesystem_error(path))
-    }
-
-    async fn read_directory(&self, path: &AbsolutePathBuf) -> io::Result<Vec<ReadDirectoryEntry>> {
-        Err(disabled_filesystem_error(path))
-    }
-
-    async fn remove(&self, path: &AbsolutePathBuf, _options: RemoveOptions) -> io::Result<()> {
-        Err(disabled_filesystem_error(path))
-    }
-
-    async fn copy(
-        &self,
-        source_path: &AbsolutePathBuf,
-        _destination_path: &AbsolutePathBuf,
-        _options: CopyOptions,
-    ) -> io::Result<()> {
-        Err(disabled_filesystem_error(source_path))
-    }
-}
-
-fn disabled_filesystem_error(path: &AbsolutePathBuf) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Unsupported,
-        format!(
-            "environment is disabled; filesystem access is unavailable for `{}`",
-            path.display()
-        ),
-    )
 }
 
 impl ExecutorEnvironment for Environment {
@@ -336,13 +266,11 @@ impl ExecutorEnvironment for Environment {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
     use std::sync::Arc;
 
     use super::Environment;
     use super::EnvironmentManager;
     use super::EnvironmentMode;
-    use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -415,42 +343,5 @@ mod tests {
             .expect("start process");
 
         assert_eq!(response.process.process_id().as_str(), "default-env-proc");
-    }
-
-    #[tokio::test]
-    async fn disabled_environment_rejects_exec_and_filesystem_access() {
-        let environment = Environment::create_for_mode(EnvironmentMode::Disabled)
-            .await
-            .expect("create disabled environment");
-
-        let exec_error = match environment
-            .get_exec_backend()
-            .start(crate::ExecParams {
-                process_id: ProcessId::from("disabled-proc"),
-                argv: vec!["true".to_string()],
-                cwd: std::env::current_dir().expect("read current dir"),
-                env: Default::default(),
-                tty: false,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(_) => panic!("disabled environment should reject exec"),
-            Err(err) => err,
-        };
-        assert_eq!(
-            exec_error.to_string(),
-            "exec-server protocol error: environment is disabled; cannot start process `disabled-proc`"
-        );
-
-        let path =
-            codex_utils_absolute_path::AbsolutePathBuf::try_from(std::env::temp_dir().as_path())
-                .expect("temp dir");
-        let fs_error = environment
-            .get_filesystem()
-            .get_metadata(&path)
-            .await
-            .expect_err("disabled environment should reject filesystem access");
-        assert_eq!(fs_error.kind(), io::ErrorKind::Unsupported);
     }
 }
