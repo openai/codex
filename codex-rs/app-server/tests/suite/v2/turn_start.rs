@@ -1,4 +1,5 @@
 use anyhow::Result;
+use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
@@ -9,6 +10,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
@@ -53,6 +55,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -63,6 +66,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
+
+use super::analytics::enable_analytics_capture;
+use super::analytics::wait_for_analytics_event;
+use super::analytics::wait_for_analytics_turn_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -234,6 +241,261 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Image {
+                url: "https://example.com/a.png".to_string(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["turn_id"], turn.id);
+    assert_eq!(
+        event["event_params"]["product_client_id"],
+        DEFAULT_CLIENT_NAME
+    );
+    assert_eq!(event["event_params"]["model"], "mock-model");
+    assert_eq!(event["event_params"]["model_provider"], "mock_provider");
+    assert_eq!(event["event_params"]["sandbox_policy"], "read_only");
+    assert_eq!(event["event_params"]["submission_type"], "default");
+    assert_eq!(event["event_params"]["ephemeral"], false);
+    assert_eq!(event["event_params"]["thread_source"], "user");
+    assert_eq!(event["event_params"]["initialization_mode"], "new");
+    assert_eq!(
+        event["event_params"]["subagent_source"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        event["event_params"]["parent_thread_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(event["event_params"]["num_input_images"], 1);
+    assert_eq!(event["event_params"]["is_first_turn"], true);
+    assert_eq!(event["event_params"]["status"], "completed");
+    assert!(event["event_params"]["started_at"].as_u64().is_some());
+    assert!(event["event_params"]["completed_at"].as_u64().is_some());
+    assert!(event["event_params"]["duration_ms"].as_u64().is_some());
+    assert_eq!(event["event_params"]["input_tokens"], 0);
+    assert_eq!(event["event_params"]["cached_input_tokens"], 0);
+    assert_eq!(event["event_params"]["output_tokens"], 0);
+    assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
+    assert_eq!(event["event_params"]["total_tokens"], 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_tracks_second_turn_as_not_first_and_queued_submission_analytics() -> Result<()>
+{
+    let responses = vec![
+        create_final_assistant_message_sse_response("Done 1")?,
+        create_final_assistant_message_sse_response("Done 2")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let first_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "first turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let first_turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn: first_turn } = to_response::<TurnStartResponse>(first_turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let first_turn_event =
+        wait_for_analytics_turn_event(&server, DEFAULT_READ_TIMEOUT, &first_turn.id).await?;
+    assert_eq!(
+        first_turn_event["event_params"]["submission_type"],
+        "default"
+    );
+    assert_eq!(first_turn_event["event_params"]["is_first_turn"], true);
+
+    let second_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "second turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            submission_type: Some(SubmissionType::PromptQueued),
+            ..Default::default()
+        })
+        .await?;
+    let second_turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn: second_turn } =
+        to_response::<TurnStartResponse>(second_turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let second_turn_event =
+        wait_for_analytics_turn_event(&server, DEFAULT_READ_TIMEOUT, &second_turn.id).await?;
+    assert_eq!(
+        second_turn_event["event_params"]["submission_type"],
+        "queued"
+    );
+    assert_eq!(second_turn_event["event_params"]["is_first_turn"], false);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_tracks_failed_turn_event_analytics() -> Result<()> {
+    let server = create_mock_responses_server_sequence(vec![String::new()]).await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "trigger failed turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let completed_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    assert!(completed.turn.error.is_some());
+
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["turn_id"], turn.id);
+    assert_eq!(event["event_params"]["status"], "failed");
+    assert_ne!(event["event_params"]["turn_error"], serde_json::Value::Null);
 
     Ok(())
 }
@@ -1392,6 +1654,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             summary: Some(ReasoningSummary::Auto),
             service_tier: None,
             personality: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: None,
         })
@@ -1425,6 +1688,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             summary: Some(ReasoningSummary::Auto),
             service_tier: None,
             personality: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: None,
         })
