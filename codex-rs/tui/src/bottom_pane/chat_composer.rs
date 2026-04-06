@@ -3536,10 +3536,13 @@ impl ChatComposer {
                 } else {
                     self.collaboration_mode_indicator
                 };
-                let thread_name_line = self
-                    .thread_name_label
-                    .as_ref()
-                    .map(|name| Line::from(vec![Span::from(name.clone()).dim()]));
+                let max_thread_name_width = available_width / 2;
+                let thread_name_line = self.thread_name_label.as_ref().map(|name| {
+                    truncate_line_with_ellipsis_if_overflow(
+                        Line::from(vec![Span::from(name.clone()).dim()]),
+                        max_thread_name_width,
+                    )
+                });
                 let mut left_width = if self.footer_flash_visible() {
                     self.footer_flash
                         .as_ref()
