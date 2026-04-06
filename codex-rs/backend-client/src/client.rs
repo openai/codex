@@ -278,9 +278,7 @@ impl Client {
             }
         };
         let req = self.http.post(&url).headers(self.headers());
-        let _ = self
-            .exec_request_detailed(req, "POST", &url)
-            .await?;
+        let _ = self.exec_request_detailed(req, "POST", &url).await?;
         Ok(())
     }
 

@@ -17,6 +17,7 @@ use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
+use axum::http::StatusCode;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -1759,7 +1760,7 @@ impl CodexMessageProcessor {
 
         let status = match client.send_add_credits_nudge_email().await {
             Ok(()) => AddCreditsNudgeEmailStatus::Sent,
-            Err(err) if err.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
+            Err(err) if err.status() == Some(StatusCode::TOO_MANY_REQUESTS) => {
                 AddCreditsNudgeEmailStatus::CooldownActive
             }
             Err(err) => {
