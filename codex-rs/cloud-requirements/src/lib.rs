@@ -1154,6 +1154,7 @@ mod tests {
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1182,6 +1183,7 @@ mod tests {
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1210,6 +1212,7 @@ mod tests {
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1255,6 +1258,7 @@ mod tests {
             result,
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1336,6 +1340,7 @@ enabled = false
             handle.await.expect("cloud requirements task"),
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1407,6 +1412,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1476,6 +1482,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1639,6 +1646,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1673,6 +1681,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1727,6 +1736,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1776,6 +1786,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1829,6 +1840,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1883,6 +1895,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -1937,6 +1950,7 @@ enabled = false
                 .and_then(|contents| parse_cloud_requirements(contents).ok().flatten()),
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -2024,6 +2038,7 @@ enabled = false
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
@@ -2050,6 +2065,7 @@ enabled = false
                 .and_then(|contents| parse_cloud_requirements(contents).ok().flatten()),
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 guardian_developer_instructions: None,
