@@ -12,7 +12,9 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
@@ -172,7 +174,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home);
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -334,6 +336,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && !is_windowsapps_path(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -341,6 +344,12 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn is_windowsapps_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains("\\windowsapps\\")
 }
 
 fn gather_legacy_full_read_roots(
@@ -569,9 +578,16 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
+fn find_setup_exe(codex_home: &Path) -> PathBuf {
+    let log_dir = sandbox_dir(codex_home);
+    let materialized =
+        resolve_helper_for_launch(HelperExecutable::Setup, codex_home, Some(&log_dir));
+    if materialized.exists() {
+        return materialized;
+    }
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && !is_windowsapps_path(dir)
     {
         let candidate = dir.join("codex-windows-sandbox-setup.exe");
         if candidate.exists() {
@@ -611,7 +627,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -804,6 +820,7 @@ mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::is_windowsapps_path;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -816,6 +833,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1007,6 +1025,16 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn windowsapps_detection_matches_packaged_path() {
+        assert!(is_windowsapps_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe"
+        )));
+        assert!(!is_windowsapps_path(Path::new(
+            r"C:\Program Files\OpenAI\codex.exe"
+        )));
     }
 
     #[test]
