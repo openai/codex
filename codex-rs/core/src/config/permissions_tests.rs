@@ -1,7 +1,15 @@
 use super::*;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
-use crate::config::ConfigToml;
+use codex_config_types::ConfigToml;
+use codex_config_types::FilesystemPermissionsToml;
+use codex_config_types::NetworkDomainPermissionToml;
+use codex_config_types::NetworkDomainPermissionsToml;
+use codex_config_types::NetworkToml;
+use codex_config_types::NetworkUnixSocketPermissionToml;
+use codex_config_types::NetworkUnixSocketPermissionsToml;
+use codex_config_types::PermissionProfileToml;
+use codex_config_types::PermissionsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;

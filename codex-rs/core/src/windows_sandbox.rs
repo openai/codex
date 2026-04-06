@@ -1,8 +1,8 @@
 use crate::config::Config;
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::profile::ConfigProfile;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_config_types::ConfigProfile;
+use codex_config_types::ConfigToml;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_features::FeaturesToml;

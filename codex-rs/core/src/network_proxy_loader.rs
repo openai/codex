@@ -1,7 +1,4 @@
-use crate::config::NetworkToml;
-use crate::config::PermissionsToml;
 use crate::config::find_codex_home;
-use crate::config::overlay_network_domain_permissions;
 use crate::config::resolve_permission_profile;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
@@ -16,6 +13,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config_types::NetworkToml;
+use codex_config_types::PermissionsToml;
+use codex_config_types::overlay_network_domain_permissions;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxyConfig;

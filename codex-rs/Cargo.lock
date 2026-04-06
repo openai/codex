@@ -1411,6 +1411,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-config",
+ "codex-config-types",
  "codex-core",
  "codex-exec-server",
  "codex-features",
@@ -1825,6 +1826,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-config-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-app-server-protocol",
+ "codex-config",
+ "codex-features",
+ "codex-git-utils",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-network-proxy",
+ "codex-protocol",
+ "codex-rmcp-client",
+ "codex-utils-absolute-path",
+ "dunce",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "codex-connectors"
 version = "0.0.0"
 dependencies = [
@@ -1858,6 +1881,7 @@ dependencies = [
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",
+ "codex-config-types",
  "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
@@ -2787,6 +2811,7 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
+ "codex-config-types",
  "codex-core",
  "codex-features",
  "codex-feedback",

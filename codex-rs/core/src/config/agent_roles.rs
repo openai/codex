@@ -1,9 +1,9 @@
 use super::AgentRoleConfig;
-use super::AgentRoleToml;
-use super::AgentsToml;
-use super::ConfigToml;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use codex_config_types::AgentRoleToml;
+use codex_config_types::AgentsToml;
+use codex_config_types::ConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;

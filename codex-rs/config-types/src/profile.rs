@@ -3,7 +3,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::config::ToolsToml;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Personality;
 use codex_config::types::WindowsToml;
@@ -15,6 +14,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+
+use crate::ToolsToml;
 
 /// Collection of common configuration options that a user can define as a unit
 /// in `config.toml`.
@@ -63,7 +64,7 @@ pub struct ConfigProfile {
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.
-    #[schemars(schema_with = "crate::config::schema::features_schema")]
+    #[schemars(schema_with = "crate::schema::features_schema")]
     pub features: Option<FeaturesToml>,
     pub oss_provider: Option<String>,
 }
