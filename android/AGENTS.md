@@ -134,6 +134,14 @@ stub SDK docs and the local refactor doc:
     the same planner turn can continue and produce the child-Genie plan
   - child Genie questions remain separate child-session questions that roll up
     through the parent session when user escalation is needed
+- Retention is intentionally bounded:
+  - keep only the most recent 10 terminal top-level session trees in framework
+    history; never prune active/queued/waiting sessions
+  - prune stale Agent planner `CODEX_HOME` cache directories under the Agent app
+    cache to the most recent 10
+  - prune stale Genie `CODEX_HOME` cache directories per paired target app to
+    the most recent 10 from inside the Genie runtime, because the Agent app does
+    not have direct filesystem ownership of other app sandboxes
 - HOME icon / notification taps for question or final-result states should route
   to `SessionPopupActivity`, which uses one dialog-style popup shape for both
   question answering and result follow-up.

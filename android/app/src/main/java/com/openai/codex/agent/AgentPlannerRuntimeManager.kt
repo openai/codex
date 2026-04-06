@@ -3,6 +3,7 @@ package com.openai.codex.agent
 import android.app.agent.AgentManager
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.CodexHomeRetention
 import com.openai.codex.bridge.HostedCodexConfig
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedWriter
@@ -108,7 +109,7 @@ object AgentPlannerRuntimeManager {
 
     private class AgentPlannerRuntime(
         private val context: Context,
-        private val frameworkSessionId: String?,
+        private val frameworkSessionId: String,
     ) : Closeable {
         companion object {
             private const val REQUEST_TIMEOUT_MS = 30_000L
@@ -159,7 +160,14 @@ object AgentPlannerRuntimeManager {
             }
             localProxy?.close()
             if (::codexHome.isInitialized) {
+                CodexHomeRetention.clearActive(codexHome)
                 runCatching { codexHome.deleteRecursively() }
+                runCatching {
+                    CodexHomeRetention.pruneSessionHomes(
+                        root = checkNotNull(codexHome.parentFile),
+                        keepHomeNames = emptySet(),
+                    )
+                }
             }
             if (::process.isInitialized) {
                 runCatching { process.destroy() }
@@ -167,10 +175,16 @@ object AgentPlannerRuntimeManager {
         }
 
         private fun startProcess() {
-            codexHome = File(context.cacheDir, "planner-codex-home/$frameworkSessionId").apply {
+            val codexHomeRoot = File(context.cacheDir, "planner-codex-home")
+            codexHome = File(codexHomeRoot, frameworkSessionId).apply {
                 deleteRecursively()
                 mkdirs()
             }
+            CodexHomeRetention.markActive(codexHome)
+            CodexHomeRetention.pruneSessionHomes(
+                root = codexHomeRoot,
+                keepHomeNames = setOf(codexHome.name),
+            )
             localProxy = AgentLocalCodexProxy { requestBody ->
                 forwardResponsesRequest(requestBody)
             }.also(AgentLocalCodexProxy::start)

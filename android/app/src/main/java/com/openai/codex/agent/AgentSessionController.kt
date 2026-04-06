@@ -7,10 +7,12 @@ import android.content.Context
 import android.os.Binder
 import android.os.Process
 import android.util.Log
+import com.openai.codex.bridge.CodexHomeRetention
 import com.openai.codex.bridge.DesktopSessionBootstrap
 import com.openai.codex.bridge.DetachedTargetCompat
 import com.openai.codex.bridge.FrameworkSessionTransportCompat
 import com.openai.codex.bridge.SessionExecutionSettings
+import java.io.File
 import java.util.concurrent.Executor
 
 class AgentSessionController(context: Context) {
@@ -23,6 +25,7 @@ class AgentSessionController(context: Context) {
         private const val PREFERRED_GENIE_PACKAGE = "com.openai.codex.genie"
         private const val QUESTION_ANSWER_RETRY_COUNT = 10
         private const val QUESTION_ANSWER_RETRY_DELAY_MS = 50L
+        private const val MAX_RETAINED_TERMINAL_SESSION_TREES = 10
     }
 
     private enum class ChildSessionLaunchMode {
@@ -683,6 +686,83 @@ class AgentSessionController(context: Context) {
             cancelledSessionIds = cancelledSessionIds,
             failedSessionIds = failedSessionIds,
         )
+    }
+
+    fun enforceRetentionPolicy() {
+        val manager = agentManager ?: return
+        runCatching {
+            pruneTerminalSessionTrees(manager)
+        }.onFailure { err ->
+            Log.w(TAG, "Failed to prune terminal framework sessions", err)
+        }
+        val keepSessionIds: Set<String> = runCatching {
+            manager.getSessions(currentUserId()).mapTo(mutableSetOf()) { it.sessionId }
+        }.getOrElse { err ->
+            Log.w(TAG, "Failed to load sessions for planner cache retention", err)
+            emptySet()
+        }
+        prunePlannerCodexHomes(keepSessionIds)
+    }
+
+    private fun pruneTerminalSessionTrees(manager: AgentManager) {
+        val sessions = manager.getSessions(currentUserId())
+        val sessionsById = sessions.associateBy(AgentSessionInfo::getSessionId)
+        val childrenByParent = sessions
+            .filter { !it.parentSessionId.isNullOrBlank() }
+            .groupBy { it.parentSessionId }
+        val terminalRoots = sessions
+            .filter { session ->
+                session.parentSessionId.isNullOrBlank() ||
+                    !sessionsById.containsKey(session.parentSessionId)
+            }
+            .filter { root ->
+                terminalTreeFor(root, childrenByParent)
+                    .all { isTerminalState(it.state) }
+            }
+            .sortedWith(
+                compareByDescending<AgentSessionInfo> { it.createdElapsedRealtimeMillis }
+                    .thenBy(AgentSessionInfo::getSessionId),
+            )
+        terminalRoots
+            .drop(MAX_RETAINED_TERMINAL_SESSION_TREES)
+            .forEach { session ->
+                runCatching {
+                    cancelSessionTree(session.sessionId)
+                }.onFailure { err ->
+                    Log.w(TAG, "Failed to prune terminal session tree ${session.sessionId}", err)
+                }
+            }
+    }
+
+    private fun terminalTreeFor(
+        root: AgentSessionInfo,
+        childrenByParent: Map<String?, List<AgentSessionInfo>>,
+    ): List<AgentSessionInfo> {
+        val tree = mutableListOf<AgentSessionInfo>()
+        val stack = ArrayDeque<AgentSessionInfo>()
+        stack.add(root)
+        while (!stack.isEmpty()) {
+            val session = stack.removeLast()
+            tree += session
+            childrenByParent[session.sessionId].orEmpty().forEach(stack::add)
+        }
+        return tree
+    }
+
+    private fun prunePlannerCodexHomes(keepSessionIds: Set<String>) {
+        listOf(
+            File(appContext.cacheDir, "planner-codex-home"),
+            File(appContext.cacheDir, "planner-desktop-codex-home"),
+        ).forEach { root ->
+            runCatching {
+                CodexHomeRetention.pruneSessionHomes(
+                    root = root,
+                    keepHomeNames = keepSessionIds,
+                )
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to prune planner codex homes under ${root.absolutePath}", err)
+            }
+        }
     }
 
     private fun requireAgentManager(): AgentManager {

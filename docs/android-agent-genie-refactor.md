@@ -136,6 +136,15 @@ The current repo now contains these implementation slices:
     selecting packages and delegated Genie objectives
   - child Genie questions are still represented as child-session questions and
     roll up to the parent only when they need user escalation
+- Session retention is bounded:
+  - the Agent keeps only the most recent 10 terminal top-level session trees in
+    the framework session list and never prunes active/queued/waiting sessions
+  - Agent planner `CODEX_HOME` cache directories are also pruned to the most
+    recent 10 stale homes, while live homes are protected with an active marker
+  - each Genie prunes stale per-target `cache/codex-home/<sessionId>` homes in
+    the paired app sandbox to the most recent 10 for that target app; global
+    cross-target cache cleanup would need framework support because the Agent
+    app cannot directly delete other apps' cache directories
 - Codex Agent still uses `cancelSession(sessionId)` for user-driven cancellation
   because it is the AGENT-role app, not a HOME-role surface. The
   HOME-only `cancelHomeSession(sessionId)` API is reserved for Launcher/HOME

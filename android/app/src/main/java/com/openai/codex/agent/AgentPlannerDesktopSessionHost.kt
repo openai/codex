@@ -3,6 +3,7 @@ package com.openai.codex.agent
 import android.app.agent.AgentManager
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.CodexHomeRetention
 import com.openai.codex.bridge.FrameworkEventBridge
 import com.openai.codex.bridge.HostedCodexConfig
 import com.openai.codex.bridge.SessionExecutionSettings
@@ -138,7 +139,14 @@ internal class AgentPlannerDesktopSessionHost(
         }
         localProxy?.close()
         if (::codexHome.isInitialized) {
+            CodexHomeRetention.clearActive(codexHome)
             runCatching { codexHome.deleteRecursively() }
+            runCatching {
+                CodexHomeRetention.pruneSessionHomes(
+                    root = checkNotNull(codexHome.parentFile),
+                    keepHomeNames = emptySet(),
+                )
+            }
         }
         if (::process.isInitialized) {
             process.destroy()
@@ -204,10 +212,16 @@ internal class AgentPlannerDesktopSessionHost(
     }
 
     private fun startProcess() {
-        codexHome = File(context.cacheDir, "planner-desktop-codex-home/$sessionId").apply {
+        val codexHomeRoot = File(context.cacheDir, "planner-desktop-codex-home")
+        codexHome = File(codexHomeRoot, sessionId).apply {
             deleteRecursively()
             mkdirs()
         }
+        CodexHomeRetention.markActive(codexHome)
+        CodexHomeRetention.pruneSessionHomes(
+            root = codexHomeRoot,
+            keepHomeNames = setOf(sessionId),
+        )
         localProxy = AgentLocalCodexProxy { requestBody ->
             forwardResponsesRequest(requestBody)
         }.also(AgentLocalCodexProxy::start)

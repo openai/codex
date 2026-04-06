@@ -5,6 +5,7 @@ import android.app.agent.GenieRequest
 import android.app.agent.GenieService
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.CodexHomeRetention
 import com.openai.codex.bridge.DesktopSessionBootstrap
 import com.openai.codex.bridge.DetachedTargetCompat
 import com.openai.codex.bridge.FrameworkEventBridge
@@ -211,10 +212,16 @@ class CodexAppServerHost(
     }
 
     private fun startProcess() {
-        codexHome = File(context.cacheDir, "codex-home/${request.sessionId}").apply {
+        val codexHomeRoot = File(context.cacheDir, "codex-home")
+        codexHome = File(codexHomeRoot, request.sessionId).apply {
             deleteRecursively()
             mkdirs()
         }
+        CodexHomeRetention.markActive(codexHome)
+        CodexHomeRetention.pruneSessionHomes(
+            root = codexHomeRoot,
+            keepHomeNames = setOf(request.sessionId),
+        )
         HostedCodexConfig.installAgentsFile(codexHome, bridgeClient.readInstalledAgentsMarkdown())
         val processBuilder = ProcessBuilder(
             listOf(
@@ -414,7 +421,14 @@ class CodexAppServerHost(
             runCatching { process.destroy() }
         }
         if (::codexHome.isInitialized) {
+            CodexHomeRetention.clearActive(codexHome)
             runCatching { codexHome.deleteRecursively() }
+            runCatching {
+                CodexHomeRetention.pruneSessionHomes(
+                    root = checkNotNull(codexHome.parentFile),
+                    keepHomeNames = emptySet(),
+                )
+            }
         }
         control.process = null
         activeThreadId = null

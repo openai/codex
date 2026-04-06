@@ -6,6 +6,7 @@ import android.app.agent.AgentSessionEvent
 import android.app.agent.AgentSessionInfo
 import android.os.Process
 import android.util.Log
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import org.json.JSONObject
 
@@ -20,6 +21,7 @@ class CodexAgentService : AgentService() {
         private val pendingQuestionLoads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val handledBridgeRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val pendingParentRollups = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        private val retentionPruneScheduled = AtomicBoolean(false)
     }
 
     private val agentManager by lazy { getSystemService(AgentManager::class.java) }
@@ -28,6 +30,7 @@ class CodexAgentService : AgentService() {
 
     override fun onCreate() {
         super.onCreate()
+        scheduleRetentionPrune()
     }
 
     override fun onSessionChanged(session: AgentSessionInfo) {
@@ -46,6 +49,10 @@ class CodexAgentService : AgentService() {
                 reason = "Planner session ended before the question was answered",
             )
             AgentPlannerRuntimeManager.closeSession(session.sessionId)
+            scheduleRetentionPrune()
+        }
+        if (isTerminalSessionState(session.state)) {
+            scheduleRetentionPrune()
         }
         if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
             return
@@ -77,6 +84,20 @@ class CodexAgentService : AgentService() {
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
         handledBridgeRequests.removeIf { it.startsWith("$sessionId:") }
         pendingGenieQuestions.removeIf { it.startsWith("$sessionId:") }
+        scheduleRetentionPrune()
+    }
+
+    private fun scheduleRetentionPrune() {
+        if (!retentionPruneScheduled.compareAndSet(false, true)) {
+            return
+        }
+        thread(name = "CodexAgentRetentionPrune") {
+            try {
+                sessionController.enforceRetentionPolicy()
+            } finally {
+                retentionPruneScheduled.set(false)
+            }
+        }
     }
 
     override fun onShowOrUpdateSessionNotification(
