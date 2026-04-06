@@ -13,13 +13,17 @@ use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchResultSource;
 use codex_tools::collect_tool_search_output_tools;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct ToolSearchHandler {
     tools: HashMap<String, ToolInfo>,
 }
 
 impl ToolSearchHandler {
-    pub fn new(tools: HashMap<String, ToolInfo>) -> Self {
+    pub fn new(mut tools: HashMap<String, ToolInfo>, include_watchdog_tools: bool) -> Self {
+        if include_watchdog_tools {
+            tools.extend(watchdog_tool_infos());
+        }
         Self { tools }
     }
 }
@@ -95,6 +99,70 @@ impl ToolHandler for ToolSearchHandler {
         })?;
 
         Ok(ToolSearchOutput { tools })
+    }
+}
+
+fn watchdog_tool_infos() -> HashMap<String, ToolInfo> {
+    HashMap::from([
+        (
+            "watchdog:compact_parent_context".to_string(),
+            watchdog_tool_info(
+                "compact_parent_context",
+                "Watchdog-only: request compaction for the watchdog helper's parent thread when it is idle and appears stuck.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "reason": {"type": "string"},
+                        "evidence": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+        ),
+        (
+            "watchdog:watchdog_self_close".to_string(),
+            watchdog_tool_info(
+                "watchdog_self_close",
+                "Watchdog-only: send an optional final message to the parent/root thread, close this watchdog's persistent handle, and end this check-in immediately.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+        ),
+    ])
+}
+
+fn watchdog_tool_info(
+    tool_name: &str,
+    description: &str,
+    input_schema: serde_json::Value,
+) -> ToolInfo {
+    ToolInfo {
+        server_name: "watchdog".to_string(),
+        tool_name: tool_name.to_string(),
+        tool_namespace: "watchdog".to_string(),
+        tool: rmcp::model::Tool {
+            name: tool_name.to_string().into(),
+            title: None,
+            description: Some(description.to_string().into()),
+            input_schema: Arc::new(rmcp::model::object(input_schema)),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        },
+        connector_id: Some("watchdog".to_string()),
+        connector_name: Some("watchdog".to_string()),
+        connector_description: Some(
+            "Watchdog-only tools for parent-thread recovery and watchdog check-in lifecycle control."
+                .to_string(),
+        ),
+        plugin_display_names: Vec::new(),
     }
 }
 

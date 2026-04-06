@@ -217,9 +217,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ToolSearch => {
                 if tool_search_handler.is_none() {
-                    tool_search_handler = app_tools
-                        .as_ref()
-                        .map(|app_tools| Arc::new(ToolSearchHandler::new(app_tools.clone())));
+                    let app_tools = app_tools.clone().unwrap_or_default();
+                    tool_search_handler = Some(Arc::new(ToolSearchHandler::new(
+                        app_tools,
+                        config.agent_watchdog,
+                    )));
                 }
                 if let Some(tool_search_handler) = tool_search_handler.as_ref() {
                     builder.register_handler(handler.name, tool_search_handler.clone());
