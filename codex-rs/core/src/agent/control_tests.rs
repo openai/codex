@@ -5,7 +5,6 @@ use crate::agent::agent_status_from_event;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
-use crate::config_loader::LoaderOverrides;
 use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
 use assert_matches::assert_matches;
 use chrono::Utc;
@@ -36,15 +35,9 @@ async fn test_config_with_cli_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> (TempDir, Config) {
     let home = TempDir::new().expect("create temp dir");
-    let config = ConfigBuilder::default()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(home.path().to_path_buf())
         .cli_overrides(cli_overrides)
-        .loader_overrides(LoaderOverrides {
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(String::new()),
-            ..LoaderOverrides::default()
-        })
         .build()
         .await
         .expect("load default test config");

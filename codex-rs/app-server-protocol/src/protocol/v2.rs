@@ -850,6 +850,8 @@ pub struct ConfigReadResponse {
 pub struct ConfigRequirements {
     #[experimental(nested)]
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    #[experimental("configRequirements/read.allowedApprovalsReviewers")]
+    pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
@@ -7331,6 +7333,7 @@ mod tests {
                     request_permissions: false,
                     mcp_elicitations: false,
                 }]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,

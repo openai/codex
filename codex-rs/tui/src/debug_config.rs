@@ -566,6 +566,7 @@ mod tests {
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             guardian_developer_instructions: None,
@@ -729,6 +730,7 @@ approval_policy = "never"
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_developer_instructions: None,
