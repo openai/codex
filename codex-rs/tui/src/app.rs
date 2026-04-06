@@ -2403,7 +2403,36 @@ impl App {
                 app_server.reload_user_config().await?;
                 Ok(true)
             }
-            AppCommandView::OverrideTurnContext { .. } => Ok(true),
+            AppCommandView::OverrideTurnContext {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                windows_sandbox_level: _,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
+            } => {
+                app_server
+                    .thread_turn_context_update(
+                        thread_id,
+                        (*cwd).clone(),
+                        *approval_policy,
+                        *approvals_reviewer,
+                        (*sandbox_policy).clone(),
+                        (*model).clone(),
+                        *effort,
+                        *summary,
+                        *service_tier,
+                        (*collaboration_mode).clone(),
+                        *personality,
+                    )
+                    .await?;
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }

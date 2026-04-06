@@ -2891,6 +2891,69 @@ pub struct ThreadUnarchiveParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadSetNameResponse {}
 
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnContextUpdateParams {
+    pub thread_id: String,
+    /// Override the working directory for subsequent turns and thread-scoped
+    /// operations.
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+    /// Override the approval policy for subsequent turns.
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on subsequent
+    /// turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Override the sandbox policy for subsequent turns.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the model for subsequent turns.
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    /// Override the reasoning effort for subsequent turns.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub effort: Option<Option<ReasoningEffort>>,
+    /// Override the reasoning summary for subsequent turns.
+    #[ts(optional = nullable)]
+    pub summary: Option<ReasoningSummary>,
+    /// Override the service tier for subsequent turns.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
+    /// EXPERIMENTAL - Set a pre-set collaboration mode for subsequent turns.
+    ///
+    /// Takes precedence over model, reasoning effort, and developer
+    /// instructions if set.
+    #[experimental("thread/turnContext/update.collaborationMode")]
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
+    /// Override the personality for subsequent turns.
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnContextUpdateResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

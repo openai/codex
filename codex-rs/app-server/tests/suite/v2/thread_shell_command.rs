@@ -22,6 +22,8 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTurnContextUpdateParams;
+use codex_app_server_protocol::ThreadTurnContextUpdateResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -321,6 +323,89 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_shell_command_uses_updated_turn_context_cwd() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let original_workspace = tmp.path().join("original");
+    std::fs::create_dir(&original_workspace)?;
+    let updated_workspace = tmp.path().join("updated");
+    std::fs::create_dir(&updated_workspace)?;
+
+    let server = create_mock_responses_server_sequence(vec![]).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(original_workspace.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let update_id = mcp
+        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+            thread_id: thread.id.clone(),
+            cwd: Some(updated_workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+    let _: ThreadTurnContextUpdateResponse =
+        to_response::<ThreadTurnContextUpdateResponse>(update_resp)?;
+
+    let resolved_workspace = std::fs::canonicalize(updated_workspace.as_path())?;
+    let (shell_command, expected_output) = current_shell_pwd_command(resolved_workspace.as_path());
+    let shell_id = mcp
+        .send_thread_shell_command_request(ThreadShellCommandParams {
+            thread_id: thread.id,
+            command: shell_command,
+        })
+        .await?;
+    let shell_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(shell_id)),
+    )
+    .await??;
+    let _: ThreadShellCommandResponse = to_response::<ThreadShellCommandResponse>(shell_resp)?;
+
+    let started = wait_for_command_execution_started(&mut mcp, /*expected_id*/ None).await?;
+    let ThreadItem::CommandExecution { id, source, .. } = &started.item else {
+        unreachable!("helper returns command execution item");
+    };
+    let command_id = id.clone();
+    assert_eq!(source, &CommandExecutionSource::UserShell);
+
+    let completed = wait_for_command_execution_completed(&mut mcp, Some(&command_id)).await?;
+    let ThreadItem::CommandExecution {
+        aggregated_output, ..
+    } = &completed.item
+    else {
+        unreachable!("helper returns command execution item");
+    };
+    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
+
+    Ok(())
+}
+
 fn current_shell_output_command(text: &str) -> Result<(String, String)> {
     let command_and_output = match default_user_shell().name() {
         "powershell" => {
@@ -337,6 +422,17 @@ fn current_shell_output_command(text: &str) -> Result<(String, String)> {
         }
     };
     Ok(command_and_output)
+}
+
+fn current_shell_pwd_command(cwd: &Path) -> (String, String) {
+    match default_user_shell().name() {
+        "powershell" => (
+            "(Get-Location).Path".to_string(),
+            format!("{}\r\n", cwd.display()),
+        ),
+        "cmd" => ("cd".to_string(), format!("{}\r\n", cwd.display())),
+        _ => ("pwd".to_string(), format!("{}\n", cwd.display())),
+    }
 }
 
 async fn wait_for_command_execution_started(
