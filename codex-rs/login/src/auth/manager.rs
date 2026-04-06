@@ -1108,6 +1108,23 @@ pub struct AuthManager {
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
 }
 
+/// Configuration view required to construct a shared [`AuthManager`].
+///
+/// Implementations should return the auth-related config values for the
+/// already-resolved runtime configuration. The primary implementation is
+/// `codex_core::config::Config`, but this trait keeps `codex-login` independent
+/// from `codex-core`.
+pub trait AuthManagerConfig {
+    /// Returns the Codex home directory used for auth storage.
+    fn codex_home(&self) -> PathBuf;
+
+    /// Returns the CLI auth credential storage mode for auth loading.
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode;
+
+    /// Returns the workspace ID that ChatGPT auth should be restricted to, if any.
+    fn forced_chatgpt_workspace_id(&self) -> Option<String>;
+}
+
 impl Debug for AuthManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthManager")
@@ -1402,6 +1419,20 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
         ))
+    }
+
+    /// Convenience constructor returning an `Arc` wrapper from resolved config.
+    pub fn shared_from_config(
+        config: &impl AuthManagerConfig,
+        enable_codex_api_key_env: bool,
+    ) -> Arc<Self> {
+        let auth_manager = Self::shared(
+            config.codex_home(),
+            enable_codex_api_key_env,
+            config.cli_auth_credentials_store_mode(),
+        );
+        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
+        auth_manager
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
