@@ -1,5 +1,7 @@
 use crate::CommandToolOptions;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
+use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
@@ -8,6 +10,7 @@ use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
 use crate::ToolRegistryPlan;
 use crate::ToolRegistryPlanParams;
+use crate::ToolSearchAppInfo;
 use crate::ToolSearchAppSource;
 use crate::ToolSpec;
 use crate::ToolsConfig;
@@ -61,6 +64,9 @@ use crate::tool_registry_plan_types::agent_type_description;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use rmcp::model::Tool as McpTool;
+
+const AGENT_TOOLS_NAMESPACE: &str = "agents";
+const AGENT_TOOLS_NAMESPACE_DESCRIPTION: &str = "Agent collaboration tools for spawning, messaging, waiting on, listing, and closing subagents.";
 
 pub fn build_tool_registry_plan(
     config: &ToolsConfig,
@@ -227,10 +233,9 @@ pub fn build_tool_registry_plan(
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
     }
 
-    if config.search_tool
-        && let Some(app_tools) = params.app_tools
-    {
-        let search_app_infos = collect_tool_search_app_infos(
+    if config.search_tool && (params.app_tools.is_some() || config.collab_tools) {
+        let app_tools = params.app_tools.unwrap_or(&[]);
+        let mut search_app_infos = collect_tool_search_app_infos(
             app_tools.iter().map(|tool| ToolSearchAppSource {
                 server_name: tool.server_name,
                 connector_name: tool.connector_name,
@@ -238,6 +243,12 @@ pub fn build_tool_registry_plan(
             }),
             params.codex_apps_mcp_server_name,
         );
+        if config.collab_tools {
+            search_app_infos.push(ToolSearchAppInfo {
+                name: AGENT_TOOLS_NAMESPACE.to_string(),
+                description: Some(AGENT_TOOLS_NAMESPACE_DESCRIPTION.to_string()),
+            });
+        }
         plan.push_spec(
             create_tool_search_tool(&search_app_infos, TOOL_SEARCH_DEFAULT_LIMIT),
             /*supports_parallel_tool_calls*/ true,
@@ -344,81 +355,55 @@ pub fn build_tool_registry_plan(
         if config.multi_agent_v2 {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            plan.push_spec(
+            let agent_tools = vec![
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
                 }),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_send_message_tool(),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_followup_task_tool(),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_wait_agent_tool_v2(params.wait_agent_timeouts),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_close_agent_tool_v2(),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_list_agents_tool(),
+            ];
+            plan.push_spec(
+                create_agent_tools_namespace(agent_tools),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            plan.register_handler("spawn_agent", ToolHandlerKind::SpawnAgentV2);
-            plan.register_handler("send_message", ToolHandlerKind::SendMessageV2);
-            plan.register_handler("followup_task", ToolHandlerKind::FollowupTaskV2);
-            plan.register_handler("wait_agent", ToolHandlerKind::WaitAgentV2);
-            plan.register_handler("close_agent", ToolHandlerKind::CloseAgentV2);
-            plan.register_handler("list_agents", ToolHandlerKind::ListAgentsV2);
+            register_agent_tool_handler(&mut plan, "spawn_agent", ToolHandlerKind::SpawnAgentV2);
+            register_agent_tool_handler(&mut plan, "send_message", ToolHandlerKind::SendMessageV2);
+            register_agent_tool_handler(
+                &mut plan,
+                "followup_task",
+                ToolHandlerKind::FollowupTaskV2,
+            );
+            register_agent_tool_handler(&mut plan, "wait_agent", ToolHandlerKind::WaitAgentV2);
+            register_agent_tool_handler(&mut plan, "close_agent", ToolHandlerKind::CloseAgentV2);
+            register_agent_tool_handler(&mut plan, "list_agents", ToolHandlerKind::ListAgentsV2);
         } else {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            plan.push_spec(
+            let agent_tools = vec![
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
                 }),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_send_input_tool_v1(),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_resume_agent_tool(),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.register_handler("resume_agent", ToolHandlerKind::ResumeAgentV1);
-            plan.push_spec(
                 create_wait_agent_tool_v1(params.wait_agent_timeouts),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
                 create_close_agent_tool_v1(),
+            ];
+            plan.push_spec(
+                create_agent_tools_namespace(agent_tools),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            plan.register_handler("spawn_agent", ToolHandlerKind::SpawnAgentV1);
-            plan.register_handler("send_input", ToolHandlerKind::SendInputV1);
-            plan.register_handler("wait_agent", ToolHandlerKind::WaitAgentV1);
-            plan.register_handler("close_agent", ToolHandlerKind::CloseAgentV1);
+            register_agent_tool_handler(&mut plan, "spawn_agent", ToolHandlerKind::SpawnAgentV1);
+            register_agent_tool_handler(&mut plan, "send_input", ToolHandlerKind::SendInputV1);
+            register_agent_tool_handler(&mut plan, "resume_agent", ToolHandlerKind::ResumeAgentV1);
+            register_agent_tool_handler(&mut plan, "wait_agent", ToolHandlerKind::WaitAgentV1);
+            register_agent_tool_handler(&mut plan, "close_agent", ToolHandlerKind::CloseAgentV1);
         }
     }
 
@@ -485,6 +470,31 @@ pub fn build_tool_registry_plan(
     }
 
     plan
+}
+
+fn create_agent_tools_namespace(agent_tools: Vec<ToolSpec>) -> ToolSpec {
+    let tools = agent_tools
+        .into_iter()
+        .filter_map(|tool| match tool {
+            ToolSpec::Function(tool) => Some(ResponsesApiNamespaceTool::Function(tool)),
+            ToolSpec::Namespace(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::LocalShell {}
+            | ToolSpec::Freeform(_)
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::ImageGeneration { .. } => None,
+        })
+        .collect();
+    ToolSpec::Namespace(ResponsesApiNamespace {
+        name: AGENT_TOOLS_NAMESPACE.to_string(),
+        description: AGENT_TOOLS_NAMESPACE_DESCRIPTION.to_string(),
+        tools,
+    })
+}
+
+fn register_agent_tool_handler(plan: &mut ToolRegistryPlan, name: &str, kind: ToolHandlerKind) {
+    plan.register_handler(name, kind);
+    plan.register_handler(format!("{AGENT_TOOLS_NAMESPACE}:{name}"), kind);
 }
 
 #[cfg(test)]

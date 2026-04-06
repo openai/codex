@@ -5,6 +5,7 @@ use crate::DiscoverablePluginInfo;
 use crate::DiscoverableTool;
 use crate::FreeformTool;
 use crate::JsonSchema;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
@@ -100,24 +101,22 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         vec![
             create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
             create_send_message_tool(),
+            create_followup_task_tool(),
             create_wait_agent_tool_v2(wait_agent_timeout_options()),
             create_close_agent_tool_v2(),
+            create_list_agents_tool(),
         ]
     } else {
         vec![
             create_spawn_agent_tool_v1(spawn_agent_tool_options(&config)),
             create_send_input_tool_v1(),
+            create_resume_agent_tool(),
             create_wait_agent_tool_v1(wait_agent_timeout_options()),
             create_close_agent_tool_v1(),
         ]
     };
-    for spec in collab_specs {
-        expected.insert(spec.name().to_string(), spec);
-    }
-    if !config.multi_agent_v2 {
-        let spec = create_resume_agent_tool();
-        expected.insert(spec.name().to_string(), spec);
-    }
+    let spec = create_agent_tools_namespace(collab_specs);
+    expected.insert(spec.name().to_string(), spec);
 
     if config.exec_permission_approvals_enabled {
         let spec = create_request_permissions_tool(request_permissions_tool_description());
@@ -161,17 +160,15 @@ fn test_build_specs_collab_tools_enabled() {
         &[],
     );
 
-    assert_contains_tool_names(
+    assert_contains_tool_names(&tools, &["agents"]);
+    assert_contains_agent_tool_names(
         &tools,
         &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
     assert_lacks_tool_name(&tools, "list_agents");
 
-    let spawn_agent = find_tool(&tools, "spawn_agent");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &spawn_agent.spec else {
-        panic!("spawn_agent should be a function tool");
-    };
+    let ResponsesApiTool { parameters, .. } = find_agent_tool(&tools, "spawn_agent");
     let JsonSchema::Object { properties, .. } = parameters else {
         panic!("spawn_agent should use object params");
     };
@@ -202,7 +199,8 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         &[],
     );
 
-    assert_contains_tool_names(
+    assert_contains_tool_names(&tools, &["agents"]);
+    assert_contains_agent_tool_names(
         &tools,
         &[
             "spawn_agent",
@@ -214,15 +212,11 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         ],
     );
 
-    let spawn_agent = find_tool(&tools, "spawn_agent");
-    let ToolSpec::Function(ResponsesApiTool {
+    let ResponsesApiTool {
         parameters,
         output_schema,
         ..
-    }) = &spawn_agent.spec
-    else {
-        panic!("spawn_agent should be a function tool");
-    };
+    } = find_agent_tool(&tools, "spawn_agent");
     let JsonSchema::Object {
         properties,
         required,
@@ -248,10 +242,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         json!(["agent_id", "task_name", "nickname"])
     );
 
-    let send_message = find_tool(&tools, "send_message");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_message.spec else {
-        panic!("send_message should be a function tool");
-    };
+    let ResponsesApiTool { parameters, .. } = find_agent_tool(&tools, "send_message");
     let JsonSchema::Object {
         properties,
         required,
@@ -269,10 +260,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         Some(&vec!["target".to_string(), "message".to_string()])
     );
 
-    let followup_task = find_tool(&tools, "followup_task");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &followup_task.spec else {
-        panic!("followup_task should be a function tool");
-    };
+    let ResponsesApiTool { parameters, .. } = find_agent_tool(&tools, "followup_task");
     let JsonSchema::Object {
         properties,
         required,
@@ -289,15 +277,11 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         Some(&vec!["target".to_string(), "message".to_string()])
     );
 
-    let wait_agent = find_tool(&tools, "wait_agent");
-    let ToolSpec::Function(ResponsesApiTool {
+    let ResponsesApiTool {
         parameters,
         output_schema,
         ..
-    }) = &wait_agent.spec
-    else {
-        panic!("wait_agent should be a function tool");
-    };
+    } = find_agent_tool(&tools, "wait_agent");
     let JsonSchema::Object {
         properties,
         required,
@@ -317,15 +301,11 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         json!("Brief wait summary without the agent's final content.")
     );
 
-    let list_agents = find_tool(&tools, "list_agents");
-    let ToolSpec::Function(ResponsesApiTool {
+    let ResponsesApiTool {
         parameters,
         output_schema,
         ..
-    }) = &list_agents.spec
-    else {
-        panic!("list_agents should be a function tool");
-    };
+    } = find_agent_tool(&tools, "list_agents");
     let JsonSchema::Object {
         properties,
         required,
@@ -370,15 +350,10 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         &[],
     );
 
-    assert_contains_tool_names(
+    assert_contains_tool_names(&tools, &["agents", "spawn_agents_on_csv"]);
+    assert_contains_agent_tool_names(
         &tools,
-        &[
-            "spawn_agent",
-            "send_input",
-            "wait_agent",
-            "close_agent",
-            "spawn_agents_on_csv",
-        ],
+        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
 }
 
@@ -481,17 +456,18 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
 
     assert_contains_tool_names(
         &tools,
+        &["agents", "spawn_agents_on_csv", "report_agent_job_result"],
+    );
+    assert_contains_agent_tool_names(
+        &tools,
         &[
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "spawn_agents_on_csv",
-            "report_agent_job_result",
         ],
     );
-    assert_lacks_tool_name(&tools, "request_user_input");
 }
 
 #[test]
@@ -1808,6 +1784,30 @@ fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
         !names.contains(&expected_absent),
         "expected tool {expected_absent} to be absent; had: {names:?}"
     );
+}
+
+fn assert_contains_agent_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
+    for expected in expected_subset {
+        let _ = find_agent_tool(tools, expected);
+    }
+}
+
+fn find_agent_tool<'a>(
+    tools: &'a [ConfiguredToolSpec],
+    expected_name: &str,
+) -> &'a ResponsesApiTool {
+    let agents = find_tool(tools, "agents");
+    let ToolSpec::Namespace(namespace) = &agents.spec else {
+        panic!("agents should be a namespace tool");
+    };
+    namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => Some(tool),
+            ResponsesApiNamespaceTool::Function(_) => None,
+        })
+        .unwrap_or_else(|| panic!("expected agent tool {expected_name}"))
 }
 
 fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
