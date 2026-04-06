@@ -244,7 +244,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             "exec_command is unavailable in this session".to_string(),
                         ));
                     };
-                    if environment.mode().is_remote() {
+                    if environment.is_remote() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
                         ));

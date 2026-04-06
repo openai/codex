@@ -14,50 +14,6 @@ use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
-/// Describes where execution and filesystem operations for a session come from.
-///
-/// `CODEX_EXEC_SERVER_URL=none` maps to [`EnvironmentMode::Disabled`] so callers
-/// can distinguish "intentionally unavailable" from "use the local executor".
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum EnvironmentMode {
-    /// Run against the local process and filesystem implementations.
-    Local,
-    /// Run against a remote exec-server endpoint.
-    Remote { exec_server_url: String },
-    /// Disable executor-backed capabilities for this session entirely.
-    Disabled,
-}
-
-impl EnvironmentMode {
-    /// Returns the remote exec-server URL when this mode is remote.
-    pub fn exec_server_url(&self) -> Option<&str> {
-        match self {
-            Self::Local | Self::Disabled => None,
-            Self::Remote { exec_server_url } => Some(exec_server_url.as_str()),
-        }
-    }
-
-    /// Returns whether this mode uses a remote exec-server.
-    pub fn is_remote(&self) -> bool {
-        matches!(self, Self::Remote { .. })
-    }
-
-    /// Returns whether this mode disables environment-backed APIs.
-    pub fn is_disabled(&self) -> bool {
-        matches!(self, Self::Disabled)
-    }
-
-    fn from_exec_server_url(exec_server_url: Option<String>) -> Self {
-        match exec_server_url.as_deref().map(str::trim) {
-            None | Some("") => Self::Local,
-            Some(url) if url.eq_ignore_ascii_case("none") => Self::Disabled,
-            Some(url) => Self::Remote {
-                exec_server_url: url.to_string(),
-            },
-        }
-    }
-}
-
 /// Provides access to the exec backend for a selected environment.
 ///
 /// Implementations are expected to return the backend that matches the current
@@ -72,7 +28,8 @@ pub trait ExecutorEnvironment: Send + Sync {
 /// follow-up turns preserve explicit `Disabled` semantics.
 #[derive(Debug)]
 pub struct EnvironmentManager {
-    mode: EnvironmentMode,
+    exec_server_url: Option<String>,
+    disabled: bool,
     current_environment: OnceCell<Option<Arc<Environment>>>,
 }
 
@@ -85,13 +42,10 @@ impl Default for EnvironmentManager {
 impl EnvironmentManager {
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value.
     pub fn new(exec_server_url: Option<String>) -> Self {
-        Self::from_mode(EnvironmentMode::from_exec_server_url(exec_server_url))
-    }
-
-    /// Builds a manager from an already-parsed environment mode.
-    pub fn from_mode(mode: EnvironmentMode) -> Self {
+        let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
         Self {
-            mode,
+            exec_server_url,
+            disabled,
             current_environment: OnceCell::new(),
         }
     }
@@ -105,30 +59,33 @@ impl EnvironmentManager {
     /// disabled mode when no environment is available.
     pub fn from_environment(environment: Option<&Environment>) -> Self {
         match environment {
-            Some(environment) => Self::from_mode(environment.mode().clone()),
-            None => Self::from_mode(EnvironmentMode::Disabled),
+            Some(environment) => Self {
+                exec_server_url: environment.exec_server_url().map(str::to_owned),
+                disabled: false,
+                current_environment: OnceCell::new(),
+            },
+            None => Self {
+                exec_server_url: None,
+                disabled: true,
+                current_environment: OnceCell::new(),
+            },
         }
-    }
-
-    /// Returns the stable mode for this manager.
-    pub fn mode(&self) -> &EnvironmentMode {
-        &self.mode
     }
 
     /// Returns the remote exec-server URL when one is configured.
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.mode.exec_server_url()
+        self.exec_server_url.as_deref()
     }
 
     /// Returns the cached environment, creating it on first access.
     pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
         self.current_environment
             .get_or_try_init(|| async {
-                if self.mode.is_disabled() {
+                if self.disabled {
                     Ok(None)
                 } else {
                     Ok(Some(Arc::new(
-                        Environment::create_for_mode(self.mode.clone()).await?,
+                        Environment::create(self.exec_server_url.clone()).await?,
                     )))
                 }
             })
@@ -144,7 +101,7 @@ impl EnvironmentManager {
 /// and remote client, if any.
 #[derive(Clone)]
 pub struct Environment {
-    mode: EnvironmentMode,
+    exec_server_url: Option<String>,
     remote_exec_server_client: Option<ExecServerClient>,
     exec_backend: Arc<dyn ExecBackend>,
 }
@@ -160,7 +117,7 @@ impl Default for Environment {
         }
 
         Self {
-            mode: EnvironmentMode::Local,
+            exec_server_url: None,
             remote_exec_server_client: None,
             exec_backend: Arc::new(local_process),
         }
@@ -170,7 +127,7 @@ impl Default for Environment {
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
-            .field("mode", &self.mode)
+            .field("exec_server_url", &self.exec_server_url)
             .finish_non_exhaustive()
     }
 }
@@ -178,12 +135,14 @@ impl std::fmt::Debug for Environment {
 impl Environment {
     /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value.
     pub async fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
-        Self::create_for_mode(EnvironmentMode::from_exec_server_url(exec_server_url)).await
-    }
+        let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
+        if disabled {
+            return Err(ExecServerError::Protocol(
+                "disabled mode does not create an Environment".to_string(),
+            ));
+        }
 
-    /// Builds an environment for an explicit mode.
-    pub async fn create_for_mode(mode: EnvironmentMode) -> Result<Self, ExecServerError> {
-        let remote_exec_server_client = if let EnvironmentMode::Remote { exec_server_url } = &mode {
+        let remote_exec_server_client = if let Some(exec_server_url) = &exec_server_url {
             Some(
                 ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
                     websocket_url: exec_server_url.clone(),
@@ -197,14 +156,14 @@ impl Environment {
             None
         };
 
-        let exec_backend: Arc<dyn ExecBackend> = match (&mode, remote_exec_server_client.clone()) {
-            (EnvironmentMode::Remote { .. }, Some(client)) => Arc::new(RemoteProcess::new(client)),
-            (EnvironmentMode::Remote { .. }, None) => {
+        let exec_backend: Arc<dyn ExecBackend> = match remote_exec_server_client.clone() {
+            Some(client) => Arc::new(RemoteProcess::new(client)),
+            None if exec_server_url.is_some() => {
                 return Err(ExecServerError::Protocol(
                     "remote mode should have an exec-server client".to_string(),
                 ));
             }
-            (EnvironmentMode::Local, _) => {
+            None => {
                 let local_process = LocalProcess::default();
                 local_process
                     .initialize()
@@ -214,28 +173,22 @@ impl Environment {
                     .map_err(ExecServerError::Protocol)?;
                 Arc::new(local_process)
             }
-            (EnvironmentMode::Disabled, _) => {
-                return Err(ExecServerError::Protocol(
-                    "disabled mode does not create an Environment".to_string(),
-                ));
-            }
         };
 
         Ok(Self {
-            mode,
+            exec_server_url,
             remote_exec_server_client,
             exec_backend,
         })
     }
 
-    /// Returns the selected mode for this environment.
-    pub fn mode(&self) -> &EnvironmentMode {
-        &self.mode
+    pub fn is_remote(&self) -> bool {
+        self.exec_server_url.is_some()
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.mode.exec_server_url()
+        self.exec_server_url.as_deref()
     }
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
@@ -243,18 +196,18 @@ impl Environment {
     }
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
-        match (&self.mode, self.remote_exec_server_client.clone()) {
-            (EnvironmentMode::Remote { .. }, Some(client)) => {
-                Arc::new(RemoteFileSystem::new(client))
-            }
-            (EnvironmentMode::Remote { .. }, None) => {
-                panic!("remote mode should have an exec-server client")
-            }
-            (EnvironmentMode::Local, _) => Arc::new(LocalFileSystem),
-            (EnvironmentMode::Disabled, _) => {
-                panic!("disabled mode does not have an Environment")
-            }
+        match self.remote_exec_server_client.clone() {
+            Some(client) => Arc::new(RemoteFileSystem::new(client)),
+            None => Arc::new(LocalFileSystem),
         }
+    }
+}
+
+fn normalize_exec_server_url(exec_server_url: Option<String>) -> (Option<String>, bool) {
+    match exec_server_url.as_deref().map(str::trim) {
+        None | Some("") => (None, false),
+        Some(url) if url.eq_ignore_ascii_case("none") => (None, true),
+        Some(url) => (Some(url.to_string()), false),
     }
 }
 
@@ -270,12 +223,11 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
-    use super::EnvironmentMode;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn create_local_environment_does_not_connect() {
-        let environment = Environment::create_for_mode(EnvironmentMode::Local)
+        let environment = Environment::create(/*exec_server_url*/ None)
             .await
             .expect("create environment");
 
@@ -287,7 +239,7 @@ mod tests {
     fn environment_manager_normalizes_empty_url() {
         let manager = EnvironmentManager::new(Some(String::new()));
 
-        assert_eq!(manager.mode(), &EnvironmentMode::Local);
+        assert!(!manager.disabled);
         assert_eq!(manager.exec_server_url(), None);
     }
 
@@ -295,7 +247,7 @@ mod tests {
     fn environment_manager_treats_none_value_as_disabled() {
         let manager = EnvironmentManager::new(Some("none".to_string()));
 
-        assert_eq!(manager.mode(), &EnvironmentMode::Disabled);
+        assert!(manager.disabled);
         assert_eq!(manager.exec_server_url(), None);
     }
 
