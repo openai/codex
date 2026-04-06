@@ -12,7 +12,10 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::helper_materialization::HelperExecutable;
+use crate::helper_materialization::copy_helper_if_needed;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::is_windowsapps_package_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
@@ -172,7 +175,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home)?;
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -331,9 +334,18 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
 }
 
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
+    let current_exe = std::env::current_exe().ok();
+    gather_helper_read_roots_with_current_exe(codex_home, current_exe.as_deref())
+}
+
+fn gather_helper_read_roots_with_current_exe(
+    codex_home: &Path,
+    current_exe: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
+    if let Some(exe) = current_exe
         && let Some(dir) = exe.parent()
+        && !is_windowsapps_package_dir(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -569,16 +581,17 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+fn find_setup_exe(codex_home: &Path) -> Result<PathBuf> {
+    let log_dir = sandbox_dir(codex_home);
+    copy_helper_if_needed(HelperExecutable::Setup, codex_home, Some(&log_dir)).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!(
+                "failed to resolve setup helper from materialized copy in {}: {err:#}",
+                helper_bin_dir(codex_home).display()
+            ),
+        )
+    })
 }
 
 fn report_helper_failure(
@@ -611,7 +624,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home)?;
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -802,6 +815,7 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use super::gather_helper_read_roots_with_current_exe;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
@@ -1007,6 +1021,34 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn helper_read_roots_skip_windowsapps_executable_directory() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let current_exe = PathBuf::from(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.0.0_x64__2p2nqsd0c76g0\codex.exe",
+        );
+
+        let roots = gather_helper_read_roots_with_current_exe(&codex_home, Some(&current_exe));
+        let windowsapps_parent = current_exe.parent().expect("current exe parent");
+        let expected_helper_dir = helper_bin_dir(&codex_home);
+
+        assert!(!roots.iter().any(|root| root == windowsapps_parent));
+        assert!(roots.iter().any(|root| root == &expected_helper_dir));
+    }
+
+    #[test]
+    fn helper_read_roots_include_non_windowsapps_executable_directory() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let current_exe = PathBuf::from(r"C:\Users\example\AppData\Local\OpenAI\Codex\codex.exe");
+
+        let roots = gather_helper_read_roots_with_current_exe(&codex_home, Some(&current_exe));
+        let expected_exe_parent = current_exe.parent().expect("current exe parent");
+
+        assert!(roots.iter().any(|root| root == expected_exe_parent));
     }
 
     #[test]
