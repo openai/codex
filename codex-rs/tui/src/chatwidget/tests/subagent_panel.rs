@@ -52,7 +52,9 @@ async fn subagent_panel_is_not_flushed_into_transcript_history() {
 #[tokio::test]
 async fn subagent_panel_mounts_while_placeholder_active_cell_exists_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.active_cell = Some(ChatWidget::placeholder_session_header_cell(chat.config_ref()));
+    chat.active_cell = Some(ChatWidget::placeholder_session_header_cell(
+        chat.config_ref(),
+    ));
     chat.bottom_pane.set_composer_text(
         "show current subagent state".to_string(),
         Vec::new(),
@@ -78,9 +80,9 @@ async fn subagent_panel_mounts_while_placeholder_active_cell_exists_snapshot() {
     )));
 
     assert!(
-        chat.active_cell.as_ref().is_some_and(|cell| cell
-            .as_any()
-            .is::<history_cell::SessionHeaderHistoryCell>()),
+        chat.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>()),
         "placeholder session header should remain the active cell"
     );
     assert!(
