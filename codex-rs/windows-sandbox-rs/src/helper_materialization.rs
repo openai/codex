@@ -3,6 +3,8 @@ use anyhow::Context;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
+use std::fs::FileTimes;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,18 +18,21 @@ use crate::sandbox_bin_dir;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup-helper",
         }
     }
 }
@@ -44,16 +49,33 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
     sandbox_bin_dir(codex_home)
 }
 
+pub(crate) fn path_is_under_windows_apps(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
+}
+
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join(kind.file_name());
-        if candidate.exists() {
-            return candidate;
-        }
+    if let Some(candidate) = legacy_lookup_from_current_exe(std::env::current_exe().ok(), kind) {
+        return candidate;
     }
     PathBuf::from(kind.file_name())
+}
+
+fn legacy_lookup_from_current_exe(
+    current_exe: Option<PathBuf>,
+    kind: HelperExecutable,
+) -> Option<PathBuf> {
+    let exe = current_exe?;
+    let dir = exe.parent()?;
+    if path_is_under_windows_apps(dir) {
+        return None;
+    }
+    let candidate = dir.join(kind.file_name());
+    candidate.exists().then_some(candidate)
 }
 
 pub(crate) fn resolve_helper_for_launch(
@@ -182,6 +204,15 @@ fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     let dir = exe
         .parent()
         .ok_or_else(|| anyhow!("current executable has no parent directory"))?;
+    if path_is_under_windows_apps(dir) {
+        log_note(
+            &format!(
+                "helper lookup next to current executable is disabled for WindowsApps installs: {}",
+                dir.display()
+            ),
+            None,
+        );
+    }
     let candidate = dir.join(kind.file_name());
     if candidate.exists() {
         Ok(candidate)
@@ -287,15 +318,34 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         .modified()
         .with_context(|| format!("read helper destination mtime {}", destination.display()))?;
 
-    Ok(destination_modified >= source_modified)
+    if destination_modified < source_modified {
+        return Ok(false);
+    }
+
+    if source_files_match(source, destination)? {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+fn source_files_match(source: &Path, destination: &Path) -> Result<bool> {
+    let source_bytes =
+        fs::read(source).with_context(|| format!("read helper source bytes {}", source.display()))?;
+    let destination_bytes = fs::read(destination)
+        .with_context(|| format!("read helper destination bytes {}", destination.display()))?;
+    Ok(source_bytes == destination_bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::destination_is_fresh;
+    use super::legacy_lookup_from_current_exe;
+    use super::path_is_under_windows_apps;
     use super::helper_bin_dir;
     use super::copy_from_source_if_needed;
     use super::CopyOutcome;
+    use super::HelperExecutable;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -317,17 +367,27 @@ mod tests {
     }
 
     #[test]
-    fn destination_is_fresh_uses_size_and_mtime() {
+    fn destination_is_fresh_requires_matching_contents_when_metadata_matches() {
         let tmp = TempDir::new().expect("tempdir");
         let source = tmp.path().join("source.exe");
         let destination = tmp.path().join("destination.exe");
 
-        fs::write(&destination, b"same-size").expect("write destination");
+        fs::write(&destination, b"dest-v1!!").expect("write destination");
         std::thread::sleep(std::time::Duration::from_secs(1));
-        fs::write(&source, b"same-size").expect("write source");
+        fs::write(&source, b"source-v1").expect("write source");
         assert!(!destination_is_fresh(&source, &destination).expect("stale metadata"));
 
-        fs::write(&destination, b"same-size").expect("rewrite destination");
+        fs::write(&destination, b"source-v1").expect("rewrite destination");
+        let source_modified = fs::metadata(&source)
+            .expect("source metadata")
+            .modified()
+            .expect("source mtime");
+        File::options()
+            .write(true)
+            .open(&destination)
+            .expect("open destination")
+            .set_times(FileTimes::new().set_modified(source_modified))
+            .expect("set destination mtime");
         assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
     }
 
@@ -375,5 +435,41 @@ mod tests {
             b"runner".as_slice(),
             fs::read(&runner_destination).expect("read runner")
         );
+    }
+
+    #[test]
+    fn path_is_under_windows_apps_matches_component() {
+        assert!(path_is_under_windows_apps(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe"
+        )));
+        assert!(!path_is_under_windows_apps(Path::new(
+            r"C:\Program Files\OpenAI\Codex\codex.exe"
+        )));
+    }
+
+    #[test]
+    fn legacy_lookup_skips_windows_apps_siblings() {
+        let tmp = TempDir::new().expect("tempdir");
+        let normal_dir = tmp.path().join("OpenAI");
+        fs::create_dir_all(&normal_dir).expect("create normal dir");
+        let normal_helper = normal_dir.join("codex-command-runner.exe");
+        fs::write(&normal_helper, b"runner").expect("write helper");
+
+        let lookup = legacy_lookup_from_current_exe(
+            Some(normal_dir.join("codex.exe")),
+            HelperExecutable::CommandRunner,
+        );
+        assert_eq!(Some(normal_helper), lookup);
+
+        let windows_apps_dir = tmp.path().join("WindowsApps").join("OpenAI.Codex");
+        fs::create_dir_all(&windows_apps_dir).expect("create WindowsApps dir");
+        let windows_apps_helper = windows_apps_dir.join("codex-command-runner.exe");
+        fs::write(&windows_apps_helper, b"runner").expect("write helper in WindowsApps");
+
+        let lookup = legacy_lookup_from_current_exe(
+            Some(windows_apps_dir.join("codex.exe")),
+            HelperExecutable::CommandRunner,
+        );
+        assert_eq!(None, lookup);
     }
 }
