@@ -84,13 +84,13 @@ pub struct UnifiedExecRuntime<'a> {
     shell_mode: UnifiedExecShellMode,
 }
 
-fn build_remote_exec_sandbox_config(attempt: &SandboxAttempt<'_>) -> SandboxLaunchConfig {
-    SandboxLaunchConfig {
-        mode: if matches!(attempt.sandbox, codex_sandboxing::SandboxType::None) {
-            SandboxLaunchMode::Disabled
-        } else {
-            SandboxLaunchMode::Auto
-        },
+fn build_remote_exec_sandbox_config(attempt: &SandboxAttempt<'_>) -> Option<SandboxLaunchConfig> {
+    if matches!(attempt.sandbox, codex_sandboxing::SandboxType::None) {
+        return None;
+    }
+
+    Some(SandboxLaunchConfig {
+        mode: SandboxLaunchMode::Auto,
         policy: attempt.policy.clone(),
         file_system_policy: attempt.file_system_policy.clone(),
         network_policy: attempt.network_policy,
@@ -99,7 +99,7 @@ fn build_remote_exec_sandbox_config(attempt: &SandboxAttempt<'_>) -> SandboxLaun
         windows_sandbox_level: attempt.windows_sandbox_level,
         windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
         use_legacy_landlock: attempt.use_legacy_landlock,
-    }
+    })
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -241,17 +241,18 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         // Remote exec-server now owns sandbox argv construction, so this branch
         // keeps sending raw command data until we collapse the launch APIs.
         if ctx.turn.environment.exec_server_url().is_some() {
+            let exec_params = codex_exec_server::ExecParams {
+                process_id: req.process_id.to_string().into(),
+                argv: command,
+                cwd: req.cwd.clone(),
+                env,
+                tty: req.tty,
+                arg0: None,
+                sandbox: build_remote_exec_sandbox_config(attempt),
+            };
             return self
                 .manager
-                .open_session_with_remote_exec(
-                    req.process_id,
-                    command,
-                    req.cwd.clone(),
-                    env,
-                    req.tty,
-                    Some(build_remote_exec_sandbox_config(attempt)),
-                    ctx.turn.environment.as_ref(),
-                )
+                .open_session_with_remote_exec(exec_params, ctx.turn.environment.as_ref())
                 .await
                 .map_err(|err| match err {
                     UnifiedExecError::SandboxDenied { output, .. } => {
