@@ -35,7 +35,6 @@ const REQUESTED_MODEL: &str = "gpt-5.1";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 const ROLE_MODEL: &str = "gpt-5.1-codex-max";
 const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
-const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "The agent has started with forked context.";
 const SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS: &str = "You are a newly spawned agent in a team of agents collaborating to complete a task. You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. You are responsible for returning the response to your assigned task in the final channel. When you give your response, the contents of your response in the final channel will be immediately delivered back to your parent agent. The prior conversation history was forked from your parent agent. Treat the next user message as your assigned task, and use the forked history only as background context.";
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
@@ -69,22 +68,37 @@ fn tool_parameter_description(
     tool_name: &str,
     parameter_name: &str,
 ) -> Option<String> {
+    fn find_parameter_description(
+        tool: &serde_json::Value,
+        tool_name: &str,
+        parameter_name: &str,
+    ) -> Option<String> {
+        if tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name) {
+            return tool
+                .get("parameters")
+                .and_then(|parameters| parameters.get("properties"))
+                .and_then(|properties| properties.get(parameter_name))
+                .and_then(|parameter| parameter.get("description"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+        }
+
+        tool.get("tools")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|tools| {
+                tools
+                    .iter()
+                    .find_map(|tool| find_parameter_description(tool, tool_name, parameter_name))
+            })
+    }
+
     req.body_json()
         .get("tools")
         .and_then(serde_json::Value::as_array)
         .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name) {
-                    tool.get("parameters")
-                        .and_then(|parameters| parameters.get("properties"))
-                        .and_then(|properties| properties.get(parameter_name))
-                        .and_then(|parameter| parameter.get("description"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                } else {
-                    None
-                }
-            })
+            tools
+                .iter()
+                .find_map(|tool| find_parameter_description(tool, tool_name, parameter_name))
         })
 }
 
