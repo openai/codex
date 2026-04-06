@@ -3,6 +3,7 @@ use anyhow::Context;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,18 +17,21 @@ use crate::sandbox_bin_dir;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    SetupHelper,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::SetupHelper => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::SetupHelper => "setup-helper",
         }
     }
 }
@@ -46,14 +50,20 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+        && let Some(candidate) = legacy_candidate_from_exe(kind, &exe)
     {
-        let candidate = dir.join(kind.file_name());
-        if candidate.exists() {
-            return candidate;
-        }
+        return candidate;
     }
     PathBuf::from(kind.file_name())
+}
+
+pub(crate) fn is_windowsapps_install_dir(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 pub(crate) fn resolve_helper_for_launch(
@@ -193,6 +203,15 @@ fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     }
 }
 
+fn legacy_candidate_from_exe(kind: HelperExecutable, exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    if is_windowsapps_install_dir(dir) {
+        return None;
+    }
+    let candidate = dir.join(kind.file_name());
+    candidate.exists().then_some(candidate)
+}
+
 fn copy_from_source_if_needed(source: &Path, destination: &Path) -> Result<CopyOutcome> {
     if destination_is_fresh(source, destination)? {
         return Ok(CopyOutcome::Reused);
@@ -287,19 +306,62 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         .modified()
         .with_context(|| format!("read helper destination mtime {}", destination.display()))?;
 
-    Ok(destination_modified >= source_modified)
+    if destination_modified < source_modified {
+        return Ok(false);
+    }
+
+    files_have_same_contents(source, destination)
+}
+
+fn files_have_same_contents(source: &Path, destination: &Path) -> Result<bool> {
+    let mut source_file = fs::File::open(source)
+        .with_context(|| format!("open helper source for compare {}", source.display()))?;
+    let mut destination_file = fs::File::open(destination).with_context(|| {
+        format!(
+            "open helper destination for compare {}",
+            destination.display()
+        )
+    })?;
+    let mut source_buf = [0_u8; 8192];
+    let mut destination_buf = [0_u8; 8192];
+
+    loop {
+        let source_read = source_file.read(&mut source_buf).with_context(|| {
+            format!("read helper source for compare {}", source.display())
+        })?;
+        let destination_read = destination_file.read(&mut destination_buf).with_context(|| {
+            format!(
+                "read helper destination for compare {}",
+                destination.display()
+            )
+        })?;
+        if source_read != destination_read {
+            return Ok(false);
+        }
+        if source_read == 0 {
+            return Ok(true);
+        }
+        if source_buf[..source_read] != destination_buf[..destination_read] {
+            return Ok(false);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::destination_is_fresh;
+    use super::legacy_candidate_from_exe;
     use super::helper_bin_dir;
+    use super::is_windowsapps_install_dir;
     use super::copy_from_source_if_needed;
+    use super::HelperExecutable;
     use super::CopyOutcome;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::fs::FileTimes;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::time::SystemTime;
     use tempfile::TempDir;
 
     #[test]
@@ -317,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn destination_is_fresh_uses_size_and_mtime() {
+    fn destination_is_fresh_reuses_equal_contents_when_metadata_is_fresh() {
         let tmp = TempDir::new().expect("tempdir");
         let source = tmp.path().join("source.exe");
         let destination = tmp.path().join("destination.exe");
@@ -329,6 +391,31 @@ mod tests {
 
         fs::write(&destination, b"same-size").expect("rewrite destination");
         assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
+    }
+
+    #[test]
+    fn destination_is_fresh_detects_same_size_same_mtime_content_drift() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = tmp.path().join("source.exe");
+        let destination = tmp.path().join("destination.exe");
+        let shared_mtime = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+        fs::write(&source, b"runner-v2").expect("write source");
+        fs::write(&destination, b"runner-v1").expect("write destination");
+        fs::File::options()
+            .write(true)
+            .open(&source)
+            .expect("open source")
+            .set_times(FileTimes::new().set_modified(shared_mtime))
+            .expect("set source mtime");
+        fs::File::options()
+            .write(true)
+            .open(&destination)
+            .expect("open destination")
+            .set_times(FileTimes::new().set_modified(shared_mtime))
+            .expect("set destination mtime");
+
+        assert!(!destination_is_fresh(&source, &destination).expect("detect content drift"));
     }
 
     #[test]
@@ -374,6 +461,35 @@ mod tests {
         assert_eq!(
             b"runner".as_slice(),
             fs::read(&runner_destination).expect("read runner")
+        );
+    }
+
+    #[test]
+    fn windowsapps_install_dir_detection_is_case_insensitive() {
+        assert!(is_windowsapps_install_dir(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex"
+        )));
+        assert!(is_windowsapps_install_dir(Path::new(
+            r"C:\Program Files\WINDOWSAPPS\OpenAI.Codex"
+        )));
+        assert!(!is_windowsapps_install_dir(Path::new(
+            r"C:\Program Files\OpenAI.Codex"
+        )));
+    }
+
+    #[test]
+    fn legacy_lookup_skips_existing_helpers_inside_windowsapps_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let exe_dir = tmp.path().join("Program Files").join("WindowsApps").join("OpenAI.Codex");
+        fs::create_dir_all(&exe_dir).expect("create exe dir");
+        let exe = exe_dir.join("codex.exe");
+        let helper = exe_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&exe, b"exe").expect("write exe");
+        fs::write(&helper, b"helper").expect("write helper");
+
+        assert_eq!(
+            None,
+            legacy_candidate_from_exe(HelperExecutable::SetupHelper, &exe)
         );
     }
 }
