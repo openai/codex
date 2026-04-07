@@ -14,7 +14,7 @@ Context map
   ■ Conversation 40.0%
 
   ■ User          ~12,000 tokens   60.0% of used
-    ██████████ Skill instructions (42 skills) (~12,000 tokens)
+    ██████████ Skill instructions (~12,000 tokens)
 
   ■ Conversation   ~8,000 tokens   40.0% of used
     ██████░░░░ Tool output (~5,000 tokens)

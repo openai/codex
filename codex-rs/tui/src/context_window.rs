@@ -403,7 +403,7 @@ mod tests {
                     label: "User".to_string(),
                     tokens: 12_000,
                     details: vec![ThreadContextWindowDetail {
-                        label: "Skill instructions (42 skills)".to_string(),
+                        label: "Skill instructions".to_string(),
                         tokens: 12_000,
                     }],
                 },

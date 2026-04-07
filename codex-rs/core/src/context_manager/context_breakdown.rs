@@ -331,13 +331,7 @@ fn classify_content_item(
 fn classify_developer_text(text: &str) -> (ContextSectionKind, String) {
     let trimmed = text.trim_start();
     if starts_with_tag(trimmed, SKILLS_INSTRUCTIONS_OPEN_TAG) {
-        return (
-            ContextSectionKind::User,
-            format!(
-                "Skill instructions ({} skills)",
-                count_catalog_entries(trimmed)
-            ),
-        );
+        return (ContextSectionKind::User, "Skill instructions".to_string());
     }
     if starts_with_tag(trimmed, APPS_INSTRUCTIONS_OPEN_TAG) {
         return (
@@ -672,7 +666,7 @@ mod tests {
                 "AGENTS.md instructions for /repo".to_string(),
                 "Base instructions".to_string(),
                 "Environment context".to_string(),
-                "Skill instructions (1 skills)".to_string(),
+                "Skill instructions".to_string(),
                 "Reasoning".to_string(),
                 "Skill: notify (/tmp/skills/notify/SKILL.md)".to_string(),
                 "User message".to_string(),
