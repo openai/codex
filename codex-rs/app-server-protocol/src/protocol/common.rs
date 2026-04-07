@@ -1640,6 +1640,7 @@ mod tests {
         let request = ClientRequest::FsWatch {
             request_id: RequestId::Integer(10),
             params: v2::FsWatchParams {
+                watch_id: "watch-git".to_string(),
                 path: absolute_path("tmp/repo/.git"),
             },
         };
@@ -1648,6 +1649,7 @@ mod tests {
                 "method": "fs/watch",
                 "id": 10,
                 "params": {
+                    "watchId": "watch-git",
                     "path": absolute_path_string("tmp/repo/.git")
                 }
             }),
