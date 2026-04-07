@@ -2,6 +2,7 @@ use crate::policy::SandboxPolicy;
 use dunce::canonicalize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -37,28 +38,36 @@ pub fn compute_allow_paths(
             ..
         }
     );
+    let allow_limited_git_writes = matches!(
+        policy,
+        SandboxPolicy::WorkspaceWrite {
+            allow_limited_git_writes: true,
+            ..
+        }
+    );
 
     if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        let add_writable_root =
-            |root: PathBuf,
-             policy_cwd: &Path,
-             add_allow: &mut dyn FnMut(PathBuf),
-             add_deny: &mut dyn FnMut(PathBuf)| {
-                let candidate = if root.is_absolute() {
-                    root
-                } else {
-                    policy_cwd.join(root)
-                };
-                let canonical = canonicalize(&candidate).unwrap_or(candidate);
-                add_allow(canonical.clone());
-
-                for protected_subdir in [".git", ".codex", ".agents"] {
-                    let protected_entry = canonical.join(protected_subdir);
-                    if protected_entry.exists() {
-                        add_deny(protected_entry);
-                    }
-                }
+        let add_writable_root = |root: PathBuf,
+                                 policy_cwd: &Path,
+                                 add_allow: &mut dyn FnMut(PathBuf),
+                                 add_deny: &mut dyn FnMut(PathBuf)| {
+            let candidate = if root.is_absolute() {
+                root
+            } else {
+                policy_cwd.join(root)
             };
+            let canonical = canonicalize(&candidate).unwrap_or(candidate);
+            add_allow(canonical.clone());
+
+            add_git_deny_paths(&canonical, allow_limited_git_writes, add_deny);
+
+            for protected_subdir in [".codex", ".agents"] {
+                let protected_entry = canonical.join(protected_subdir);
+                if protected_entry.exists() {
+                    add_deny(protected_entry);
+                }
+            }
+        };
 
         add_writable_root(
             command_cwd.to_path_buf(),
@@ -92,6 +101,52 @@ pub fn compute_allow_paths(
     AllowDenyPaths { allow, deny }
 }
 
+fn add_git_deny_paths(
+    canonical_writable_root: &Path,
+    allow_limited_git_writes: bool,
+    add_deny: &mut dyn FnMut(PathBuf),
+) {
+    let dot_git = canonical_writable_root.join(".git");
+    if allow_limited_git_writes {
+        if dot_git.is_dir() {
+            add_deny(dot_git.join("config"));
+            add_deny(dot_git.join("hooks"));
+        } else if dot_git.is_file()
+            && let Some(gitdir) = resolve_gitdir_from_file(&dot_git)
+        {
+            add_deny(gitdir.join("config"));
+            add_deny(gitdir.join("hooks"));
+        }
+    } else if dot_git.exists() {
+        add_deny(dot_git.clone());
+        if dot_git.is_file()
+            && let Some(gitdir) = resolve_gitdir_from_file(&dot_git)
+        {
+            add_deny(gitdir);
+        }
+    }
+}
+
+fn resolve_gitdir_from_file(dot_git: &Path) -> Option<PathBuf> {
+    let contents = fs::read_to_string(dot_git).ok()?;
+    let (_, gitdir_raw) = contents.trim().split_once(':')?;
+    let gitdir_raw = gitdir_raw.trim();
+    if gitdir_raw.is_empty() {
+        return None;
+    }
+    let gitdir = PathBuf::from(gitdir_raw);
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        dot_git.parent()?.join(gitdir)
+    };
+    if gitdir.exists() {
+        Some(canonicalize(&gitdir).unwrap_or(gitdir))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +167,7 @@ mod tests {
             writable_roots: vec![AbsolutePathBuf::try_from(extra_root.as_path()).unwrap()],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };
@@ -139,6 +195,7 @@ mod tests {
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
         };
@@ -167,6 +224,7 @@ mod tests {
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
         };
@@ -195,6 +253,7 @@ mod tests {
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
         };
@@ -206,6 +265,76 @@ mod tests {
         let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_file).unwrap()]
             .into_iter()
             .collect();
+
+        assert_eq!(expected_allow, paths.allow);
+        assert_eq!(expected_deny, paths.deny);
+    }
+
+    #[test]
+    fn allows_git_metadata_except_config_and_hooks_when_requested() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let git_dir = command_cwd.join(".git");
+        let git_config = git_dir.join("config");
+        let git_hooks = git_dir.join("hooks");
+        fs::create_dir_all(&git_hooks).expect("create git hooks");
+        fs::write(&git_config, "[core]\n").expect("write git config");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: false,
+            allow_limited_git_writes: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
+            .into_iter()
+            .collect();
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&git_config).unwrap(),
+            dunce::canonicalize(&git_hooks).unwrap(),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(expected_allow, paths.allow);
+        assert_eq!(expected_deny, paths.deny);
+    }
+
+    #[test]
+    fn allow_limited_git_writes_resolves_gitdir_pointer_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let dot_git = command_cwd.join(".git");
+        let gitdir = command_cwd.join("repo.git").join("worktrees").join("example");
+        let git_config = gitdir.join("config");
+        let git_hooks = gitdir.join("hooks");
+        fs::create_dir_all(&git_hooks).expect("create git hooks");
+        fs::write(&git_config, "[core]\n").expect("write git config");
+        fs::write(&dot_git, "gitdir: repo.git/worktrees/example").expect("write git pointer");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: false,
+            allow_limited_git_writes: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
+            .into_iter()
+            .collect();
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&git_config).unwrap(),
+            dunce::canonicalize(&git_hooks).unwrap(),
+        ]
+        .into_iter()
+        .collect();
 
         assert_eq!(expected_allow, paths.allow);
         assert_eq!(expected_deny, paths.deny);
@@ -224,6 +353,7 @@ mod tests {
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
         };
@@ -253,6 +383,7 @@ mod tests {
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
         };

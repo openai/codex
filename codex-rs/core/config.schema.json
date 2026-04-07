@@ -746,6 +746,10 @@
     },
     "FilesystemPermissionsToml": {
       "properties": {
+        "allow_limited_git_writes": {
+          "default": false,
+          "type": "boolean"
+        },
         "glob_scan_max_depth": {
           "description": "Optional maximum depth for expanding unreadable glob patterns on platforms that snapshot glob matches before sandbox startup.",
           "format": "uint",
@@ -1959,6 +1963,10 @@
     "SandboxWorkspaceWrite": {
       "additionalProperties": false,
       "properties": {
+        "allow_limited_git_writes": {
+          "default": false,
+          "type": "boolean"
+        },
         "exclude_slash_tmp": {
           "default": false,
           "type": "boolean"

@@ -645,6 +645,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -701,6 +702,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

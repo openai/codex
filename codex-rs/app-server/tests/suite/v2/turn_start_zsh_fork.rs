@@ -538,6 +538,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
                 writable_roots: vec![workspace.clone().try_into()?],
                 read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }),

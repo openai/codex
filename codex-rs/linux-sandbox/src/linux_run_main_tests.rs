@@ -458,6 +458,7 @@ fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inpu
         writable_roots: vec![workspace],
         read_only_access: ReadOnlyAccess::FullAccess,
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

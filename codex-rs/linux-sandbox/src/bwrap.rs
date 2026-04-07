@@ -1373,6 +1373,7 @@ mod tests {
             ],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -1404,6 +1405,7 @@ mod tests {
             writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };

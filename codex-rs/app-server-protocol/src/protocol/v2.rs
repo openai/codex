@@ -646,6 +646,8 @@ pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
+    pub allow_limited_git_writes: bool,
+    #[serde(default)]
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
@@ -1744,6 +1746,8 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
+        allow_limited_git_writes: bool,
+        #[serde(default)]
         exclude_tmpdir_env_var: bool,
         #[serde(default)]
         exclude_slash_tmp: bool,
@@ -1775,12 +1779,14 @@ impl SandboxPolicy {
                 writable_roots,
                 read_only_access,
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 read_only_access: read_only_access.to_core(),
                 network_access: *network_access,
+                allow_limited_git_writes: *allow_limited_git_writes,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             },
@@ -1813,12 +1819,14 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 writable_roots,
                 read_only_access,
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access: ReadOnlyAccess::from(read_only_access),
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
@@ -9387,6 +9395,7 @@ mod tests {
                 readable_roots: vec![readable_root.clone()],
             },
             network_access: true,
+            allow_limited_git_writes: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };
@@ -9401,6 +9410,7 @@ mod tests {
                     readable_roots: vec![readable_root],
                 },
                 network_access: true,
+                allow_limited_git_writes: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }
@@ -9441,6 +9451,7 @@ mod tests {
                 writable_roots: vec![],
                 read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }

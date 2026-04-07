@@ -424,6 +424,7 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
             writable_roots: vec![],
             read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },

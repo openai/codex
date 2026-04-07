@@ -30,6 +30,7 @@ fn test_writable_roots_constraint() {
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -52,6 +53,7 @@ fn test_writable_roots_constraint() {
         writable_roots: vec![parent],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -100,6 +102,7 @@ fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -145,6 +148,7 @@ fn granular_sandbox_approval_false_rejects_out_of_root_patch() {
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -296,6 +300,7 @@ fn missing_project_dot_codex_config_requires_approval() {
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
