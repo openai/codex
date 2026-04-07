@@ -2349,17 +2349,17 @@ pub struct FsCopyResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsWatchParams {
+    /// Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
+    pub watch_id: String,
     /// Absolute file or directory path to watch.
     pub path: AbsolutePathBuf,
 }
 
-/// Created watch handle returned by `fs/watch`.
+/// Successful response for `fs/watch`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsWatchResponse {
-    /// Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
-    pub watch_id: String,
     /// Canonicalized path associated with the watch.
     pub path: AbsolutePathBuf,
 }
@@ -2369,7 +2369,7 @@ pub struct FsWatchResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsUnwatchParams {
-    /// Watch identifier returned by `fs/watch`.
+    /// Watch identifier previously provided to `fs/watch`.
     pub watch_id: String,
 }
 
@@ -2384,7 +2384,7 @@ pub struct FsUnwatchResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsChangedNotification {
-    /// Watch identifier returned by `fs/watch`.
+    /// Watch identifier previously provided to `fs/watch`.
     pub watch_id: String,
     /// File or directory paths associated with this event.
     pub changed_paths: Vec<AbsolutePathBuf>,
@@ -2603,22 +2603,10 @@ pub struct ThreadStartParams {
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
     pub service_name: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<Option<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
+    pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<Option<String>>,
+    pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
@@ -2733,22 +2721,10 @@ pub struct ThreadResumeParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<Option<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
+    pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<Option<String>>,
+    pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// If true, persist additional rollout EventMsg variants required to
@@ -2822,22 +2798,10 @@ pub struct ThreadForkParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<Option<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
+    pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<Option<String>>,
+    pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// If true, persist additional rollout EventMsg variants required to
@@ -3890,6 +3854,21 @@ pub struct ThreadRealtimeStartParams {
     pub prompt: String,
     #[ts(optional = nullable)]
     pub session_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub transport: Option<ThreadRealtimeStartTransport>,
+}
+
+/// EXPERIMENTAL - transport used by thread realtime.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/", tag = "type")]
+pub enum ThreadRealtimeStartTransport {
+    Websocket,
+    Webrtc {
+        /// SDP offer generated by a WebRTC RTCPeerConnection after configuring audio and the
+        /// realtime events data channel.
+        sdp: String,
+    },
 }
 
 /// EXPERIMENTAL - response for starting thread realtime.
@@ -3979,6 +3958,15 @@ pub struct ThreadRealtimeTranscriptUpdatedNotification {
 pub struct ThreadRealtimeOutputAudioDeltaNotification {
     pub thread_id: String,
     pub audio: ThreadRealtimeAudioChunk,
+}
+
+/// EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeSdpNotification {
+    pub thread_id: String,
+    pub sdp: String,
 }
 
 /// EXPERIMENTAL - emitted when thread realtime encounters an error.
@@ -5048,6 +5036,9 @@ pub struct McpToolCallResult {
     // representations). Using `JsonValue` keeps the payload wire-shaped and easy to export.
     pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
+    #[serde(rename = "_meta")]
+    #[ts(rename = "_meta")]
+    pub meta: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -8359,35 +8350,6 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
-    }
-
-    #[test]
-    fn thread_start_params_preserve_explicit_null_instructions() {
-        let params: ThreadStartParams = serde_json::from_value(json!({
-            "baseInstructions": null,
-            "developerInstructions": null,
-        }))
-        .expect("params should deserialize");
-        assert_eq!(params.base_instructions, Some(None));
-        assert_eq!(params.developer_instructions, Some(None));
-
-        let serialized = serde_json::to_value(&params).expect("params should serialize");
-        assert_eq!(
-            serialized.get("baseInstructions"),
-            Some(&serde_json::Value::Null)
-        );
-        assert_eq!(
-            serialized.get("developerInstructions"),
-            Some(&serde_json::Value::Null)
-        );
-
-        let serialized_without_override =
-            serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
-        assert_eq!(serialized_without_override.get("baseInstructions"), None);
-        assert_eq!(
-            serialized_without_override.get("developerInstructions"),
-            None
-        );
     }
 
     #[test]

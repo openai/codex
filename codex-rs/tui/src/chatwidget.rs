@@ -5028,15 +5028,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
-                let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        self.add_error_message(format!(
-                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
-                        ));
-                        return;
-                    }
-                };
+                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {
                     let message = format!(
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
@@ -6509,6 +6501,7 @@ impl ChatWidget {
                     );
                 }
             }
+            ServerNotification::ThreadRealtimeSdp(_) => {}
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
@@ -7028,6 +7021,7 @@ impl ChatWidget {
                     self.on_realtime_conversation_started(ev);
                 }
             }
+            EventMsg::RealtimeConversationSdp(_) => {}
             EventMsg::RealtimeConversationRealtime(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_realtime(ev);
