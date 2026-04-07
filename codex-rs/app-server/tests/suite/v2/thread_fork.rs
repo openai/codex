@@ -195,7 +195,8 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response_mock = responses::mount_sse_sequence(&server, vec![body.clone(), body]).await;
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![body.clone(), body.clone(), body]).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -233,11 +234,20 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         (
             json!({
                 "threadId": conversation_id.clone(),
-                "config": disabled_instruction_config,
+                "config": disabled_instruction_config.clone(),
                 "baseInstructions": null,
                 "developerInstructions": null,
             }),
             /*expect_instructions*/ false,
+        ),
+        (
+            json!({
+                "threadId": conversation_id.clone(),
+                "config": disabled_instruction_config,
+                "baseInstructions": "",
+                "developerInstructions": "",
+            }),
+            /*expect_instructions*/ true,
         ),
     ];
 
@@ -274,14 +284,22 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
     }
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
-    for (request, expect_instructions) in requests.into_iter().zip([true, false]) {
+    assert_eq!(requests.len(), 3);
+    for (index, (request, expect_instructions)) in
+        requests.into_iter().zip([true, false, true]).enumerate()
+    {
         let payload = request.body_json();
         assert_eq!(
             payload.get("instructions").is_some(),
             expect_instructions,
             "unexpected instructions field in payload: {payload:?}"
         );
+        if index == 2 {
+            assert_eq!(
+                payload.get("instructions"),
+                Some(&Value::String(String::new()))
+            );
+        }
         let developer_texts = request.message_input_texts("developer");
         assert!(
             developer_texts.iter().all(|text| !text.is_empty()),

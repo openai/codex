@@ -399,7 +399,11 @@ impl ModelClient {
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
 
-        let instructions = prompt.base_instructions.text.clone();
+        let instructions = prompt
+            .base_instructions
+            .as_ref()
+            .map(|base_instructions| base_instructions.text.clone())
+            .unwrap_or_default();
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
@@ -755,11 +759,10 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
     ) -> Result<ResponsesApiRequest> {
-        let instructions = if prompt.base_instructions.text.is_empty() {
-            None
-        } else {
-            Some(prompt.base_instructions.text.clone())
-        };
+        let instructions = prompt
+            .base_instructions
+            .as_ref()
+            .map(|base_instructions| base_instructions.text.clone());
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;

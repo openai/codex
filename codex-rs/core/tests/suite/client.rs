@@ -921,7 +921,7 @@ async fn includes_base_instructions_override_in_request() {
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
-            config.base_instructions = Some("test instructions".to_string());
+            config.base_instructions = Some(Some("test instructions".to_string()));
         });
     let codex = builder
         .build(&server)
