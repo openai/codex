@@ -7,6 +7,7 @@ use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AlarmDelivery;
+use codex_app_server_protocol::AlarmTrigger;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -320,6 +321,28 @@ impl AppServerSession {
         started_thread_from_start_response(response, config).await
     }
 
+    pub(crate) async fn start_ephemeral_thread_with_base_instructions(
+        &mut self,
+        config: &Config,
+        base_instructions: String,
+    ) -> Result<AppServerStartedThread> {
+        let request_id = self.next_request_id();
+        let mut params = thread_start_params_from_config(
+            config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+        );
+        params.ephemeral = Some(true);
+        params.persist_extended_history = false;
+        params.base_instructions = Some(base_instructions);
+        let response: ThreadStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
+            .await
+            .wrap_err("thread/start failed during alarm spec parsing")?;
+        started_thread_from_start_response(response, config).await
+    }
+
     pub(crate) async fn resume_thread(
         &mut self,
         config: Config,
@@ -421,9 +444,8 @@ impl AppServerSession {
     pub(crate) async fn thread_alarm_create(
         &mut self,
         thread_id: ThreadId,
-        cron_expression: String,
+        trigger: AlarmTrigger,
         prompt: String,
-        run_once: Option<bool>,
         delivery: AlarmDelivery,
     ) -> Result<ThreadAlarm> {
         let request_id = self.next_request_id();
@@ -433,9 +455,8 @@ impl AppServerSession {
                 request_id,
                 params: ThreadAlarmCreateParams {
                     thread_id: thread_id.to_string(),
-                    cron_expression,
+                    trigger,
                     prompt,
-                    run_once,
                     delivery,
                 },
             })

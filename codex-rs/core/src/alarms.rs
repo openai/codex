@@ -1,12 +1,14 @@
 //! Persistent thread-local alarm scheduling for follow-on turns and same-turn steer delivery.
 //!
-//! This module owns the in-memory alarm registry, schedule parsing, the hidden
+//! This module owns the in-memory alarm registry, trigger evaluation, the hidden
 //! alarm prompt injected when an alarm fires, and the JSON sidecar format used
 //! to restore alarms after a harness restart.
 
-use chrono::DateTime;
-use chrono::Duration as ChronoDuration;
-use chrono::TimeZone;
+use crate::alarm_trigger::AlarmTrigger;
+use crate::alarm_trigger::TriggerTiming;
+use crate::alarm_trigger::next_run_after_due;
+use crate::alarm_trigger::timing_for_new_trigger;
+use crate::alarm_trigger::timing_for_restored_trigger;
 use chrono::Utc;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -19,15 +21,13 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-pub const AFTER_TURN_CRON_EXPRESSION: &str = "@after-turn";
-const EVERY_PREFIX: &str = "@every ";
-const EVERY_SECONDS_PREFIX: &str = "@every:";
 pub const ALARM_UPDATED_BACKGROUND_EVENT_PREFIX: &str = "alarm_updated:";
 pub const ALARM_FIRED_BACKGROUND_EVENT_PREFIX: &str = "alarm_fired:";
 pub const MAX_ACTIVE_ALARMS_PER_THREAD: usize = 256;
-const MAX_EVERY_SECONDS: u64 = i64::MAX as u64;
 const ONE_SHOT_ALARM_PROMPT: &str = include_str!("../templates/alarms/one_shot_prompt.md");
 const RECURRING_ALARM_PROMPT: &str = include_str!("../templates/alarms/recurring_prompt.md");
+
+pub use crate::alarm_trigger::AlarmTrigger as ThreadAlarmTrigger;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -48,9 +48,8 @@ impl AlarmDelivery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadAlarm {
     pub id: String,
-    pub cron_expression: String,
+    pub trigger: AlarmTrigger,
     pub prompt: String,
-    pub run_once: bool,
     pub delivery: AlarmDelivery,
     pub created_at: i64,
     pub next_run_at: Option<i64>,
@@ -60,9 +59,9 @@ pub struct ThreadAlarm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AlarmInvocationContext {
     pub(crate) current_alarm_id: String,
-    pub(crate) cron_expression: String,
+    pub(crate) trigger: AlarmTrigger,
     pub(crate) prompt: String,
-    pub(crate) run_once: bool,
+    pub(crate) recurring: bool,
     pub(crate) delivery: AlarmDelivery,
 }
 
@@ -70,17 +69,16 @@ pub(crate) struct AlarmInvocationContext {
 pub(crate) struct ClaimedAlarm {
     pub(crate) alarm: ThreadAlarm,
     pub(crate) context: AlarmInvocationContext,
-    pub(crate) deleted_run_once_alarm: bool,
+    pub(crate) deleted_one_shot_alarm: bool,
 }
 
 #[derive(Debug)]
 pub(crate) struct CreateAlarm {
     pub(crate) id: String,
-    pub(crate) cron_expression: String,
+    pub(crate) trigger: AlarmTrigger,
     pub(crate) prompt: String,
-    pub(crate) run_once: bool,
     pub(crate) delivery: AlarmDelivery,
-    pub(crate) now: DateTime<Utc>,
+    pub(crate) now: chrono::DateTime<Utc>,
 }
 
 #[derive(Debug, Default)]
@@ -91,15 +89,8 @@ pub(crate) struct AlarmsState {
 #[derive(Debug)]
 pub(crate) struct AlarmRuntime {
     pub(crate) alarm: ThreadAlarm,
-    schedule: AlarmSchedule,
     pending_run: bool,
     pub(crate) timer_cancel: Option<CancellationToken>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AlarmSchedule {
-    AfterTurn,
-    EverySeconds(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,54 +101,7 @@ pub(crate) struct PersistedAlarm {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AlarmTimerSpec {
-    pub(crate) seconds: u64,
-    pub(crate) initial_delay: std::time::Duration,
-}
-
-impl AlarmSchedule {
-    pub(crate) fn parse(cron_expression: &str) -> Result<Self, String> {
-        if cron_expression == AFTER_TURN_CRON_EXPRESSION {
-            return Ok(Self::AfterTurn);
-        }
-
-        if let Some(seconds) = cron_expression
-            .strip_prefix(EVERY_PREFIX)
-            .map(str::trim)
-            .and_then(parse_duration_literal)
-        {
-            return Self::parse_every_seconds(seconds, cron_expression);
-        }
-
-        if let Some(seconds) = cron_expression
-            .strip_prefix(EVERY_SECONDS_PREFIX)
-            .and_then(|raw| raw.parse::<u64>().ok())
-            .filter(|seconds| *seconds > 0)
-        {
-            return Self::parse_every_seconds(seconds, cron_expression);
-        }
-
-        Err(format!(
-            "unsupported cron_expression `{cron_expression}`; supported values are `{AFTER_TURN_CRON_EXPRESSION}`, `@every 5m`, or `@every:300`"
-        ))
-    }
-
-    fn parse_every_seconds(seconds: u64, cron_expression: &str) -> Result<Self, String> {
-        if seconds > MAX_EVERY_SECONDS {
-            return Err(format!(
-                "unsupported cron_expression `{cron_expression}`; @every values must be between 1 and {MAX_EVERY_SECONDS} seconds"
-            ));
-        }
-        Ok(Self::EverySeconds(seconds))
-    }
-
-    fn next_run_at(self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        match self {
-            Self::AfterTurn => None,
-            Self::EverySeconds(seconds) => {
-                now.checked_add_signed(ChronoDuration::seconds(i64::try_from(seconds).ok()?))
-            }
-        }
-    }
+    pub(crate) delay: std::time::Duration,
 }
 
 impl AlarmsState {
@@ -197,7 +141,7 @@ impl AlarmsState {
         &mut self,
         create_alarm: CreateAlarm,
         timer_cancel: Option<CancellationToken>,
-    ) -> Result<ThreadAlarm, String> {
+    ) -> Result<(ThreadAlarm, Option<AlarmTimerSpec>), String> {
         if self.alarms.len() >= MAX_ACTIVE_ALARMS_PER_THREAD {
             return Err(format!(
                 "too many active alarms; each thread supports at most {MAX_ACTIVE_ALARMS_PER_THREAD} alarms"
@@ -205,47 +149,41 @@ impl AlarmsState {
         }
         let CreateAlarm {
             id,
-            cron_expression,
+            trigger,
             prompt,
-            run_once,
             delivery,
             now,
         } = create_alarm;
-        let schedule = AlarmSchedule::parse(&cron_expression)?;
-        let next_run_at = match schedule {
-            AlarmSchedule::AfterTurn => None,
-            AlarmSchedule::EverySeconds(_) => Some(schedule.next_run_at(now).ok_or_else(|| {
-                format!(
-                    "unsupported cron_expression `{cron_expression}`; next run time is out of range"
-                )
-            })?),
-        };
+        let TriggerTiming {
+            trigger,
+            pending_run,
+            next_run_at,
+            timer_delay,
+        } = timing_for_new_trigger(trigger, now, now)?;
         let alarm = ThreadAlarm {
             id: id.clone(),
-            cron_expression,
+            trigger,
             prompt,
-            run_once,
             delivery,
             created_at: now.timestamp(),
-            next_run_at: next_run_at.map(|value| value.timestamp()),
+            next_run_at,
             last_run_at: None,
         };
         self.alarms.insert(
             id,
             AlarmRuntime {
                 alarm: alarm.clone(),
-                schedule,
-                pending_run: matches!(schedule, AlarmSchedule::AfterTurn),
+                pending_run,
                 timer_cancel,
             },
         );
-        Ok(alarm)
+        Ok((alarm, timer_delay.map(|delay| AlarmTimerSpec { delay })))
     }
 
     pub(crate) fn restore_alarm(
         &mut self,
         persisted: PersistedAlarm,
-        now: DateTime<Utc>,
+        now: chrono::DateTime<Utc>,
         timer_cancel: Option<CancellationToken>,
     ) -> Result<Option<AlarmTimerSpec>, String> {
         if self.alarms.len() >= MAX_ACTIVE_ALARMS_PER_THREAD {
@@ -253,46 +191,37 @@ impl AlarmsState {
                 "too many persisted alarms; each thread supports at most {MAX_ACTIVE_ALARMS_PER_THREAD} alarms"
             ));
         }
-        let schedule = AlarmSchedule::parse(&persisted.alarm.cron_expression)?;
-        let mut alarm = persisted.alarm;
-        let mut pending_run = persisted.pending_run;
-        let timer_spec = match schedule {
-            AlarmSchedule::AfterTurn => {
-                alarm.next_run_at = None;
-                None
-            }
-            AlarmSchedule::EverySeconds(seconds) => {
-                let initial_delay = match alarm
-                    .next_run_at
-                    .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
-                {
-                    Some(next_run_at) if next_run_at > now => (next_run_at - now)
-                        .to_std()
-                        .map_err(|err| err.to_string())?,
-                    _ => {
-                        pending_run = true;
-                        alarm.next_run_at =
-                            schedule.next_run_at(now).map(|value| value.timestamp());
-                        std::time::Duration::from_secs(seconds)
-                    }
-                };
-                Some(AlarmTimerSpec {
-                    seconds,
-                    initial_delay,
-                })
-            }
+        let PersistedAlarm {
+            alarm,
+            pending_run: persisted_pending_run,
+        } = persisted;
+        let TriggerTiming {
+            trigger,
+            pending_run,
+            next_run_at,
+            timer_delay,
+        } = timing_for_restored_trigger(
+            alarm.trigger,
+            alarm.created_at,
+            persisted_pending_run,
+            alarm.next_run_at,
+            now,
+        )?;
+        let alarm = ThreadAlarm {
+            trigger,
+            next_run_at,
+            ..alarm
         };
         let id = alarm.id.clone();
         self.alarms.insert(
             id,
             AlarmRuntime {
                 alarm,
-                schedule,
                 pending_run,
                 timer_cancel,
             },
         );
-        Ok(timer_spec)
+        Ok(timer_delay.map(|delay| AlarmTimerSpec { delay }))
     }
 
     pub(crate) fn remove_alarm(&mut self, id: &str) -> Option<AlarmRuntime> {
@@ -309,37 +238,51 @@ impl AlarmsState {
         }
     }
 
-    pub(crate) fn mark_after_turn_alarms_due(&mut self) -> bool {
-        let mut changed = false;
-        for runtime in self.alarms.values_mut() {
-            if matches!(runtime.schedule, AlarmSchedule::AfterTurn) && !runtime.pending_run {
-                runtime.pending_run = true;
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    pub(crate) fn mark_alarm_due(&mut self, id: &str, now: DateTime<Utc>) -> bool {
+    pub(crate) fn mark_alarm_due(&mut self, id: &str, now: chrono::DateTime<Utc>) -> bool {
         let Some(runtime) = self.alarms.get_mut(id) else {
             return false;
         };
         let mut changed = !runtime.pending_run;
         runtime.pending_run = true;
-        let next_run_at = runtime
-            .schedule
-            .next_run_at(now)
-            .map(|value| value.timestamp());
-        if runtime.alarm.next_run_at != next_run_at {
-            runtime.alarm.next_run_at = next_run_at;
-            changed = true;
+        match next_run_after_due(&runtime.alarm.trigger, runtime.alarm.created_at, now) {
+            Ok(next_run_at) if runtime.alarm.next_run_at != next_run_at => {
+                runtime.alarm.next_run_at = next_run_at;
+                changed = true;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    "failed to advance alarm {} trigger: {err}",
+                    runtime.alarm.id
+                );
+            }
         }
         changed
     }
 
+    pub(crate) fn timer_spec_for_alarm(
+        &self,
+        id: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Option<AlarmTimerSpec> {
+        let runtime = self.alarms.get(id)?;
+        let next_run_at = runtime.alarm.next_run_at?;
+        if runtime.pending_run && !runtime.alarm.trigger.is_recurring() {
+            return None;
+        }
+        Some(AlarmTimerSpec {
+            delay: if next_run_at <= now.timestamp() {
+                std::time::Duration::ZERO
+            } else {
+                let delay = u64::try_from(next_run_at - now.timestamp()).ok()?;
+                std::time::Duration::from_secs(delay)
+            },
+        })
+    }
+
     pub(crate) fn claim_next_alarm(
         &mut self,
-        now: DateTime<Utc>,
+        now: chrono::DateTime<Utc>,
         can_after_turn: bool,
         can_steer_current_turn: bool,
     ) -> Option<ClaimedAlarm> {
@@ -372,12 +315,12 @@ impl AlarmsState {
         let runtime = self.alarms.remove(&next_alarm_id)?;
         let AlarmRuntime {
             mut alarm,
-            schedule,
             pending_run: _,
             timer_cancel,
         } = runtime;
-        let deleted_run_once_alarm = alarm.run_once;
-        if deleted_run_once_alarm {
+        let is_recurring = alarm.trigger.is_recurring();
+        let deleted_one_shot_alarm = !is_recurring;
+        if deleted_one_shot_alarm {
             if let Some(cancel) = timer_cancel.as_ref() {
                 cancel.cancel();
             }
@@ -387,7 +330,6 @@ impl AlarmsState {
                 alarm.id.clone(),
                 AlarmRuntime {
                     alarm: alarm.clone(),
-                    schedule,
                     pending_run: false,
                     timer_cancel,
                 },
@@ -397,21 +339,21 @@ impl AlarmsState {
             alarm: alarm.clone(),
             context: AlarmInvocationContext {
                 current_alarm_id: alarm.id,
-                cron_expression: alarm.cron_expression,
+                trigger: alarm.trigger,
                 prompt: alarm.prompt,
-                run_once: alarm.run_once,
+                recurring: is_recurring,
                 delivery: actual_delivery,
             },
-            deleted_run_once_alarm,
+            deleted_one_shot_alarm,
         })
     }
 }
 
 pub(crate) fn alarm_prompt_input_item(alarm: &AlarmInvocationContext) -> ResponseInputItem {
-    let text = if alarm.run_once {
-        render_alarm_prompt_template(ONE_SHOT_ALARM_PROMPT, alarm)
-    } else {
+    let text = if alarm.recurring {
         render_alarm_prompt_template(RECURRING_ALARM_PROMPT, alarm)
+    } else {
+        render_alarm_prompt_template(ONE_SHOT_ALARM_PROMPT, alarm)
     };
     ResponseInputItem::Message {
         role: "developer".to_string(),
@@ -422,7 +364,7 @@ pub(crate) fn alarm_prompt_input_item(alarm: &AlarmInvocationContext) -> Respons
 fn render_alarm_prompt_template(template: &str, alarm: &AlarmInvocationContext) -> String {
     template
         .replace("{{CURRENT_ALARM_ID}}", &alarm.current_alarm_id)
-        .replace("{{SCHEDULE}}", &alarm.cron_expression)
+        .replace("{{TRIGGER}}", &alarm.trigger.display())
         .replace("{{PROMPT}}", &alarm.prompt)
         .replace("{{DELIVERY}}", alarm.delivery.as_str())
         .trim_end()
@@ -445,12 +387,25 @@ pub(crate) async fn load_alarm_sidecar(rollout_path: &Path) -> Result<Vec<Persis
             ));
         }
     };
-    serde_json::from_slice(&bytes).map_err(|err| {
+    let raw_alarms: Vec<serde_json::Value> = serde_json::from_slice(&bytes).map_err(|err| {
         format!(
             "failed to parse alarm sidecar `{}`: {err}",
             sidecar_path.display()
         )
-    })
+    })?;
+    let mut alarms = Vec::new();
+    for raw_alarm in raw_alarms {
+        match serde_json::from_value::<PersistedAlarm>(raw_alarm) {
+            Ok(alarm) => alarms.push(alarm),
+            Err(err) => {
+                tracing::warn!(
+                    "skipping invalid persisted alarm from `{}`: {err}",
+                    sidecar_path.display()
+                );
+            }
+        }
+    }
+    Ok(alarms)
 }
 
 pub(crate) async fn write_alarm_sidecar(
@@ -523,43 +478,19 @@ pub(crate) async fn write_alarm_sidecar(
     }
 }
 
-fn parse_duration_literal(raw: &str) -> Option<u64> {
-    let mut digits = String::new();
-    let mut unit = String::new();
-    for ch in raw.chars() {
-        if ch.is_ascii_digit() && unit.is_empty() {
-            digits.push(ch);
-        } else if !ch.is_whitespace() {
-            unit.push(ch);
-        }
-    }
-    let value = digits.parse::<u64>().ok().filter(|value| *value > 0)?;
-    match unit.as_str() {
-        "s" | "sec" | "secs" | "second" | "seconds" => Some(value),
-        "m" | "min" | "mins" | "minute" | "minutes" => value.checked_mul(60),
-        "h" | "hr" | "hrs" | "hour" | "hours" => value.checked_mul(60 * 60),
-        "d" | "day" | "days" => value.checked_mul(60 * 60 * 24),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::AFTER_TURN_CRON_EXPRESSION;
     use super::AlarmDelivery;
     use super::AlarmInvocationContext;
-    use super::AlarmSchedule;
     use super::AlarmsState;
     use super::CreateAlarm;
     use super::MAX_ACTIVE_ALARMS_PER_THREAD;
-    use super::MAX_EVERY_SECONDS;
     use super::PersistedAlarm;
     use super::alarm_prompt_input_item;
     use super::alarm_sidecar_path_for_rollout;
     use super::load_alarm_sidecar;
     use super::write_alarm_sidecar;
-    use chrono::DateTime;
-    use chrono::Duration as ChronoDuration;
+    use crate::alarm_trigger::AlarmTrigger;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::models::ContentItem;
@@ -567,81 +498,31 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
-    #[test]
-    fn parses_supported_alarm_schedules() {
-        assert_eq!(
-            AlarmSchedule::parse(AFTER_TURN_CRON_EXPRESSION),
-            Ok(AlarmSchedule::AfterTurn)
-        );
-        assert_eq!(
-            AlarmSchedule::parse("@every 5m"),
-            Ok(AlarmSchedule::EverySeconds(300))
-        );
-        assert_eq!(
-            AlarmSchedule::parse("@every:3600"),
-            Ok(AlarmSchedule::EverySeconds(3600))
-        );
+    const ZERO_SECONDS: u64 = 0;
+    const TEN_SECONDS: u64 = 10;
+    const SIXTY_SECONDS: u64 = 60;
+
+    fn delay(seconds: u64, repeat: Option<bool>) -> AlarmTrigger {
+        AlarmTrigger::Delay { seconds, repeat }
     }
 
     #[test]
-    fn rejects_overflowing_every_alarm_schedules() {
-        let too_large = MAX_EVERY_SECONDS + 1;
-        assert_eq!(
-            AlarmSchedule::parse(&format!("@every:{too_large}")),
-            Err(format!(
-                "unsupported cron_expression `@every:{too_large}`; @every values must be between 1 and {MAX_EVERY_SECONDS} seconds"
-            ))
-        );
-        assert_eq!(
-            AlarmSchedule::parse(&format!("@every {too_large}s")),
-            Err(format!(
-                "unsupported cron_expression `@every {too_large}s`; @every values must be between 1 and {MAX_EVERY_SECONDS} seconds"
-            ))
-        );
-    }
-
-    #[test]
-    fn create_alarm_rejects_every_schedule_when_next_run_at_is_out_of_range() {
-        let now = DateTime::<Utc>::MAX_UTC - ChronoDuration::seconds(1);
-        let mut alarms = AlarmsState::default();
-
-        let result = alarms.create_alarm(
-            CreateAlarm {
-                id: "alarm-1".to_string(),
-                cron_expression: "@every:2".to_string(),
-                prompt: "overflow".to_string(),
-                run_once: false,
-                delivery: AlarmDelivery::AfterTurn,
-                now,
-            },
-            /*timer_cancel*/ None,
-        );
-
-        assert_eq!(
-            result,
-            Err(
-                "unsupported cron_expression `@every:2`; next run time is out of range".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn claim_run_once_alarm_removes_it() {
+    fn claim_one_shot_alarm_removes_it() {
         let now = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
         let mut alarms = AlarmsState::default();
-        let alarm = alarms
+        let (alarm, timer_spec) = alarms
             .create_alarm(
                 CreateAlarm {
                     id: "alarm-1".to_string(),
-                    cron_expression: AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    trigger: delay(ZERO_SECONDS, /*repeat*/ None),
                     prompt: "run tests".to_string(),
-                    run_once: true,
                     delivery: AlarmDelivery::AfterTurn,
                     now,
                 },
                 /*timer_cancel*/ None,
             )
             .expect("alarm should be created");
+        assert_eq!(timer_spec, None);
         assert_eq!(alarms.list_alarms(), vec![alarm]);
 
         let claimed = alarms
@@ -650,7 +531,7 @@ mod tests {
             )
             .expect("alarm should be claimed");
         assert_eq!(claimed.context.current_alarm_id, "alarm-1");
-        assert!(claimed.deleted_run_once_alarm);
+        assert!(claimed.deleted_one_shot_alarm);
         assert!(alarms.list_alarms().is_empty());
     }
 
@@ -665,9 +546,8 @@ mod tests {
             .create_alarm(
                 CreateAlarm {
                     id: "alarm-1".to_string(),
-                    cron_expression: AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    trigger: delay(TEN_SECONDS, Some(true)),
                     prompt: "older recurring alarm".to_string(),
-                    run_once: false,
                     delivery: AlarmDelivery::AfterTurn,
                     now: create_first,
                 },
@@ -678,15 +558,16 @@ mod tests {
             .create_alarm(
                 CreateAlarm {
                     id: "alarm-2".to_string(),
-                    cron_expression: AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    trigger: delay(TEN_SECONDS, Some(true)),
                     prompt: "newer recurring alarm".to_string(),
-                    run_once: false,
                     delivery: AlarmDelivery::AfterTurn,
                     now: create_second,
                 },
                 /*timer_cancel*/ None,
             )
             .expect("alarm should be created");
+        alarms.mark_alarm_due("alarm-1", first_claimed_at);
+        alarms.mark_alarm_due("alarm-2", first_claimed_at);
 
         let first = alarms
             .claim_next_alarm(
@@ -696,8 +577,6 @@ mod tests {
             )
             .expect("first alarm should be claimed");
         assert_eq!(first.context.current_alarm_id, "alarm-1");
-
-        alarms.mark_after_turn_alarms_due();
 
         let second = alarms
             .claim_next_alarm(
@@ -718,9 +597,8 @@ mod tests {
                 .create_alarm(
                     CreateAlarm {
                         id: format!("alarm-{index}"),
-                        cron_expression: AFTER_TURN_CRON_EXPRESSION.to_string(),
+                        trigger: delay(SIXTY_SECONDS, Some(true)),
                         prompt: format!("prompt-{index}"),
-                        run_once: false,
                         delivery: AlarmDelivery::AfterTurn,
                         now,
                     },
@@ -732,9 +610,8 @@ mod tests {
         let result = alarms.create_alarm(
             CreateAlarm {
                 id: "alarm-overflow".to_string(),
-                cron_expression: AFTER_TURN_CRON_EXPRESSION.to_string(),
+                trigger: delay(SIXTY_SECONDS, Some(true)),
                 prompt: "overflow".to_string(),
-                run_once: false,
                 delivery: AlarmDelivery::AfterTurn,
                 now,
             },
@@ -753,9 +630,9 @@ mod tests {
     fn alarm_prompt_input_is_hidden_developer_input() {
         let item = alarm_prompt_input_item(&AlarmInvocationContext {
             current_alarm_id: "alarm-1".to_string(),
-            cron_expression: "@every 10s".to_string(),
+            trigger: delay(TEN_SECONDS, Some(true)),
             prompt: "run tests".to_string(),
-            run_once: false,
+            recurring: true,
             delivery: AlarmDelivery::SteerCurrentTurn,
         });
         assert_eq!(
@@ -763,7 +640,7 @@ mod tests {
             ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "Recurring scheduled alarm prompt:\nrun tests\n\ncurrentAlarmId: alarm-1\nConfigured delivery: steer-current-turn\nSchedule: @every 10s\n\nThis alarm should keep running on its schedule unless the user asked for a stopping condition and that condition is now satisfied.\nIf that stopping condition is satisfied, stop the alarm by calling AlarmDelete with {\"id\":\"alarm-1\"}.\nDo not expose scheduler internals unless they matter to the user.".to_string(),
+                    text: "Recurring scheduled alarm prompt:\nrun tests\n\ncurrentAlarmId: alarm-1\nConfigured delivery: steer-current-turn\nTrigger: delay 10s, repeat\n\nThis alarm should keep running on its schedule unless the user asked for a stopping condition and that condition is now satisfied.\nIf that stopping condition is satisfied, stop the alarm by calling AlarmDelete with {\"id\":\"alarm-1\"}.\nDo not expose scheduler internals unless they matter to the user.".to_string(),
                 }],
             }
         );
@@ -773,9 +650,9 @@ mod tests {
     fn one_shot_alarm_prompt_input_omits_delete_instruction() {
         let item = alarm_prompt_input_item(&AlarmInvocationContext {
             current_alarm_id: "alarm-1".to_string(),
-            cron_expression: "@after-turn".to_string(),
+            trigger: delay(ZERO_SECONDS, /*repeat*/ None),
             prompt: "run tests once".to_string(),
-            run_once: true,
+            recurring: false,
             delivery: AlarmDelivery::AfterTurn,
         });
         assert_eq!(
@@ -783,7 +660,7 @@ mod tests {
             ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "One-shot scheduled alarm prompt:\nrun tests once\n\ncurrentAlarmId: alarm-1\nConfigured delivery: after-turn\nSchedule: @after-turn\n\nThis one-shot alarm has already been removed from the schedule, so you do not need to call AlarmDelete.\nDo not expose scheduler internals unless they matter to the user.".to_string(),
+                    text: "One-shot scheduled alarm prompt:\nrun tests once\n\ncurrentAlarmId: alarm-1\nConfigured delivery: after-turn\nTrigger: delay 0s\n\nThis one-shot alarm has already been removed from the schedule, so you do not need to call AlarmDelete.\nDo not expose scheduler internals unless they matter to the user.".to_string(),
                 }],
             }
         );
@@ -796,9 +673,8 @@ mod tests {
         let persisted = vec![PersistedAlarm {
             alarm: super::ThreadAlarm {
                 id: "alarm-1".to_string(),
-                cron_expression: "@after-turn".to_string(),
+                trigger: delay(ZERO_SECONDS, /*repeat*/ None),
                 prompt: "run tests".to_string(),
-                run_once: false,
                 delivery: AlarmDelivery::AfterTurn,
                 created_at: 1,
                 next_run_at: None,
@@ -828,9 +704,8 @@ mod tests {
         let original = vec![PersistedAlarm {
             alarm: super::ThreadAlarm {
                 id: "alarm-1".to_string(),
-                cron_expression: "@after-turn".to_string(),
+                trigger: delay(ZERO_SECONDS, /*repeat*/ None),
                 prompt: "run tests".to_string(),
-                run_once: false,
                 delivery: AlarmDelivery::AfterTurn,
                 created_at: 1,
                 next_run_at: None,
@@ -841,9 +716,8 @@ mod tests {
         let replacement = vec![PersistedAlarm {
             alarm: super::ThreadAlarm {
                 id: "alarm-2".to_string(),
-                cron_expression: "@after-turn".to_string(),
+                trigger: delay(SIXTY_SECONDS, Some(true)),
                 prompt: "run different tests".to_string(),
-                run_once: true,
                 delivery: AlarmDelivery::SteerCurrentTurn,
                 created_at: 2,
                 next_run_at: None,
@@ -863,5 +737,52 @@ mod tests {
             .await
             .expect("load overwritten sidecar");
         assert_eq!(loaded, replacement);
+    }
+
+    #[tokio::test]
+    async fn alarm_sidecar_skips_invalid_entries() {
+        let tempdir = TempDir::new().expect("tempdir");
+        let rollout_path = tempdir.path().join("rollout.jsonl");
+        let sidecar_path = alarm_sidecar_path_for_rollout(&rollout_path);
+        tokio::fs::write(
+            &sidecar_path,
+            r#"[
+              { "alarm": { "id": "old", "cronExpression": "@after-turn" }, "pending_run": true },
+              {
+                "alarm": {
+                  "id": "alarm-1",
+                  "trigger": { "kind": "delay", "seconds": 0, "repeat": null },
+                  "prompt": "run tests",
+                  "delivery": "after-turn",
+                  "created_at": 1,
+                  "next_run_at": null,
+                  "last_run_at": null
+                },
+                "pending_run": true
+              }
+            ]"#,
+        )
+        .await
+        .expect("write sidecar");
+
+        let loaded = load_alarm_sidecar(&rollout_path)
+            .await
+            .expect("load sidecar");
+
+        assert_eq!(
+            loaded,
+            vec![PersistedAlarm {
+                alarm: super::ThreadAlarm {
+                    id: "alarm-1".to_string(),
+                    trigger: delay(ZERO_SECONDS, /*repeat*/ None),
+                    prompt: "run tests".to_string(),
+                    delivery: AlarmDelivery::AfterTurn,
+                    created_at: 1,
+                    next_run_at: None,
+                    last_run_at: None,
+                },
+                pending_run: true,
+            }]
+        );
     }
 }

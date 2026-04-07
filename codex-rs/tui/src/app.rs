@@ -4261,21 +4261,16 @@ impl App {
                 Ok(parsed) => match app_server
                     .thread_alarm_create(
                         thread_id,
-                        parsed.cron_expression.clone(),
+                        parsed.trigger.clone(),
                         parsed.prompt.clone(),
-                        parsed.run_once,
                         parsed.delivery,
                     )
                     .await
                 {
                     Ok(alarm) => {
                         if self.chat_widget.thread_id() == Some(thread_id) {
-                            let summary = format_alarm_summary(
-                                &alarm.cron_expression,
-                                alarm.run_once,
-                                alarm.delivery,
-                                &alarm.prompt,
-                            );
+                            let summary =
+                                format_alarm_summary(&alarm.trigger, alarm.delivery, &alarm.prompt);
                             self.chat_widget.add_info_message(
                                 format!("Created thread alarm from `/loop {spec}`."),
                                 Some(summary),

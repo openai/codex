@@ -97,6 +97,63 @@
       ],
       "type": "string"
     },
+    "AlarmTrigger": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "delay"
+              ],
+              "type": "string"
+            },
+            "repeat": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "seconds": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "seconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dtstart": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "schedule"
+              ],
+              "type": "string"
+            },
+            "rrule": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "KindAlarmTrigger",
+          "type": "object"
+        }
+      ]
+    },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
@@ -2532,9 +2589,6 @@
           "format": "int64",
           "type": "integer"
         },
-        "cronExpression": {
-          "type": "string"
-        },
         "delivery": {
           "$ref": "#/definitions/AlarmDelivery"
         },
@@ -2558,17 +2612,16 @@
         "prompt": {
           "type": "string"
         },
-        "runOnce": {
-          "type": "boolean"
+        "trigger": {
+          "$ref": "#/definitions/AlarmTrigger"
         }
       },
       "required": [
         "createdAt",
-        "cronExpression",
         "delivery",
         "id",
         "prompt",
-        "runOnce"
+        "trigger"
       ],
       "type": "object"
     },

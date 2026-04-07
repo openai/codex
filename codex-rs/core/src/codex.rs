@@ -259,13 +259,13 @@ use crate::SkillsManager;
 use crate::alarms::ALARM_FIRED_BACKGROUND_EVENT_PREFIX;
 use crate::alarms::ALARM_UPDATED_BACKGROUND_EVENT_PREFIX;
 use crate::alarms::AlarmDelivery;
-use crate::alarms::AlarmSchedule;
 use crate::alarms::AlarmTimerSpec;
 use crate::alarms::AlarmsState;
 use crate::alarms::ClaimedAlarm;
 use crate::alarms::CreateAlarm;
 use crate::alarms::PersistedAlarm;
 use crate::alarms::ThreadAlarm;
+use crate::alarms::ThreadAlarmTrigger;
 use crate::alarms::alarm_prompt_input_item;
 use crate::alarms::load_alarm_sidecar;
 use crate::alarms::write_alarm_sidecar;
@@ -2700,9 +2700,8 @@ impl Session {
 
     pub(crate) async fn create_alarm(
         self: &Arc<Self>,
-        cron_expression: String,
+        trigger: ThreadAlarmTrigger,
         prompt: String,
-        run_once: bool,
         delivery: AlarmDelivery,
     ) -> Result<ThreadAlarm, String> {
         self.ensure_rollout_materialized().await;
@@ -2710,22 +2709,19 @@ impl Session {
             return Err("alarms require a persisted rollout path for restoration".to_string());
         };
 
-        let schedule = AlarmSchedule::parse(&cron_expression)?;
-        let timer_cancel =
-            matches!(schedule, AlarmSchedule::EverySeconds(_)).then(CancellationToken::new);
+        let timer_cancel = CancellationToken::new();
         let id = uuid::Uuid::new_v4().to_string();
-        let alarm = {
+        let (alarm, timer_spec) = {
             let mut alarms = self.alarms.lock().await;
             alarms.create_alarm(
                 CreateAlarm {
                     id: id.clone(),
-                    cron_expression,
+                    trigger,
                     prompt,
-                    run_once,
                     delivery,
                     now: Utc::now(),
                 },
-                timer_cancel.clone(),
+                Some(timer_cancel.clone()),
             )?
         };
         if let Err(err) = self.persist_alarms_to_rollout_sidecar(&rollout_path).await {
@@ -2735,15 +2731,8 @@ impl Session {
             return Err(err);
         }
 
-        if let (AlarmSchedule::EverySeconds(seconds), Some(cancel)) = (schedule, timer_cancel) {
-            self.spawn_alarm_timer(
-                id,
-                AlarmTimerSpec {
-                    seconds,
-                    initial_delay: std::time::Duration::from_secs(seconds),
-                },
-                cancel,
-            );
+        if let Some(timer_spec) = timer_spec {
+            self.spawn_alarm_timer(id, timer_spec, timer_cancel);
         }
         self.emit_alarm_updated_notification().await;
         self.maybe_start_pending_alarm().await;
@@ -2767,25 +2756,18 @@ impl Session {
         Ok(true)
     }
 
-    pub(crate) async fn mark_after_turn_alarms_due(&self) {
-        let changed = self.alarms.lock().await.mark_after_turn_alarms_due();
-        if changed {
-            self.persist_alarms_sidecar_best_effort().await;
-        }
-    }
-
     pub(crate) async fn maybe_start_pending_alarm(self: &Arc<Self>) {
         let Some(ClaimedAlarm {
             alarm,
             context,
-            deleted_run_once_alarm,
+            deleted_one_shot_alarm,
         }) = self.claim_next_alarm_for_delivery().await
         else {
             return;
         };
 
         self.emit_alarm_fired_notification(&alarm).await;
-        if deleted_run_once_alarm {
+        if deleted_one_shot_alarm {
             self.emit_alarm_updated_notification().await;
         }
         self.persist_alarms_sidecar_best_effort().await;
@@ -2869,7 +2851,7 @@ impl Session {
         let weak = Arc::downgrade(self);
         let session_cancel = self.alarm_timers_cancellation_token.clone();
         tokio::spawn(async move {
-            let mut delay = timer_spec.initial_delay;
+            let mut delay = timer_spec.delay;
             loop {
                 tokio::select! {
                     _ = session_cancel.cancelled() => break,
@@ -2884,7 +2866,15 @@ impl Session {
                     session.persist_alarms_sidecar_best_effort().await;
                 }
                 session.maybe_start_pending_alarm().await;
-                delay = std::time::Duration::from_secs(timer_spec.seconds);
+                let next_timer_spec = session
+                    .alarms
+                    .lock()
+                    .await
+                    .timer_spec_for_alarm(&id, Utc::now());
+                let Some(next_timer_spec) = next_timer_spec else {
+                    break;
+                };
+                delay = next_timer_spec.delay;
             }
         });
     }
@@ -2939,24 +2929,13 @@ impl Session {
 
         let mut normalized = Vec::<PersistedAlarm>::new();
         for persisted_alarm in persisted {
-            let schedule = match AlarmSchedule::parse(&persisted_alarm.alarm.cron_expression) {
-                Ok(schedule) => schedule,
-                Err(err) => {
-                    warn!(
-                        "skipping invalid persisted alarm {}: {err}",
-                        persisted_alarm.alarm.id
-                    );
-                    continue;
-                }
-            };
-            let timer_cancel =
-                matches!(schedule, AlarmSchedule::EverySeconds(_)).then(CancellationToken::new);
+            let timer_cancel = CancellationToken::new();
             let timer_spec = {
                 let mut alarms = self.alarms.lock().await;
                 match alarms.restore_alarm(
                     persisted_alarm.clone(),
                     Utc::now(),
-                    timer_cancel.clone(),
+                    Some(timer_cancel.clone()),
                 ) {
                     Ok(timer_spec) => {
                         normalized = alarms.persisted_alarms();
@@ -2971,8 +2950,8 @@ impl Session {
                     }
                 }
             };
-            if let (Some(timer_spec), Some(cancel)) = (timer_spec, timer_cancel) {
-                self.spawn_alarm_timer(persisted_alarm.alarm.id.clone(), timer_spec, cancel);
+            if let Some(timer_spec) = timer_spec {
+                self.spawn_alarm_timer(persisted_alarm.alarm.id.clone(), timer_spec, timer_cancel);
             }
         }
 

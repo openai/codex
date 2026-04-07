@@ -9,6 +9,7 @@ export type { AdditionalNetworkPermissions } from "./AdditionalNetworkPermission
 export type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";
 export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotification";
 export type { AlarmDelivery } from "./AlarmDelivery";
+export type { AlarmTrigger } from "./AlarmTrigger";
 export type { AnalyticsConfig } from "./AnalyticsConfig";
 export type { AppBranding } from "./AppBranding";
 export type { AppInfo } from "./AppInfo";

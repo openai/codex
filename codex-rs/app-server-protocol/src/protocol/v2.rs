@@ -3162,13 +3162,32 @@ pub enum AlarmDelivery {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(tag = "kind")]
+#[ts(export_to = "v2/")]
+pub enum AlarmTrigger {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Delay {
+        #[ts(type = "number")]
+        seconds: u64,
+        repeat: Option<bool>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Schedule {
+        dtstart: Option<String>,
+        rrule: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadAlarm {
     pub id: String,
-    pub cron_expression: String,
+    pub trigger: AlarmTrigger,
     pub prompt: String,
-    pub run_once: bool,
     pub delivery: AlarmDelivery,
     #[ts(type = "number")]
     pub created_at: i64,
@@ -3183,10 +3202,8 @@ pub struct ThreadAlarm {
 #[ts(export_to = "v2/")]
 pub struct ThreadAlarmCreateParams {
     pub thread_id: String,
-    pub cron_expression: String,
+    pub trigger: AlarmTrigger,
     pub prompt: String,
-    #[ts(optional = nullable)]
-    pub run_once: Option<bool>,
     pub delivery: AlarmDelivery,
 }
 

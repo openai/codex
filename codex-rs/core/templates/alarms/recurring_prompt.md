@@ -3,7 +3,7 @@ Recurring scheduled alarm prompt:
 
 currentAlarmId: {{CURRENT_ALARM_ID}}
 Configured delivery: {{DELIVERY}}
-Schedule: {{SCHEDULE}}
+Trigger: {{TRIGGER}}
 
 This alarm should keep running on its schedule unless the user asked for a stopping condition and that condition is now satisfied.
 If that stopping condition is satisfied, stop the alarm by calling AlarmDelete with {"id":"{{CURRENT_ALARM_ID}}"}.

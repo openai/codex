@@ -28,6 +28,7 @@ use tokio::sync::watch;
 
 use crate::alarms::AlarmDelivery;
 use crate::alarms::ThreadAlarm;
+use crate::alarms::ThreadAlarmTrigger;
 use codex_rollout::state_db::StateDbHandle;
 
 #[derive(Clone, Debug)]
@@ -242,14 +243,13 @@ impl CodexThread {
 
     pub async fn create_alarm(
         &self,
-        cron_expression: String,
+        trigger: ThreadAlarmTrigger,
         prompt: String,
-        run_once: bool,
         delivery: AlarmDelivery,
     ) -> Result<ThreadAlarm, String> {
         self.codex
             .session
-            .create_alarm(cron_expression, prompt, run_once, delivery)
+            .create_alarm(trigger, prompt, delivery)
             .await
     }
 

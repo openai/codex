@@ -10,29 +10,54 @@ use crate::ToolSpec;
 use std::collections::BTreeMap;
 
 pub fn create_alarm_create_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
+    let trigger_properties = BTreeMap::from([
         (
-            "cron_expression".to_string(),
+            "kind".to_string(),
+            JsonSchema::String {
+                description: Some("Trigger kind. Use `delay` or `schedule`.".to_string()),
+            },
+        ),
+        (
+            "seconds".to_string(),
+            JsonSchema::Number {
+                description: Some("Delay trigger seconds from creation time.".to_string()),
+            },
+        ),
+        (
+            "repeat".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Delay trigger recurrence flag.".to_string()),
+            },
+        ),
+        (
+            "dtstart".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Scheduler expression for the alarm. Supported values are scheduler-specific."
+                    "Schedule trigger floating local datetime in YYYY-MM-DDTHH:MM:SS format."
                         .to_string(),
                 ),
+            },
+        ),
+        (
+            "rrule".to_string(),
+            JsonSchema::String {
+                description: Some("Schedule trigger RRULE string.".to_string()),
+            },
+        ),
+    ]);
+    let properties = BTreeMap::from([
+        (
+            "trigger".to_string(),
+            JsonSchema::Object {
+                properties: trigger_properties,
+                required: Some(vec!["kind".to_string()]),
+                additional_properties: Some(false.into()),
             },
         ),
         (
             "prompt".to_string(),
             JsonSchema::String {
                 description: Some("Prompt to execute when the alarm fires.".to_string()),
-            },
-        ),
-        (
-            "run_once".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Optional. When true, delete the alarm after its next execution is claimed."
-                        .to_string(),
-                ),
             },
         ),
         (
@@ -48,15 +73,14 @@ pub fn create_alarm_create_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "AlarmCreate".to_string(),
-        description:
-            "Create a thread alarm using a structured scheduler expression, prompt, and delivery mode."
-                .to_string(),
+        description: "Create a thread alarm using a structured trigger, prompt, and delivery mode."
+            .to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
-                "cron_expression".to_string(),
+                "trigger".to_string(),
                 "prompt".to_string(),
                 "delivery".to_string(),
             ]),

@@ -519,7 +519,6 @@ impl Session {
         let session = Arc::clone(self);
         let _scheduler = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
-                session.mark_after_turn_alarms_due().await;
                 session.maybe_start_pending_alarm().await;
                 if should_clear_active_turn {
                     session.maybe_start_turn_for_pending_work().await;

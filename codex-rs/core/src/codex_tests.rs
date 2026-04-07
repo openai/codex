@@ -1,6 +1,7 @@
 use super::*;
 use crate::alarms::AlarmDelivery;
 use crate::alarms::AlarmsState;
+use crate::alarms::ThreadAlarmTrigger;
 use crate::alarms::load_alarm_sidecar;
 use crate::alarms::write_alarm_sidecar;
 use crate::config::ConfigBuilder;
@@ -3677,9 +3678,11 @@ async fn maybe_start_pending_alarm_claims_only_one_alarm_while_start_is_in_progr
             .create_alarm(
                 crate::alarms::CreateAlarm {
                     id: "alarm-1".to_string(),
-                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    trigger: ThreadAlarmTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
                     prompt: "first".to_string(),
-                    run_once: false,
                     delivery: AlarmDelivery::AfterTurn,
                     now,
                 },
@@ -3690,15 +3693,19 @@ async fn maybe_start_pending_alarm_claims_only_one_alarm_while_start_is_in_progr
             .create_alarm(
                 crate::alarms::CreateAlarm {
                     id: "alarm-2".to_string(),
-                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    trigger: ThreadAlarmTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
                     prompt: "second".to_string(),
-                    run_once: false,
                     delivery: AlarmDelivery::AfterTurn,
                     now,
                 },
                 /*timer_cancel*/ None,
             )
             .expect("second alarm should be created");
+        alarms.mark_alarm_due("alarm-1", now);
+        alarms.mark_alarm_due("alarm-2", now);
     }
 
     let first = Arc::clone(&session);
@@ -3730,9 +3737,11 @@ async fn alarm_sidecar_persistence_serializes_stale_and_newer_snapshots() {
             .create_alarm(
                 crate::alarms::CreateAlarm {
                     id: "alarm-1".to_string(),
-                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    trigger: ThreadAlarmTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
                     prompt: "first".to_string(),
-                    run_once: false,
                     delivery: AlarmDelivery::AfterTurn,
                     now,
                 },
@@ -3769,9 +3778,11 @@ async fn alarm_sidecar_persistence_serializes_stale_and_newer_snapshots() {
             .create_alarm(
                 crate::alarms::CreateAlarm {
                     id: "alarm-2".to_string(),
-                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    trigger: ThreadAlarmTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
                     prompt: "second".to_string(),
-                    run_once: false,
                     delivery: AlarmDelivery::AfterTurn,
                     now,
                 },

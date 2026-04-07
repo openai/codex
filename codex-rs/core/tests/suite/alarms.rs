@@ -1,9 +1,9 @@
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_core::alarms::AFTER_TURN_CRON_EXPRESSION;
 use codex_core::alarms::ALARM_FIRED_BACKGROUND_EVENT_PREFIX;
 use codex_core::alarms::AlarmDelivery;
 use codex_core::alarms::ThreadAlarm;
+use codex_core::alarms::ThreadAlarmTrigger;
 use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use core_test_support::responses::ev_assistant_message;
@@ -50,9 +50,11 @@ async fn assert_after_turn_alarm_starts_and_emits_fired_event() -> Result<()> {
     let created = test
         .codex
         .create_alarm(
-            AFTER_TURN_CRON_EXPRESSION.to_string(),
+            ThreadAlarmTrigger::Delay {
+                seconds: 0,
+                repeat: None,
+            },
             "run alarm".to_string(),
-            /*run_once*/ false,
             AlarmDelivery::AfterTurn,
         )
         .await
@@ -67,15 +69,7 @@ async fn assert_after_turn_alarm_starts_and_emits_fired_event() -> Result<()> {
     })
     .await;
     let fired: ThreadAlarm = serde_json::from_str(&payload)?;
-    let expected = ThreadAlarm {
-        last_run_at: Some(
-            fired
-                .last_run_at
-                .ok_or_else(|| anyhow!("claimed alarm should record last_run_at"))?,
-        ),
-        ..created
-    };
-    assert_eq!(fired, expected);
+    assert_eq!(fired, created);
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

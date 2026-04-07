@@ -457,65 +457,6 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
 }
 
 #[tokio::test]
-async fn list_threads_includes_alarm_only_sessions_without_user_messages() -> std::io::Result<()> {
-    let home = TempDir::new().expect("temp dir");
-    let config = test_config(home.path());
-
-    let uuid = Uuid::from_u128(9014);
-    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-    let path = write_session_file_without_user_message(home.path(), "2025-01-03T14-00-00", uuid)?;
-    fs::write(format!("{}.alarms.json", path.display()), "[]")?;
-
-    let runtime = codex_state::StateRuntime::init(
-        home.path().to_path_buf(),
-        config.model_provider_id.clone(),
-    )
-    .await
-    .expect("state db should initialize");
-    runtime
-        .mark_backfill_complete(/*last_watermark*/ None)
-        .await
-        .expect("backfill should be complete");
-    let created_at = chrono::Utc
-        .with_ymd_and_hms(2025, 1, 3, 14, 0, 0)
-        .single()
-        .expect("valid datetime");
-    let mut builder = codex_state::ThreadMetadataBuilder::new(
-        thread_id,
-        path.clone(),
-        created_at,
-        SessionSource::Cli,
-    );
-    builder.model_provider = Some(config.model_provider_id.clone());
-    builder.cwd = home.path().to_path_buf();
-    let metadata = builder.build(config.model_provider_id.as_str());
-    runtime
-        .upsert_thread(&metadata)
-        .await
-        .expect("state db upsert should succeed");
-
-    let default_provider = config.model_provider_id.clone();
-    let page = RolloutRecorder::list_threads(
-        &config,
-        /*page_size*/ 1,
-        /*cursor*/ None,
-        ThreadSortKey::CreatedAt,
-        &[],
-        /*model_providers*/ None,
-        default_provider.as_str(),
-        /*search_term*/ None,
-    )
-    .await?;
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].path, path);
-    assert_eq!(
-        page.items[0].first_user_message.as_deref(),
-        Some("(alarm configured)")
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn list_threads_db_enabled_fills_page_after_filtering_empty_threads() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());

@@ -6,6 +6,7 @@
 use serde::Deserialize;
 
 use crate::alarms::AlarmDelivery;
+use crate::alarms::ThreadAlarmTrigger;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -16,9 +17,8 @@ use crate::tools::registry::ToolKind;
 
 #[derive(Deserialize)]
 struct AlarmCreateArgs {
-    cron_expression: String,
+    trigger: ThreadAlarmTrigger,
     prompt: String,
-    run_once: Option<bool>,
     delivery: AlarmDelivery,
 }
 
@@ -45,12 +45,7 @@ impl ToolHandler for AlarmCreateHandler {
         let args: AlarmCreateArgs = parse_arguments(&arguments)?;
         let alarm = invocation
             .session
-            .create_alarm(
-                args.cron_expression,
-                args.prompt,
-                args.run_once.unwrap_or(false),
-                args.delivery,
-            )
+            .create_alarm(args.trigger, args.prompt, args.delivery)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         let content = serde_json::to_string(&alarm).map_err(|err| {

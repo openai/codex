@@ -15,6 +15,7 @@ use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
+use codex_app_server_protocol::AlarmTrigger;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
@@ -166,9 +167,8 @@ struct CommandExecutionCompletionItem {
 fn thread_alarm_from_core(value: codex_core::alarms::ThreadAlarm) -> ThreadAlarm {
     ThreadAlarm {
         id: value.id,
-        cron_expression: value.cron_expression,
+        trigger: alarm_trigger_from_core(value.trigger),
         prompt: value.prompt,
-        run_once: value.run_once,
         delivery: match value.delivery {
             codex_core::alarms::AlarmDelivery::AfterTurn => {
                 codex_app_server_protocol::AlarmDelivery::AfterTurn
@@ -180,6 +180,17 @@ fn thread_alarm_from_core(value: codex_core::alarms::ThreadAlarm) -> ThreadAlarm
         created_at: value.created_at,
         next_run_at: value.next_run_at,
         last_run_at: value.last_run_at,
+    }
+}
+
+fn alarm_trigger_from_core(value: codex_core::alarms::ThreadAlarmTrigger) -> AlarmTrigger {
+    match value {
+        codex_core::alarms::ThreadAlarmTrigger::Delay { seconds, repeat } => {
+            AlarmTrigger::Delay { seconds, repeat }
+        }
+        codex_core::alarms::ThreadAlarmTrigger::Schedule { dtstart, rrule } => {
+            AlarmTrigger::Schedule { dtstart, rrule }
+        }
     }
 }
 #[allow(clippy::too_many_arguments)]

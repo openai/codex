@@ -41,6 +41,8 @@ use std::time::Instant;
 use url::Url;
 
 use self::realtime::PendingSteerCompareKey;
+use crate::alarm_scheduler::format_alarm_trigger;
+use crate::alarm_scheduler::trigger_is_recurring;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
@@ -9952,16 +9954,11 @@ impl ChatWidget {
             codex_app_server_protocol::AlarmDelivery::AfterTurn => "after-turn",
             codex_app_server_protocol::AlarmDelivery::SteerCurrentTurn => "steer-current-turn",
         };
-        let schedule = if alarm.run_once {
-            format!(
-                "Running thread alarm • {} • one-shot • {}",
-                alarm.cron_expression, delivery
-            )
+        let trigger = format_alarm_trigger(&alarm.trigger);
+        let schedule = if trigger_is_recurring(&alarm.trigger) {
+            format!("Running thread alarm • {trigger} • {delivery}")
         } else {
-            format!(
-                "Running thread alarm • {} • {}",
-                alarm.cron_expression, delivery
-            )
+            format!("Running thread alarm • {trigger} • one-shot • {delivery}")
         };
         self.add_info_message(alarm.prompt, Some(schedule));
     }
@@ -9990,10 +9987,11 @@ impl ChatWidget {
                         id: alarm_id.clone(),
                     });
                 })];
-                let name = if alarm.run_once {
-                    format!("{} • one-shot", alarm.cron_expression)
+                let trigger = format_alarm_trigger(&alarm.trigger);
+                let name = if trigger_is_recurring(&alarm.trigger) {
+                    trigger
                 } else {
-                    alarm.cron_expression.clone()
+                    format!("{trigger} • one-shot")
                 };
                 let selected_description =
                     format!("{}\n\nPress Enter to delete this alarm.", alarm.prompt);

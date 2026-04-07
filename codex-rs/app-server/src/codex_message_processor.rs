@@ -25,6 +25,7 @@ use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AlarmDelivery as ApiAlarmDelivery;
+use codex_app_server_protocol::AlarmTrigger as ApiAlarmTrigger;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -3704,9 +3705,8 @@ impl CodexMessageProcessor {
     ) {
         let ThreadAlarmCreateParams {
             thread_id,
-            cron_expression,
+            trigger,
             prompt,
-            run_once,
             delivery,
         } = params;
         let Some(thread) = self.load_alarm_thread(request_id.clone(), &thread_id).await else {
@@ -3714,9 +3714,8 @@ impl CodexMessageProcessor {
         };
         match thread
             .create_alarm(
-                cron_expression,
+                alarm_trigger_to_core(trigger),
                 prompt,
-                run_once.unwrap_or(false),
                 alarm_delivery_to_core(delivery),
             )
             .await
@@ -9053,12 +9052,33 @@ fn api_alarm_delivery_from_core(value: codex_core::alarms::AlarmDelivery) -> Api
     }
 }
 
+fn alarm_trigger_to_core(value: ApiAlarmTrigger) -> codex_core::alarms::ThreadAlarmTrigger {
+    match value {
+        ApiAlarmTrigger::Delay { seconds, repeat } => {
+            codex_core::alarms::ThreadAlarmTrigger::Delay { seconds, repeat }
+        }
+        ApiAlarmTrigger::Schedule { dtstart, rrule } => {
+            codex_core::alarms::ThreadAlarmTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
+
+fn api_alarm_trigger_from_core(value: codex_core::alarms::ThreadAlarmTrigger) -> ApiAlarmTrigger {
+    match value {
+        codex_core::alarms::ThreadAlarmTrigger::Delay { seconds, repeat } => {
+            ApiAlarmTrigger::Delay { seconds, repeat }
+        }
+        codex_core::alarms::ThreadAlarmTrigger::Schedule { dtstart, rrule } => {
+            ApiAlarmTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
+
 fn api_thread_alarm_from_core(value: codex_core::alarms::ThreadAlarm) -> ApiThreadAlarm {
     ApiThreadAlarm {
         id: value.id,
-        cron_expression: value.cron_expression,
+        trigger: api_alarm_trigger_from_core(value.trigger),
         prompt: value.prompt,
-        run_once: value.run_once,
         delivery: api_alarm_delivery_from_core(value.delivery),
         created_at: value.created_at,
         next_run_at: value.next_run_at,
