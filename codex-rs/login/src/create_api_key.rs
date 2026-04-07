@@ -70,6 +70,10 @@ impl PendingCreateApiKey {
         self.callback_server.shutdown_handle.clone()
     }
 
+    pub async fn cancel(self) {
+        self.callback_server.shutdown_and_wait().await;
+    }
+
     pub async fn finish(self) -> Result<CreatedApiKey, CreateApiKeyError> {
         let code = self
             .callback_server

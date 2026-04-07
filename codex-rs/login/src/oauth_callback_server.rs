@@ -51,6 +51,7 @@ pub(crate) struct AuthorizationCodeServer {
     pub auth_url: String,
     pub actual_port: u16,
     pub redirect_uri: String,
+    server: Arc<Server>,
     code_verifier: String,
     server_handle: tokio::task::JoinHandle<io::Result<String>>,
     pub(crate) shutdown_handle: ShutdownHandle,
@@ -65,8 +66,21 @@ impl AuthorizationCodeServer {
         &self.code_verifier
     }
 
+    pub(crate) async fn shutdown_and_wait(self) {
+        let AuthorizationCodeServer {
+            server,
+            server_handle,
+            shutdown_handle,
+            ..
+        } = self;
+        shutdown_handle.shutdown();
+        server.unblock();
+        let _ = server_handle.await;
+    }
+
     pub async fn wait_for_code(self, timeout: Duration) -> io::Result<String> {
         let AuthorizationCodeServer {
+            server,
             server_handle,
             shutdown_handle,
             ..
@@ -81,6 +95,7 @@ impl AuthorizationCodeServer {
             }
             _ = tokio::time::sleep(timeout) => {
                 shutdown_handle.shutdown();
+                server.unblock();
                 let _ = server_handle.await;
                 Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -115,7 +130,7 @@ where
         }
     };
     let (server_handle, shutdown_handle) = spawn_callback_server_loop(
-        server,
+        server.clone(),
         rx,
         "Authentication was not completed",
         move |url_raw| {
@@ -129,6 +144,7 @@ where
         auth_url,
         actual_port,
         redirect_uri,
+        server,
         code_verifier: pkce.code_verifier,
         server_handle,
         shutdown_handle,

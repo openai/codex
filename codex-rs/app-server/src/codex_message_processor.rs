@@ -2779,25 +2779,49 @@ impl CodexMessageProcessor {
 
         // If a previous client started this flow and never called finish, do not
         // try to bind fixed port 5000 until the old callback server is dropped.
-        let existing_response = {
+        let (existing_response, error_message, pending_to_cancel) = {
             let mut active_create_api_key = self.active_create_api_key.lock().await;
             if let Some(active) = active_create_api_key.as_ref()
                 && active.thread_id == thread_uuid
                 && active.started_at.elapsed() < CREATE_API_KEY_OAUTH_TIMEOUT
                 && active.pending.is_some()
             {
-                Some(ThreadCreateApiKeyStartResponse::Started {
-                    auth_url: active.auth_url.clone(),
-                    callback_port: active.callback_port,
-                })
+                (
+                    Some(ThreadCreateApiKeyStartResponse::Started {
+                        auth_url: active.auth_url.clone(),
+                        callback_port: active.callback_port,
+                    }),
+                    None,
+                    None,
+                )
+            } else if let Some(active) = active_create_api_key.as_ref()
+                && active.pending.is_none()
+            {
+                (
+                    None,
+                    Some(format!(
+                        "API key creation is already in progress for thread {}",
+                        active.thread_id
+                    )),
+                    None,
+                )
             } else {
-                drop(active_create_api_key.take());
-                None
+                let pending_to_cancel = active_create_api_key
+                    .take()
+                    .and_then(|mut active| active.pending.take());
+                (None, None, pending_to_cancel)
             }
         };
         if let Some(response) = existing_response {
             self.outgoing.send_response(request_id, response).await;
             return;
+        }
+        if let Some(message) = error_message {
+            self.send_invalid_request_error(request_id, message).await;
+            return;
+        }
+        if let Some(pending) = pending_to_cancel {
+            pending.cancel().await;
         }
 
         let pending = match start_create_api_key() {
@@ -2831,12 +2855,21 @@ impl CodexMessageProcessor {
         let active_create_api_key = Arc::clone(&self.active_create_api_key);
         tokio::spawn(async move {
             tokio::time::sleep(CREATE_API_KEY_OAUTH_TIMEOUT).await;
-            let mut active_create_api_key = active_create_api_key.lock().await;
-            if active_create_api_key
-                .as_ref()
-                .is_some_and(|active| active.flow_id == flow_id)
-            {
-                drop(active_create_api_key.take());
+            let pending_to_cancel = {
+                let mut active_create_api_key = active_create_api_key.lock().await;
+                if active_create_api_key
+                    .as_ref()
+                    .is_some_and(|active| active.flow_id == flow_id && active.pending.is_some())
+                {
+                    active_create_api_key
+                        .take()
+                        .and_then(|mut active| active.pending.take())
+                } else {
+                    None
+                }
+            };
+            if let Some(pending) = pending_to_cancel {
+                pending.cancel().await;
             }
         });
 
