@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-print_failed_bazel_test_logs=0
+summarize_failed_bazel_test_logs=0
 use_node_test_env=0
 remote_download_toplevel=0
 windows_msvc_host_platform=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --print-failed-test-logs)
-      print_failed_bazel_test_logs=1
+    --summarize-failed-test-logs)
+      summarize_failed_bazel_test_logs=1
       shift
       ;;
     --use-node-test-env)
@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--summarize-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -65,7 +65,7 @@ case "${RUNNER_OS:-}" in
     ;;
 esac
 
-print_failed_bazel_test_logs() {
+summarize_failed_bazel_test_logs() {
   local console_log="$1"
   local testlogs_dir=
   local -a bazel_info_cmd=(bazel)
@@ -101,13 +101,6 @@ print_failed_bazel_test_logs() {
     return
   fi
 
-  echo
-  echo "Bazel failed test targets:"
-  for target_log in "${failed_target_logs[@]}"; do
-    local target="${target_log%%$'\t'*}"
-    echo "  FAIL ${target}"
-  done
-
   for target_log in "${failed_target_logs[@]}"; do
     local target="${target_log%%$'\t'*}"
     local test_log="${target_log#*$'\t'}"
@@ -126,12 +119,7 @@ print_failed_bazel_test_logs() {
       test_log="${testlogs_dir}/${rel_path}/test.log"
     fi
 
-    echo
-    echo "FAIL ${target}"
-    echo "test log: ${test_log}"
-    echo
     if [[ -f "$test_log" ]]; then
-      cat "$test_log"
       awk -v target="$target" '
         /^failures:$/ {
           in_failures = 1
@@ -157,8 +145,6 @@ print_failed_bazel_test_logs() {
           print ""
         }
       ' "$test_log" >> "$rust_test_summary"
-    else
-      echo "Missing test log: $test_log"
     fi
   done
 
@@ -363,8 +349,8 @@ else
 fi
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
-  if [[ $print_failed_bazel_test_logs -eq 1 ]]; then
-    print_failed_bazel_test_logs "$bazel_console_log"
+  if [[ $summarize_failed_bazel_test_logs -eq 1 ]]; then
+    summarize_failed_bazel_test_logs "$bazel_console_log"
   fi
   exit "$bazel_status"
 fi

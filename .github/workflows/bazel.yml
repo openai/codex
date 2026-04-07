@@ -97,7 +97,7 @@ jobs:
           )
 
           bazel_wrapper_args=(
-            --print-failed-test-logs
+            --summarize-failed-test-logs
             --use-node-test-env
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
