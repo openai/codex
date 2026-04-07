@@ -111,7 +111,10 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
         session_config: RealtimeSessionConfig,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
-        let session = realtime_session_json(session_config)?;
+        let mut session = realtime_session_json(session_config)?;
+        if let Some(session) = session.as_object_mut() {
+            session.remove("id");
+        }
         // TODO(aibrahim): Align the SIWC route with the API multipart shape and remove this branch.
         if self.uses_backend_request_shape() {
             let body = to_value(BackendRealtimeCallRequest {
@@ -127,10 +130,6 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
             return Ok(RealtimeCallResponse { sdp });
         }
 
-        let mut session = session;
-        if let Some(session) = session.as_object_mut() {
-            session.remove("id");
-        }
         let session = to_string(&session).map_err(|err| ApiError::InvalidRequest {
             message: err.to_string(),
         })?;
@@ -396,8 +395,12 @@ mod tests {
             request.url,
             "https://chatgpt.com/backend-api/codex/realtime/calls"
         );
-        let expected_session = realtime_session_json(realtime_session_config("sess-backend"))
+        let mut expected_session = realtime_session_json(realtime_session_config("sess-backend"))
             .expect("session should encode");
+        expected_session
+            .as_object_mut()
+            .expect("session should be an object")
+            .remove("id");
         assert_eq!(
             request.body,
             Some(RequestBody::Json(
