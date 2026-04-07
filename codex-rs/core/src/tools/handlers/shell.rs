@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
+use crate::exec_env::apply_dependency_env;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
@@ -395,17 +396,13 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
-        let dependency_env = session.dependency_env().await;
-        if !dependency_env.is_empty() {
-            exec_params.env.extend(dependency_env.clone());
-        }
-
         let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
-        for key in dependency_env.keys() {
-            if let Some(value) = exec_params.env.get(key) {
-                explicit_env_overrides.insert(key.clone(), value.clone());
-            }
-        }
+        let dependency_env = session.dependency_env().await;
+        apply_dependency_env(
+            &mut exec_params.env,
+            &mut explicit_env_overrides,
+            &dependency_env,
+        );
 
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);

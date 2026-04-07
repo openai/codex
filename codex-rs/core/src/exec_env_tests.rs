@@ -104,6 +104,26 @@ fn test_set_overrides() {
 }
 
 #[test]
+fn apply_dependency_env_restores_filtered_secret_and_marks_explicit_override() {
+    let mut env = hashmap! {
+        "PATH".to_string() => "/usr/bin".to_string(),
+    };
+    let mut explicit_env_overrides = HashMap::new();
+    let dependency_env = hashmap! {
+        "OPENAI_API_KEY".to_string() => "sk-session".to_string(),
+    };
+
+    apply_dependency_env(&mut env, &mut explicit_env_overrides, &dependency_env);
+
+    let expected = hashmap! {
+        "PATH".to_string() => "/usr/bin".to_string(),
+        "OPENAI_API_KEY".to_string() => "sk-session".to_string(),
+    };
+    assert_eq!(env, expected);
+    assert_eq!(explicit_env_overrides, dependency_env);
+}
+
+#[test]
 fn populate_env_inserts_thread_id() {
     let vars = make_vars(&[("PATH", "/usr/bin")]);
     let policy = ShellEnvironmentPolicy::default();

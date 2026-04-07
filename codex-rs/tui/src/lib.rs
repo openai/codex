@@ -102,6 +102,7 @@ mod clipboard_paste;
 mod clipboard_text;
 mod collaboration_modes;
 mod color;
+mod create_api_key;
 pub(crate) mod custom_terminal;
 pub use custom_terminal::Terminal;
 mod cwd_prompt;

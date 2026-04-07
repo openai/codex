@@ -2962,6 +2962,44 @@ pub struct ThreadSetNameResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadCreateApiKeyStartParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", tag = "status")]
+#[ts(export_to = "v2/", tag = "status")]
+pub enum ThreadCreateApiKeyStartResponse {
+    AlreadySet,
+    #[serde(rename = "started", rename_all = "camelCase")]
+    #[ts(rename = "started", rename_all = "camelCase")]
+    Started {
+        auth_url: String,
+        callback_port: u16,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCreateApiKeyFinishParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCreateApiKeyFinishResponse {
+    pub organization_id: String,
+    pub organization_title: Option<String>,
+    pub default_project_id: String,
+    pub default_project_title: Option<String>,
+    pub project_api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateParams {
     pub thread_id: String,
     /// Patch the stored Git metadata for this thread.

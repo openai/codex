@@ -4286,6 +4286,13 @@ impl App {
                 self.enqueue_thread_history_entry_response(thread_id, event)
                     .await?;
             }
+            AppEvent::StartCreateApiKey { thread_id } => {
+                crate::create_api_key::start_command(
+                    self.app_event_tx.clone(),
+                    app_server.request_handle(),
+                    thread_id,
+                );
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();

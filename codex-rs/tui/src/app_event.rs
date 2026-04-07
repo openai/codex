@@ -157,6 +157,11 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Start the browser flow for creating an OpenAI API key for a thread.
+    StartCreateApiKey {
+        thread_id: ThreadId,
+    },
+
     /// Open the app link view in the bottom pane.
     OpenAppLink {
         app_id: String,

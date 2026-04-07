@@ -24,6 +24,28 @@ pub fn create_env(
     create_env_from_vars(std::env::vars(), policy, thread_id)
 }
 
+/// Apply session dependency environment after normal filtering.
+///
+/// Dependency values are user/session-provided inputs required by tools or
+/// generated during a session, so they intentionally override the default
+/// secret-looking environment filters for future spawned commands.
+pub(crate) fn apply_dependency_env(
+    env: &mut HashMap<String, String>,
+    explicit_env_overrides: &mut HashMap<String, String>,
+    dependency_env: &HashMap<String, String>,
+) {
+    if dependency_env.is_empty() {
+        return;
+    }
+
+    env.extend(dependency_env.clone());
+    for key in dependency_env.keys() {
+        if let Some(value) = env.get(key) {
+            explicit_env_overrides.insert(key.clone(), value.clone());
+        }
+    }
+}
+
 fn create_env_from_vars<I>(
     vars: I,
     policy: &ShellEnvironmentPolicy,

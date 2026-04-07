@@ -123,6 +123,10 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadCreateApiKeyFinishParams;
+use codex_app_server_protocol::ThreadCreateApiKeyFinishResponse;
+use codex_app_server_protocol::ThreadCreateApiKeyStartParams;
+use codex_app_server_protocol::ThreadCreateApiKeyStartResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -239,7 +243,10 @@ use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
+use codex_login::CREATE_API_KEY_OAUTH_TIMEOUT;
 use codex_login::CodexAuth;
+use codex_login::OPENAI_API_KEY_ENV_VAR;
+use codex_login::PendingCreateApiKey;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
@@ -248,6 +255,7 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_login::start_create_api_key;
 use codex_mcp::McpSnapshotDetail;
 use codex_mcp::collect_mcp_snapshot_with_detail;
 use codex_mcp::discover_supported_scopes;
@@ -312,6 +320,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -366,6 +375,16 @@ enum ActiveLogin {
     },
 }
 
+struct ActiveCreateApiKey {
+    flow_id: Uuid,
+    thread_id: ThreadId,
+    started_at: Instant,
+    auth_url: String,
+    callback_port: u16,
+    shutdown_handle: ShutdownHandle,
+    pending: Option<PendingCreateApiKey>,
+}
+
 impl ActiveLogin {
     fn login_id(&self) -> Uuid {
         match self {
@@ -407,6 +426,22 @@ impl Drop for ActiveLogin {
     }
 }
 
+impl Drop for ActiveCreateApiKey {
+    fn drop(&mut self) {
+        self.shutdown_handle.shutdown();
+    }
+}
+
+fn effective_openai_api_key_is_set(
+    dependency_env: &HashMap<String, String>,
+    process_env_value: Option<String>,
+) -> bool {
+    match dependency_env.get(OPENAI_API_KEY_ENV_VAR) {
+        Some(value) => !value.trim().is_empty(),
+        None => process_env_value.is_some_and(|value| !value.trim().is_empty()),
+    }
+}
+
 /// Handles JSON-RPC messages for Codex threads (and legacy conversation APIs).
 pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
@@ -419,6 +454,7 @@ pub(crate) struct CodexMessageProcessor {
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
+    active_create_api_key: Arc<Mutex<Option<ActiveCreateApiKey>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
@@ -543,6 +579,7 @@ impl CodexMessageProcessor {
             runtime_feature_enablement,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
+            active_create_api_key: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
@@ -735,6 +772,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadSetName { request_id, params } => {
                 self.thread_set_name(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadCreateApiKeyStart { request_id, params } => {
+                self.thread_create_api_key_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadCreateApiKeyFinish { request_id, params } => {
+                self.thread_create_api_key_finish(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
@@ -2704,6 +2749,267 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
             .await;
+    }
+
+    async fn thread_create_api_key_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadCreateApiKeyStartParams,
+    ) {
+        let ThreadCreateApiKeyStartParams { thread_id } = params;
+
+        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+            Ok(loaded) => loaded,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let dependency_env = thread.dependency_env().await;
+        if effective_openai_api_key_is_set(
+            &dependency_env,
+            std::env::var(OPENAI_API_KEY_ENV_VAR).ok(),
+        ) {
+            self.outgoing
+                .send_response(request_id, ThreadCreateApiKeyStartResponse::AlreadySet)
+                .await;
+            return;
+        }
+
+        // If a previous client started this flow and never called finish, do not
+        // try to bind fixed port 5000 until the old callback server is dropped.
+        let (existing_response, error_message, pending_to_cancel) = {
+            let mut active_create_api_key = self.active_create_api_key.lock().await;
+            if let Some(active) = active_create_api_key.as_ref()
+                && active.thread_id == thread_uuid
+                && active.started_at.elapsed() < CREATE_API_KEY_OAUTH_TIMEOUT
+                && active.pending.is_some()
+            {
+                (
+                    Some(ThreadCreateApiKeyStartResponse::Started {
+                        auth_url: active.auth_url.clone(),
+                        callback_port: active.callback_port,
+                    }),
+                    None,
+                    None,
+                )
+            } else if let Some(active) = active_create_api_key.as_ref()
+                && active.pending.is_none()
+            {
+                (
+                    None,
+                    Some(format!(
+                        "API key creation is already in progress for thread {}",
+                        active.thread_id
+                    )),
+                    None,
+                )
+            } else {
+                let pending_to_cancel = active_create_api_key
+                    .take()
+                    .and_then(|mut active| active.pending.take());
+                (None, None, pending_to_cancel)
+            }
+        };
+        if let Some(response) = existing_response {
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+        if let Some(message) = error_message {
+            self.send_invalid_request_error(request_id, message).await;
+            return;
+        }
+        if let Some(pending) = pending_to_cancel {
+            pending.cancel().await;
+        }
+
+        let pending = match start_create_api_key() {
+            Ok(pending) => pending,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to start API key creation: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let auth_url = pending.auth_url().to_string();
+        let callback_port = pending.callback_port();
+        let shutdown_handle = pending.shutdown_handle();
+        let flow_id = Uuid::new_v4();
+
+        let mut active_create_api_key = self.active_create_api_key.lock().await;
+        *active_create_api_key = Some(ActiveCreateApiKey {
+            flow_id,
+            thread_id: thread_uuid,
+            started_at: Instant::now(),
+            auth_url: auth_url.clone(),
+            callback_port,
+            shutdown_handle,
+            pending: Some(pending),
+        });
+        drop(active_create_api_key);
+
+        let active_create_api_key = Arc::clone(&self.active_create_api_key);
+        tokio::spawn(async move {
+            tokio::time::sleep(CREATE_API_KEY_OAUTH_TIMEOUT).await;
+            let pending_to_cancel = {
+                let mut active_create_api_key = active_create_api_key.lock().await;
+                if active_create_api_key
+                    .as_ref()
+                    .is_some_and(|active| active.flow_id == flow_id && active.pending.is_some())
+                {
+                    active_create_api_key
+                        .take()
+                        .and_then(|mut active| active.pending.take())
+                } else {
+                    None
+                }
+            };
+            if let Some(pending) = pending_to_cancel {
+                pending.cancel().await;
+            }
+        });
+
+        self.outgoing
+            .send_response(
+                request_id,
+                ThreadCreateApiKeyStartResponse::Started {
+                    auth_url,
+                    callback_port,
+                },
+            )
+            .await;
+    }
+
+    async fn thread_create_api_key_finish(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadCreateApiKeyFinishParams,
+    ) {
+        let ThreadCreateApiKeyFinishParams { thread_id } = params;
+
+        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+            Ok(loaded) => loaded,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let (flow_id, pending) = {
+            let mut active_create_api_key = self.active_create_api_key.lock().await;
+            let Some(mut active) = active_create_api_key.take() else {
+                drop(active_create_api_key);
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("no active API key creation flow for thread {thread_uuid}"),
+                )
+                .await;
+                return;
+            };
+
+            if active.thread_id != thread_uuid {
+                let active_thread_id = active.thread_id;
+                *active_create_api_key = Some(active);
+                drop(active_create_api_key);
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "active API key creation flow belongs to thread {active_thread_id}, not thread {thread_uuid}"
+                    ),
+                )
+                .await;
+                return;
+            }
+
+            let Some(pending) = active.pending.take() else {
+                *active_create_api_key = Some(active);
+                drop(active_create_api_key);
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!(
+                                "active API key creation flow for thread {thread_uuid} has no pending session"
+                            ),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            };
+
+            // Keep an active marker while finish waits so a later start request
+            // can cancel/restart this flow instead of failing on port 5000.
+            let flow_id = active.flow_id;
+            *active_create_api_key = Some(active);
+            (flow_id, pending)
+        };
+
+        let outgoing = Arc::clone(&self.outgoing);
+        let active_create_api_key = Arc::clone(&self.active_create_api_key);
+        tokio::spawn(async move {
+            let result = pending.finish().await;
+            let flow_was_active = {
+                let mut active_create_api_key = active_create_api_key.lock().await;
+                if active_create_api_key
+                    .as_ref()
+                    .is_some_and(|active| active.flow_id == flow_id)
+                {
+                    drop(active_create_api_key.take());
+                    true
+                } else {
+                    false
+                }
+            };
+
+            match result {
+                Ok(created) if flow_was_active => {
+                    let response = ThreadCreateApiKeyFinishResponse {
+                        organization_id: created.organization_id,
+                        organization_title: created.organization_title,
+                        default_project_id: created.default_project_id,
+                        default_project_title: created.default_project_title,
+                        project_api_key: created.project_api_key.clone(),
+                    };
+                    thread
+                        .set_dependency_env(HashMap::from([(
+                            OPENAI_API_KEY_ENV_VAR.to_string(),
+                            created.project_api_key,
+                        )]))
+                        .await;
+                    outgoing.send_response(request_id, response).await;
+                }
+                Ok(_) => {
+                    outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: "API key creation was cancelled.".to_string(),
+                                data: None,
+                            },
+                        )
+                        .await;
+                }
+                Err(err) => {
+                    outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("API key creation failed: {err}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                }
+            }
+        });
     }
 
     async fn thread_metadata_update(
@@ -9194,6 +9500,26 @@ mod tests {
                 "detail": "failed to load your workspace-managed config",
             }))
         );
+    }
+
+    #[test]
+    fn effective_openai_api_key_uses_dependency_env_precedence() {
+        assert!(effective_openai_api_key_is_set(
+            &HashMap::new(),
+            Some("sk-process".to_string())
+        ));
+        assert!(!effective_openai_api_key_is_set(
+            &HashMap::new(),
+            /*process_env_value*/ None
+        ));
+        assert!(effective_openai_api_key_is_set(
+            &HashMap::from([(OPENAI_API_KEY_ENV_VAR.to_string(), "sk-session".to_string())]),
+            /*process_env_value*/ None,
+        ));
+        assert!(!effective_openai_api_key_is_set(
+            &HashMap::from([(OPENAI_API_KEY_ENV_VAR.to_string(), String::new())]),
+            Some("sk-process".to_string()),
+        ));
     }
 
     #[test]
