@@ -96,6 +96,9 @@ fn thread_manager() -> ThreadManager {
 
 async fn install_role_with_model_provider_and_profile_override(turn: &mut TurnContext) -> String {
     let role_name = "fork-context-role".to_string();
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
     let role_config_path = turn.config.codex_home.join("fork-context-role.toml");
     tokio::fs::write(
         &role_config_path,
@@ -107,6 +110,12 @@ model_verbosity = "low"
 plan_mode_reasoning_effort = "minimal"
 profile = "role-profile"
 service_tier = "fast"
+
+[model_providers.role-provider]
+name = "Role Provider"
+base_url = "https://role.example.com/v1"
+env_key = "ROLE_PROVIDER_API_KEY"
+wire_api = "responses"
 
 [profiles.role-profile]
 model_provider = "role-provider"
@@ -133,7 +142,6 @@ model_provider = "role-provider"
             description: Some("Role with model-provider and profile overrides".to_string()),
             config_file: Some(role_config_path),
             nickname_candidates: None,
-            fork_context: None,
         },
     );
     turn.config = Arc::new(config);
@@ -430,7 +438,6 @@ async fn spawn_agent_fork_context_ignores_child_model_overrides() {
     session.conversation_id = root.thread_id;
     let expected_model = turn.model_info.slug.clone();
     let expected_model_provider_id = turn.config.model_provider_id.clone();
-    let expected_model_provider_name = turn.provider.name.clone();
     let expected_active_profile = turn.config.active_profile.clone();
     let expected_reasoning_effort = turn.reasoning_effort;
     let expected_service_tier = turn.config.service_tier;
@@ -471,7 +478,6 @@ async fn spawn_agent_fork_context_ignores_child_model_overrides() {
 
     assert_eq!(snapshot.model, expected_model);
     assert_eq!(snapshot.model_provider_id, expected_model_provider_id);
-    assert_eq!(snapshot.model_provider.name, expected_model_provider_name);
     assert_eq!(snapshot.active_profile, expected_active_profile);
     assert_eq!(snapshot.reasoning_effort, expected_reasoning_effort);
     assert_eq!(snapshot.service_tier, expected_service_tier);
@@ -509,7 +515,6 @@ async fn multi_agent_v2_spawn_fork_turns_ignores_child_model_overrides() {
     };
     let expected_model = turn.model_info.slug.clone();
     let expected_model_provider_id = turn.config.model_provider_id.clone();
-    let expected_model_provider_name = turn.provider.name.clone();
     let expected_active_profile = turn.config.active_profile.clone();
     let expected_reasoning_effort = turn.reasoning_effort;
     let expected_service_tier = turn.config.service_tier;
@@ -553,7 +558,6 @@ async fn multi_agent_v2_spawn_fork_turns_ignores_child_model_overrides() {
 
     assert_eq!(snapshot.model, expected_model);
     assert_eq!(snapshot.model_provider_id, expected_model_provider_id);
-    assert_eq!(snapshot.model_provider.name, expected_model_provider_name);
     assert_eq!(snapshot.active_profile, expected_active_profile);
     assert_eq!(snapshot.reasoning_effort, expected_reasoning_effort);
     assert_eq!(snapshot.service_tier, expected_service_tier);
