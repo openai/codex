@@ -135,8 +135,9 @@ fn standalone_install_context(
     codex_home: Option<&Path>,
 ) -> Option<InstallContext> {
     let canonical_exe = std::fs::canonicalize(exe_path).ok()?;
+    let canonical_codex_home = std::fs::canonicalize(codex_home?).ok()?;
     let release_dir = canonical_exe.parent()?.to_path_buf();
-    if !is_managed_release_dir(&release_dir, codex_home?) {
+    if !is_managed_release_dir(&release_dir, &canonical_codex_home) {
         return None;
     }
 
