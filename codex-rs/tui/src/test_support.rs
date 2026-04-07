@@ -1,36 +1,5 @@
-use codex_utils_absolute_path::AbsolutePathBuf;
-use std::path::Path;
+pub(crate) use codex_utils_absolute_path::test_support::PathBufExt;
 use std::path::PathBuf;
-
-pub(crate) trait PathExt {
-    fn abs(&self) -> AbsolutePathBuf;
-}
-
-impl PathExt for Path {
-    fn abs(&self) -> AbsolutePathBuf {
-        if let Ok(path) = AbsolutePathBuf::try_from(self.to_path_buf()) {
-            return path;
-        }
-        if cfg!(windows)
-            && let Some(path) = self.to_str()
-            && path.starts_with('/')
-        {
-            return AbsolutePathBuf::try_from(test_path_buf(path))
-                .expect("windows test path should be absolute");
-        }
-        panic!("path should already be absolute");
-    }
-}
-
-pub(crate) trait PathBufExt {
-    fn abs(&self) -> AbsolutePathBuf;
-}
-
-impl PathBufExt for PathBuf {
-    fn abs(&self) -> AbsolutePathBuf {
-        self.as_path().abs()
-    }
-}
 
 pub(crate) fn test_path_display(path: &str) -> String {
     test_path_buf(path).abs().display().to_string()

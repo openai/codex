@@ -13,8 +13,9 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
+pub use codex_utils_absolute_path::test_support::PathBufExt;
+pub use codex_utils_absolute_path::test_support::PathExt;
 use regex_lite::Regex;
-use std::path::Path;
 use std::path::PathBuf;
 
 pub mod apps_test_server;
@@ -103,36 +104,6 @@ pub fn test_absolute_path_with_windows(
 
 pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
     test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
-}
-
-pub trait PathExt {
-    fn abs(&self) -> AbsolutePathBuf;
-}
-
-impl PathExt for Path {
-    fn abs(&self) -> AbsolutePathBuf {
-        if let Ok(path) = AbsolutePathBuf::try_from(self.to_path_buf()) {
-            return path;
-        }
-        if cfg!(windows)
-            && let Some(path) = self.to_str()
-            && path.starts_with('/')
-        {
-            return AbsolutePathBuf::try_from(test_path_buf(path))
-                .expect("windows test path should be absolute");
-        }
-        panic!("path should already be absolute");
-    }
-}
-
-pub trait PathBufExt {
-    fn abs(&self) -> AbsolutePathBuf;
-}
-
-impl PathBufExt for PathBuf {
-    fn abs(&self) -> AbsolutePathBuf {
-        self.as_path().abs()
-    }
 }
 
 pub trait TempDirExt {

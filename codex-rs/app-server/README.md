@@ -169,7 +169,7 @@ Example with notification opt-out:
 - `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
 - `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
 - `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
-- `fs/watch` — subscribe this connection to filesystem change notifications for an absolute file or directory path; returns a `watchId` and canonicalized `path`.
+- `fs/watch` — subscribe this connection to filesystem change notifications for an absolute file or directory path and caller-provided `watchId`; returns the canonicalized `path`.
 - `fs/unwatch` — stop sending notifications for a prior `fs/watch`; returns `{}`.
 - `fs/changed` — notification emitted when watched paths change, including the `watchId` and `changedPaths`.
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
@@ -816,10 +816,10 @@ All filesystem paths in this section must be absolute.
 
 ```json
 { "method": "fs/watch", "id": 44, "params": {
+    "watchId": "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1",
     "path": "/Users/me/project/.git/HEAD"
 } }
 { "id": 44, "result": {
-    "watchId": "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1",
     "path": "/Users/me/project/.git/HEAD"
 } }
 { "method": "fs/changed", "params": {

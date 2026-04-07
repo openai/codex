@@ -55,18 +55,10 @@ impl ApplyPatchRuntime {
     fn build_guardian_review_request(
         req: &ApplyPatchRequest,
         call_id: &str,
-        fallback_cwd: &AbsolutePathBuf,
     ) -> GuardianApprovalRequest {
-        let cwd = match AbsolutePathBuf::try_from(req.action.cwd.as_path()) {
-            Ok(cwd) => cwd,
-            Err(err) => {
-                tracing::warn!("apply_patch cwd is not absolute: {err}");
-                fallback_cwd.clone()
-            }
-        };
         GuardianApprovalRequest::ApplyPatch {
             id: call_id.to_string(),
-            cwd,
+            cwd: req.action.cwd.clone(),
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         }
@@ -109,7 +101,7 @@ impl ApplyPatchRuntime {
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
                 req.action.patch.clone(),
             ],
-            cwd: req.action.cwd.clone(),
+            cwd: req.action.cwd.to_path_buf(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),
@@ -157,8 +149,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 return ReviewDecision::Approved;
             }
             if routes_approval_to_guardian(turn) {
-                let action =
-                    ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id, &turn.cwd);
+                let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
                 return review_approval_request(session, turn, action, retry_reason).await;
             }
             if let Some(reason) = retry_reason {
