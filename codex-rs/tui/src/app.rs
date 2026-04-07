@@ -1895,6 +1895,13 @@ impl App {
         });
     }
 
+    /// Spawns a background task to fetch account rate limits and deliver the
+    /// result as a `RateLimitsLoaded` event.
+    ///
+    /// The `origin` is forwarded to the completion handler so it can distinguish
+    /// a startup prefetch (which only updates cached snapshots and schedules a
+    /// frame) from a `/status`-triggered refresh (which must finalize the
+    /// corresponding status card).
     fn refresh_rate_limits(
         &mut self,
         app_server: &AppServerSession,
@@ -3841,6 +3848,8 @@ impl App {
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();
+        // Kick off a non-blocking rate-limit prefetch so the first `/status`
+        // already has data, without delaying the initial frame render.
         if requires_openai_auth && has_chatgpt_account {
             app.refresh_rate_limits(&app_server, RateLimitRefreshOrigin::StartupPrefetch);
         }

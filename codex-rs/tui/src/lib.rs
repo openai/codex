@@ -1615,6 +1615,9 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
+/// Determines the user's authentication mode using a lightweight account read
+/// rather than a full `bootstrap`, avoiding the model-list fetch and
+/// rate-limit round-trip that `bootstrap` would trigger.
 async fn get_login_status(
     app_server: &mut AppServerSession,
     config: &Config,

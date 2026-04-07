@@ -75,9 +75,20 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+/// Distinguishes why a rate-limit refresh was requested so the completion
+/// handler can route the result correctly.
+///
+/// A `StartupPrefetch` fires once, concurrently with the rest of TUI init, and
+/// only updates the cached snapshots (no status card to finalize). A
+/// `StatusCommand` is tied to a specific `/status` invocation and must call
+/// `finish_status_rate_limit_refresh` when done so the card stops showing a
+/// "refreshing" state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateLimitRefreshOrigin {
+    /// Eagerly fetched after bootstrap so the first `/status` already has data.
     StartupPrefetch,
+    /// User-initiated via `/status`; the `request_id` correlates with the
+    /// status card that should be updated when the fetch completes.
     StatusCommand { request_id: u64 },
 }
 

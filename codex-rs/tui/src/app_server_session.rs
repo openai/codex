@@ -90,11 +90,20 @@ use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Data collected during the TUI bootstrap phase that the main event loop
+/// needs to configure the UI, telemetry, and initial rate-limit prefetch.
+///
+/// Rate-limit snapshots are intentionally **not** included here; they are
+/// fetched asynchronously after bootstrap returns so that the TUI can render
+/// its first frame without waiting for the rate-limit round-trip.
 pub(crate) struct AppServerBootstrap {
     pub(crate) account_email: Option<String>,
     pub(crate) auth_mode: Option<TelemetryAuthMode>,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
     pub(crate) plan_type: Option<codex_protocol::account::PlanType>,
+    /// Whether the configured model provider needs OpenAI-style auth. Combined
+    /// with `has_chatgpt_account` to decide if a startup rate-limit prefetch
+    /// should be fired.
     pub(crate) requires_openai_auth: bool,
     pub(crate) default_model: String,
     pub(crate) feedback_audience: FeedbackAudience,
@@ -250,6 +259,10 @@ impl AppServerSession {
         })
     }
 
+    /// Fetches the current account info without refreshing the auth token.
+    ///
+    /// Used by both `bootstrap` (to populate the initial UI) and `get_login_status`
+    /// (to check auth mode without the overhead of a full bootstrap).
     pub(crate) async fn read_account(&mut self) -> Result<GetAccountResponse> {
         let account_request_id = self.next_request_id();
         self.client
