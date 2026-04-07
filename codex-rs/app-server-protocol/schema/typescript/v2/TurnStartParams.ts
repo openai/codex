@@ -6,6 +6,7 @@ import type { Personality } from "../Personality";
 import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ReasoningSummary } from "../ReasoningSummary";
 import type { ServiceTier } from "../ServiceTier";
+import type { SubmissionType } from "../SubmissionType";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
@@ -45,6 +46,9 @@ personality?: Personality | null, /**
  * this turn.
  */
 outputSchema?: JsonValue | null, /**
+ * Metadata describing how the prompt was submitted.
+ */
+submissionType?: SubmissionType | null, /**
  * EXPERIMENTAL - Set a pre-set collaboration mode.
  * Takes precedence over model, reasoning_effort, and developer instructions if set.
  *
