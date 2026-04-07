@@ -7899,10 +7899,11 @@ impl CodexMessageProcessor {
         let state_db_ctx = state_db_ctx?;
         state_db_ctx
             .find_rollout_path_by_id(conversation_id, /*archived_only*/ None)
-            .await.unwrap_or_else(|err| {
-            warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
-            None
-        })
+            .await
+            .unwrap_or_else(|err| {
+                warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
+                None
+            })
     }
 }
 
