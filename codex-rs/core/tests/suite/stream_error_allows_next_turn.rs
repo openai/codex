@@ -1,5 +1,5 @@
-use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -84,7 +84,7 @@ async fn continue_after_stream_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.base_instructions = Some("You are a helpful assistant".to_string());
+            config.base_instructions = Some(Some("You are a helpful assistant".to_string()));
             config.model_provider = provider;
         })
         .build(&server)

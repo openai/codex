@@ -1,0 +1,100 @@
+diff --git a/build.rs b/build.rs
+index 9843ad8aa..573075489 100644
+--- a/build.rs
++++ b/build.rs
+@@ -346,7 +346,29 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
+     // we want to optimize for minimizing the build tools required: No Perl,
+     // no nasm, etc.
+     let generated_dir = if !is_git {
+-        c_root_dir.join(PREGENERATED)
++        let pregenerated_dir = c_root_dir.join(PREGENERATED);
++        if target.os == WINDOWS
++            && target.env == "msvc"
++            && env::var_os("RULES_RUST_BAZEL_BUILD_SCRIPT_RUNNER").is_some()
++        {
++            let mut pending = vec![(pregenerated_dir.clone(), out_dir.clone())];
++            while let Some((src_dir, dst_dir)) = pending.pop() {
++                fs::create_dir_all(&dst_dir).unwrap();
++                for entry in fs::read_dir(&src_dir).unwrap() {
++                    let entry = entry.unwrap();
++                    let src_path = entry.path();
++                    let dst_path = dst_dir.join(entry.file_name());
++                    if entry.file_type().unwrap().is_dir() {
++                        pending.push((src_path, dst_path));
++                    } else {
++                        fs::copy(&src_path, &dst_path).unwrap();
++                    }
++                }
++            }
++            out_dir.clone()
++        } else {
++            pregenerated_dir
++        }
+     } else {
+         generate_sources_and_preassemble(
+             &out_dir,
+@@ -569,6 +591,15 @@ fn configure_cc(c: &mut cc::Build, target: &Target, c_root_dir: &Path, include_d
+ 
+     let _ = c.include(c_root_dir.join("include"));
+     let _ = c.include(include_dir);
++    let _ = c.include(c_root_dir.join("third_party").join("fiat"));
++    if compiler.is_like_msvc() {
++        let _ = c.include(c_root_dir.join("crypto").join("curve25519"));
++        let _ = c.include(c_root_dir.join("crypto").join("limbs"));
++        let _ = c.include(c_root_dir.join("crypto").join("fipsmodule").join("aes"));
++        let _ = c.include(c_root_dir.join("crypto").join("fipsmodule").join("bn"));
++        let _ = c.include(c_root_dir.join("crypto").join("fipsmodule").join("ec"));
++        let _ = c.include(c_root_dir.join("crypto").join("poly1305"));
++    }
+     for f in cpp_flags(&compiler) {
+         let _ = c.flag(f);
+     }
+diff --git a/crypto/curve25519/curve25519.c b/crypto/curve25519/curve25519.c
+index 99d7d7fbb..2f69ad560 100644
+--- a/crypto/curve25519/curve25519.c
++++ b/crypto/curve25519/curve25519.c
+@@ -47,11 +47,11 @@
+ #if defined(__GNUC__)
+ #pragma GCC diagnostic ignored "-Wpedantic"
+ #endif
+-#include "../../third_party/fiat/curve25519_64.h"
++#include "curve25519_64.h"
+ #elif defined(OPENSSL_64_BIT)
+-#include "../../third_party/fiat/curve25519_64_msvc.h"
++#include "curve25519_64_msvc.h"
+ #else
+-#include "../../third_party/fiat/curve25519_32.h"
++#include "curve25519_32.h"
+ #endif
+ 
+ 
+diff --git a/crypto/curve25519/curve25519_64_adx.c b/crypto/curve25519/curve25519_64_adx.c
+index 88964a9dd..b660f55f4 100644
+--- a/crypto/curve25519/curve25519_64_adx.c
++++ b/crypto/curve25519/curve25519_64_adx.c
+@@ -19,5 +19,5 @@
+ #pragma GCC diagnostic ignored "-Wpedantic"
+ #pragma GCC diagnostic ignored "-Wsign-conversion"
+ 
+-#include "../../third_party/fiat/curve25519_64_adx.h"
++#include "curve25519_64_adx.h"
+ #endif
+diff --git a/crypto/fipsmodule/ec/p256.c b/crypto/fipsmodule/ec/p256.c
+index 0117916da..4224d1192 100644
+--- a/crypto/fipsmodule/ec/p256.c
++++ b/crypto/fipsmodule/ec/p256.c
+@@ -50,11 +50,11 @@
+ #if defined(__GNUC__)
+ #pragma GCC diagnostic ignored "-Wpedantic"
+ #endif
+-#include "../../../third_party/fiat/p256_64.h"
++#include "p256_64.h"
+ #elif defined(OPENSSL_64_BIT)
+-#include "../../../third_party/fiat/p256_64_msvc.h"
++#include "p256_64_msvc.h"
+ #else
+-#include "../../../third_party/fiat/p256_32.h"
++#include "p256_32.h"
+ #endif
+ 
+ 

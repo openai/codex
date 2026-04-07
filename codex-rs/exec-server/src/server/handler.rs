@@ -1,7 +1,7 @@
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
-use std::time::Instant;
 
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCopyResponse;
@@ -29,23 +29,30 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+use crate::rpc::RpcNotificationSender;
 use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
 use crate::server::session_registry::SessionHandle;
-
-const MAX_LONG_POLL_SLICE: Duration = Duration::from_millis(50);
+use crate::server::session_registry::SessionRegistry;
 
 pub(crate) struct ExecServerHandler {
-    session: SessionHandle,
+    session_registry: Arc<SessionRegistry>,
+    notifications: RpcNotificationSender,
+    session: StdMutex<Option<SessionHandle>>,
     file_system: FileSystemHandler,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
 
 impl ExecServerHandler {
-    pub(crate) fn new(session: SessionHandle) -> Self {
+    pub(crate) fn new(
+        session_registry: Arc<SessionRegistry>,
+        notifications: RpcNotificationSender,
+    ) -> Self {
         Self {
-            session,
+            session_registry,
+            notifications,
+            session: StdMutex::new(None),
             file_system: FileSystemHandler::default(),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -53,16 +60,19 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn shutdown(&self) {
-        self.session.detach().await;
+        if let Some(session) = self.session() {
+            session.detach().await;
+        }
     }
 
-    pub(crate) fn is_current_attachment(&self) -> bool {
-        self.session.is_current_attachment()
+    pub(crate) fn is_session_attached(&self) -> bool {
+        self.session()
+            .is_none_or(|session| session.is_session_attached())
     }
 
-    pub(crate) fn initialize(
+    pub(crate) async fn initialize(
         &self,
-        _params: InitializeParams,
+        params: InitializeParams,
     ) -> Result<InitializeResponse, JSONRPCErrorError> {
         if self.initialize_requested.swap(true, Ordering::SeqCst) {
             return Err(invalid_request(
@@ -70,78 +80,69 @@ impl ExecServerHandler {
             ));
         }
 
-        Ok(InitializeResponse {
-            session_id: self.session.session_id().to_string(),
-        })
+        let session = match self
+            .session_registry
+            .attach(params.resume_session_id.clone(), self.notifications.clone())
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                self.initialize_requested.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+        };
+        let session_id = session.session_id().to_string();
+        tracing::debug!(
+            session_id,
+            connection_id = %session.connection_id(),
+            "exec-server session attached"
+        );
+        *self
+            .session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(session);
+        Ok(InitializeResponse { session_id })
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {
-        self.require_current_attachment_string()?;
         if !self.initialize_requested.load(Ordering::SeqCst) {
             return Err("received `initialized` notification before `initialize`".into());
         }
+        self.require_session_attached()
+            .map_err(|error| error.message)?;
         self.initialized.store(true, Ordering::SeqCst);
         Ok(())
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
-        self.session.process().exec(params).await
+        let session = self.require_initialized_for("exec")?;
+        session.process().exec(params).await
     }
 
     pub(crate) async fn exec_read(
         &self,
         params: ReadParams,
     ) -> Result<ReadResponse, JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
-
-        let total_wait = Duration::from_millis(params.wait_ms.unwrap_or(0));
-        if total_wait.is_zero() {
-            return self.session.process().exec_read(params).await;
-        }
-
-        let deadline = Instant::now() + total_wait;
-        loop {
-            let now = Instant::now();
-            let wait_ms = deadline
-                .saturating_duration_since(now)
-                .min(MAX_LONG_POLL_SLICE)
-                .as_millis() as u64;
-            let response = self
-                .session
-                .process()
-                .exec_read(ReadParams {
-                    wait_ms: Some(wait_ms),
-                    ..params.clone()
-                })
-                .await?;
-            self.require_current_attachment()?;
-
-            if !response.chunks.is_empty()
-                || response.exited
-                || response.closed
-                || wait_ms == 0
-                || Instant::now() >= deadline
-            {
-                return Ok(response);
-            }
-        }
+        let session = self.require_initialized_for("exec")?;
+        let response = session.process().exec_read(params).await?;
+        self.require_session_attached()?;
+        Ok(response)
     }
 
     pub(crate) async fn exec_write(
         &self,
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
-        self.session.process().exec_write(params).await
+        let session = self.require_initialized_for("exec")?;
+        session.process().exec_write(params).await
     }
 
     pub(crate) async fn terminate(
         &self,
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
-        self.session.process().terminate(params).await
+        let session = self.require_initialized_for("exec")?;
+        session.process().terminate(params).await
     }
 
     pub(crate) async fn fs_read_file(
@@ -200,37 +201,44 @@ impl ExecServerHandler {
         self.file_system.copy(params).await
     }
 
-    fn require_initialized_for(&self, method_family: &str) -> Result<(), JSONRPCErrorError> {
-        self.require_current_attachment()?;
+    fn require_initialized_for(
+        &self,
+        method_family: &str,
+    ) -> Result<SessionHandle, JSONRPCErrorError> {
         if !self.initialize_requested.load(Ordering::SeqCst) {
             return Err(invalid_request(format!(
                 "client must call initialize before using {method_family} methods"
             )));
         }
+        let session = self.require_session_attached()?;
         if !self.initialized.load(Ordering::SeqCst) {
             return Err(invalid_request(format!(
                 "client must send initialized before using {method_family} methods"
             )));
         }
-        Ok(())
+        Ok(session)
     }
 
-    fn require_current_attachment(&self) -> Result<(), JSONRPCErrorError> {
-        if self.is_current_attachment() {
-            Ok(())
-        } else {
-            Err(invalid_request(
-                "session has been resumed by another connection".to_string(),
-            ))
+    fn require_session_attached(&self) -> Result<SessionHandle, JSONRPCErrorError> {
+        let Some(session) = self.session() else {
+            return Err(invalid_request(
+                "client must call initialize before using methods".to_string(),
+            ));
+        };
+        if session.is_session_attached() {
+            return Ok(session);
         }
+
+        Err(invalid_request(
+            "session has been resumed by another connection".to_string(),
+        ))
     }
 
-    fn require_current_attachment_string(&self) -> Result<(), String> {
-        if self.is_current_attachment() {
-            Ok(())
-        } else {
-            Err("session has been resumed by another connection".to_string())
-        }
+    fn session(&self) -> Option<SessionHandle> {
+        self.session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

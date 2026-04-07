@@ -1,10 +1,9 @@
-use codex_core::AuthManager;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
 use codex_login::token_data::TokenData;
 use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::RwLock;
-
-use codex_core::auth::AuthCredentialsStoreMode;
 
 static CHATGPT_TOKEN: LazyLock<RwLock<Option<TokenData>>> = LazyLock::new(|| RwLock::new(None));
 

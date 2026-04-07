@@ -1,4 +1,3 @@
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::rollout::ARCHIVED_SESSIONS_SUBDIR;
 use crate::rollout::SESSIONS_SUBDIR;
@@ -6,9 +5,10 @@ use crate::rollout::list::ThreadListConfig;
 use crate::rollout::list::ThreadListLayout;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::get_threads_in_root;
-use crate::state_db;
+use codex_config::config_toml::ConfigToml;
 use codex_protocol::config_types::Personality;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::state_db;
 use std::io;
 use std::path::Path;
 use tokio::fs::OpenOptions;

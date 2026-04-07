@@ -17,6 +17,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
@@ -33,11 +34,10 @@ use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
-use crate::config::types::McpServerConfig;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::protocol::SandboxPolicy;
 use crate::rollout::recorder::RolloutRecorder;
+use codex_config::types::McpServerConfig;
 use codex_features::Feature;
+use codex_model_provider_info::ModelProviderInfo;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
@@ -137,7 +137,7 @@ impl GuardianReviewSessionReuseKey {
             model_reasoning_summary: spawn_config.model_reasoning_summary,
             permissions: spawn_config.permissions.clone(),
             developer_instructions: spawn_config.developer_instructions.clone(),
-            base_instructions: spawn_config.base_instructions.clone(),
+            base_instructions: spawn_config.base_instructions.clone().flatten(),
             user_instructions: spawn_config.user_instructions.clone(),
             compact_prompt: spawn_config.compact_prompt.clone(),
             cwd: spawn_config.cwd.to_path_buf(),

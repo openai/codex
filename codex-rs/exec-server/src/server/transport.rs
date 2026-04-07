@@ -59,7 +59,7 @@ async fn run_websocket_listener(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
-    let session_registry = SessionRegistry::default();
+    let session_registry = SessionRegistry::new();
     tracing::info!("codex-exec-server listening on ws://{local_addr}");
     println!("ws://{local_addr}");
 

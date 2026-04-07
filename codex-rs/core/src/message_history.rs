@@ -36,7 +36,7 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 
 use crate::config::Config;
-use crate::config::types::HistoryPersistence;
+use codex_config::types::HistoryPersistence;
 
 use codex_protocol::ThreadId;
 #[cfg(unix)]

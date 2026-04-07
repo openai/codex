@@ -16,7 +16,7 @@ const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH"
 #[derive(Debug, Parser)]
 struct AppServerArgs {
     /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `ws://IP:PORT`.
+    /// `ws://IP:PORT`, `off`.
     #[arg(
         long = "listen",
         value_name = "URL",

@@ -15,7 +15,8 @@ no-`--argv0` compatibility path for the inner re-exec. If `bwrap` is missing,
 the helper falls back to the vendored bubblewrap path compiled into this
 binary.
 Codex also surfaces a startup warning when `bwrap` is missing so users know it
-is falling back to the vendored helper.
+is falling back to the vendored helper. Codex surfaces the same startup warning
+path when bubblewrap cannot create user namespaces.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
@@ -28,6 +29,8 @@ is falling back to the vendored helper.
   path.
 - If `bwrap` is missing, Codex also surfaces a startup warning instead of
   printing directly from the sandbox helper.
+- If bubblewrap cannot create user namespaces, Codex surfaces a startup warning
+  instead of waiting for a runtime sandbox failure.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)

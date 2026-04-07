@@ -1,15 +1,15 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
-use codex_core::CodexAuth;
 use codex_core::ModelClient;
 use codex_core::ModelClientSession;
-use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::current_span_w3c_trace_context;
@@ -1654,9 +1654,9 @@ fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
 
 fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Prompt {
     let mut prompt = prompt_with_input(input);
-    prompt.base_instructions = BaseInstructions {
+    prompt.base_instructions = Some(BaseInstructions {
         text: instructions.to_string(),
-    };
+    });
     prompt
 }
 

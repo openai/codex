@@ -1,10 +1,12 @@
 use crate::facts::AppInvocation;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
+use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -226,5 +228,51 @@ pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
         runtime_os: std::env::consts::OS.to_string(),
         runtime_os_version: os_info.version().to_string(),
         runtime_arch: std::env::consts::ARCH.to_string(),
+    }
+}
+
+pub(crate) fn subagent_thread_started_event_request(
+    input: SubAgentThreadStartedInput,
+) -> ThreadInitializedEvent {
+    let event_params = ThreadInitializedEventParams {
+        thread_id: input.thread_id,
+        app_server_client: CodexAppServerClientMetadata {
+            product_client_id: input.product_client_id,
+            client_name: Some(input.client_name),
+            client_version: Some(input.client_version),
+            rpc_transport: AppServerRpcTransport::InProcess,
+            experimental_api_enabled: None,
+        },
+        runtime: current_runtime_metadata(),
+        model: input.model,
+        ephemeral: input.ephemeral,
+        thread_source: Some("subagent"),
+        initialization_mode: ThreadInitializationMode::New,
+        subagent_source: Some(subagent_source_name(&input.subagent_source)),
+        parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
+        created_at: input.created_at,
+    };
+    ThreadInitializedEvent {
+        event_type: "codex_thread_initialized",
+        event_params,
+    }
+}
+
+fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
+    match subagent_source {
+        SubAgentSource::Review => "review".to_string(),
+        SubAgentSource::Compact => "compact".to_string(),
+        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
+        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
+        SubAgentSource::Other(other) => other.clone(),
+    }
+}
+
+fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
+    match subagent_source {
+        SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        } => Some(parent_thread_id.to_string()),
+        _ => None,
     }
 }

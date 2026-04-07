@@ -1,8 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
-use codex_core::CodexAuth;
-use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
+use codex_login::CodexAuth;
+use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;

@@ -37,20 +37,17 @@ fn exec_params(process_id: &str) -> ExecParams {
 
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::default();
-    let session = registry
-        .attach(
-            /*resume_session_id*/ None,
-            RpcNotificationSender::new(outgoing_tx),
-        )
-        .await
-        .expect("attach session");
-    let handler = Arc::new(ExecServerHandler::new(session));
+    let registry = SessionRegistry::new();
+    let handler = Arc::new(ExecServerHandler::new(
+        registry,
+        RpcNotificationSender::new(outgoing_tx),
+    ));
     let initialize_response = handler
         .initialize(InitializeParams {
             client_name: "exec-server-test".to_string(),
             resume_session_id: None,
         })
+        .await
         .expect("initialize");
     Uuid::parse_str(&initialize_response.session_id).expect("session id should be a UUID");
     handler.initialized().expect("initialized");
@@ -117,20 +114,17 @@ async fn terminate_reports_false_after_process_exit() {
 #[tokio::test]
 async fn long_poll_read_fails_after_session_resume() {
     let (first_tx, _first_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::default();
-    let first_session = registry
-        .attach(
-            /*resume_session_id*/ None,
-            RpcNotificationSender::new(first_tx),
-        )
-        .await
-        .expect("attach first session");
-    let first_handler = Arc::new(ExecServerHandler::new(first_session));
+    let registry = SessionRegistry::new();
+    let first_handler = Arc::new(ExecServerHandler::new(
+        Arc::clone(&registry),
+        RpcNotificationSender::new(first_tx),
+    ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
             client_name: "exec-server-test".to_string(),
             resume_session_id: None,
         })
+        .await
         .expect("initialize");
     first_handler.initialized().expect("initialized");
 
@@ -163,21 +157,19 @@ async fn long_poll_read_fails_after_session_resume() {
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
+    first_handler.shutdown().await;
 
     let (second_tx, _second_rx) = mpsc::channel(16);
-    let second_session = registry
-        .attach(
-            Some(initialize_response.session_id),
-            RpcNotificationSender::new(second_tx),
-        )
-        .await
-        .expect("attach second session");
-    let second_handler = Arc::new(ExecServerHandler::new(second_session));
+    let second_handler = Arc::new(ExecServerHandler::new(
+        registry,
+        RpcNotificationSender::new(second_tx),
+    ));
     second_handler
         .initialize(InitializeParams {
             client_name: "exec-server-test".to_string(),
-            resume_session_id: None,
+            resume_session_id: Some(initialize_response.session_id),
         })
+        .await
         .expect("initialize second connection");
     second_handler
         .initialized()
@@ -194,4 +186,45 @@ async fn long_poll_read_fails_after_session_resume() {
     );
 
     second_handler.shutdown().await;
+}
+
+#[tokio::test]
+async fn active_session_resume_is_rejected() {
+    let (first_tx, _first_rx) = mpsc::channel(16);
+    let registry = SessionRegistry::new();
+    let first_handler = Arc::new(ExecServerHandler::new(
+        Arc::clone(&registry),
+        RpcNotificationSender::new(first_tx),
+    ));
+    let initialize_response = first_handler
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: None,
+        })
+        .await
+        .expect("initialize");
+
+    let (second_tx, _second_rx) = mpsc::channel(16);
+    let second_handler = Arc::new(ExecServerHandler::new(
+        registry,
+        RpcNotificationSender::new(second_tx),
+    ));
+    let err = second_handler
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: Some(initialize_response.session_id.clone()),
+        })
+        .await
+        .expect_err("active session resume should fail");
+
+    assert_eq!(err.code, -32600);
+    assert_eq!(
+        err.message,
+        format!(
+            "session {} is already attached to another connection",
+            initialize_response.session_id
+        )
+    );
+
+    first_handler.shutdown().await;
 }

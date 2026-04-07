@@ -1,9 +1,10 @@
 //! Shared argument parsing and dispatch for the v2 text-only agent messaging tools.
 //!
-//! `send_message` and `assign_task` share the same submission path and differ only in whether the
+//! `send_message` and `followup_task` share the same submission path and differ only in whether the
 //! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
+use crate::tools::context::FunctionToolOutput;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,36 +39,12 @@ pub(crate) struct SendMessageArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Input for the MultiAgentV2 `assign_task` tool.
-pub(crate) struct AssignTaskArgs {
+/// Input for the MultiAgentV2 `followup_task` tool.
+pub(crate) struct FollowupTaskArgs {
     pub(crate) target: String,
     pub(crate) message: String,
     #[serde(default)]
     pub(crate) interrupt: bool,
-}
-
-#[derive(Debug, Serialize)]
-/// Tool result shared by the MultiAgentV2 message-delivery tools.
-pub(crate) struct MessageToolResult {
-    submission_id: String,
-}
-
-impl ToolOutput for MessageToolResult {
-    fn log_preview(&self) -> String {
-        tool_output_json_text(self, "multi_agent_message")
-    }
-
-    fn success_for_logging(&self) -> bool {
-        true
-    }
-
-    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        tool_output_response_item(call_id, payload, self, Some(true), "multi_agent_message")
-    }
-
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        tool_output_code_mode_result(self, "multi_agent_message")
-    }
 }
 
 fn message_content(message: String) -> Result<String, FunctionCallError> {
@@ -79,14 +56,14 @@ fn message_content(message: String) -> Result<String, FunctionCallError> {
     Ok(message)
 }
 
-/// Handles the shared MultiAgentV2 plain-text message flow for both `send_message` and `assign_task`.
+/// Handles the shared MultiAgentV2 plain-text message flow for both `send_message` and `followup_task`.
 pub(crate) async fn handle_message_string_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,
     target: String,
     message: String,
     interrupt: bool,
-) -> Result<MessageToolResult, FunctionCallError> {
+) -> Result<FunctionToolOutput, FunctionCallError> {
     handle_message_submission(
         invocation,
         mode,
@@ -103,15 +80,13 @@ async fn handle_message_submission(
     target: String,
     prompt: String,
     interrupt: bool,
-) -> Result<MessageToolResult, FunctionCallError> {
+) -> Result<FunctionToolOutput, FunctionCallError> {
     let ToolInvocation {
         session,
         turn,
-        payload,
         call_id,
         ..
     } = invocation;
-    let _ = payload;
     let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
     let receiver_agent = session
         .services
@@ -186,7 +161,7 @@ async fn handle_message_submission(
             .into(),
         )
         .await;
-    let submission_id = result?;
+    result?;
 
-    Ok(MessageToolResult { submission_id })
+    Ok(FunctionToolOutput::from_text(String::new(), Some(true)))
 }
