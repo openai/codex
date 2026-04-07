@@ -6,14 +6,14 @@ use std::process::Output;
 
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 const MISSING_BWRAP_WARNING: &str = concat!(
-    "Codex could not find Bubblewrap on PATH. ",
-    "Install Bubblewrap with your OS package manager. ",
+    "Codex could not find bubblewrap on PATH. ",
+    "Install bubblewrap with your OS package manager. ",
     "See the sandbox prerequisites: ",
     "https://developers.openai.com/codex/concepts/sandboxing#prerequisites. ",
-    "Codex will use the vendored Bubblewrap in the meantime.",
+    "Codex will use the vendored bubblewrap in the meantime.",
 );
 const USER_NAMESPACE_WARNING: &str =
-    concat!("Codex's Linux sandbox uses Bubblewrap and needs access to create user namespaces.",);
+    concat!("Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.",);
 const USER_NAMESPACE_FAILURES: [&str; 4] = [
     "loopback: Failed RTM_NEWADDR",
     "loopback: Failed RTM_NEWLINK",
