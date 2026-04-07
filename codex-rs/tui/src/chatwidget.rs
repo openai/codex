@@ -5992,6 +5992,9 @@ impl ChatWidget {
                 local_image_paths,
                 remote_image_urls,
             ));
+            // Bump turn counter here (at user-message submission time) so that
+            // `record_agent_markdown` can derive the correct ordinal for the
+            // agent response that follows.
             self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         } else if render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
@@ -7006,6 +7009,10 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
+            // NOTE: All three AgentMessage arms feed `record_agent_markdown` even
+            // when the message is otherwise not rendered (thread-snapshot replay,
+            // non-review live messages). This ensures the copy history stays
+            // populated across replay, resume, and live paths.
             EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
                     && !self.is_review_mode =>
@@ -7198,6 +7205,9 @@ impl ChatWidget {
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
+            // Copy-history cleanup on rollback is handled by `app_backtrack`,
+            // which calls `truncate_agent_turn_markdowns_to_turn_count` after
+            // trimming transcript cells.
             EventMsg::ThreadRolledBack(rollback) => {
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
