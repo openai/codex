@@ -132,7 +132,11 @@ fn standalone_install_context(
     let canonical_exe = std::fs::canonicalize(exe_path).ok()?;
     let canonical_codex_home = std::fs::canonicalize(codex_home?).ok()?;
     let release_dir = canonical_exe.parent()?.to_path_buf();
-    if !is_managed_release_dir(&release_dir, &canonical_codex_home) {
+    let releases_root = canonical_codex_home
+        .join("packages")
+        .join(STANDALONE_PACKAGES_DIRNAME)
+        .join(RELEASES_DIRNAME);
+    if !release_dir.starts_with(releases_root) {
         return None;
     }
 
@@ -142,17 +146,6 @@ fn standalone_install_context(
         resources_dir: resources_dir.is_dir().then_some(resources_dir),
         platform: standalone_platform(),
     })
-}
-
-fn is_managed_release_dir(release_dir: &Path, codex_home: &Path) -> bool {
-    release_dir.starts_with(releases_root(codex_home, STANDALONE_PACKAGES_DIRNAME))
-}
-
-fn releases_root(codex_home: &Path, package_dirname: &str) -> PathBuf {
-    codex_home
-        .join("packages")
-        .join(package_dirname)
-        .join(RELEASES_DIRNAME)
 }
 
 fn standalone_platform() -> StandalonePlatform {
