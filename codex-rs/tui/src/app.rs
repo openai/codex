@@ -6075,7 +6075,7 @@ async fn fetch_plugins_list(
         .request_typed(ClientRequest::PluginList {
             request_id,
             params: PluginListParams {
-                cwds: Some(vec![cwd]),
+                cwds: Some(vec![cwd.to_path_buf()]),
                 force_remote_sync: false,
             },
         })
