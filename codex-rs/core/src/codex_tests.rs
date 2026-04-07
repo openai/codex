@@ -4050,18 +4050,13 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let image_output_dir = image_output_path
         .parent()
         .expect("generated image path should have a parent");
-    let save_message: ResponseItem = DeveloperInstructions::new(format!(
-        "Generated images are saved to {} as {} by default.",
+    let image_message: ResponseItem = DeveloperInstructions::new(format!(
+        "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
         image_output_dir.display(),
         image_output_path.display(),
     ))
     .into();
-    let copy_message: ResponseItem = DeveloperInstructions::new(
-        "If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
-            .to_string(),
-    )
-    .into();
-    assert_eq!(history.raw_items(), &[save_message, copy_message, item]);
+    assert_eq!(history.raw_items(), &[image_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
