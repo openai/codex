@@ -12,6 +12,7 @@ use rmcp::model::ServerRequest;
 use rmcp::service::NotificationContext;
 use rmcp::service::RequestContext;
 use rmcp::service::Service;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::logging_client_handler::LoggingClientHandler;
@@ -63,12 +64,12 @@ impl Service<RoleClient> for ElicitationClientService {
         context: RequestContext<RoleClient>,
     ) -> Result<ClientResult, rmcp::ErrorData> {
         match request {
-            ServerRequest::CreateElicitationRequest(request) => self
-                .create_elicitation(request.params, context)
-                .await
+            ServerRequest::CreateElicitationRequest(request) => {
+                let response = self.create_elicitation(request.params, context).await?;
                 // RMCP's typed CreateElicitationResult does not model result-level `_meta`.
-                .map(elicitation_response_result)
-                .map(ClientResult::CustomResult),
+                let result = elicitation_response_result(response)?;
+                Ok(ClientResult::CustomResult(result))
+            }
             request => {
                 <LoggingClientHandler as Service<RoleClient>>::handle_request(
                     &self.handler,
@@ -105,39 +106,40 @@ fn restore_context_meta(mut request: Elicitation, mut context_meta: Meta) -> Eli
         return request;
     }
 
-    match request.meta_mut() {
-        Some(meta) => {
-            meta.extend(context_meta);
-        }
-        meta @ None => {
-            *meta = Some(context_meta);
-        }
-    }
+    request
+        .meta_mut()
+        .get_or_insert_with(Meta::new)
+        .extend(context_meta);
     request
 }
 
-fn elicitation_response_result(response: ElicitationResponse) -> CustomResult {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateElicitationResultWithMeta {
+    action: ElicitationAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<Value>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    meta: Option<Value>,
+}
+
+fn elicitation_response_result(
+    response: ElicitationResponse,
+) -> Result<CustomResult, rmcp::ErrorData> {
     let ElicitationResponse {
         action,
         content,
         meta,
     } = response;
-    let action = match action {
-        ElicitationAction::Accept => "accept",
-        ElicitationAction::Decline => "decline",
-        ElicitationAction::Cancel => "cancel",
+    let result = CreateElicitationResultWithMeta {
+        action,
+        content,
+        meta,
     };
 
-    let mut result =
-        serde_json::Map::from_iter([("action".to_string(), Value::String(action.to_string()))]);
-    if let Some(content) = content {
-        result.insert("content".to_string(), content);
-    }
-    if let Some(meta) = meta {
-        result.insert("_meta".to_string(), meta);
-    }
-
-    CustomResult(Value::Object(result))
+    serde_json::to_value(result)
+        .map(CustomResult)
+        .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))
 }
 
 #[cfg(test)]
@@ -172,13 +174,14 @@ mod tests {
 
     #[test]
     fn elicitation_response_result_serializes_response_meta() {
-        let result = rmcp::model::ClientResult::CustomResult(elicitation_response_result(
-            ElicitationResponse {
+        let result = rmcp::model::ClientResult::CustomResult(
+            elicitation_response_result(ElicitationResponse {
                 action: ElicitationAction::Accept,
                 content: Some(json!({ "confirmed": true })),
                 meta: Some(json!({ "persist": "always" })),
-            },
-        ));
+            })
+            .expect("elicitation response should serialize"),
+        );
 
         assert_eq!(
             serde_json::to_value(result).expect("client result should serialize"),
