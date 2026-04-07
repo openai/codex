@@ -620,6 +620,41 @@ macro_rules! server_request_definitions {
             }
         }
 
+        /// Typed response from the client to the server.
+        #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ServerResponse {
+            $(
+                $(#[$variant_meta])*
+                $(#[serde(rename = $wire)])?
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    response: $response,
+                },
+            )*
+        }
+
+        impl ServerResponse {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            }
+        }
+
         #[derive(Debug, Clone, PartialEq, JsonSchema)]
         #[allow(clippy::large_enum_variant)]
         pub enum ServerRequestPayload {
@@ -1231,6 +1266,30 @@ mod tests {
     }
 
     #[test]
+    fn serialize_server_response() -> Result<()> {
+        let response = ServerResponse::CommandExecutionRequestApproval {
+            request_id: RequestId::Integer(8),
+            response: v2::CommandExecutionRequestApprovalResponse {
+                decision: v2::CommandExecutionApprovalDecision::AcceptForSession,
+            },
+        };
+
+        assert_eq!(response.id(), &RequestId::Integer(8));
+        assert_eq!(response.method(), "item/commandExecution/requestApproval");
+        assert_eq!(
+            json!({
+                "method": "item/commandExecution/requestApproval",
+                "id": 8,
+                "response": {
+                    "decision": "acceptForSession"
+                }
+            }),
+            serde_json::to_value(&response)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_mcp_server_elicitation_request() -> Result<()> {
         let requested_schema: v2::McpElicitationSchema = serde_json::from_value(json!({
             "type": "object",
@@ -1635,6 +1694,7 @@ mod tests {
         let request = ClientRequest::FsWatch {
             request_id: RequestId::Integer(10),
             params: v2::FsWatchParams {
+                watch_id: "watch-git".to_string(),
                 path: absolute_path("tmp/repo/.git"),
             },
         };
@@ -1643,6 +1703,7 @@ mod tests {
                 "method": "fs/watch",
                 "id": 10,
                 "params": {
+                    "watchId": "watch-git",
                     "path": absolute_path_string("tmp/repo/.git")
                 }
             }),

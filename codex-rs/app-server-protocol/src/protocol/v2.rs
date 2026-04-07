@@ -2349,17 +2349,17 @@ pub struct FsCopyResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsWatchParams {
+    /// Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
+    pub watch_id: String,
     /// Absolute file or directory path to watch.
     pub path: AbsolutePathBuf,
 }
 
-/// Created watch handle returned by `fs/watch`.
+/// Successful response for `fs/watch`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsWatchResponse {
-    /// Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
-    pub watch_id: String,
     /// Canonicalized path associated with the watch.
     pub path: AbsolutePathBuf,
 }
@@ -2369,7 +2369,7 @@ pub struct FsWatchResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsUnwatchParams {
-    /// Watch identifier returned by `fs/watch`.
+    /// Watch identifier previously provided to `fs/watch`.
     pub watch_id: String,
 }
 
@@ -2384,7 +2384,7 @@ pub struct FsUnwatchResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsChangedNotification {
-    /// Watch identifier returned by `fs/watch`.
+    /// Watch identifier previously provided to `fs/watch`.
     pub watch_id: String,
     /// File or directory paths associated with this event.
     pub changed_paths: Vec<AbsolutePathBuf>,
@@ -5048,6 +5048,9 @@ pub struct McpToolCallResult {
     // representations). Using `JsonValue` keeps the payload wire-shaped and easy to export.
     pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
+    #[serde(rename = "_meta")]
+    #[ts(rename = "_meta")]
+    pub meta: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
