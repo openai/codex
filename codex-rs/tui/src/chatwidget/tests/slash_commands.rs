@@ -221,7 +221,9 @@ async fn slash_copy_state_clears_on_thread_rollback() {
             duration_ms: None,
         }),
     });
-    chat.truncate_agent_turn_markdowns_to_turn_count(/*remaining_turn_count*/ 0, None);
+    chat.truncate_agent_turn_markdowns_to_turn_count(
+        /*remaining_turn_count*/ 0, /*transcript_fallback*/ None,
+    );
 
     assert_eq!(chat.last_agent_markdown_text(), None);
 }
@@ -324,7 +326,9 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
     });
     let _ = drain_insert_history(&mut rx);
 
-    chat.truncate_agent_turn_markdowns_to_turn_count(/*remaining_turn_count*/ 0, None);
+    chat.truncate_agent_turn_markdowns_to_turn_count(
+        /*remaining_turn_count*/ 0, /*transcript_fallback*/ None,
+    );
 
     assert_eq!(chat.last_agent_markdown_text(), None);
 }

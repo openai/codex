@@ -919,14 +919,18 @@ mod tests {
     #[test]
     fn agent_group_count_ignores_context_compacted_marker() {
         let cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(AgentMessageCell::new(vec![Line::from("first")], true))
-                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("first")],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>,
             Arc::new(crate::history_cell::new_info_event(
                 "Context compacted".to_string(),
-                None,
+                /*hint*/ None,
             )) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(vec![Line::from("second")], true))
-                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("second")],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>,
         ];
 
         assert_eq!(agent_group_count(&cells), 2);

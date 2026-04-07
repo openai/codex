@@ -2234,7 +2234,7 @@ impl ChatWidget {
         self.handle_stream_finished();
         self.add_to_history(history_cell::new_info_event(
             "Context compacted".to_owned(),
-            None,
+            /*hint*/ None,
         ));
         self.request_redraw();
     }
@@ -5103,7 +5103,7 @@ impl ChatWidget {
                     self.clipboard_lease = lease;
                     self.add_to_history(history_cell::new_info_event(
                         "Copied last message to clipboard".into(),
-                        None,
+                        /*hint*/ None,
                     ));
                 }
                 Err(error) => self.add_to_history(history_cell::new_error_event(format!(
