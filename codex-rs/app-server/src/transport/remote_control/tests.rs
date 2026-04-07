@@ -125,13 +125,14 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
@@ -376,7 +377,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     );
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
 }
 
 #[tokio::test]
@@ -389,13 +390,14 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
@@ -452,7 +454,84 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     }
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_start_allows_remote_control_invalid_url_when_disabled() {
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, _remote_handle) = start_remote_control(
+        "https://internal.example.com/backend-api/".to_string(),
+        /*state_db*/ None,
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ false,
+    )
+    .await
+    .expect("disabled remote control should not validate the URL at startup");
+
+    shutdown_token.cancel();
+    timeout(Duration::from_secs(1), remote_task)
+        .await
+        .expect("remote control task should stop")
+        .expect("remote control task should join");
+}
+
+#[tokio::test]
+async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        remote_control_url,
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        enroll_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    respond_with_json(
+        enroll_request.stream,
+        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+    )
+    .await;
+    let mut first_websocket = accept_remote_control_connection(&listener).await;
+
+    remote_handle.set_enabled(false);
+    timeout(Duration::from_secs(1), first_websocket.next())
+        .await
+        .expect("disabling remote control should close the websocket");
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("disabled remote control should not reconnect");
+
+    remote_handle.set_enabled(true);
+    let mut second_websocket = accept_remote_control_connection(&listener).await;
+    second_websocket
+        .close(None)
+        .await
+        .expect("second websocket should close");
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
 }
 
 #[tokio::test]
@@ -465,13 +544,14 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
@@ -617,7 +697,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     );
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
 }
 
 #[tokio::test]
@@ -631,13 +711,14 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
@@ -815,7 +896,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     );
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
 }
 
 #[tokio::test]
@@ -847,13 +928,14 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     let (transport_event_tx, _transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
@@ -879,7 +961,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     );
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
 }
 
 #[tokio::test]
@@ -913,13 +995,14 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (app_server_client_name_tx, app_server_client_name_rx) = oneshot::channel::<String>();
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
         Some(app_server_client_name_rx),
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
@@ -936,7 +1019,7 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
     );
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
 }
 
 #[tokio::test]
@@ -969,13 +1052,14 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     let (transport_event_tx, _transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(state_db.clone()),
         auth_manager,
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start before account id is available");
@@ -1012,7 +1096,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     );
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
 }
 
 #[tokio::test]
@@ -1051,13 +1135,14 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let (transport_event_tx, _transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let remote_handle = start_remote_control(
+    let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
@@ -1104,7 +1189,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     );
 
     shutdown_token.cancel();
-    let _ = remote_handle.await;
+    let _ = remote_task.await;
 }
 
 #[derive(Debug)]
