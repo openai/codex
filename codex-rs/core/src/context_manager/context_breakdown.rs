@@ -334,7 +334,7 @@ fn classify_developer_text(text: &str) -> (ContextSectionKind, String) {
         return (
             ContextSectionKind::User,
             format!(
-                "Implicit skills catalog ({} skills)",
+                "Skill instructions ({} skills)",
                 count_catalog_entries(trimmed)
             ),
         );
@@ -672,7 +672,7 @@ mod tests {
                 "AGENTS.md instructions for /repo".to_string(),
                 "Base instructions".to_string(),
                 "Environment context".to_string(),
-                "Implicit skills catalog (1 skills)".to_string(),
+                "Skill instructions (1 skills)".to_string(),
                 "Reasoning".to_string(),
                 "Skill: notify (/tmp/skills/notify/SKILL.md)".to_string(),
                 "User message".to_string(),
