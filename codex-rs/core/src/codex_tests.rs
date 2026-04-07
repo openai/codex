@@ -1,6 +1,8 @@
 use super::*;
 use crate::alarms::AlarmDelivery;
 use crate::alarms::AlarmsState;
+use crate::alarms::load_alarm_sidecar;
+use crate::alarms::write_alarm_sidecar;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -117,6 +119,8 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
+use tempfile::TempDir;
+use tokio::sync::Notify;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
@@ -2784,6 +2788,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         alarm_start_in_progress: Mutex::new(false),
+        alarm_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
@@ -3627,6 +3632,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         alarm_start_in_progress: Mutex::new(false),
+        alarm_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
@@ -3710,6 +3716,94 @@ async fn maybe_start_pending_alarm_claims_only_one_alarm_while_start_is_in_progr
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn alarm_sidecar_persistence_serializes_stale_and_newer_snapshots() {
+    let (session, _, _) = make_session_and_context_with_rx().await;
+    let tempdir = TempDir::new().expect("tempdir");
+    let rollout_path = tempdir.path().join("rollout.jsonl");
+    let now = chrono::Utc::now();
+    {
+        let mut alarms = session.alarms.lock().await;
+        alarms
+            .create_alarm(
+                crate::alarms::CreateAlarm {
+                    id: "alarm-1".to_string(),
+                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    prompt: "first".to_string(),
+                    run_once: false,
+                    delivery: AlarmDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("first alarm should be created");
+    }
+
+    let first_snapshot_taken = Arc::new(Notify::new());
+    let allow_first_write = Arc::new(Notify::new());
+    let first_session = Arc::clone(&session);
+    let first_rollout_path = rollout_path.clone();
+    let first_snapshot_taken_for_task = Arc::clone(&first_snapshot_taken);
+    let allow_first_write_for_task = Arc::clone(&allow_first_write);
+    let first_write = tokio::spawn(async move {
+        first_session
+            .persist_alarms_sidecar_with_writer(|alarms| async move {
+                first_snapshot_taken_for_task.notify_one();
+                allow_first_write_for_task.notified().await;
+                write_alarm_sidecar(&first_rollout_path, &alarms).await
+            })
+            .await
+            .expect("first persist should succeed");
+    });
+    first_snapshot_taken.notified().await;
+
+    {
+        let mut alarms = session.alarms.lock().await;
+        let removed = alarms
+            .remove_alarm("alarm-1")
+            .expect("first alarm should be removable");
+        AlarmsState::cancel_runtime(&removed);
+        alarms
+            .create_alarm(
+                crate::alarms::CreateAlarm {
+                    id: "alarm-2".to_string(),
+                    cron_expression: crate::alarms::AFTER_TURN_CRON_EXPRESSION.to_string(),
+                    prompt: "second".to_string(),
+                    run_once: false,
+                    delivery: AlarmDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("second alarm should be created");
+    }
+
+    let second_session = Arc::clone(&session);
+    let second_rollout_path = rollout_path.clone();
+    let second_write = tokio::spawn(async move {
+        second_session
+            .persist_alarms_sidecar_with_writer(|alarms| async move {
+                write_alarm_sidecar(&second_rollout_path, &alarms).await
+            })
+            .await
+            .expect("second persist should succeed");
+    });
+
+    allow_first_write.notify_one();
+    first_write
+        .await
+        .expect("first persist task should complete");
+    second_write
+        .await
+        .expect("second persist task should complete");
+
+    let loaded = load_alarm_sidecar(&rollout_path)
+        .await
+        .expect("alarm sidecar should load");
+    let persisted = session.alarms.lock().await.persisted_alarms();
+    assert_eq!(loaded, persisted);
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -840,6 +841,9 @@ pub(crate) struct Session {
     /// Prevents concurrent alarm timers from claiming multiple alarms before a
     /// newly started turn becomes the active turn.
     alarm_start_in_progress: Mutex<bool>,
+    /// Serializes alarm sidecar snapshots and file writes so stale alarm state
+    /// cannot overwrite newer persisted state.
+    alarm_sidecar_write_lock: Mutex<()>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
@@ -2004,6 +2008,7 @@ impl Session {
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             alarm_start_in_progress: Mutex::new(false),
+            alarm_sidecar_write_lock: Mutex::new(()),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
@@ -2885,8 +2890,24 @@ impl Session {
     }
 
     async fn persist_alarms_to_rollout_sidecar(&self, rollout_path: &Path) -> Result<(), String> {
+        let rollout_path = rollout_path.to_path_buf();
+        self.persist_alarms_sidecar_with_writer(|alarms| async move {
+            write_alarm_sidecar(&rollout_path, &alarms).await
+        })
+        .await
+    }
+
+    async fn persist_alarms_sidecar_with_writer<W, Fut>(
+        &self,
+        write_sidecar: W,
+    ) -> Result<(), String>
+    where
+        W: FnOnce(Vec<PersistedAlarm>) -> Fut,
+        Fut: Future<Output = Result<(), String>>,
+    {
+        let _write_lock = self.alarm_sidecar_write_lock.lock().await;
         let alarms = self.alarms.lock().await.persisted_alarms();
-        write_alarm_sidecar(rollout_path, &alarms).await
+        write_sidecar(alarms).await
     }
 
     async fn persist_alarms_sidecar_best_effort(&self) {
