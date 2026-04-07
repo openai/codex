@@ -22,6 +22,7 @@ use codex_protocol::protocol::ReviewDecision;
 #[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxLaunchConfig;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformError;
 use codex_sandboxing::SandboxType;
@@ -337,21 +338,25 @@ impl<'a> SandboxAttempt<'a> {
         options: ExecOptions,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
+        let sandbox_launch_config = SandboxLaunchConfig {
+            sandbox: self.sandbox,
+            policy: self.policy.clone(),
+            file_system_policy: self.file_system_policy.clone(),
+            network_policy: self.network_policy,
+            sandbox_policy_cwd: self.sandbox_cwd.to_path_buf(),
+            additional_permissions: None,
+            enforce_managed_network: self.enforce_managed_network,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            use_legacy_landlock: self.use_legacy_landlock,
+        };
         self.manager
             .transform(
                 command,
-                self.policy,
-                self.file_system_policy,
-                self.network_policy,
-                self.sandbox,
-                self.enforce_managed_network,
+                &sandbox_launch_config,
                 network,
-                self.sandbox_cwd,
                 self.codex_linux_sandbox_exe
                     .map(std::path::PathBuf::as_path),
-                self.use_legacy_landlock,
-                self.windows_sandbox_level,
-                self.windows_sandbox_private_desktop,
             )
             .map(|request| {
                 crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)

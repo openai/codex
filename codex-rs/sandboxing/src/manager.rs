@@ -87,20 +87,7 @@ impl SandboxLaunchConfig {
         network: Option<&NetworkProxy>,
         codex_linux_sandbox_exe: Option<&Path>,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        SandboxManager::new().transform(
-            command,
-            &self.policy,
-            &self.file_system_policy,
-            self.network_policy,
-            self.sandbox,
-            self.enforce_managed_network,
-            network,
-            self.sandbox_policy_cwd.as_path(),
-            codex_linux_sandbox_exe,
-            self.use_legacy_landlock,
-            self.windows_sandbox_level,
-            self.windows_sandbox_private_desktop,
-        )
+        SandboxManager::new().transform(command, self, network, codex_linux_sandbox_exe)
     }
 }
 
@@ -205,33 +192,27 @@ impl SandboxManager {
     pub fn transform(
         &self,
         mut command: SandboxCommand,
-        policy: &SandboxPolicy,
-        file_system_policy: &FileSystemSandboxPolicy,
-        network_policy: NetworkSandboxPolicy,
-        sandbox: SandboxType,
-        enforce_managed_network: bool,
+        launch: &SandboxLaunchConfig,
         network: Option<&NetworkProxy>,
-        sandbox_policy_cwd: &Path,
         codex_linux_sandbox_exe: Option<&Path>,
-        use_legacy_landlock: bool,
-        windows_sandbox_level: WindowsSandboxLevel,
-        windows_sandbox_private_desktop: bool,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         let additional_permissions = command.additional_permissions.take();
         let EffectiveSandboxPermissions {
             sandbox_policy: effective_policy,
-        } = EffectiveSandboxPermissions::new(policy, additional_permissions.as_ref());
+        } = EffectiveSandboxPermissions::new(&launch.policy, additional_permissions.as_ref());
         let effective_file_system_policy = effective_file_system_sandbox_policy(
-            file_system_policy,
+            &launch.file_system_policy,
             additional_permissions.as_ref(),
         );
-        let effective_network_policy =
-            effective_network_sandbox_policy(network_policy, additional_permissions.as_ref());
+        let effective_network_policy = effective_network_sandbox_policy(
+            launch.network_policy,
+            additional_permissions.as_ref(),
+        );
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
 
-        let (argv, arg0_override) = match sandbox {
+        let (argv, arg0_override) = match launch.sandbox {
             SandboxType::None => (os_argv_to_strings(argv), None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
@@ -239,8 +220,8 @@ impl SandboxManager {
                     os_argv_to_strings(argv),
                     &effective_file_system_policy,
                     effective_network_policy,
-                    sandbox_policy_cwd,
-                    enforce_managed_network,
+                    launch.sandbox_policy_cwd.as_path(),
+                    launch.enforce_managed_network,
                     network,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
@@ -253,15 +234,15 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
+                let allow_proxy_network = allow_network_for_proxy(launch.enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args_for_policies(
                     os_argv_to_strings(argv),
                     command.cwd.as_path(),
                     &effective_policy,
                     &effective_file_system_policy,
                     effective_network_policy,
-                    sandbox_policy_cwd,
-                    use_legacy_landlock,
+                    launch.sandbox_policy_cwd.as_path(),
+                    launch.use_legacy_landlock,
                     allow_proxy_network,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
@@ -280,9 +261,9 @@ impl SandboxManager {
             cwd: command.cwd,
             env: command.env,
             network: network.cloned(),
-            sandbox,
-            windows_sandbox_level,
-            windows_sandbox_private_desktop,
+            sandbox: launch.sandbox,
+            windows_sandbox_level: launch.windows_sandbox_level,
+            windows_sandbox_private_desktop: launch.windows_sandbox_private_desktop,
             sandbox_policy: effective_policy,
             file_system_sandbox_policy: effective_file_system_policy,
             network_sandbox_policy: effective_network_policy,
