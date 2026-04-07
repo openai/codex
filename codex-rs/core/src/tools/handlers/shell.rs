@@ -459,25 +459,29 @@ impl ShellHandler {
         }
 
         // Intercept apply_patch if present.
-        let apply_patch_cwd =
-            AbsolutePathBuf::from_absolute_path(&exec_params.cwd).map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "apply_patch verification failed: failed to resolve cwd: {err}"
-                ))
-            })?;
-        if let Some(output) = intercept_apply_patch(
-            &exec_params.command,
-            &apply_patch_cwd,
-            exec_params.expiration.timeout_ms(),
-            session.clone(),
-            turn.clone(),
-            Some(&tracker),
-            &call_id,
-            tool_name.as_str(),
-        )
-        .await?
-        {
-            return Ok(output);
+        if let Some(environment) = turn.environment.as_ref() {
+            let apply_patch_cwd =
+                AbsolutePathBuf::from_absolute_path(&exec_params.cwd).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "apply_patch verification failed: failed to resolve cwd: {err}"
+                    ))
+                })?;
+            let fs = environment.get_filesystem();
+            if let Some(output) = intercept_apply_patch(
+                &exec_params.command,
+                &apply_patch_cwd,
+                fs.as_ref(),
+                exec_params.expiration.timeout_ms(),
+                session.clone(),
+                turn.clone(),
+                Some(&tracker),
+                &call_id,
+                tool_name.as_str(),
+            )
+            .await?
+            {
+                return Ok(output);
+            }
         }
 
         let source = ExecCommandSource::Agent;

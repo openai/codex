@@ -275,39 +275,43 @@ impl ToolHandler for UnifiedExecHandler {
                     }
                 };
 
-                let apply_patch_cwd = match AbsolutePathBuf::from_absolute_path(&cwd) {
-                    Ok(cwd) => cwd,
-                    Err(err) => {
+                if let Some(environment) = context.turn.environment.as_ref() {
+                    let apply_patch_cwd = match AbsolutePathBuf::from_absolute_path(&cwd) {
+                        Ok(cwd) => cwd,
+                        Err(err) => {
+                            manager.release_process_id(process_id).await;
+                            return Err(FunctionCallError::RespondToModel(format!(
+                                "apply_patch verification failed: failed to resolve cwd: {err}"
+                            )));
+                        }
+                    };
+                    let fs = environment.get_filesystem();
+                    if let Some(output) = intercept_apply_patch(
+                        &command,
+                        &apply_patch_cwd,
+                        fs.as_ref(),
+                        Some(yield_time_ms),
+                        context.session.clone(),
+                        context.turn.clone(),
+                        Some(&tracker),
+                        &context.call_id,
+                        tool_name.as_str(),
+                    )
+                    .await?
+                    {
                         manager.release_process_id(process_id).await;
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "apply_patch verification failed: failed to resolve cwd: {err}"
-                        )));
+                        return Ok(ExecCommandToolOutput {
+                            event_call_id: String::new(),
+                            chunk_id: String::new(),
+                            wall_time: std::time::Duration::ZERO,
+                            raw_output: output.into_text().into_bytes(),
+                            max_output_tokens: None,
+                            process_id: None,
+                            exit_code: None,
+                            original_token_count: None,
+                            session_command: None,
+                        });
                     }
-                };
-                if let Some(output) = intercept_apply_patch(
-                    &command,
-                    &apply_patch_cwd,
-                    Some(yield_time_ms),
-                    context.session.clone(),
-                    context.turn.clone(),
-                    Some(&tracker),
-                    &context.call_id,
-                    tool_name.as_str(),
-                )
-                .await?
-                {
-                    manager.release_process_id(process_id).await;
-                    return Ok(ExecCommandToolOutput {
-                        event_call_id: String::new(),
-                        chunk_id: String::new(),
-                        wall_time: std::time::Duration::ZERO,
-                        raw_output: output.into_text().into_bytes(),
-                        max_output_tokens: None,
-                        process_id: None,
-                        exit_code: None,
-                        original_token_count: None,
-                        session_command: None,
-                    });
                 }
 
                 emit_unified_exec_tty_metric(&turn.session_telemetry, tty);

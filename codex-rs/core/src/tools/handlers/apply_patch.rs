@@ -23,6 +23,7 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -264,6 +265,7 @@ impl ToolHandler for ApplyPatchHandler {
 pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &AbsolutePathBuf,
+    fs: &dyn ExecutorFileSystem,
     timeout_ms: Option<u64>,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -271,11 +273,7 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let Some(environment) = turn.environment.as_ref() else {
-        return Ok(None);
-    };
-    let fs = environment.get_filesystem();
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs.as_ref()).await {
+    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs).await {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
