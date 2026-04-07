@@ -475,7 +475,10 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(path).expect("absolute path")
+        match AbsolutePathBuf::try_from(path) {
+            Ok(path) => path,
+            Err(err) => panic!("absolute path: {err}"),
+        }
     }
 
     fn read_only_sandbox_policy(readable_roots: Vec<PathBuf>) -> SandboxPolicy {

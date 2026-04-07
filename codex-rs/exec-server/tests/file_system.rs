@@ -53,7 +53,9 @@ impl CurrentDirGuard {
 
 impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
-        std::env::set_current_dir(&self.original).expect("restore cwd");
+        if let Err(err) = std::env::set_current_dir(&self.original) {
+            panic!("restore cwd: {err}");
+        }
     }
 }
 
