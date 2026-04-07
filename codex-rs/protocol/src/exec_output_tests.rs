@@ -68,8 +68,8 @@ fn test_invalid_bytes_still_fall_back_to_lossy() {
 }
 
 #[test]
-fn preview_failed_log_from_protocol() {
-    panic!("intentional preview failure: protocol test log");
+fn preview_failed_log_from_protocol() -> Result<(), String> {
+    Err("intentional preview failure: protocol returned Result::Err".to_string())
 }
 
 fn decode_shell_output(bytes: &[u8]) -> String {

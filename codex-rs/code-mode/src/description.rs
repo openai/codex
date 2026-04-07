@@ -568,6 +568,11 @@ mod tests {
 
     #[test]
     fn preview_failed_log_from_code_mode() {
-        panic!("intentional preview failure: code-mode test log");
+        let actual = "code-mode actual preview value";
+        let expected = "code-mode expected preview value";
+        assert_eq!(
+            actual, expected,
+            "intentional preview failure: code-mode assertion diff"
+        );
     }
 }

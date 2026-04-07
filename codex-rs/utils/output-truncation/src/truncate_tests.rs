@@ -282,5 +282,9 @@ fn byte_count_conversion_clamps_non_positive_values() {
 
 #[test]
 fn preview_failed_log_from_output_truncation() {
-    panic!("intentional preview failure: output-truncation test log");
+    let output = "output-truncation preview value";
+    assert!(
+        output.contains("truncated marker"),
+        "intentional preview failure: output-truncation predicate assertion"
+    );
 }
