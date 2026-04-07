@@ -37,8 +37,8 @@ async fn approval_keys_include_move_destination() {
 #[test]
 fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root() {
     let tmp = TempDir::new().expect("tmp");
-    let cwd = tmp.path();
-    let nested = cwd.join("nested");
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path()).expect("cwd should be absolute");
+    let nested = cwd.as_path().join("nested");
     std::fs::create_dir_all(&nested).expect("create nested dir");
     let file_path = AbsolutePathBuf::try_from(nested.join("file.txt"))
         .expect("nested file path should be absolute");
@@ -50,7 +50,7 @@ fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root()
         exclude_slash_tmp: false,
     });
 
-    let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, cwd);
+    let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd);
 
     assert_eq!(permissions, None);
 }
@@ -58,9 +58,10 @@ fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root()
 #[test]
 fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
     let tmp = TempDir::new().expect("tmp");
-    let cwd = tmp.path().join("workspace");
+    let cwd_path = tmp.path().join("workspace");
+    let cwd = AbsolutePathBuf::from_absolute_path(&cwd_path).expect("cwd should be absolute");
     let outside = tmp.path().join("outside");
-    std::fs::create_dir_all(&cwd).expect("create cwd");
+    std::fs::create_dir_all(&cwd_path).expect("create cwd");
     std::fs::create_dir_all(&outside).expect("create outside dir");
     let file_path = AbsolutePathBuf::try_from(outside.join("file.txt"))
         .expect("outside file path should be absolute");

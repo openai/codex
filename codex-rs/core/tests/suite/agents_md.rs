@@ -87,10 +87,7 @@ async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
             })
             .with_workspace_setup(|cwd, fs| async move {
                 let nested = cwd.clone();
-                let root = nested
-                    .parent()
-                    .and_then(|parent| parent.parent())
-                    .expect("nested workspace should have a project root ancestor");
+                let root = nested.parent().parent();
                 let root_agents = root.join("AGENTS.md");
                 let git_marker = root.join(".git");
                 let nested_agents = nested.join("AGENTS.md");

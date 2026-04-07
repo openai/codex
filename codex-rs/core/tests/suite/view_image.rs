@@ -98,11 +98,10 @@ async fn write_workspace_file(
     contents: Vec<u8>,
 ) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        test.fs()
-            .create_directory(&parent, CreateDirectoryOptions { recursive: true })
-            .await?;
-    }
+    let parent = abs_path.parent();
+    test.fs()
+        .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+        .await?;
     test.fs().write_file(&abs_path, contents).await?;
     Ok(abs_path.into_path_buf())
 }
