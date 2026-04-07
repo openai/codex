@@ -75,6 +75,12 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RateLimitRefreshOrigin {
+    StartupPrefetch,
+    StatusCommand { request_id: u64 },
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -139,12 +145,12 @@ pub(crate) enum AppEvent {
 
     /// Refresh account rate limits in the background.
     RefreshRateLimits {
-        request_id: u64,
+        origin: RateLimitRefreshOrigin,
     },
 
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
-        request_id: u64,
+        origin: RateLimitRefreshOrigin,
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 

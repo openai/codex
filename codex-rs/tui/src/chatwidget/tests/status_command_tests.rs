@@ -19,7 +19,9 @@ async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgp
         "expected /status to explain the background refresh, got: {rendered}"
     );
     let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits { request_id }) => request_id,
+        Ok(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        }) => request_id,
         other => panic!("expected rate-limit refresh request, got {other:?}"),
     };
     pretty_assertions::assert_eq!(request_id, 0);
@@ -37,7 +39,9 @@ async fn status_command_updates_rendered_cell_after_rate_limit_refresh() {
         other => panic!("expected status output before refresh request, got {other:?}"),
     };
     let first_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits { request_id }) => request_id,
+        Ok(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        }) => request_id,
         other => panic!("expected rate-limit refresh request, got {other:?}"),
     };
 
@@ -86,7 +90,9 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
         other => panic!("expected first status output, got {other:?}"),
     };
     let first_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits { request_id }) => request_id,
+        Ok(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        }) => request_id,
         other => panic!("expected first refresh request, got {other:?}"),
     };
 
@@ -96,7 +102,9 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
         other => panic!("expected second status output, got {other:?}"),
     };
     let second_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits { request_id }) => request_id,
+        Ok(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        }) => request_id,
         other => panic!("expected second refresh request, got {other:?}"),
     };
 

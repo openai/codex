@@ -1623,9 +1623,14 @@ async fn get_login_status(
         return Ok(LoginStatus::NotAuthenticated);
     }
 
-    let bootstrap = app_server.bootstrap(config).await?;
-    Ok(match bootstrap.account_auth_mode {
-        Some(auth_mode) => LoginStatus::AuthMode(auth_mode),
+    let account = app_server.read_account().await?;
+    Ok(match account.account {
+        Some(codex_app_server_protocol::Account::ApiKey {}) => {
+            LoginStatus::AuthMode(AppServerAuthMode::ApiKey)
+        }
+        Some(codex_app_server_protocol::Account::Chatgpt { .. }) => {
+            LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
+        }
         None => LoginStatus::NotAuthenticated,
     })
 }
