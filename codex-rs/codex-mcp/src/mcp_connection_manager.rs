@@ -3,8 +3,8 @@
 //! The [`McpConnectionManager`] owns one [`codex_rmcp_client::RmcpClient`] per
 //! configured server (keyed by the *server name*). It offers convenience
 //! helpers to query the available tools across *all* servers and returns them
-//! in a single aggregated map using the fully-qualified tool name
-//! `"<server><MCP_TOOL_NAME_DELIMITER><tool>"` as the key.
+//! in a single aggregated map using the model-visible fully-qualified tool name
+//! as the key.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -25,8 +25,8 @@ use crate::mcp::ToolPluginProvenance;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::mcp::configured_mcp_servers;
 use crate::mcp::effective_mcp_servers;
-use crate::mcp::sanitize_responses_api_tool_name;
 use crate::mcp::tool_plugin_provenance;
+pub(crate) use crate::mcp_tool_names::qualify_tools;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -89,13 +89,8 @@ use codex_login::CodexAuth;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 
-/// Delimiter used to separate the server name from the tool name in a fully
-/// qualified tool name.
-///
-/// OpenAI requires tool names to conform to `^[a-zA-Z0-9_-]+$`, so we must
-/// choose a delimiter from this character set.
+/// Delimiter used to separate MCP tool-name parts.
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Default timeout for initializing MCP server & initially listing tools.
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -103,7 +98,7 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
-const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 1;
+const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 2;
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
@@ -135,50 +130,17 @@ pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCac
     }
 }
 
-fn qualify_tools<I>(tools: I) -> HashMap<String, ToolInfo>
-where
-    I: IntoIterator<Item = ToolInfo>,
-{
-    let mut used_names = HashSet::new();
-    let mut seen_raw_names = HashSet::new();
-    let mut qualified_tools = HashMap::new();
-    for tool in tools {
-        let qualified_name_raw = format!("{}{}", tool.tool_namespace, tool.tool_name);
-        if !seen_raw_names.insert(qualified_name_raw.clone()) {
-            warn!("skipping duplicated tool {}", qualified_name_raw);
-            continue;
-        }
-
-        // Start from a "pretty" name (sanitized), then deterministically disambiguate on
-        // collisions by appending a hash of the *raw* (unsanitized) qualified name. This
-        // ensures tools like `foo.bar` and `foo_bar` don't collapse to the same key.
-        let mut qualified_name = sanitize_responses_api_tool_name(&qualified_name_raw);
-
-        // Enforce length constraints early; use the raw name for the hash input so the
-        // output remains stable even when sanitization changes.
-        if qualified_name.len() > MAX_TOOL_NAME_LENGTH {
-            let sha1_str = sha1_hex(&qualified_name_raw);
-            let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
-            qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
-        }
-
-        if used_names.contains(&qualified_name) {
-            warn!("skipping duplicated tool {}", qualified_name);
-            continue;
-        }
-
-        used_names.insert(qualified_name.clone());
-        qualified_tools.insert(qualified_name, tool);
-    }
-
-    qualified_tools
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
+    /// Raw MCP server name used for routing the tool call.
     pub server_name: String,
-    pub tool_name: String,
-    pub tool_namespace: String,
+    /// Model-visible tool name used in Responses API tool declarations.
+    #[serde(rename = "tool_name", alias = "callable_name")]
+    pub callable_name: String,
+    /// Model-visible namespace used for deferred tool loading.
+    #[serde(rename = "tool_namespace", alias = "callable_namespace")]
+    pub callable_namespace: String,
+    /// Raw MCP tool definition; `tool.name` is sent back to the MCP server.
     pub tool: Tool,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
@@ -805,14 +767,14 @@ impl McpConnectionManager {
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
-        let mut tools = HashMap::new();
+        let mut tools = Vec::new();
         for managed_client in self.clients.values() {
             let Some(server_tools) = managed_client.listed_tools().await else {
                 continue;
             };
-            tools.extend(qualify_tools(server_tools));
+            tools.extend(server_tools);
         }
-        tools
+        qualify_tools(tools)
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -1212,7 +1174,7 @@ fn normalize_codex_apps_tool_title(
     value.to_string()
 }
 
-fn normalize_codex_apps_tool_name(
+fn normalize_codex_apps_callable_name(
     server_name: &str,
     tool_name: &str,
     connector_id: Option<&str>,
@@ -1247,7 +1209,10 @@ fn normalize_codex_apps_tool_name(
     tool_name
 }
 
-fn normalize_codex_apps_namespace(server_name: &str, connector_name: Option<&str>) -> String {
+fn normalize_codex_apps_callable_namespace(
+    server_name: &str,
+    connector_name: Option<&str>,
+) -> String {
     if server_name == CODEX_APPS_MCP_SERVER_NAME
         && let Some(connector_name) = connector_name
     {
@@ -1259,10 +1224,7 @@ fn normalize_codex_apps_namespace(server_name: &str, connector_name: Option<&str
             sanitize_name(connector_name)
         )
     } else {
-        format!(
-            "mcp{}{}{}",
-            MCP_TOOL_NAME_DELIMITER, server_name, MCP_TOOL_NAME_DELIMITER
-        )
+        format!("mcp{MCP_TOOL_NAME_DELIMITER}{server_name}{MCP_TOOL_NAME_DELIMITER}")
     }
 }
 
@@ -1591,14 +1553,16 @@ async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
-            let tool_name = normalize_codex_apps_tool_name(
+            let callable_name = normalize_codex_apps_callable_name(
                 server_name,
                 &tool.tool.name,
                 tool.connector_id.as_deref(),
                 tool.connector_name.as_deref(),
             );
-            let tool_namespace =
-                normalize_codex_apps_namespace(server_name, tool.connector_name.as_deref());
+            let callable_namespace = normalize_codex_apps_callable_namespace(
+                server_name,
+                tool.connector_name.as_deref(),
+            );
             let connector_name = tool.connector_name;
             let connector_description = tool.connector_description;
             let mut tool_def = tool.tool;
@@ -1611,8 +1575,8 @@ async fn list_tools_for_client_uncached(
             }
             ToolInfo {
                 server_name: server_name.to_owned(),
-                tool_name,
-                tool_namespace,
+                callable_name,
+                callable_namespace,
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,

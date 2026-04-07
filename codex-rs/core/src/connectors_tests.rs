@@ -110,8 +110,8 @@ fn codex_app_tool(
 
     ToolInfo {
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        tool_name: tool_name.to_string(),
-        tool_namespace,
+        callable_name: tool_name.to_string(),
+        callable_namespace: tool_namespace,
         tool: test_tool_definition(tool_name),
         connector_id: Some(connector_id.to_string()),
         connector_name: connector_name.map(ToOwned::to_owned),
@@ -188,8 +188,8 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             "mcp__sample__echo".to_string(),
             ToolInfo {
                 server_name: "sample".to_string(),
-                tool_name: "echo".to_string(),
-                tool_namespace: "sample".to_string(),
+                callable_name: "echo".to_string(),
+                callable_namespace: "sample".to_string(),
                 tool: test_tool_definition("echo"),
                 connector_id: None,
                 connector_name: None,
@@ -312,8 +312,8 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
         "mcp__codex_apps__calendar_create_event".to_string(),
         ToolInfo {
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool_name: "calendar_create_event".to_string(),
-            tool_namespace: "mcp__codex_apps__calendar".to_string(),
+            callable_name: "calendar_create_event".to_string(),
+            callable_namespace: "mcp__codex_apps__calendar".to_string(),
             tool: Tool {
                 name: "calendar_create_event".to_string().into(),
                 title: None,

@@ -82,8 +82,8 @@ impl ToolHandler for ToolSearchHandler {
                 .filter_map(|result| entries.get(result.document.id))
                 .map(|(_, tool)| ToolSearchResultSource {
                     server_name: tool.server_name.as_str(),
-                    tool_namespace: tool.tool_namespace.as_str(),
-                    tool_name: tool.tool_name.as_str(),
+                    tool_namespace: tool.callable_namespace.as_str(),
+                    tool_name: tool.callable_name.as_str(),
                     tool: &tool.tool,
                     connector_name: tool.connector_name.as_deref(),
                     connector_description: tool.connector_description.as_deref(),
@@ -102,7 +102,8 @@ impl ToolHandler for ToolSearchHandler {
 fn build_search_text(name: &str, info: &ToolInfo) -> String {
     let mut parts = vec![
         name.to_string(),
-        info.tool_name.clone(),
+        info.callable_name.clone(),
+        info.tool.name.to_string(),
         info.server_name.clone(),
     ];
 

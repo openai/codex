@@ -245,11 +245,11 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_mcp::mcp::McpServerStatusSnapshot;
 use codex_mcp::mcp::auth::discover_supported_scopes;
 use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::collect_mcp_snapshot;
+use codex_mcp::mcp::collect_mcp_server_status_snapshot;
 use codex_mcp::mcp::effective_mcp_servers;
-use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -5190,54 +5190,20 @@ impl CodexMessageProcessor {
         mcp_config: codex_mcp::mcp::McpConfig,
         auth: Option<CodexAuth>,
     ) {
-        let snapshot = collect_mcp_snapshot(
+        let snapshot = collect_mcp_server_status_snapshot(
             &mcp_config,
             auth.as_ref(),
             request_id.request_id.to_string(),
         )
         .await;
 
-        // Rebuild the tool list per original server name instead of using
-        // `group_tools_by_server()`: qualified tool names are sanitized for the
-        // Responses API, so a config key like `some-server` is encoded as the
-        // `mcp__some_server__` prefix. Matching with the original server name's
-        // sanitized prefix preserves `/mcp` output for hyphenated names.
         let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-        let mut sanitized_prefix_counts = HashMap::<String, usize>::new();
-        for name in effective_servers.keys() {
-            let prefix = qualified_mcp_tool_name_prefix(name);
-            *sanitized_prefix_counts.entry(prefix).or_default() += 1;
-        }
-        let tools_by_server = effective_servers
-            .keys()
-            .map(|name| {
-                let prefix = qualified_mcp_tool_name_prefix(name);
-                // If multiple server names normalize to the same prefix, the
-                // qualified tool namespace is ambiguous (for example
-                // `some-server` and `some_server` both become
-                // `mcp__some_server__`). In that case, avoid attributing the
-                // same tools to multiple servers.
-                let tools = if sanitized_prefix_counts
-                    .get(&prefix)
-                    .copied()
-                    .unwrap_or_default()
-                    == 1
-                {
-                    snapshot
-                        .tools
-                        .iter()
-                        .filter_map(|(qualified_name, tool)| {
-                            qualified_name
-                                .strip_prefix(&prefix)
-                                .map(|tool_name| (tool_name.to_string(), tool.clone()))
-                        })
-                        .collect::<HashMap<_, _>>()
-                } else {
-                    HashMap::new()
-                };
-                (name.clone(), tools)
-            })
-            .collect::<HashMap<_, _>>();
+        let McpServerStatusSnapshot {
+            tools_by_server,
+            resources,
+            resource_templates,
+            auth_statuses,
+        } = snapshot;
 
         let mut server_names: Vec<String> = config
             .mcp_servers
@@ -5247,9 +5213,9 @@ impl CodexMessageProcessor {
             // effective runtime config even when they are not user-declared in
             // `config.mcp_servers`.
             .chain(effective_servers.keys().cloned())
-            .chain(snapshot.auth_statuses.keys().cloned())
-            .chain(snapshot.resources.keys().cloned())
-            .chain(snapshot.resource_templates.keys().cloned())
+            .chain(auth_statuses.keys().cloned())
+            .chain(resources.keys().cloned())
+            .chain(resource_templates.keys().cloned())
             .collect();
         server_names.sort();
         server_names.dedup();
@@ -5290,14 +5256,9 @@ impl CodexMessageProcessor {
             .map(|name| McpServerStatus {
                 name: name.clone(),
                 tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
-                resource_templates: snapshot
-                    .resource_templates
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_default(),
-                auth_status: snapshot
-                    .auth_statuses
+                resources: resources.get(name).cloned().unwrap_or_default(),
+                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                auth_status: auth_statuses
                     .get(name)
                     .cloned()
                     .unwrap_or(CoreMcpAuthStatus::Unsupported)

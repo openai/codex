@@ -404,8 +404,8 @@ fn make_mcp_tool(
 
     ToolInfo {
         server_name: server_name.to_string(),
-        tool_name: tool_name.to_string(),
-        tool_namespace,
+        callable_name: tool_name.to_string(),
+        callable_namespace: tool_namespace,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
