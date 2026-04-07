@@ -63,7 +63,7 @@ async fn insert_state_db_thread(
         .await
         .expect("state db should initialize");
     runtime
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
     let created_at = chrono::Utc
@@ -223,13 +223,26 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     let uuid = Uuid::from_u128(302);
     let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
     let ts = "2025-01-03T13-00-00";
-    write_session_file(home, ts, uuid, 1, Some(SessionSource::Cli)).unwrap();
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
     let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
 
     let stale_db_path = home.join(format!(
         "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
     ));
-    insert_state_db_thread(home, thread_id, stale_db_path.as_path(), false).await;
+    insert_state_db_thread(
+        home,
+        thread_id,
+        stale_db_path.as_path(),
+        /*archived*/ false,
+    )
+    .await;
 
     let found = find_thread_path_by_id_str(home, &uuid.to_string())
         .await
@@ -245,7 +258,14 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
     let uuid = Uuid::from_u128(303);
     let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
     let ts = "2025-01-03T13-00-00";
-    write_session_file(home, ts, uuid, 1, Some(SessionSource::Cli)).unwrap();
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
     let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
 
     // Create an empty state DB so lookup takes the DB-first path and then falls back to files.
@@ -253,7 +273,7 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
         .await
         .expect("state db should initialize");
     _runtime
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
 
@@ -491,7 +511,7 @@ async fn test_list_conversations_latest_first() {
         home,
         "2025-01-01T12-00-00",
         u1,
-        3,
+        /*num_records*/ 3,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -499,7 +519,7 @@ async fn test_list_conversations_latest_first() {
         home,
         "2025-01-02T12-00-00",
         u2,
-        3,
+        /*num_records*/ 3,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -507,7 +527,7 @@ async fn test_list_conversations_latest_first() {
         home,
         "2025-01-03T12-00-00",
         u3,
-        3,
+        /*num_records*/ 3,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -515,8 +535,8 @@ async fn test_list_conversations_latest_first() {
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -624,7 +644,7 @@ async fn test_pagination_cursor() {
         home,
         "2025-03-01T09-00-00",
         u1,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -632,7 +652,7 @@ async fn test_pagination_cursor() {
         home,
         "2025-03-02T09-00-00",
         u2,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -640,7 +660,7 @@ async fn test_pagination_cursor() {
         home,
         "2025-03-03T09-00-00",
         u3,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -648,7 +668,7 @@ async fn test_pagination_cursor() {
         home,
         "2025-03-04T09-00-00",
         u4,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -656,7 +676,7 @@ async fn test_pagination_cursor() {
         home,
         "2025-03-05T09-00-00",
         u5,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
     )
     .unwrap();
@@ -664,8 +684,8 @@ async fn test_pagination_cursor() {
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page1 = get_threads(
         home,
-        2,
-        None,
+        /*page_size*/ 2,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -732,7 +752,7 @@ async fn test_pagination_cursor() {
 
     let page2 = get_threads(
         home,
-        2,
+        /*page_size*/ 2,
         page1.next_cursor.as_ref(),
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
@@ -800,7 +820,7 @@ async fn test_pagination_cursor() {
 
     let page3 = get_threads(
         home,
-        2,
+        /*page_size*/ 2,
         page2.next_cursor.as_ref(),
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
@@ -848,13 +868,14 @@ async fn test_list_threads_scans_past_head_for_user_event() {
 
     let uuid = Uuid::from_u128(99);
     let ts = "2025-05-01T10-30-00";
-    write_session_file_with_delayed_user_event(home, ts, uuid, 12).unwrap();
+    write_session_file_with_delayed_user_event(home, ts, uuid, /*meta_lines_before_user*/ 12)
+        .unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -874,13 +895,20 @@ async fn test_get_thread_contents() {
 
     let uuid = Uuid::new_v4();
     let ts = "2025-04-01T10-30-00";
-    write_session_file(home, ts, uuid, 2, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 2,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
         home,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -949,7 +977,7 @@ async fn test_get_thread_contents() {
 }
 
 #[tokio::test]
-async fn test_base_instructions_missing_in_meta_defaults_to_null() {
+async fn test_base_instructions_missing_in_meta_stays_missing() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
@@ -969,8 +997,8 @@ async fn test_base_instructions_missing_in_meta_defaults_to_null() {
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
         home,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -983,10 +1011,7 @@ async fn test_base_instructions_missing_in_meta_defaults_to_null() {
         .await
         .expect("session meta head");
     let first = head.first().expect("first head entry");
-    assert_eq!(
-        first.get("base_instructions"),
-        Some(&serde_json::Value::Null)
-    );
+    assert_eq!(first.get("base_instructions"), None);
 }
 
 #[tokio::test]
@@ -1012,8 +1037,8 @@ async fn test_base_instructions_present_in_meta_is_preserved() {
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
         home,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -1040,7 +1065,14 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
 
     let ts = "2025-06-01T08-00-00";
     let uuid = Uuid::from_u128(43);
-    write_session_file(home, ts, uuid, 0, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 0,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
 
     let created = PrimitiveDateTime::parse(
         ts,
@@ -1063,8 +1095,8 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
         home,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -1108,6 +1140,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 agent_role: None,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
+                developer_instructions: None,
                 dynamic_tools: None,
                 memory_mode: None,
             },
@@ -1148,8 +1181,8 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
         home,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::UpdatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -1181,15 +1214,36 @@ async fn test_stable_ordering_same_second_pagination() {
     let u2 = Uuid::from_u128(2);
     let u3 = Uuid::from_u128(3);
 
-    write_session_file(home, ts, u1, 0, Some(SessionSource::VSCode)).unwrap();
-    write_session_file(home, ts, u2, 0, Some(SessionSource::VSCode)).unwrap();
-    write_session_file(home, ts, u3, 0, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(
+        home,
+        ts,
+        u1,
+        /*num_records*/ 0,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        ts,
+        u2,
+        /*num_records*/ 0,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        ts,
+        u3,
+        /*num_records*/ 0,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page1 = get_threads(
         home,
-        2,
-        None,
+        /*page_size*/ 2,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -1256,7 +1310,7 @@ async fn test_stable_ordering_same_second_pagination() {
 
     let page2 = get_threads(
         home,
-        2,
+        /*page_size*/ 2,
         page1.next_cursor.as_ref(),
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
@@ -1309,7 +1363,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         home,
         "2025-08-02T10-00-00",
         interactive_id,
-        2,
+        /*num_records*/ 2,
         Some(SessionSource::Cli),
     )
     .unwrap();
@@ -1317,7 +1371,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         home,
         "2025-08-01T10-00-00",
         non_interactive_id,
-        2,
+        /*num_records*/ 2,
         Some(SessionSource::Exec),
     )
     .unwrap();
@@ -1325,8 +1379,8 @@ async fn test_source_filter_excludes_non_matching_sessions() {
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let interactive_only = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
@@ -1347,11 +1401,11 @@ async fn test_source_filter_excludes_non_matching_sessions() {
 
     let all_sessions = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
-        None,
+        /*model_providers*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1383,7 +1437,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         home,
         "2025-09-01T12-00-00",
         openai_id,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
         Some("openai"),
     )?;
@@ -1391,7 +1445,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         home,
         "2025-09-01T11-00-00",
         beta_id,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
         Some("beta"),
     )?;
@@ -1399,9 +1453,9 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         home,
         "2025-09-01T10-00-00",
         none_id,
-        1,
+        /*num_records*/ 1,
         Some(SessionSource::VSCode),
-        None,
+        /*model_provider*/ None,
     )?;
 
     let openai_id_str = openai_id.to_string();
@@ -1409,8 +1463,8 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     let openai_filter = provider_vec(&["openai"]);
     let openai_sessions = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(openai_filter.as_slice()),
@@ -1429,8 +1483,8 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     let beta_filter = provider_vec(&["beta"]);
     let beta_sessions = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(beta_filter.as_slice()),
@@ -1448,8 +1502,8 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     let unknown_filter = provider_vec(&["unknown"]);
     let unknown_sessions = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(unknown_filter.as_slice()),
@@ -1460,11 +1514,11 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
 
     let all_sessions = get_threads(
         home,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
-        None,
+        /*model_providers*/ None,
         "openai",
     )
     .await?;

@@ -23,7 +23,6 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::ServiceTier;
 use crate::config_types::WindowsSandboxLevel;
-use crate::custom_prompts::CustomPrompt;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
@@ -49,6 +48,8 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::serde_helpers::deserialize_double_option;
+use crate::serde_helpers::serialize_double_option;
 use crate::user_input::UserInput;
 use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -64,10 +65,11 @@ use ts_rs::TS;
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
-pub use crate::approvals::ExecApprovalRequestSkillMetadata;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::approvals::GuardianAssessmentAction;
 pub use crate::approvals::GuardianAssessmentEvent;
 pub use crate::approvals::GuardianAssessmentStatus;
+pub use crate::approvals::GuardianCommandSource;
 pub use crate::approvals::GuardianRiskLevel;
 pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
@@ -452,9 +454,6 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
-    /// Request the list of available custom prompts.
-    ListCustomPrompts,
-
     /// Request the list of skills for the provided `cwd` values or the session default.
     ListSkills {
         /// Working directories to scope repo skills discovery.
@@ -511,6 +510,15 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+}
+
+impl From<Vec<UserInput>> for Op {
+    fn from(value: Vec<UserInput>) -> Self {
+        Op::UserInput {
+            items: value,
+            final_output_json_schema: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
@@ -587,7 +595,6 @@ impl Op {
             Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
-            Self::ListCustomPrompts => "list_custom_prompts",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
@@ -1064,13 +1071,20 @@ impl SandboxPolicy {
                 }
 
                 // For each root, compute subpaths that should remain read-only.
+                let cwd_root = AbsolutePathBuf::from_absolute_path(cwd).ok();
                 roots
                     .into_iter()
-                    .map(|writable_root| WritableRoot {
-                        read_only_subpaths: default_read_only_subpaths_for_writable_root(
-                            &writable_root,
-                        ),
-                        root: writable_root,
+                    .map(|writable_root| {
+                        let protect_missing_dot_codex = cwd_root
+                            .as_ref()
+                            .is_some_and(|cwd_root| cwd_root == &writable_root);
+                        WritableRoot {
+                            read_only_subpaths: default_read_only_subpaths_for_writable_root(
+                                &writable_root,
+                                protect_missing_dot_codex,
+                            ),
+                            root: writable_root,
+                        }
                     })
                     .collect()
             }
@@ -1080,12 +1094,10 @@ impl SandboxPolicy {
 
 fn default_read_only_subpaths_for_writable_root(
     writable_root: &AbsolutePathBuf,
+    protect_missing_dot_codex: bool,
 ) -> Vec<AbsolutePathBuf> {
     let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
-    #[allow(clippy::expect_used)]
-    let top_level_git = writable_root
-        .join(".git")
-        .expect(".git is a valid relative path");
+    let top_level_git = writable_root.join(".git");
     // This applies to typical repos (directory .git), worktrees/submodules
     // (file .git with gitdir pointer), and bare repos when the gitdir is the
     // writable root itself.
@@ -1101,14 +1113,18 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_git);
     }
 
-    // Make .agents/skills and .codex/config.toml and related files read-only
-    // to the agent, by default.
-    for subdir in &[".agents", ".codex"] {
-        #[allow(clippy::expect_used)]
-        let top_level_codex = writable_root.join(subdir).expect("valid relative path");
-        if top_level_codex.as_path().is_dir() {
-            subpaths.push(top_level_codex);
-        }
+    let top_level_agents = writable_root.join(".agents");
+    if top_level_agents.as_path().is_dir() {
+        subpaths.push(top_level_agents);
+    }
+
+    // Keep top-level project metadata under .codex read-only to the agent by
+    // default. For the workspace root itself, protect it even before the
+    // directory exists so first-time creation still goes through the
+    // protected-path approval flow.
+    let top_level_codex = writable_root.join(".codex");
+    if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
+        subpaths.push(top_level_codex);
     }
 
     let mut deduped = Vec::with_capacity(subpaths.len());
@@ -1166,16 +1182,7 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf
             return None;
         }
     };
-    let gitdir_path = match AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base) {
-        Ok(path) => path,
-        Err(err) => {
-            error!(
-                "Failed to resolve gitdir path {gitdir_raw} from {path}: {err}",
-                path = dot_git.as_path().display()
-            );
-            return None;
-        }
-    };
+    let gitdir_path = AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base);
     if !gitdir_path.as_path().exists() {
         error!(
             "Resolved gitdir path {path} does not exist.",
@@ -1348,9 +1355,6 @@ pub enum EventMsg {
     /// List of MCP tools available to the agent.
     McpListToolsResponse(McpListToolsResponseEvent),
 
-    /// List of custom prompts available to the agent.
-    ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
-
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
 
@@ -1408,6 +1412,7 @@ pub enum EventMsg {
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
     PreToolUse,
+    PostToolUse,
     SessionStart,
     UserPromptSubmit,
     Stop,
@@ -1847,11 +1852,23 @@ pub struct ContextCompactedEvent;
 pub struct TurnCompleteEvent {
     pub turn_id: String,
     pub last_agent_message: Option<String>,
+    /// Unix timestamp (in seconds) when the turn completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and completion in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
     pub turn_id: String,
+    /// Unix timestamp (in seconds) when the turn started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub started_at: Option<i64>,
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
     #[serde(default)]
@@ -2303,7 +2320,7 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
+    pub fn get_base_instructions(&self) -> Option<Option<BaseInstructions>> {
         // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
             InitialHistory::New => None,
@@ -2315,6 +2332,26 @@ impl InitialHistory {
             }
             InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
+                _ => None,
+            }),
+        }
+    }
+
+    pub fn get_developer_instructions(&self) -> Option<Option<String>> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => {
+                        meta_line.meta.developer_instructions.clone()
+                    }
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => {
+                    meta_line.meta.developer_instructions.clone()
+                }
                 _ => None,
             }),
         }
@@ -2511,7 +2548,20 @@ pub struct SessionMeta {
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
-    pub base_instructions: Option<BaseInstructions>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_double_option",
+        serialize_with = "serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_instructions: Option<Option<BaseInstructions>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_double_option",
+        serialize_with = "serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub developer_instructions: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2533,6 +2583,7 @@ impl Default for SessionMeta {
             agent_path: None,
             model_provider: None,
             base_instructions: None,
+            developer_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
         }
@@ -3079,12 +3130,6 @@ impl fmt::Display for McpAuthStatus {
     }
 }
 
-/// Response payload for `Op::ListCustomPrompts`.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ListCustomPromptsResponseEvent {
-    pub custom_prompts: Vec<CustomPrompt>,
-}
-
 /// Response payload for `Op::ListSkills`.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListSkillsResponseEvent {
@@ -3364,6 +3409,14 @@ pub struct Chunk {
 pub struct TurnAbortedEvent {
     pub turn_id: Option<String>,
     pub reason: TurnAbortReason,
+    /// Unix timestamp (in seconds) when the turn was aborted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and abort in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -3967,8 +4020,7 @@ mod tests {
             .last()
             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
             .expect("filesystem root");
-        let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path())
-            .expect("resolve blocked");
+        let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path());
         let expected_blocked = AbsolutePathBuf::from_absolute_path(
             cwd.path()
                 .canonicalize()
@@ -4019,8 +4071,7 @@ mod tests {
         let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
         let cwd_absolute =
             AbsolutePathBuf::from_absolute_path(&canonical_cwd).expect("absolute tempdir");
-        let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path())
-            .expect("resolve unreadable path");
+        let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path());
         let expected_secret = AbsolutePathBuf::from_absolute_path(canonical_cwd.join("secret"))
             .expect("canonical secret");
         let expected_agents = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".agents"))
@@ -4085,15 +4136,15 @@ mod tests {
     fn restricted_file_system_policy_treats_read_entries_as_read_only_subpaths() {
         let cwd = TempDir::new().expect("tempdir");
         let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
-        let docs_public = AbsolutePathBuf::resolve_path_against_base("docs/public", cwd.path())
-            .expect("resolve docs/public");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
+        let docs_public = AbsolutePathBuf::resolve_path_against_base("docs/public", cwd.path());
         let expected_docs = AbsolutePathBuf::from_absolute_path(canonical_cwd.join("docs"))
             .expect("canonical docs");
         let expected_docs_public =
             AbsolutePathBuf::from_absolute_path(canonical_cwd.join("docs/public"))
                 .expect("canonical docs/public");
+        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
+            .expect("canonical .codex");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -4115,7 +4166,13 @@ mod tests {
         assert_eq!(
             sorted_writable_roots(policy.get_writable_roots_with_cwd(cwd.path())),
             vec![
-                (canonical_cwd, vec![expected_docs.to_path_buf()]),
+                (
+                    canonical_cwd,
+                    vec![
+                        expected_dot_codex.to_path_buf(),
+                        expected_docs.to_path_buf()
+                    ],
+                ),
                 (expected_docs_public.to_path_buf(), Vec::new()),
             ]
         );
@@ -4124,9 +4181,10 @@ mod tests {
     #[test]
     fn legacy_workspace_write_nested_readable_root_stays_writable() {
         let cwd = TempDir::new().expect("tempdir");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
+            .expect("canonical .codex");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: ReadOnlyAccess::Restricted {
@@ -4143,7 +4201,7 @@ mod tests {
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path())
                     .get_writable_roots_with_cwd(cwd.path())
             ),
-            vec![(canonical_cwd, Vec::new())]
+            vec![(canonical_cwd, vec![expected_dot_codex.to_path_buf()])]
         );
     }
 
@@ -4180,12 +4238,9 @@ mod tests {
     #[test]
     fn legacy_sandbox_policy_semantics_survive_split_bridge() {
         let cwd = TempDir::new().expect("tempdir");
-        let readable_root = AbsolutePathBuf::resolve_path_against_base("readable", cwd.path())
-            .expect("resolve readable root");
-        let writable_root = AbsolutePathBuf::resolve_path_against_base("writable", cwd.path())
-            .expect("resolve writable root");
-        let nested_readable_root = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path())
-            .expect("resolve nested readable root");
+        let readable_root = AbsolutePathBuf::resolve_path_against_base("readable", cwd.path());
+        let writable_root = AbsolutePathBuf::resolve_path_against_base("writable", cwd.path());
+        let nested_readable_root = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let policies = [
             SandboxPolicy::DangerFullAccess,
             SandboxPolicy::ExternalSandbox {
@@ -4258,7 +4313,7 @@ mod tests {
             }),
         };
 
-        let legacy_events = event.as_legacy_events(false);
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
         assert_eq!(legacy_events.len(), 1);
         match &legacy_events[0] {
             EventMsg::WebSearchBegin(event) => assert_eq!(event.call_id, "search-1"),
@@ -4274,7 +4329,11 @@ mod tests {
             item: TurnItem::UserMessage(UserMessageItem::new(&[])),
         };
 
-        assert!(event.as_legacy_events(false).is_empty());
+        assert!(
+            event
+                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -4291,7 +4350,7 @@ mod tests {
             }),
         };
 
-        let legacy_events = event.as_legacy_events(false);
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
         assert_eq!(legacy_events.len(), 1);
         match &legacy_events[0] {
             EventMsg::ImageGenerationBegin(event) => assert_eq!(event.call_id, "ig-1"),
@@ -4313,7 +4372,7 @@ mod tests {
             }),
         };
 
-        let legacy_events = event.as_legacy_events(false);
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
         assert_eq!(legacy_events.len(), 1);
         match &legacy_events[0] {
             EventMsg::ImageGenerationEnd(event) => {
@@ -4518,7 +4577,9 @@ mod tests {
         }))?;
 
         match event {
-            EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) => {
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id, reason, ..
+            }) => {
                 assert_eq!(turn_id, None);
                 assert_eq!(reason, TurnAbortReason::Interrupted);
             }
@@ -4728,8 +4789,9 @@ mod tests {
             total_tokens: 10,
         });
 
-        let info = TokenUsageInfo::new_or_append(&initial, &last, None)
-            .expect("new_or_append should return info");
+        let info =
+            TokenUsageInfo::new_or_append(&initial, &last, /*model_context_window*/ None)
+                .expect("new_or_append should return info");
 
         assert_eq!(info.model_context_window, Some(258_400));
     }

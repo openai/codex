@@ -1,7 +1,4 @@
-use crate::macos_permissions::intersect_macos_seatbelt_profile_extensions;
-use crate::macos_permissions::merge_macos_seatbelt_profile_extensions;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -20,28 +17,21 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveSandboxPermissions {
     pub sandbox_policy: SandboxPolicy,
-    pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
 }
 
 impl EffectiveSandboxPermissions {
     pub fn new(
         sandbox_policy: &SandboxPolicy,
-        macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
         additional_permissions: Option<&PermissionProfile>,
     ) -> Self {
         let Some(additional_permissions) = additional_permissions else {
             return Self {
                 sandbox_policy: sandbox_policy.clone(),
-                macos_seatbelt_profile_extensions: macos_seatbelt_profile_extensions.cloned(),
             };
         };
 
         Self {
             sandbox_policy: effective_sandbox_policy(sandbox_policy, Some(additional_permissions)),
-            macos_seatbelt_profile_extensions: merge_macos_seatbelt_profile_extensions(
-                macos_seatbelt_profile_extensions,
-                additional_permissions.macos.as_ref(),
-            ),
         }
     }
 }
@@ -64,12 +54,9 @@ pub fn normalize_additional_permissions(
             FileSystemPermissions { read, write }
         })
         .filter(|file_system| !file_system.is_empty());
-    let macos = additional_permissions.macos;
-
     Ok(PermissionProfile {
         network,
         file_system,
-        macos,
     })
 }
 
@@ -110,15 +97,10 @@ pub fn merge_permission_profiles(
                 (None, Some(permissions)) => Some(permissions.clone()),
                 (None, None) => None,
             };
-            let macos = merge_macos_seatbelt_profile_extensions(
-                base.macos.as_ref(),
-                permissions.macos.as_ref(),
-            );
 
             Some(PermissionProfile {
                 network,
                 file_system,
-                macos,
             })
             .filter(|permissions| !permissions.is_empty())
         }
@@ -134,26 +116,10 @@ pub fn intersect_permission_profiles(
         .file_system
         .map(|requested_file_system| {
             let granted_file_system = granted.file_system.unwrap_or_default();
-            let read = requested_file_system
-                .read
-                .map(|requested_read| {
-                    let granted_read = granted_file_system.read.unwrap_or_default();
-                    requested_read
-                        .into_iter()
-                        .filter(|path| granted_read.contains(path))
-                        .collect()
-                })
-                .filter(|paths: &Vec<_>| !paths.is_empty());
-            let write = requested_file_system
-                .write
-                .map(|requested_write| {
-                    let granted_write = granted_file_system.write.unwrap_or_default();
-                    requested_write
-                        .into_iter()
-                        .filter(|path| granted_write.contains(path))
-                        .collect()
-                })
-                .filter(|paths: &Vec<_>| !paths.is_empty());
+            let read =
+                intersect_permission_paths(requested_file_system.read, granted_file_system.read);
+            let write =
+                intersect_permission_paths(requested_file_system.write, granted_file_system.write);
             FileSystemPermissions { read, write }
         })
         .filter(|file_system| !file_system.is_empty());
@@ -171,13 +137,30 @@ pub fn intersect_permission_profiles(
         _ => None,
     };
 
-    let macos = intersect_macos_seatbelt_profile_extensions(requested.macos, granted.macos);
-
     PermissionProfile {
         network,
         file_system,
-        macos,
     }
+}
+
+fn intersect_permission_paths(
+    requested: Option<Vec<AbsolutePathBuf>>,
+    granted: Option<Vec<AbsolutePathBuf>>,
+) -> Option<Vec<AbsolutePathBuf>> {
+    requested.and_then(|requested_paths| {
+        if requested_paths.is_empty() {
+            return granted.map(|_| Vec::new());
+        }
+
+        let granted_paths = granted.unwrap_or_default();
+        Some(
+            requested_paths
+                .into_iter()
+                .filter(|path| granted_paths.contains(path))
+                .collect::<Vec<_>>(),
+        )
+        .filter(|paths| !paths.is_empty())
+    })
 }
 
 fn normalize_permission_paths(

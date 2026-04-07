@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_hooks::PostToolUseOutcome;
+use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
@@ -14,7 +16,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
+use serde_json::Value;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -139,6 +143,33 @@ pub(crate) async fn run_pre_tool_use_hooks(
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
     if should_block { block_reason } else { None }
+}
+
+pub(crate) async fn run_post_tool_use_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    tool_use_id: String,
+    command: String,
+    tool_response: Value,
+) -> PostToolUseOutcome {
+    let request = PostToolUseRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name: "Bash".to_string(),
+        tool_use_id,
+        command,
+        tool_response,
+    };
+    let preview_runs = sess.hooks().preview_post_tool_use(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = sess.hooks().run_post_tool_use(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
+    outcome
 }
 
 pub(crate) async fn run_user_prompt_submit_hooks(
@@ -276,7 +307,7 @@ async fn emit_hook_started_events(
     for run in preview_runs {
         sess.send_event(
             turn_context,
-            EventMsg::HookStarted(crate::protocol::HookStartedEvent {
+            EventMsg::HookStarted(HookStartedEvent {
                 turn_id: Some(turn_context.sub_id.clone()),
                 run,
             }),

@@ -3,6 +3,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
@@ -16,6 +18,9 @@ use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
+    LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem) });
 
 #[derive(Clone, Default)]
 pub struct LocalFileSystem;

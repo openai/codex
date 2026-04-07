@@ -2,10 +2,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::CodexAuth;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -77,7 +77,7 @@ fn test_model_info(
         availability_nux: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),

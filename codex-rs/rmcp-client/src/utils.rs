@@ -193,7 +193,7 @@ mod tests {
         let value = "from-env";
         let expected = OsString::from(value);
         let _guard = EnvVarGuard::set(custom_var, value);
-        let env = create_env_for_mcp_server(None, &[custom_var.to_string()]);
+        let env = create_env_for_mcp_server(/*extra_env*/ None, &[custom_var.to_string()]);
         assert_eq!(env.get(OsStr::new(custom_var)), Some(&expected));
     }
 
@@ -207,7 +207,7 @@ mod tests {
         let expected = raw_path.to_os_string();
         let _guard = EnvVarGuard::set("PATH", raw_path);
 
-        let env = create_env_for_mcp_server(None, &[]);
+        let env = create_env_for_mcp_server(/*extra_env*/ None, &[]);
 
         assert_eq!(env.get(OsStr::new("PATH")), Some(&expected));
     }

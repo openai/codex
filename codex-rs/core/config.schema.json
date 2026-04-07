@@ -338,9 +338,6 @@
             "apps": {
               "type": "boolean"
             },
-            "artifact": {
-              "type": "boolean"
-            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -363,6 +360,9 @@
               "type": "boolean"
             },
             "connectors": {
+              "type": "boolean"
+            },
+            "debug_hide_spawn_agent_metadata": {
               "type": "boolean"
             },
             "default_mode_request_user_input": {
@@ -393,6 +393,9 @@
               "type": "boolean"
             },
             "fast_mode": {
+              "type": "boolean"
+            },
+            "general_analytics": {
               "type": "boolean"
             },
             "guardian_approval": {
@@ -435,6 +438,9 @@
               "type": "boolean"
             },
             "realtime_conversation": {
+              "type": "boolean"
+            },
+            "remote_control": {
               "type": "boolean"
             },
             "remote_models": {
@@ -506,9 +512,6 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
-            "voice_transcription": {
-              "type": "boolean"
-            },
             "web_search": {
               "type": "boolean"
             },
@@ -522,6 +525,15 @@
           "type": "object"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "include_apps_instructions": {
+          "type": "boolean"
+        },
+        "include_environment_context": {
+          "type": "boolean"
+        },
+        "include_permissions_instructions": {
           "type": "boolean"
         },
         "js_repl_node_module_dirs": {
@@ -745,6 +757,21 @@
         }
       ]
     },
+    "McpServerToolConfig": {
+      "additionalProperties": false,
+      "description": "Per-tool approval settings for a single MCP server tool.",
+      "properties": {
+        "approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for this tool."
+        }
+      },
+      "type": "object"
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -807,10 +834,62 @@
       },
       "type": "object"
     },
+    "ModelProviderAuthInfo": {
+      "additionalProperties": false,
+      "description": "Configuration for obtaining a provider bearer token from a command.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Command arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Command to execute. Bare names are resolved via `PATH`; paths are resolved against `cwd`.",
+          "type": "string"
+        },
+        "cwd": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Working directory used when running the token command."
+        },
+        "refresh_interval_ms": {
+          "default": 300000,
+          "description": "Maximum age for the cached token before rerunning the command. Set to `0` to disable proactive refresh and only rerun after a 401 retry path.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "default": 5000,
+          "description": "Maximum time to wait for the token command to exit successfully.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
       "properties": {
+        "auth": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelProviderAuthInfo"
+            }
+          ],
+          "description": "Command-backed bearer-token configuration for this provider."
+        },
         "base_url": {
           "description": "Base URL for the provider's OpenAI-compatible API.",
           "type": "string"
@@ -901,6 +980,16 @@
       ],
       "type": "object"
     },
+    "NetworkDomainPermissionToml": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "NetworkDomainPermissionsToml": {
+      "type": "object"
+    },
     "NetworkModeSchema": {
       "enum": [
         "limited",
@@ -914,20 +1003,8 @@
         "allow_local_binding": {
           "type": "boolean"
         },
-        "allow_unix_sockets": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "allow_upstream_proxy": {
           "type": "boolean"
-        },
-        "allowed_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         },
         "dangerously_allow_all_unix_sockets": {
           "type": "boolean"
@@ -935,11 +1012,8 @@
         "dangerously_allow_non_loopback_proxy": {
           "type": "boolean"
         },
-        "denied_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+        "domains": {
+          "$ref": "#/definitions/NetworkDomainPermissionsToml"
         },
         "enable_socks5": {
           "type": "boolean"
@@ -958,8 +1032,21 @@
         },
         "socks_url": {
           "type": "string"
+        },
+        "unix_sockets": {
+          "$ref": "#/definitions/NetworkUnixSocketPermissionsToml"
         }
       },
+      "type": "object"
+    },
+    "NetworkUnixSocketPermissionToml": {
+      "enum": [
+        "allow",
+        "none"
+      ],
+      "type": "string"
+    },
+    "NetworkUnixSocketPermissionsToml": {
       "type": "object"
     },
     "Notice": {
@@ -1247,6 +1334,7 @@
     },
     "RawMcpServerConfig": {
       "additionalProperties": false,
+      "description": "Raw MCP config shape used for deserialization and JSON Schema generation.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
       "properties": {
         "args": {
           "default": null,
@@ -1313,6 +1401,11 @@
           },
           "type": "object"
         },
+        "name": {
+          "default": null,
+          "description": "Legacy display-name field accepted for backward compatibility.",
+          "type": "string"
+        },
         "oauth_resource": {
           "default": null,
           "type": "string"
@@ -1343,6 +1436,13 @@
           "default": null,
           "format": "double",
           "type": "number"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServerToolConfig"
+          },
+          "default": null,
+          "type": "object"
         },
         "url": {
           "type": "string"
@@ -1914,10 +2014,6 @@
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
-    "experimental_exec_server_url": {
-      "description": "Experimental / do not use. Overrides the URL used when connecting to a remote exec server.",
-      "type": "string"
-    },
     "experimental_realtime_start_instructions": {
       "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
       "type": "string"
@@ -1955,9 +2051,6 @@
         "apps": {
           "type": "boolean"
         },
-        "artifact": {
-          "type": "boolean"
-        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -1980,6 +2073,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "debug_hide_spawn_agent_metadata": {
           "type": "boolean"
         },
         "default_mode_request_user_input": {
@@ -2010,6 +2106,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "general_analytics": {
           "type": "boolean"
         },
         "guardian_approval": {
@@ -2052,6 +2151,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "remote_control": {
           "type": "boolean"
         },
         "remote_models": {
@@ -2123,9 +2225,6 @@
         "use_linux_sandbox_bwrap": {
           "type": "boolean"
         },
-        "voice_transcription": {
-          "type": "boolean"
-        },
         "web_search": {
           "type": "boolean"
         },
@@ -2189,6 +2288,18 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "include_apps_instructions": {
+      "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_environment_context": {
+      "description": "Whether to inject the `<environment_context>` user block.",
+      "type": "boolean"
+    },
+    "include_permissions_instructions": {
+      "description": "Whether to inject the `<permissions instructions>` developer block.",
+      "type": "boolean"
     },
     "instructions": {
       "description": "System instructions.",
@@ -2318,7 +2429,7 @@
           "$ref": "#/definitions/Notice"
         }
       ],
-      "description": "Collection of in-product notices (different from notifications) See [`crate::config::types::Notices`] for more details"
+      "description": "Collection of in-product notices (different from notifications) See [`crate::types::Notice`] for more details"
     },
     "notify": {
       "default": null,

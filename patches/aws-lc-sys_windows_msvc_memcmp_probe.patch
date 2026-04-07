@@ -1,0 +1,38 @@
+diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
+--- a/builder/cc_builder.rs
++++ b/builder/cc_builder.rs
+@@ -667,12 +667,24 @@
+         if cargo_env("HOST") != target() {
+             return;
+         }
++
++        let bazel_execroot = Self::bazel_execroot(self.manifest_dir.as_path());
++        if bazel_execroot.is_some() && target().ends_with("windows-msvc") {
++            // This probe guards a GCC memcmp miscompile. Under Bazel's
++            // hermetic Windows/MSVC build-script toolchain we drive clang with
++            // MinGW-flavored CFLAGS, which is good enough for compiling
++            // aws-lc but not for linking and executing this standalone test
++            // binary. Skip the probe in that configuration instead of failing
++            // the whole build script.
++            emit_warning("Skipping memcmp probe for Bazel windows-msvc build scripts.");
++            return;
++        }
+ 
+         let basename = "memcmp_invalid_stripped_check";
+         let exec_path = out_dir().join(basename);
+         let memcmp_build = cc::Build::default();
+         let memcmp_compiler = memcmp_build.get_compiler();
+         if !memcmp_compiler.is_like_clang() && !memcmp_compiler.is_like_gnu() {
+             // The logic below assumes a Clang or GCC compiler is in use
+             return;
+         }
+@@ -701,7 +713,7 @@
+                 memcmp_compile_args.push(flag.into());
+             }
+         }
+ 
+-        if let Some(execroot) = Self::bazel_execroot(self.manifest_dir.as_path()) {
++        if let Some(execroot) = bazel_execroot {
+             // In Bazel build-script sandboxes, `cc` can pass `bazel-out/...` args
+             // relative to the execroot while the process runs from elsewhere.
+             // Normalize those args to absolute paths so this check can still link.

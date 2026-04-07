@@ -4,9 +4,8 @@ This module implements the websocket-backed app-server client transport.
 It owns the remote connection lifecycle, including the initialize/initialized
 handshake, JSON-RPC request/response routing, server-request resolution, and
 notification streaming. The rest of the crate uses the same `AppServerEvent`
-surface for both in-process and remote transports, so callers such as
-`tui_app_server` can switch between them without changing their higher-level
-session logic.
+surface for both in-process and remote transports, so callers such as the TUI
+can switch between them without changing their higher-level session logic.
 */
 
 use std::collections::HashMap;
@@ -48,6 +47,9 @@ use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tracing::warn;
 use url::Url;
 
@@ -57,6 +59,7 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone)]
 pub struct RemoteAppServerConnectArgs {
     pub websocket_url: String,
+    pub auth_token: Option<String>,
     pub client_name: String,
     pub client_version: String,
     pub experimental_api: bool,
@@ -83,6 +86,16 @@ impl RemoteAppServerConnectArgs {
             },
             capabilities: Some(capabilities),
         }
+    }
+}
+
+pub(crate) fn websocket_url_supports_auth_token(url: &Url) -> bool {
+    match (url.scheme(), url.host()) {
+        ("wss", Some(_)) => true,
+        ("ws", Some(url::Host::Domain(domain))) => domain.eq_ignore_ascii_case("localhost"),
+        ("ws", Some(url::Host::Ipv4(addr))) => addr.is_loopback(),
+        ("ws", Some(url::Host::Ipv6(addr))) => addr.is_loopback(),
+        _ => false,
     }
 }
 
@@ -132,7 +145,31 @@ impl RemoteAppServerClient {
                 format!("invalid websocket URL `{websocket_url}`: {err}"),
             )
         })?;
-        let stream = timeout(CONNECT_TIMEOUT, connect_async(url.as_str()))
+        if args.auth_token.is_some() && !websocket_url_supports_auth_token(&url) {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "remote auth tokens require `wss://` or loopback `ws://` URLs; got `{websocket_url}`"
+                ),
+            ));
+        }
+        let mut request = url.as_str().into_client_request().map_err(|err| {
+            IoError::new(
+                ErrorKind::InvalidInput,
+                format!("invalid websocket URL `{websocket_url}`: {err}"),
+            )
+        })?;
+        if let Some(auth_token) = args.auth_token.as_deref() {
+            let header_value =
+                HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|err| {
+                    IoError::new(
+                        ErrorKind::InvalidInput,
+                        format!("invalid remote authorization header value: {err}"),
+                    )
+                })?;
+            request.headers_mut().insert(AUTHORIZATION, header_value);
+        }
+        let stream = timeout(CONNECT_TIMEOUT, connect_async(request))
             .await
             .map_err(|_| {
                 IoError::new(

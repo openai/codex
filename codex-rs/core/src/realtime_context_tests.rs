@@ -47,7 +47,7 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
 async fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
     assert_eq!(
-        build_workspace_section_with_user_root(cwd.path(), None).await,
+        build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None).await,
         None
     );
 }
@@ -58,7 +58,7 @@ async fn workspace_section_includes_tree_when_entries_exist() {
     fs::create_dir(cwd.path().join("docs")).expect("create docs dir");
     fs::write(cwd.path().join("README.md"), "hello").expect("write readme");
 
-    let section = build_workspace_section_with_user_root(cwd.path(), None)
+    let section = build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None)
         .await
         .expect("workspace section");
     assert!(section.contains("Working directory tree:"));

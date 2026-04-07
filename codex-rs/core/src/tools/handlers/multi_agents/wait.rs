@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent::status::is_final;
-use crate::error::CodexErr;
+use codex_protocol::error::CodexErr;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -14,7 +14,6 @@ use tokio::time::timeout_at;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
     type Output = WaitAgentResult;
 
@@ -36,7 +35,7 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
-        let receiver_thread_ids = resolve_agent_targets(&session, &turn, args.targets).await?;
+        let receiver_thread_ids = parse_agent_id_targets(args.targets)?;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
         let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {

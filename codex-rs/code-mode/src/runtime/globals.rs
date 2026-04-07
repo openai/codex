@@ -1,8 +1,10 @@
 use super::RuntimeState;
+use super::callbacks::clear_timeout_callback;
 use super::callbacks::exit_callback;
 use super::callbacks::image_callback;
 use super::callbacks::load_callback;
 use super::callbacks::notify_callback;
+use super::callbacks::set_timeout_callback;
 use super::callbacks::store_callback;
 use super::callbacks::text_callback;
 use super::callbacks::tool_callback;
@@ -18,6 +20,8 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
 
     let tools = build_tools_object(scope)?;
     let all_tools = build_all_tools_value(scope)?;
+    let clear_timeout = helper_function(scope, "clearTimeout", clear_timeout_callback)?;
+    let set_timeout = helper_function(scope, "setTimeout", set_timeout_callback)?;
     let text = helper_function(scope, "text", text_callback)?;
     let image = helper_function(scope, "image", image_callback)?;
     let store = helper_function(scope, "store", store_callback)?;
@@ -28,6 +32,8 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
 
     set_global(scope, global, "tools", tools.into())?;
     set_global(scope, global, "ALL_TOOLS", all_tools)?;
+    set_global(scope, global, "clearTimeout", clear_timeout.into())?;
+    set_global(scope, global, "setTimeout", set_timeout.into())?;
     set_global(scope, global, "text", text.into())?;
     set_global(scope, global, "image", image.into())?;
     set_global(scope, global, "store", store.into())?;

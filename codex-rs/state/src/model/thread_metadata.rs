@@ -525,6 +525,9 @@ mod tests {
         let metadata = ThreadMetadata::try_from(thread_row(Some("future")))
             .expect("thread metadata should parse");
 
-        assert_eq!(metadata, expected_thread_metadata(None));
+        assert_eq!(
+            metadata,
+            expected_thread_metadata(/*reasoning_effort*/ None)
+        );
     }
 }

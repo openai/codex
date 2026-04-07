@@ -1,3 +1,4 @@
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -5,6 +6,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::Error as _;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -77,6 +79,7 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
+    pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
@@ -91,6 +94,10 @@ impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
             approval_policy: ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                /*source*/ None,
+            ),
+            approvals_reviewer: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
                 /*source*/ None,
             ),
@@ -132,7 +139,93 @@ pub struct McpServerRequirement {
     pub identity: McpServerIdentity,
 }
 
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkDomainPermissionsToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, NetworkDomainPermissionToml>,
+}
+
+impl NetworkDomainPermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn allowed_domains(&self) -> Option<Vec<String>> {
+        let allowed_domains: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, permission)| matches!(permission, NetworkDomainPermissionToml::Allow))
+            .map(|(pattern, _)| pattern.clone())
+            .collect();
+        (!allowed_domains.is_empty()).then_some(allowed_domains)
+    }
+
+    pub fn denied_domains(&self) -> Option<Vec<String>> {
+        let denied_domains: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, permission)| matches!(permission, NetworkDomainPermissionToml::Deny))
+            .map(|(pattern, _)| pattern.clone())
+            .collect();
+        (!denied_domains.is_empty()).then_some(denied_domains)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkDomainPermissionToml {
+    Allow,
+    Deny,
+}
+
+impl std::fmt::Display for NetworkDomainPermissionToml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let permission = match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        };
+        f.write_str(permission)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkUnixSocketPermissionsToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, NetworkUnixSocketPermissionToml>,
+}
+
+impl NetworkUnixSocketPermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn allow_unix_sockets(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(_, permission)| matches!(permission, NetworkUnixSocketPermissionToml::Allow))
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkUnixSocketPermissionToml {
+    Allow,
+    None,
+}
+
+impl std::fmt::Display for NetworkUnixSocketPermissionToml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let permission = match self {
+            Self::Allow => "allow",
+            Self::None => "none",
+        };
+        f.write_str(permission)
+    }
+}
+
+#[derive(Serialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkRequirementsToml {
     pub enabled: Option<bool>,
     pub http_port: Option<u16>,
@@ -140,17 +233,127 @@ pub struct NetworkRequirementsToml {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
-    pub allowed_domains: Option<Vec<String>>,
+    pub domains: Option<NetworkDomainPermissionsToml>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
-    pub denied_domains: Option<Vec<String>>,
-    pub allow_unix_sockets: Option<Vec<String>>,
+    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
+    pub danger_full_access_denylist_only: Option<bool>,
+    pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
 }
 
+#[derive(Deserialize)]
+struct RawNetworkRequirementsToml {
+    enabled: Option<bool>,
+    http_port: Option<u16>,
+    socks_port: Option<u16>,
+    allow_upstream_proxy: Option<bool>,
+    dangerously_allow_non_loopback_proxy: Option<bool>,
+    dangerously_allow_all_unix_sockets: Option<bool>,
+    domains: Option<NetworkDomainPermissionsToml>,
+    #[serde(default)]
+    allowed_domains: Option<Vec<String>>,
+    /// When true, only managed `allowed_domains` are respected while managed
+    /// network enforcement is active. User allowlist entries are ignored.
+    managed_allowed_domains_only: Option<bool>,
+    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
+    danger_full_access_denylist_only: Option<bool>,
+    #[serde(default)]
+    denied_domains: Option<Vec<String>>,
+    unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
+    #[serde(default)]
+    allow_unix_sockets: Option<Vec<String>>,
+    allow_local_binding: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for NetworkRequirementsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawNetworkRequirementsToml::deserialize(deserializer)?;
+        let RawNetworkRequirementsToml {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_all_unix_sockets,
+            domains,
+            allowed_domains,
+            managed_allowed_domains_only,
+            danger_full_access_denylist_only,
+            denied_domains,
+            unix_sockets,
+            allow_unix_sockets,
+            allow_local_binding,
+        } = raw;
+
+        if domains.is_some() && (allowed_domains.is_some() || denied_domains.is_some()) {
+            return Err(D::Error::custom(
+                "`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`",
+            ));
+        }
+
+        if unix_sockets.is_some() && allow_unix_sockets.is_some() {
+            return Err(D::Error::custom(
+                "`experimental_network.unix_sockets` cannot be combined with legacy `allow_unix_sockets`",
+            ));
+        }
+
+        Ok(Self {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_all_unix_sockets,
+            domains: domains
+                .or_else(|| legacy_domain_permissions_from_lists(allowed_domains, denied_domains)),
+            managed_allowed_domains_only,
+            danger_full_access_denylist_only,
+            unix_sockets: unix_sockets
+                .or_else(|| legacy_unix_socket_permissions_from_list(allow_unix_sockets)),
+            allow_local_binding,
+        })
+    }
+}
+
+/// Legacy list normalization is intentionally lossy: explicit empty legacy
+/// lists are treated as unset when converted to the canonical network
+/// permission shape.
+fn legacy_domain_permissions_from_lists(
+    allowed_domains: Option<Vec<String>>,
+    denied_domains: Option<Vec<String>>,
+) -> Option<NetworkDomainPermissionsToml> {
+    let mut entries = BTreeMap::new();
+
+    for pattern in allowed_domains.unwrap_or_default() {
+        entries.insert(pattern, NetworkDomainPermissionToml::Allow);
+    }
+
+    for pattern in denied_domains.unwrap_or_default() {
+        entries.insert(pattern, NetworkDomainPermissionToml::Deny);
+    }
+
+    (!entries.is_empty()).then_some(NetworkDomainPermissionsToml { entries })
+}
+
+fn legacy_unix_socket_permissions_from_list(
+    allow_unix_sockets: Option<Vec<String>>,
+) -> Option<NetworkUnixSocketPermissionsToml> {
+    let entries = allow_unix_sockets
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| (path, NetworkUnixSocketPermissionToml::Allow))
+        .collect::<BTreeMap<_, _>>();
+
+    (!entries.is_empty()).then_some(NetworkUnixSocketPermissionsToml { entries })
+}
+
 /// Normalized network constraints derived from requirements TOML.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct NetworkConstraints {
     pub enabled: Option<bool>,
     pub http_port: Option<u16>,
@@ -158,13 +361,24 @@ pub struct NetworkConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
-    pub allowed_domains: Option<Vec<String>>,
+    pub domains: Option<NetworkDomainPermissionsToml>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
-    pub denied_domains: Option<Vec<String>>,
-    pub allow_unix_sockets: Option<Vec<String>>,
+    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
+    pub danger_full_access_denylist_only: Option<bool>,
+    pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for NetworkConstraints {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let requirements = NetworkRequirementsToml::deserialize(deserializer)?;
+        Ok(requirements.into())
+    }
 }
 
 impl From<NetworkRequirementsToml> for NetworkConstraints {
@@ -176,10 +390,10 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
-            allowed_domains,
+            domains,
             managed_allowed_domains_only,
-            denied_domains,
-            allow_unix_sockets,
+            danger_full_access_denylist_only,
+            unix_sockets,
             allow_local_binding,
         } = value;
         Self {
@@ -189,10 +403,10 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
-            allowed_domains,
+            domains,
             managed_allowed_domains_only,
-            denied_domains,
-            allow_unix_sockets,
+            danger_full_access_denylist_only,
+            unix_sockets,
             allow_local_binding,
         }
     }
@@ -289,6 +503,7 @@ pub(crate) fn merge_enablement_settings_descending(
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     #[serde(rename = "features", alias = "feature_requirements")]
@@ -327,6 +542,7 @@ impl<T> std::ops::Deref for Sourced<T> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
+    pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
@@ -358,6 +574,7 @@ impl ConfigRequirementsWithSources {
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
             allowed_approval_policies: _,
+            allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
             allowed_web_search_modes: _,
             feature_requirements: _,
@@ -383,6 +600,7 @@ impl ConfigRequirementsWithSources {
             source,
             {
                 allowed_approval_policies,
+                allowed_approvals_reviewers,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
                 feature_requirements,
@@ -406,6 +624,7 @@ impl ConfigRequirementsWithSources {
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
+            allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
@@ -418,6 +637,7 @@ impl ConfigRequirementsWithSources {
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
+            allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
@@ -468,6 +688,7 @@ pub enum ResidencyRequirement {
 impl ConfigRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_approval_policies.is_none()
+            && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_web_search_modes.is_none()
             && self
@@ -495,6 +716,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
+            allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
@@ -524,6 +746,36 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                             field_name: "approval_policy",
                             candidate: format!("{candidate:?}"),
                             allowed: format!("{policies:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        })
+                    }
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                /*source*/ None,
+            ),
+        };
+
+        let approvals_reviewer = match allowed_approvals_reviewers {
+            Some(Sourced {
+                value: reviewers,
+                source: requirement_source,
+            }) => {
+                let Some(initial_value) = reviewers.first().copied() else {
+                    return Err(ConstraintError::empty_field("allowed_approvals_reviewers"));
+                };
+
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(initial_value, move |candidate| {
+                    if reviewers.contains(candidate) {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "approvals_reviewer",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{reviewers:?}"),
                             requirement_source: requirement_source_for_error.clone(),
                         })
                     }
@@ -680,6 +932,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         });
         Ok(ConfigRequirements {
             approval_policy,
+            approvals_reviewer,
             sandbox_policy,
             web_search_mode,
             feature_requirements,
@@ -716,6 +969,7 @@ mod tests {
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_approval_policies,
+            allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
@@ -728,6 +982,8 @@ mod tests {
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_approvals_reviewers: allowed_approvals_reviewers
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -752,6 +1008,8 @@ mod tests {
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
 
         let allowed_approval_policies = vec![AskForApproval::UnlessTrusted, AskForApproval::Never];
+        let allowed_approvals_reviewers =
+            vec![ApprovalsReviewer::GuardianSubagent, ApprovalsReviewer::User];
         let allowed_sandbox_modes = vec![
             SandboxModeRequirement::WorkspaceWrite,
             SandboxModeRequirement::DangerFullAccess,
@@ -772,6 +1030,7 @@ mod tests {
         // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
+            allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
@@ -791,6 +1050,10 @@ mod tests {
                 allowed_approval_policies: Some(Sourced::new(
                     allowed_approval_policies,
                     source.clone()
+                )),
+                allowed_approvals_reviewers: Some(Sourced::new(
+                    allowed_approvals_reviewers,
+                    source.clone(),
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
@@ -836,6 +1099,7 @@ mod tests {
                     vec![AskForApproval::OnRequest],
                     source_location,
                 )),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
@@ -879,6 +1143,7 @@ mod tests {
                     vec![AskForApproval::Never],
                     existing_source,
                 )),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
@@ -956,6 +1221,18 @@ guardian_developer_instructions = """
         )?;
 
         assert!(requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_approvals_reviewers_is_not_empty() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+allowed_approvals_reviewers = ["user"]
+"#,
+        )?;
+
+        assert!(!requirements.is_empty());
         Ok(())
     }
 
@@ -1132,6 +1409,7 @@ guardian_developer_instructions = """
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
+                allowed_approvals_reviewers = ["guardian_subagent"]
                 allowed_sandbox_modes = ["read-only"]
             "#,
         )?;
@@ -1162,6 +1440,17 @@ guardian_developer_instructions = """
                 field_name: "sandbox_mode",
                 candidate: "DangerFullAccess".into(),
                 allowed: "[ReadOnly]".into(),
+                requirement_source: source_location.clone(),
+            })
+        );
+        assert_eq!(
+            requirements
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::User),
+            Err(ConstraintError::InvalidValue {
+                field_name: "approvals_reviewer",
+                candidate: "User".into(),
+                allowed: "[GuardianSubagent]".into(),
                 requirement_source: source_location,
             })
         );
@@ -1201,6 +1490,7 @@ guardian_developer_instructions = """
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
+                allowed_approvals_reviewers = ["guardian_subagent"]
                 allowed_sandbox_modes = ["read-only"]
                 allowed_web_search_modes = ["cached"]
                 enforce_residency = "us"
@@ -1216,6 +1506,10 @@ guardian_developer_instructions = """
 
         assert_eq!(
             requirements.approval_policy.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(
+            requirements.approvals_reviewer.source,
             Some(source_location.clone())
         );
         assert_eq!(
@@ -1288,6 +1582,54 @@ guardian_developer_instructions = """
                 .sandbox_policy
                 .can_set(&SandboxPolicy::new_read_only_policy())
                 .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_allowed_approvals_reviewers() -> Result<()> {
+        let toml_str = r#"
+            allowed_approvals_reviewers = ["guardian_subagent", "user"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.approvals_reviewer.value(),
+            ApprovalsReviewer::GuardianSubagent,
+            "currently, there is no way to specify the default value for approvals reviewer in the toml, so it picks the first allowed value"
+        );
+        assert!(
+            requirements
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::GuardianSubagent)
+                .is_ok()
+        );
+        assert!(
+            requirements
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::User)
+                .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_allowed_approvals_reviewers_is_rejected() -> Result<()> {
+        let toml_str = r#"
+            allowed_approvals_reviewers = []
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let err = ConfigRequirements::try_from(with_unknown_source(config))
+            .expect_err("empty approvals reviewer allow-list should be rejected");
+
+        assert_eq!(
+            err,
+            ConstraintError::EmptyField {
+                field_name: "allowed_approvals_reviewers".to_string(),
+            }
         );
 
         Ok(())
@@ -1475,8 +1817,86 @@ guardian_developer_instructions = """
             enabled = true
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
+            managed_allowed_domains_only = true
+            danger_full_access_denylist_only = true
+            allow_local_binding = false
+
+            [experimental_network.domains]
+            "api.example.com" = "allow"
+            "*.openai.com" = "allow"
+            "blocked.example.com" = "deny"
+
+            [experimental_network.unix_sockets]
+            "/tmp/example.sock" = "allow"
+        "#;
+
+        let source = RequirementSource::CloudRequirements;
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
+
+        let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
+        let sourced_network = requirements
+            .network
+            .expect("network requirements should be preserved as constraints");
+
+        assert_eq!(sourced_network.source, source);
+        assert_eq!(sourced_network.value.enabled, Some(true));
+        assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
+        assert_eq!(
+            sourced_network.value.dangerously_allow_all_unix_sockets,
+            Some(true)
+        );
+        assert_eq!(
+            sourced_network.value.domains.as_ref(),
+            Some(&NetworkDomainPermissionsToml {
+                entries: BTreeMap::from([
+                    (
+                        "*.openai.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "api.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "blocked.example.com".to_string(),
+                        NetworkDomainPermissionToml::Deny,
+                    ),
+                ]),
+            })
+        );
+        assert_eq!(
+            sourced_network.value.managed_allowed_domains_only,
+            Some(true)
+        );
+        assert_eq!(
+            sourced_network.value.danger_full_access_denylist_only,
+            Some(true)
+        );
+        assert_eq!(
+            sourced_network.value.unix_sockets.as_ref(),
+            Some(&NetworkUnixSocketPermissionsToml {
+                entries: BTreeMap::from([(
+                    "/tmp/example.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                )]),
+            })
+        );
+        assert_eq!(sourced_network.value.allow_local_binding, Some(false));
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
+        let toml_str = r#"
+            [experimental_network]
+            enabled = true
+            allow_upstream_proxy = false
+            dangerously_allow_all_unix_sockets = true
             allowed_domains = ["api.example.com", "*.openai.com"]
             managed_allowed_domains_only = true
+            danger_full_access_denylist_only = true
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
             allow_local_binding = false
@@ -1499,27 +1919,139 @@ guardian_developer_instructions = """
             Some(true)
         );
         assert_eq!(
-            sourced_network.value.allowed_domains.as_ref(),
-            Some(&vec![
-                "api.example.com".to_string(),
-                "*.openai.com".to_string()
-            ])
+            sourced_network.value.domains.as_ref(),
+            Some(&NetworkDomainPermissionsToml {
+                entries: BTreeMap::from([
+                    (
+                        "*.openai.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "api.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "blocked.example.com".to_string(),
+                        NetworkDomainPermissionToml::Deny,
+                    ),
+                ]),
+            })
         );
         assert_eq!(
             sourced_network.value.managed_allowed_domains_only,
             Some(true)
         );
         assert_eq!(
-            sourced_network.value.denied_domains.as_ref(),
-            Some(&vec!["blocked.example.com".to_string()])
+            sourced_network.value.danger_full_access_denylist_only,
+            Some(true)
         );
         assert_eq!(
-            sourced_network.value.allow_unix_sockets.as_ref(),
-            Some(&vec!["/tmp/example.sock".to_string()])
+            sourced_network.value.unix_sockets.as_ref(),
+            Some(&NetworkUnixSocketPermissionsToml {
+                entries: BTreeMap::from([(
+                    "/tmp/example.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                )]),
+            })
         );
         assert_eq!(sourced_network.value.allow_local_binding, Some(false));
 
         Ok(())
+    }
+
+    #[test]
+    fn mixed_legacy_and_canonical_network_requirements_are_rejected() {
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [experimental_network]
+                allowed_domains = ["api.example.com"]
+
+                [experimental_network.domains]
+                "*.openai.com" = "allow"
+            "#,
+        )
+        .expect_err("mixed network domain shapes should fail");
+
+        assert!(
+            err.to_string()
+                .contains("`experimental_network.domains` cannot be combined"),
+            "unexpected error: {err:#}"
+        );
+
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [experimental_network]
+                allow_unix_sockets = ["/tmp/example.sock"]
+
+                [experimental_network.unix_sockets]
+                "/tmp/another.sock" = "allow"
+            "#,
+        )
+        .expect_err("mixed network unix socket shapes should fail");
+
+        assert!(
+            err.to_string()
+                .contains("`experimental_network.unix_sockets` cannot be combined"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn network_permission_containers_project_allowed_and_denied_entries() {
+        let domains = NetworkDomainPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    "*.openai.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                ),
+                (
+                    "api.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                ),
+                (
+                    "blocked.example.com".to_string(),
+                    NetworkDomainPermissionToml::Deny,
+                ),
+            ]),
+        };
+        let unix_sockets = NetworkUnixSocketPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    "/tmp/example.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                ),
+                (
+                    "/tmp/ignored.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::None,
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            domains.allowed_domains(),
+            Some(vec![
+                "*.openai.com".to_string(),
+                "api.example.com".to_string()
+            ])
+        );
+        assert_eq!(
+            domains.denied_domains(),
+            Some(vec!["blocked.example.com".to_string()])
+        );
+        assert_eq!(
+            NetworkDomainPermissionsToml {
+                entries: BTreeMap::from([(
+                    "api.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                )]),
+            }
+            .denied_domains(),
+            None
+        );
+        assert_eq!(
+            unix_sockets.allow_unix_sockets(),
+            vec!["/tmp/example.sock".to_string()]
+        );
     }
 
     #[test]

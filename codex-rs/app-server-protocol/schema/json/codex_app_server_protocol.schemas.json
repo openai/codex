@@ -28,41 +28,6 @@
       },
       "type": "object"
     },
-    "AdditionalMacOsPermissions": {
-      "properties": {
-        "accessibility": {
-          "type": "boolean"
-        },
-        "automations": {
-          "$ref": "#/definitions/MacOsAutomationPermission"
-        },
-        "calendar": {
-          "type": "boolean"
-        },
-        "contacts": {
-          "$ref": "#/definitions/MacOsContactsPermission"
-        },
-        "launchServices": {
-          "type": "boolean"
-        },
-        "preferences": {
-          "$ref": "#/definitions/MacOsPreferencesPermission"
-        },
-        "reminders": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "accessibility",
-        "automations",
-        "calendar",
-        "contacts",
-        "launchServices",
-        "preferences",
-        "reminders"
-      ],
-      "type": "object"
-    },
     "AdditionalNetworkPermissions": {
       "properties": {
         "enabled": {
@@ -80,16 +45,6 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalMacOsPermissions"
             },
             {
               "type": "null"
@@ -1253,6 +1208,30 @@
             },
             "method": {
               "enum": [
+                "mcpServer/resource/read"
+              ],
+              "title": "McpServer/resource/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/McpResourceReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "McpServer/resource/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "windowsSandbox/setupStart"
               ],
               "title": "WindowsSandbox/setupStartRequestMethod",
@@ -1864,17 +1843,6 @@
       "title": "CommandExecutionRequestApprovalResponse",
       "type": "object"
     },
-    "CommandExecutionRequestApprovalSkillMetadata": {
-      "properties": {
-        "pathToSkillsMd": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "pathToSkillsMd"
-      ],
-      "type": "object"
-    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2478,49 +2446,6 @@
       ],
       "title": "JSONRPCResponse",
       "type": "object"
-    },
-    "MacOsAutomationPermission": {
-      "oneOf": [
-        {
-          "enum": [
-            "none",
-            "all"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "bundle_ids": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "bundle_ids"
-          ],
-          "title": "BundleIdsMacOsAutomationPermission",
-          "type": "object"
-        }
-      ]
-    },
-    "MacOsContactsPermission": {
-      "enum": [
-        "none",
-        "read_only",
-        "read_write"
-      ],
-      "type": "string"
-    },
-    "MacOsPreferencesPermission": {
-      "enum": [
-        "none",
-        "read_only",
-        "read_write"
-      ],
-      "type": "string"
     },
     "McpElicitationArrayType": {
       "enum": [
@@ -3162,7 +3087,7 @@
           "type": "string"
         },
         "protocol": {
-          "$ref": "#/definitions/NetworkApprovalProtocol"
+          "$ref": "#/definitions/v2/NetworkApprovalProtocol"
         }
       },
       "required": [
@@ -3170,15 +3095,6 @@
         "protocol"
       ],
       "type": "object"
-    },
-    "NetworkApprovalProtocol": {
-      "enum": [
-        "http",
-        "https",
-        "socks5Tcp",
-        "socks5Udp"
-      ],
-      "type": "string"
     },
     "NetworkPolicyAmendment": {
       "properties": {
@@ -7595,7 +7511,7 @@
             "type": "array"
           },
           "watchId": {
-            "description": "Watch identifier returned by `fs/watch`.",
+            "description": "Watch identifier previously provided to `fs/watch`.",
             "type": "string"
           }
         },
@@ -7865,7 +7781,7 @@
         "description": "Stop filesystem watch notifications for a prior `fs/watch`.",
         "properties": {
           "watchId": {
-            "description": "Watch identifier returned by `fs/watch`.",
+            "description": "Watch identifier previously provided to `fs/watch`.",
             "type": "string"
           }
         },
@@ -7892,25 +7808,6 @@
               }
             ],
             "description": "Absolute file or directory path to watch."
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "title": "FsWatchParams",
-        "type": "object"
-      },
-      "FsWatchResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Created watch handle returned by `fs/watch`.",
-        "properties": {
-          "path": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
-              }
-            ],
-            "description": "Canonicalized path associated with the watch."
           },
           "watchId": {
             "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
@@ -7920,6 +7817,25 @@
         "required": [
           "path",
           "watchId"
+        ],
+        "title": "FsWatchParams",
+        "type": "object"
+      },
+      "FsWatchResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `fs/watch`.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Canonicalized path associated with the watch."
+          }
+        },
+        "required": [
+          "path"
         ],
         "title": "FsWatchResponse",
         "type": "object"
@@ -8176,6 +8092,176 @@
         ],
         "type": "object"
       },
+      "GuardianApprovalReviewAction": {
+        "oneOf": [
+          {
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/definitions/v2/GuardianCommandSource"
+              },
+              "type": {
+                "enum": [
+                  "command"
+                ],
+                "title": "CommandGuardianApprovalReviewActionType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "cwd",
+              "source",
+              "type"
+            ],
+            "title": "CommandGuardianApprovalReviewAction",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "argv": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "program": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/definitions/v2/GuardianCommandSource"
+              },
+              "type": {
+                "enum": [
+                  "execve"
+                ],
+                "title": "ExecveGuardianApprovalReviewActionType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "argv",
+              "cwd",
+              "program",
+              "source",
+              "type"
+            ],
+            "title": "ExecveGuardianApprovalReviewAction",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "files": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "applyPatch"
+                ],
+                "title": "ApplyPatchGuardianApprovalReviewActionType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "files",
+              "type"
+            ],
+            "title": "ApplyPatchGuardianApprovalReviewAction",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "format": "uint16",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "protocol": {
+                "$ref": "#/definitions/v2/NetworkApprovalProtocol"
+              },
+              "target": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "networkAccess"
+                ],
+                "title": "NetworkAccessGuardianApprovalReviewActionType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "host",
+              "port",
+              "protocol",
+              "target",
+              "type"
+            ],
+            "title": "NetworkAccessGuardianApprovalReviewAction",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "connectorId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "connectorName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "server": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              },
+              "toolTitle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "mcpToolCall"
+                ],
+                "title": "McpToolCallGuardianApprovalReviewActionType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "server",
+              "toolName",
+              "type"
+            ],
+            "title": "McpToolCallGuardianApprovalReviewAction",
+            "type": "object"
+          }
+        ]
+      },
       "GuardianApprovalReviewStatus": {
         "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
         "enum": [
@@ -8183,6 +8269,13 @@
           "approved",
           "denied",
           "aborted"
+        ],
+        "type": "string"
+      },
+      "GuardianCommandSource": {
+        "enum": [
+          "shell",
+          "unifiedExec"
         ],
         "type": "string"
       },
@@ -8221,6 +8314,7 @@
       "HookEventName": {
         "enum": [
           "preToolUse",
+          "postToolUse",
           "sessionStart",
           "userPromptSubmit",
           "stop"
@@ -8447,7 +8541,9 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
         "properties": {
-          "action": true,
+          "action": {
+            "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
+          },
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
@@ -8462,6 +8558,7 @@
           }
         },
         "required": [
+          "action",
           "review",
           "targetItemId",
           "threadId",
@@ -8474,7 +8571,9 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
         "properties": {
-          "action": true,
+          "action": {
+            "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
+          },
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
@@ -8489,6 +8588,7 @@
           }
         },
         "required": [
+          "action",
           "review",
           "targetItemId",
           "threadId",
@@ -8527,6 +8627,17 @@
               "string",
               "null"
             ]
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpServerStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls how much MCP inventory data to fetch for each server. Defaults to `Full` when omitted."
           },
           "limit": {
             "description": "Optional page size; defaults to a server-defined value.",
@@ -8668,6 +8779,22 @@
             "type": "object"
           },
           {
+            "properties": {
+              "type": {
+                "enum": [
+                  "chatgptDeviceCode"
+                ],
+                "title": "ChatgptDeviceCodev2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ChatgptDeviceCodev2::LoginAccountParams",
+            "type": "object"
+          },
+          {
             "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
             "properties": {
               "accessToken": {
@@ -8750,6 +8877,36 @@
           },
           {
             "properties": {
+              "loginId": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "chatgptDeviceCode"
+                ],
+                "title": "ChatgptDeviceCodev2::LoginAccountResponseType",
+                "type": "string"
+              },
+              "userCode": {
+                "description": "One-time code the user must enter after signing in.",
+                "type": "string"
+              },
+              "verificationUrl": {
+                "description": "URL the client should open in a browser to complete device code authorization.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "loginId",
+              "type",
+              "userCode",
+              "verificationUrl"
+            ],
+            "title": "ChatgptDeviceCodev2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "properties": {
               "type": {
                 "enum": [
                   "chatgptAuthTokens"
@@ -8806,6 +8963,43 @@
           "oAuth"
         ],
         "type": "string"
+      },
+      "McpResourceReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "server": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "threadId",
+          "uri"
+        ],
+        "title": "McpResourceReadParams",
+        "type": "object"
+      },
+      "McpResourceReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "contents": {
+            "items": {
+              "$ref": "#/definitions/v2/ResourceContent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "contents"
+        ],
+        "title": "McpResourceReadResponse",
+        "type": "object"
       },
       "McpServerOauthLoginCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -8922,6 +9116,13 @@
         ],
         "type": "object"
       },
+      "McpServerStatusDetail": {
+        "enum": [
+          "full",
+          "toolsAndAuthOnly"
+        ],
+        "type": "string"
+      },
       "McpServerStatusUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -8983,6 +9184,7 @@
       },
       "McpToolCallResult": {
         "properties": {
+          "_meta": true,
           "content": {
             "items": true,
             "type": "array"
@@ -9301,6 +9503,22 @@
         ],
         "type": "string"
       },
+      "NetworkApprovalProtocol": {
+        "enum": [
+          "http",
+          "https",
+          "socks5Tcp",
+          "socks5Udp"
+        ],
+        "type": "string"
+      },
+      "NetworkDomainPermission": {
+        "enum": [
+          "allow",
+          "deny"
+        ],
+        "type": "string"
+      },
       "NetworkRequirements": {
         "properties": {
           "allowLocalBinding": {
@@ -9310,6 +9528,7 @@
             ]
           },
           "allowUnixSockets": {
+            "description": "Legacy compatibility view derived from `unix_sockets`.",
             "items": {
               "type": "string"
             },
@@ -9325,11 +9544,18 @@
             ]
           },
           "allowedDomains": {
+            "description": "Legacy compatibility view derived from `domains`.",
             "items": {
               "type": "string"
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "dangerFullAccessDenylistOnly": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -9346,11 +9572,22 @@
             ]
           },
           "deniedDomains": {
+            "description": "Legacy compatibility view derived from `domains`.",
             "items": {
               "type": "string"
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "domains": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/NetworkDomainPermission"
+            },
+            "description": "Canonical network permission map for `experimental_network`.",
+            "type": [
+              "object",
               "null"
             ]
           },
@@ -9368,6 +9605,13 @@
               "null"
             ]
           },
+          "managedAllowedDomainsOnly": {
+            "description": "When true, only managed allowlist entries are respected while managed network enforcement is active.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "socksPort": {
             "format": "uint16",
             "minimum": 0.0,
@@ -9375,9 +9619,26 @@
               "integer",
               "null"
             ]
+          },
+          "unixSockets": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/NetworkUnixSocketPermission"
+            },
+            "description": "Canonical unix socket permission map for `experimental_network`.",
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "type": "object"
+      },
+      "NetworkUnixSocketPermission": {
+        "enum": [
+          "allow",
+          "none"
+        ],
+        "type": "string"
       },
       "NonSteerableTurnKind": {
         "enum": [
@@ -9511,7 +9772,9 @@
           "plus",
           "pro",
           "team",
+          "self_serve_business_usage_based",
           "business",
+          "enterprise_cbp_usage_based",
           "enterprise",
           "edu",
           "unknown"
@@ -10465,6 +10728,57 @@
           "uri"
         ],
         "type": "object"
+      },
+      "ResourceContent": {
+        "anyOf": [
+          {
+            "properties": {
+              "_meta": true,
+              "mimeType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "uri": {
+                "description": "The URI of this resource.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "uri"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "_meta": true,
+              "blob": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "uri": {
+                "description": "The URI of this resource.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "blob",
+              "uri"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Contents returned when reading a resource from an MCP server."
       },
       "ResourceTemplate": {
         "description": "A template description for resources available on the server.",
@@ -12008,6 +12322,13 @@
           "ephemeral": {
             "description": "Whether the thread is ephemeral and should not be materialized on disk.",
             "type": "boolean"
+          },
+          "forkedFromId": {
+            "description": "Source thread id when this thread was created by forking another thread.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "gitInfo": {
             "anyOf": [
@@ -14145,6 +14466,22 @@
       },
       "Turn": {
         "properties": {
+          "completedAt": {
+            "description": "Unix timestamp (in seconds) when the turn completed.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "description": "Duration between turn start and completion in milliseconds, if known.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "error": {
             "anyOf": [
               {
@@ -14165,6 +14502,14 @@
               "$ref": "#/definitions/v2/ThreadItem"
             },
             "type": "array"
+          },
+          "startedAt": {
+            "description": "Unix timestamp (in seconds) when the turn started.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "status": {
             "$ref": "#/definitions/v2/TurnStatus"

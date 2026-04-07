@@ -1,6 +1,7 @@
 use base64::Engine;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_protocol::auth::PlanType;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -41,7 +42,14 @@ pub struct IdTokenInfo {
 impl IdTokenInfo {
     pub fn get_chatgpt_plan_type(&self) -> Option<String> {
         self.chatgpt_plan_type.as_ref().map(|t| match t {
-            PlanType::Known(plan) => format!("{plan:?}"),
+            PlanType::Known(plan) => plan.display_name().to_string(),
+            PlanType::Unknown(s) => s.clone(),
+        })
+    }
+
+    pub fn get_chatgpt_plan_type_raw(&self) -> Option<String> {
+        self.chatgpt_plan_type.as_ref().map(|t| match t {
+            PlanType::Known(plan) => plan.raw_value().to_string(),
             PlanType::Unknown(s) => s.clone(),
         })
     }
@@ -49,47 +57,9 @@ impl IdTokenInfo {
     pub fn is_workspace_account(&self) -> bool {
         matches!(
             self.chatgpt_plan_type,
-            Some(PlanType::Known(
-                KnownPlan::Team | KnownPlan::Business | KnownPlan::Enterprise | KnownPlan::Edu
-            ))
+            Some(PlanType::Known(plan)) if plan.is_workspace_account()
         )
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum PlanType {
-    Known(KnownPlan),
-    Unknown(String),
-}
-
-impl PlanType {
-    pub fn from_raw_value(raw: &str) -> Self {
-        match raw.to_ascii_lowercase().as_str() {
-            "free" => Self::Known(KnownPlan::Free),
-            "go" => Self::Known(KnownPlan::Go),
-            "plus" => Self::Known(KnownPlan::Plus),
-            "pro" => Self::Known(KnownPlan::Pro),
-            "team" => Self::Known(KnownPlan::Team),
-            "business" => Self::Known(KnownPlan::Business),
-            "enterprise" => Self::Known(KnownPlan::Enterprise),
-            "education" | "edu" => Self::Known(KnownPlan::Edu),
-            _ => Self::Unknown(raw.to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum KnownPlan {
-    Free,
-    Go,
-    Plus,
-    Pro,
-    Team,
-    Business,
-    Enterprise,
-    Edu,
 }
 
 #[derive(Deserialize)]

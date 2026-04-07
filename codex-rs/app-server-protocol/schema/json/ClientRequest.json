@@ -800,7 +800,7 @@
       "description": "Stop filesystem watch notifications for a prior `fs/watch`.",
       "properties": {
         "watchId": {
-          "description": "Watch identifier returned by `fs/watch`.",
+          "description": "Watch identifier previously provided to `fs/watch`.",
           "type": "string"
         }
       },
@@ -819,10 +819,15 @@
             }
           ],
           "description": "Absolute file or directory path to watch."
+        },
+        "watchId": {
+          "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
+          "type": "string"
         }
       },
       "required": [
-        "path"
+        "path",
+        "watchId"
       ],
       "type": "object"
     },
@@ -1042,6 +1047,17 @@
             "null"
           ]
         },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerStatusDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Controls how much MCP inventory data to fetch for each server. Defaults to `Full` when omitted."
+        },
         "limit": {
           "description": "Optional page size; defaults to a server-defined value.",
           "format": "uint32",
@@ -1157,6 +1173,22 @@
           "type": "object"
         },
         {
+          "properties": {
+            "type": {
+              "enum": [
+                "chatgptDeviceCode"
+              ],
+              "title": "ChatgptDeviceCodeLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ChatgptDeviceCodeLoginAccountParams",
+          "type": "object"
+        },
+        {
           "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
           "properties": {
             "accessToken": {
@@ -1192,6 +1224,25 @@
         }
       ]
     },
+    "McpResourceReadParams": {
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "threadId",
+        "uri"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginParams": {
       "properties": {
         "name": {
@@ -1218,6 +1269,13 @@
         "name"
       ],
       "type": "object"
+    },
+    "McpServerStatusDetail": {
+      "enum": [
+        "full",
+        "toolsAndAuthOnly"
+      ],
+      "type": "string"
     },
     "MergeStrategy": {
       "enum": [
@@ -4402,6 +4460,30 @@
         "params"
       ],
       "title": "McpServerStatus/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "mcpServer/resource/read"
+          ],
+          "title": "McpServer/resource/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpResourceReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "McpServer/resource/readRequest",
       "type": "object"
     },
     {

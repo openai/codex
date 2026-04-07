@@ -125,7 +125,11 @@ async fn shell_output_stays_json_without_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, false);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ false,
+    );
     let test = builder.build(&server).await?;
 
     let call_id = "shell-json";
@@ -177,7 +181,11 @@ async fn shell_output_is_structured_with_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, true);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    );
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
@@ -222,7 +230,11 @@ async fn shell_output_preserves_fixture_json_without_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, false);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ false,
+    );
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -286,7 +298,11 @@ async fn shell_output_structures_fixture_with_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, true);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    );
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -345,7 +361,11 @@ async fn shell_output_for_freeform_tool_records_duration(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, true);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    );
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
@@ -395,10 +415,14 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder =
-        configure_shell_model(test_codex(), output_type, true).with_config(move |config| {
-            config.tool_output_token_limit = Some(200);
-        });
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    )
+    .with_config(move |config| {
+        config.tool_output_token_limit = Some(200);
+    });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-truncated";

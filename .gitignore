@@ -10,6 +10,7 @@ node_modules
 # build
 dist/
 bazel-*
+user.bazelrc
 build/
 out/
 storybook-static/

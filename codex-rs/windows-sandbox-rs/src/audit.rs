@@ -33,10 +33,10 @@ const SKIP_DIR_SUFFIXES: &[&str] = &[
 ];
 
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
-    if let Ok(abs) = p.canonicalize() {
-        if set.insert(abs.clone()) {
-            out.push(abs);
-        }
+    if let Ok(abs) = p.canonicalize()
+        && set.insert(abs.clone())
+    {
+        out.push(abs);
     }
 }
 
@@ -194,8 +194,7 @@ pub fn audit_everyone_writable(
         }
         crate::logging::log_note(
             &format!(
-                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
-                list
+                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{list}",
             ),
             logs_base_dir,
         );
@@ -229,7 +228,7 @@ pub fn apply_world_writable_scan_and_denies(
         logs_base_dir,
     ) {
         log_note(
-            &format!("AUDIT: failed to apply capability deny ACEs: {}", err),
+            &format!("AUDIT: failed to apply capability deny ACEs: {err}"),
             logs_base_dir,
         );
     }

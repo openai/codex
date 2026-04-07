@@ -221,7 +221,8 @@ mod tests {
             error: None,
         };
 
-        let mut terminal = Terminal::new(VT100Backend::new(70, 14)).expect("terminal");
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 14)).expect("terminal");
         terminal
             .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
             .expect("draw");

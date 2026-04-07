@@ -6,7 +6,6 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::LoaderOverrides;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -87,14 +86,8 @@ fn external_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
 
 async fn test_config() -> (TempDir, Config) {
     let home = TempDir::new().expect("create temp dir");
-    let config = ConfigBuilder::default()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(home.path().to_path_buf())
-        .loader_overrides(LoaderOverrides {
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(String::new()),
-            ..LoaderOverrides::default()
-        })
         .build()
         .await
         .expect("load default test config");
@@ -115,7 +108,10 @@ async fn child_uses_parent_exec_policy_when_non_exec_policy_layers_differ() {
     let mut child_config = parent_config.clone();
     let mut layers: Vec<_> = child_config
         .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
         .into_iter()
         .cloned()
         .collect();
@@ -156,7 +152,10 @@ async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_dif
     child_config.config_layer_stack = ConfigLayerStack::new(
         child_config
             .config_layer_stack
-            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
             .into_iter()
             .cloned()
             .collect(),
@@ -291,7 +290,7 @@ async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
         "blocked.example.com",
         codex_execpolicy::NetworkRuleProtocol::Https,
         Decision::Forbidden,
-        None,
+        /*justification*/ None,
     )?;
 
     let requirements = ConfigRequirements {
@@ -338,7 +337,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         "blocked.example.com",
         codex_execpolicy::NetworkRuleProtocol::Https,
         Decision::Forbidden,
-        None,
+        /*justification*/ None,
     )?;
 
     let requirements = ConfigRequirements {
@@ -805,7 +804,7 @@ fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
             &read_only_file_system_sandbox_policy(),
             &command,
             SandboxPermissions::RequireEscalated,
-            false,
+            /*used_complex_parsing*/ false,
         )
     );
 }
@@ -823,9 +822,36 @@ fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
             &restricted_file_system_policy,
             &command,
             SandboxPermissions::RequireEscalated,
-            false,
+            /*used_complex_parsing*/ false,
         )
     );
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_prompts_for_inline_additional_permissions_under_on_request() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                "zsh".to_string(),
+                "-lc".to_string(),
+                "touch requested-dir/requested-but-unused.txt".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "touch".to_string(),
+                "requested-dir/requested-but-unused.txt".to_string(),
+            ])),
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1321,7 +1347,7 @@ fn derive_requested_execpolicy_amendment_for_test(
 fn derive_requested_execpolicy_amendment_returns_none_for_missing_prefix_rule() {
     assert_eq!(
         None,
-        derive_requested_execpolicy_amendment_for_test(None, &[])
+        derive_requested_execpolicy_amendment_for_test(/*prefix_rule*/ None, &[])
     );
 }
 

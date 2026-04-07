@@ -10,6 +10,7 @@ use codex_app_server_protocol::FsRemoveParams;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::io;
+use tracing::trace;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -22,6 +23,7 @@ use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const NOT_FOUND_ERROR_CODE: i64 = -32004;
 
 #[derive(Clone)]
 pub(crate) struct RemoteFileSystem {
@@ -30,6 +32,7 @@ pub(crate) struct RemoteFileSystem {
 
 impl RemoteFileSystem {
     pub(crate) fn new(client: ExecServerClient) -> Self {
+        trace!("remote fs new");
         Self { client }
     }
 }
@@ -37,6 +40,7 @@ impl RemoteFileSystem {
 #[async_trait]
 impl ExecutorFileSystem for RemoteFileSystem {
     async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
+        trace!("remote fs read_file");
         let response = self
             .client
             .fs_read_file(FsReadFileParams { path: path.clone() })
@@ -51,6 +55,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
     }
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
+        trace!("remote fs write_file");
         self.client
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
@@ -66,6 +71,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         path: &AbsolutePathBuf,
         options: CreateDirectoryOptions,
     ) -> FileSystemResult<()> {
+        trace!("remote fs create_directory");
         self.client
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
@@ -77,6 +83,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
     }
 
     async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        trace!("remote fs get_metadata");
         let response = self
             .client
             .fs_get_metadata(FsGetMetadataParams { path: path.clone() })
@@ -94,6 +101,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        trace!("remote fs read_directory");
         let response = self
             .client
             .fs_read_directory(FsReadDirectoryParams { path: path.clone() })
@@ -111,6 +119,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
     }
 
     async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
+        trace!("remote fs remove");
         self.client
             .fs_remove(FsRemoveParams {
                 path: path.clone(),
@@ -128,6 +137,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         destination_path: &AbsolutePathBuf,
         options: CopyOptions,
     ) -> FileSystemResult<()> {
+        trace!("remote fs copy");
         self.client
             .fs_copy(FsCopyParams {
                 source_path: source_path.clone(),
@@ -142,6 +152,9 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
 fn map_remote_error(error: ExecServerError) -> io::Error {
     match error {
+        ExecServerError::Server { code, message } if code == NOT_FOUND_ERROR_CODE => {
+            io::Error::new(io::ErrorKind::NotFound, message)
+        }
         ExecServerError::Server { code, message } if code == INVALID_REQUEST_ERROR_CODE => {
             io::Error::new(io::ErrorKind::InvalidInput, message)
         }

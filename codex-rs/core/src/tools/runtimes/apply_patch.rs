@@ -5,7 +5,6 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::exec::ExecCapturePolicy;
-use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -22,6 +21,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -42,7 +42,6 @@ pub struct ApplyPatchRequest {
     pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
     pub timeout_ms: Option<u64>,
-    pub codex_exe: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -59,42 +58,54 @@ impl ApplyPatchRuntime {
     ) -> GuardianApprovalRequest {
         GuardianApprovalRequest::ApplyPatch {
             id: call_id.to_string(),
-            cwd: req.action.cwd.clone(),
+            cwd: req.action.cwd.to_path_buf(),
             files: req.file_paths.clone(),
-            change_count: req.changes.len(),
             patch: req.action.patch.clone(),
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
-        _codex_home: &std::path::Path,
+        codex_home: &std::path::Path,
     ) -> Result<SandboxCommand, ToolError> {
-        let exe = if let Some(path) = &req.codex_exe {
-            path.clone()
-        } else {
-            #[cfg(target_os = "windows")]
-            {
-                codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                std::env::current_exe().map_err(|e| {
-                    ToolError::Rejected(format!("failed to determine codex exe: {e}"))
-                })?
-            }
-        };
-        Ok(SandboxCommand {
-            program: exe.to_string_lossy().to_string(),
+        Ok(Self::build_sandbox_command_with_program(
+            req,
+            codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn build_sandbox_command(
+        req: &ApplyPatchRequest,
+        codex_self_exe: Option<&PathBuf>,
+    ) -> Result<SandboxCommand, ToolError> {
+        let exe = Self::resolve_apply_patch_program(codex_self_exe)?;
+        Ok(Self::build_sandbox_command_with_program(req, exe))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_apply_patch_program(codex_self_exe: Option<&PathBuf>) -> Result<PathBuf, ToolError> {
+        if let Some(path) = codex_self_exe {
+            return Ok(path.clone());
+        }
+
+        std::env::current_exe()
+            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
+    }
+
+    fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
+        SandboxCommand {
+            program: exe.into_os_string(),
             args: vec![
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
                 req.action.patch.clone(),
             ],
-            cwd: req.action.cwd.clone(),
+            cwd: req.action.cwd.to_path_buf(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),
-        })
+        }
     }
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
@@ -134,12 +145,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
+            if req.permissions_preapproved && retry_reason.is_none() {
+                return ReviewDecision::Approved;
+            }
             if routes_approval_to_guardian(turn) {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
                 return review_approval_request(session, turn, action, retry_reason).await;
-            }
-            if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -200,7 +211,10 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
+        #[cfg(target_os = "windows")]
         let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        #[cfg(not(target_os = "windows"))]
+        let command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
         let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,

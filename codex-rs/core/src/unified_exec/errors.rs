@@ -1,10 +1,12 @@
-use crate::exec::ExecToolCallOutput;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub(crate) enum UnifiedExecError {
     #[error("Failed to create unified exec process: {message}")]
     CreateProcess { message: String },
+    #[error("Unified exec process failed: {message}")]
+    ProcessFailed { message: String },
     // The model is trained on `session_id`, but internally we track a `process_id`.
     #[error("Unknown process id {process_id}")]
     UnknownProcessId { process_id: i32 },
@@ -26,6 +28,10 @@ pub(crate) enum UnifiedExecError {
 impl UnifiedExecError {
     pub(crate) fn create_process(message: String) -> Self {
         Self::CreateProcess { message }
+    }
+
+    pub(crate) fn process_failed(message: String) -> Self {
+        Self::ProcessFailed { message }
     }
 
     pub(crate) fn sandbox_denied(message: String, output: ExecToolCallOutput) -> Self {

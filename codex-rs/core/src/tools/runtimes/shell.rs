@@ -10,11 +10,9 @@ pub(crate) mod zsh_fork_backend;
 
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
-use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -35,9 +33,11 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -184,7 +184,6 @@ impl Approvable<ShellRequest> for ShellRuntime {
                             .proposed_execpolicy_amendment()
                             .cloned(),
                         req.additional_permissions.clone(),
-                        /*skill_metadata*/ None,
                         available_decisions,
                     )
                     .await
@@ -227,6 +226,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
+            &req.env,
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)

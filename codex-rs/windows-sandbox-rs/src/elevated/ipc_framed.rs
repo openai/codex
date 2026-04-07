@@ -8,8 +8,8 @@
 //! through the elevated runner.
 
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -144,7 +144,7 @@ pub fn read_frame<R: Read>(mut reader: R) -> Result<Option<FramedMessage>> {
     }
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_FRAME_LEN {
-        anyhow::bail!("frame too large: {}", len);
+        anyhow::bail!("frame too large: {len}");
     }
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload)?;

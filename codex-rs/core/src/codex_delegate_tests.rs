@@ -9,8 +9,10 @@ use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -23,7 +25,6 @@ use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,6 +53,8 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
             msg: EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("turn-1".to_string()),
                 reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
             }),
         })
         .await
@@ -286,7 +289,6 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
-                    skill_metadata: None,
                     available_decisions: Some(vec![
                         ReviewDecision::Approved,
                         ReviewDecision::Abort,
@@ -318,11 +320,11 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
             risk_score: None,
             risk_level: None,
             rationale: None,
-            action: Some(json!({
-                "tool": "shell",
-                "command": "rm -rf tmp",
-                "cwd": "/tmp",
-            })),
+            action: GuardianAssessmentAction::Command {
+                source: GuardianCommandSource::Shell,
+                command: "rm -rf tmp".to_string(),
+                cwd: "/tmp".into(),
+            },
         }
     );
 

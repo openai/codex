@@ -36,7 +36,7 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
             _server: Some(server),
         })
     } else {
-        let environment = Environment::create(None).await?;
+        let environment = Environment::create(/*exec_server_url*/ None).await?;
         Ok(FileSystemContext {
             file_system: environment.get_filesystem(),
             _server: None,
@@ -121,6 +121,12 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(nested_file_contents, b"hello from trait");
+
+    let nested_file_text = file_system
+        .read_file_text(&absolute_path(nested_file.clone()))
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(nested_file_text, "hello from trait");
 
     file_system
         .copy(

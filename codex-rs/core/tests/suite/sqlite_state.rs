@@ -1,6 +1,6 @@
 use anyhow::Result;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -146,6 +146,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     agent_role: None,
                     model_provider: None,
                     base_instructions: None,
+                    developer_instructions: None,
                     dynamic_tools: Some(dynamic_tools_for_hook),
                     memory_mode: None,
                 },
@@ -375,6 +376,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         );
         config

@@ -1,6 +1,4 @@
 use super::CoreShellActionProvider;
-#[cfg(target_os = "macos")]
-use super::CoreShellCommandExecutor;
 use super::InterceptedExecPolicyContext;
 use super::ParsedShellCommand;
 use super::commands_for_intercepted_exec_policy;
@@ -8,27 +6,12 @@ use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
-use crate::SkillMetadata;
-#[cfg(target_os = "macos")]
-use crate::config::Constrained;
-#[cfg(target_os = "macos")]
-use crate::config::Permissions;
-#[cfg(target_os = "macos")]
-use crate::config::types::ShellEnvironmentPolicy;
-use crate::protocol::AskForApproval;
-use crate::protocol::GranularApprovalConfig;
-use crate::protocol::ReadOnlyAccess;
-use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
-#[cfg(target_os = "macos")]
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::MacOsPreferencesPermission;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -36,20 +19,17 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
-#[cfg(target_os = "macos")]
-use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::Permissions as EscalatedPermissions;
-#[cfg(target_os = "macos")]
-use codex_shell_escalation::ShellCommandExecutor;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-#[cfg(target_os = "macos")]
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -76,60 +56,6 @@ fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
         },
         access: FileSystemAccessMode::Read,
     }])
-}
-
-#[cfg(target_os = "macos")]
-fn unrestricted_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
-    FileSystemSandboxPolicy::unrestricted()
-}
-
-fn test_skill_metadata(permission_profile: Option<PermissionProfile>) -> SkillMetadata {
-    SkillMetadata {
-        name: "skill".to_string(),
-        description: "description".to_string(),
-        short_description: None,
-        interface: None,
-        dependencies: None,
-        policy: None,
-        permission_profile,
-        managed_network_override: None,
-        path_to_skills_md: PathBuf::from("/tmp/skill/SKILL.md"),
-        scope: SkillScope::User,
-    }
-}
-
-#[test]
-fn execve_prompt_rejection_uses_skill_approval_for_skill_scripts() {
-    let decision_source = super::DecisionSource::SkillScript {
-        skill: test_skill_metadata(None),
-    };
-
-    assert_eq!(
-        super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            &decision_source,
-        ),
-        None,
-    );
-    assert_eq!(
-        super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: false,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            &decision_source,
-        ),
-        Some("approval required by skill, but AskForApproval::Granular.skill_approval is false"),
-    );
 }
 
 #[test]
@@ -169,15 +95,24 @@ fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
 #[test]
 fn approval_sandbox_permissions_only_downgrades_preapproved_additional_permissions() {
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, true),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::WithAdditionalPermissions,
+            /*additional_permissions_preapproved*/ true
+        ),
         SandboxPermissions::UseDefault,
     );
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, false),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::WithAdditionalPermissions,
+            /*additional_permissions_preapproved*/ false
+        ),
         SandboxPermissions::WithAdditionalPermissions,
     );
     assert_eq!(
-        super::approval_sandbox_permissions(SandboxPermissions::RequireEscalated, true),
+        super::approval_sandbox_permissions(
+            SandboxPermissions::RequireEscalated,
+            /*additional_permissions_preapproved*/ true
+        ),
         SandboxPermissions::RequireEscalated,
     );
 }
@@ -345,10 +280,6 @@ fn shell_request_escalation_execution_is_explicit() {
         },
     ]);
     let network_sandbox_policy = NetworkSandboxPolicy::Restricted;
-    let macos_seatbelt_profile_extensions = MacOsSeatbeltProfileExtensions {
-        macos_preferences: MacOsPreferencesPermission::ReadWrite,
-        ..Default::default()
-    };
 
     assert_eq!(
         CoreShellActionProvider::shell_request_escalation_execution(
@@ -356,8 +287,7 @@ fn shell_request_escalation_execution_is_explicit() {
             &sandbox_policy,
             &file_system_sandbox_policy,
             network_sandbox_policy,
-            None,
-            Some(&macos_seatbelt_profile_extensions),
+            /*additional_permissions*/ None,
         ),
         EscalationExecution::TurnDefault,
     );
@@ -367,8 +297,7 @@ fn shell_request_escalation_execution_is_explicit() {
             &sandbox_policy,
             &file_system_sandbox_policy,
             network_sandbox_policy,
-            None,
-            Some(&macos_seatbelt_profile_extensions),
+            /*additional_permissions*/ None,
         ),
         EscalationExecution::Unsandboxed,
     );
@@ -379,52 +308,14 @@ fn shell_request_escalation_execution_is_explicit() {
             &file_system_sandbox_policy,
             network_sandbox_policy,
             Some(&requested_permissions),
-            Some(&macos_seatbelt_profile_extensions),
         ),
         EscalationExecution::Permissions(EscalationPermissions::Permissions(
             EscalatedPermissions {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
-                macos_seatbelt_profile_extensions: Some(macos_seatbelt_profile_extensions),
             },
         )),
-    );
-}
-
-#[test]
-fn skill_escalation_execution_uses_additional_permissions() {
-    let requested_permissions = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: None,
-            write: Some(vec![
-                AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
-            ]),
-        }),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
-            requested_permissions.clone(),
-        ))),
-        EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
-            requested_permissions,
-        )),
-    );
-}
-
-#[test]
-fn skill_escalation_execution_ignores_empty_permissions() {
-    assert_eq!(
-        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
-            PermissionProfile::default(),
-        ))),
-        EscalationExecution::TurnDefault,
-    );
-    assert_eq!(
-        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(None)),
-        EscalationExecution::TurnDefault,
     );
 }
 
@@ -584,7 +475,7 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
             file_system_sandbox_policy: &file_system_sandbox_policy,
             sandbox_permissions: super::approval_sandbox_permissions(
                 SandboxPermissions::WithAdditionalPermissions,
-                true,
+                /*additional_permissions_preapproved*/ true,
             ),
             enable_shell_wrapper_parsing: false,
         },
@@ -644,192 +535,4 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
         &evaluation.matched_rules,
         evaluation.decision
     ));
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions() {
-    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
-    let executor = CoreShellCommandExecutor {
-        command: vec!["echo".to_string(), "ok".to_string()],
-        cwd: cwd.to_path_buf(),
-        env: HashMap::new(),
-        network: None,
-        sandbox: SandboxType::None,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
-        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        arg0: None,
-        sandbox_policy_cwd: cwd.to_path_buf(),
-        macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            ..Default::default()
-        }),
-        codex_linux_sandbox_exe: None,
-        use_legacy_landlock: false,
-    };
-
-    let prepared = executor
-        .prepare_escalated_exec(
-            &AbsolutePathBuf::from_absolute_path("/bin/echo").unwrap(),
-            &["echo".to_string(), "ok".to_string()],
-            &cwd,
-            HashMap::new(),
-            EscalationExecution::TurnDefault,
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        prepared.command.first().map(String::as_str),
-        Some(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
-    );
-    assert_eq!(prepared.command.get(1).map(String::as_str), Some("-p"));
-    assert!(
-        prepared
-            .command
-            .get(2)
-            .is_some_and(|policy| policy.contains("(allow user-preference-write)")),
-        "expected seatbelt policy to include macOS extension profile: {:?}",
-        prepared.command
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions() {
-    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
-    let executor = CoreShellCommandExecutor {
-        command: vec!["echo".to_string(), "ok".to_string()],
-        cwd: cwd.to_path_buf(),
-        env: HashMap::new(),
-        network: None,
-        sandbox: SandboxType::None,
-        sandbox_policy: SandboxPolicy::DangerFullAccess,
-        file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
-        network_sandbox_policy: NetworkSandboxPolicy::Enabled,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        arg0: None,
-        sandbox_policy_cwd: cwd.to_path_buf(),
-        macos_seatbelt_profile_extensions: None,
-        codex_linux_sandbox_exe: None,
-        use_legacy_landlock: false,
-    };
-
-    let permissions = Permissions {
-        approval_policy: Constrained::allow_any(AskForApproval::Never),
-        sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
-        network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
-        network: None,
-        allow_login_shell: true,
-        shell_environment_policy: ShellEnvironmentPolicy::default(),
-        windows_sandbox_mode: None,
-        windows_sandbox_private_desktop: false,
-        macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadWrite,
-            ..Default::default()
-        }),
-    };
-
-    let prepared = executor
-        .prepare_escalated_exec(
-            &AbsolutePathBuf::from_absolute_path("/bin/echo").unwrap(),
-            &["echo".to_string(), "ok".to_string()],
-            &cwd,
-            HashMap::new(),
-            EscalationExecution::Permissions(EscalationPermissions::Permissions(
-                EscalatedPermissions {
-                    sandbox_policy: permissions.sandbox_policy.get().clone(),
-                    file_system_sandbox_policy: permissions.file_system_sandbox_policy.clone(),
-                    network_sandbox_policy: permissions.network_sandbox_policy,
-                    macos_seatbelt_profile_extensions: permissions
-                        .macos_seatbelt_profile_extensions
-                        .clone(),
-                },
-            )),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        prepared.command.first().map(String::as_str),
-        Some(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
-    );
-    assert_eq!(prepared.command.get(1).map(String::as_str), Some("-p"));
-    assert!(
-        prepared
-            .command
-            .get(2)
-            .is_some_and(|policy| policy.contains("(allow user-preference-write)")),
-        "expected seatbelt policy to include macOS extension profile: {:?}",
-        prepared.command
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_macos_extensions() {
-    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let executor = CoreShellCommandExecutor {
-        command: vec!["echo".to_string(), "ok".to_string()],
-        cwd: cwd.to_path_buf(),
-        env: HashMap::new(),
-        network: None,
-        sandbox: SandboxType::None,
-        sandbox_policy: sandbox_policy.clone(),
-        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
-        network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        arg0: None,
-        sandbox_policy_cwd: cwd.to_path_buf(),
-        macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
-            macos_preferences: MacOsPreferencesPermission::ReadOnly,
-            ..Default::default()
-        }),
-        codex_linux_sandbox_exe: None,
-        use_legacy_landlock: false,
-    };
-
-    let prepared = executor
-        .prepare_escalated_exec(
-            &AbsolutePathBuf::from_absolute_path("/bin/echo").unwrap(),
-            &["echo".to_string(), "ok".to_string()],
-            &cwd,
-            HashMap::new(),
-            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
-                PermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_calendar: true,
-                        macos_reminders: false,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            )),
-        )
-        .await
-        .unwrap();
-
-    let policy = prepared
-        .command
-        .get(2)
-        .expect("seatbelt policy should be present");
-    assert_eq!(
-        prepared.command.first().map(String::as_str),
-        Some(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
-    );
-    assert_eq!(prepared.command.get(1).map(String::as_str), Some("-p"));
-    assert!(
-        policy.contains("(allow user-preference-read)"),
-        "expected turn macOS seatbelt extensions to be preserved: {:?}",
-        prepared.command
-    );
-    assert!(
-        policy.contains("(allow mach-lookup (global-name \"com.apple.CalendarAgent\"))"),
-        "expected requested macOS seatbelt extensions to be included: {:?}",
-        prepared.command
-    );
 }

@@ -4,8 +4,13 @@ mod firewall;
 
 use anyhow::Context;
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use codex_windows_sandbox::LOG_FILE_NAME;
+use codex_windows_sandbox::SETUP_VERSION;
+use codex_windows_sandbox::SetupErrorCode;
+use codex_windows_sandbox::SetupErrorReport;
+use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
@@ -25,16 +30,11 @@ use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::workspace_cap_sid_for_cwd;
 use codex_windows_sandbox::write_setup_error_report;
-use codex_windows_sandbox::SetupErrorCode;
-use codex_windows_sandbox::SetupErrorReport;
-use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::LOG_FILE_NAME;
-use codex_windows_sandbox::SETUP_VERSION;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::ffi::c_void;
 use std::ffi::OsStr;
+use std::ffi::c_void;
 use std::fs::File;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
@@ -44,17 +44,17 @@ use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
 use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
-use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
-use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
 use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
+use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
+use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
-use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::CONTAINER_INHERIT_ACE;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OBJECT_INHERIT_ACE;
@@ -84,6 +84,10 @@ struct Payload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    #[serde(default)]
+    proxy_ports: Vec<u16>,
+    #[serde(default)]
+    allow_local_binding: bool,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -308,8 +312,7 @@ fn lock_sandbox_dir(
         );
         if set != 0 {
             return Err(anyhow::anyhow!(
-                "SetEntriesInAclW sandbox dir failed: {}",
-                set
+                "SetEntriesInAclW sandbox dir failed: {set}",
             ));
         }
         let path_w = to_wide(dir.as_os_str());
@@ -324,8 +327,7 @@ fn lock_sandbox_dir(
         );
         if res != 0 {
             return Err(anyhow::anyhow!(
-                "SetNamedSecurityInfoW sandbox dir failed: {}",
-                res
+                "SetNamedSecurityInfoW sandbox dir failed: {res}",
             ));
         }
         if !new_dacl.is_null() {
@@ -420,7 +422,7 @@ fn real_main() -> Result<()> {
             });
         let report = SetupErrorReport {
             code: failure.code,
-            message: failure.message.clone(),
+            message: failure.message,
         };
         if let Err(write_err) = write_setup_error_report(&payload.codex_home, &report) {
             let _ = log_line(
@@ -492,7 +494,7 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     if !refresh_errors.is_empty() {
         log_line(
             log,
-            &format!("read ACL run completed with errors: {:?}", refresh_errors),
+            &format!("read ACL run completed with errors: {refresh_errors:?}"),
         )?;
         if payload.refresh_only {
             anyhow::bail!("read ACL run had errors");
@@ -510,6 +512,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.codex_home,
             &payload.offline_username,
             &payload.online_username,
+            &payload.proxy_ports,
+            payload.allow_local_binding,
             log,
         );
         if let Err(err) = provision_result {
@@ -572,6 +576,21 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
+        let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
+            &offline_sid_str,
+            &payload.proxy_ports,
+            payload.allow_local_binding,
+            log,
+        );
+        if let Err(err) = proxy_allowlist_result {
+            if extract_setup_failure(&err).is_some() {
+                return Err(err);
+            }
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("ensure offline proxy allowlist failed: {err}"),
+            )));
+        }
         let firewall_result = firewall::ensure_offline_outbound_block(&offline_sid_str, log);
         if let Err(err) = firewall_result {
             if extract_setup_failure(&err).is_some() {
@@ -616,7 +635,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    let cap_sid_str = caps.workspace.clone();
+    let cap_sid_str = caps.workspace;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
@@ -874,7 +893,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     if refresh_only && !refresh_errors.is_empty() {
         log_line(
             log,
-            &format!("setup refresh completed with errors: {:?}", refresh_errors),
+            &format!("setup refresh completed with errors: {refresh_errors:?}"),
         )?;
         anyhow::bail!("setup refresh had errors");
     }

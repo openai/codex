@@ -1,5 +1,5 @@
-use crate::protocol::ReviewFinding;
-use crate::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::ReviewFinding;
+use codex_protocol::protocol::ReviewOutputEvent;
 
 // Note: We keep this module UI-agnostic. It returns plain strings that
 // higher layers (e.g., TUI) may style as needed.

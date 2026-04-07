@@ -5,19 +5,18 @@ use std::string::ToString;
 
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
-use codex_core::exec::ExecToolCallOutput;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::error::Result;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use tempfile::TempDir;
-
-use codex_core::error::Result;
 
 fn skip_test() -> bool {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
@@ -30,7 +29,8 @@ fn skip_test() -> bool {
 
 #[expect(clippy::expect_used)]
 async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
-    let sandbox_type = get_platform_sandbox(false).expect("should be able to get sandbox type");
+    let sandbox_type = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
+        .expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
 
     let params = ExecParams {
@@ -56,8 +56,8 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         NetworkSandboxPolicy::from(&policy),
         tmp.path(),
         &None,
-        false,
-        None,
+        /*use_legacy_landlock*/ false,
+        /*stdout_stream*/ None,
     )
     .await
 }

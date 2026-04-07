@@ -19,7 +19,6 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
@@ -34,6 +33,32 @@ const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 
 fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
+}
+
+fn split_word_pieces(run: &str) -> Vec<(usize, &str)> {
+    let mut pieces = Vec::new();
+    for (segment_start, segment) in run.split_word_bound_indices() {
+        let mut piece_start = 0;
+        let mut chars = segment.char_indices();
+        let Some((_, first_char)) = chars.next() else {
+            continue;
+        };
+        let mut in_separator = is_word_separator(first_char);
+
+        for (idx, ch) in chars {
+            let is_separator = is_word_separator(ch);
+            if is_separator == in_separator {
+                continue;
+            }
+            pieces.push((segment_start + piece_start, &segment[piece_start..idx]));
+            piece_start = idx;
+            in_separator = is_separator;
+        }
+
+        pieces.push((segment_start + piece_start, &segment[piece_start..]));
+    }
+
+    pieces
 }
 
 #[derive(Debug, Clone)]
@@ -529,10 +554,7 @@ impl TextArea {
             } => {
                 self.move_cursor_to_end_of_line(/*move_down_at_eol*/ true);
             }
-            _o => {
-                #[cfg(feature = "debug-logs")]
-                tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
-            }
+            _ => {}
         }
     }
 
@@ -945,6 +967,7 @@ impl TextArea {
         self.set_cursor(end);
     }
 
+    #[cfg(not(target_os = "linux"))]
     pub fn replace_element_by_id(&mut self, id: &str, text: &str) -> bool {
         if let Some(idx) = self
             .elements
@@ -1219,36 +1242,55 @@ impl TextArea {
         else {
             return 0;
         };
-        let is_separator = is_word_separator(ch);
-        let mut start = first_non_ws_idx;
-        for (idx, ch) in prefix[..first_non_ws_idx].char_indices().rev() {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
-                start = idx + ch.len_utf8();
-                break;
+        let run_start = prefix[..first_non_ws_idx]
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| ch.is_whitespace())
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+        let run_end = first_non_ws_idx + ch.len_utf8();
+        let pieces = split_word_pieces(&prefix[run_start..run_end]);
+        let mut pieces = pieces.into_iter().rev().peekable();
+        let Some((piece_start, piece)) = pieces.next() else {
+            return run_start;
+        };
+        let mut start = run_start + piece_start;
+
+        if piece.chars().all(is_word_separator) {
+            while let Some((idx, piece)) = pieces.peek() {
+                if !piece.chars().all(is_word_separator) {
+                    break;
+                }
+                start = run_start + *idx;
+                pieces.next();
             }
-            start = idx;
         }
+
         self.adjust_pos_out_of_elements(start, /*prefer_start*/ true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
+        let suffix = &self.text[self.cursor_pos..];
+        let Some(first_non_ws) = suffix.find(|ch: char| !ch.is_whitespace()) else {
             return self.text.len();
         };
-        let word_start = self.cursor_pos + first_non_ws;
-        let mut iter = self.text[word_start..].char_indices();
-        let Some((_, first_ch)) = iter.next() else {
-            return word_start;
+        let run = &suffix[first_non_ws..];
+        let run = &run[..run.find(char::is_whitespace).unwrap_or(run.len())];
+        let mut pieces = split_word_pieces(run).into_iter().peekable();
+        let Some((start, piece)) = pieces.next() else {
+            return self.cursor_pos + first_non_ws;
         };
-        let is_separator = is_word_separator(first_ch);
-        let mut end = self.text.len();
-        for (idx, ch) in iter {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
-                end = word_start + idx;
-                break;
+        let word_start = self.cursor_pos + first_non_ws + start;
+        let mut end = word_start + piece.len();
+        if piece.chars().all(is_word_separator) {
+            while let Some((idx, piece)) = pieces.peek() {
+                if !piece.chars().all(is_word_separator) {
+                    break;
+                }
+                end = self.cursor_pos + first_non_ws + *idx + piece.len();
+                pieces.next();
             }
         }
+
         self.adjust_pos_out_of_elements(end, /*prefer_start*/ false)
     }
 
@@ -1324,7 +1366,7 @@ impl TextArea {
 impl WidgetRef for &TextArea {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.wrapped_lines(area.width);
-        self.render_lines(area, buf, &lines, 0..lines.len());
+        self.render_lines(area, buf, &lines, 0..lines.len(), Style::default());
     }
 }
 
@@ -1338,7 +1380,7 @@ impl StatefulWidgetRef for &TextArea {
 
         let start = scroll as usize;
         let end = (scroll + area.height).min(lines.len() as u16) as usize;
-        self.render_lines(area, buf, &lines, start..end);
+        self.render_lines(area, buf, &lines, start..end, Style::default());
     }
 }
 
@@ -1349,6 +1391,7 @@ impl TextArea {
         buf: &mut Buffer,
         state: &mut TextAreaState,
         mask_char: char,
+        base_style: Style,
     ) {
         let lines = self.wrapped_lines(area.width);
         let scroll = self.effective_scroll(area.height, &lines, state.scroll);
@@ -1356,7 +1399,25 @@ impl TextArea {
 
         let start = scroll as usize;
         let end = (scroll + area.height).min(lines.len() as u16) as usize;
-        self.render_lines_masked(area, buf, &lines, start..end, mask_char);
+        self.render_lines_masked(area, buf, &lines, start..end, mask_char, base_style);
+    }
+
+    /// Render the textarea with an explicit `base_style` applied to every cell,
+    /// used by the Zellij code path to override inherited terminal styles.
+    pub(crate) fn render_ref_styled(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &mut TextAreaState,
+        base_style: Style,
+    ) {
+        let lines = self.wrapped_lines(area.width);
+        let scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        state.scroll = scroll;
+
+        let start = scroll as usize;
+        let end = (scroll + area.height).min(lines.len() as u16) as usize;
+        self.render_lines(area, buf, &lines, start..end, base_style);
     }
 
     fn render_lines(
@@ -1365,13 +1426,15 @@ impl TextArea {
         buf: &mut Buffer,
         lines: &[Range<usize>],
         range: std::ops::Range<usize>,
+        base_style: Style,
     ) {
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
             let line_range = r.start..r.end - 1;
-            // Draw base line with default style.
-            buf.set_string(area.x, y, &self.text[line_range.clone()], Style::default());
+            buf.set_style(Rect::new(area.x, y, area.width, 1), base_style);
+            // Draw base line with the provided style.
+            buf.set_string(area.x, y, &self.text[line_range.clone()], base_style);
 
             // Overlay styled segments for elements that intersect this line.
             for elem in &self.elements {
@@ -1383,7 +1446,7 @@ impl TextArea {
                 }
                 let styled = &self.text[overlap_start..overlap_end];
                 let x_off = self.text[line_range.start..overlap_start].width() as u16;
-                let style = Style::default().fg(Color::Cyan);
+                let style = base_style.fg(ratatui::style::Color::Cyan);
                 buf.set_string(area.x + x_off, y, styled, style);
             }
         }
@@ -1396,16 +1459,18 @@ impl TextArea {
         lines: &[Range<usize>],
         range: std::ops::Range<usize>,
         mask_char: char,
+        base_style: Style,
     ) {
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
             let line_range = r.start..r.end - 1;
+            buf.set_style(Rect::new(area.x, y, area.width, 1), base_style);
             let masked = self.text[line_range.clone()]
                 .chars()
                 .map(|_| mask_char)
                 .collect::<String>();
-            buf.set_string(area.x, y, &masked, Style::default());
+            buf.set_string(area.x, y, &masked, base_style);
         }
     }
 }
@@ -1468,17 +1533,17 @@ mod tests {
     fn insert_and_replace_update_cursor_and_text() {
         // insert helpers
         let mut t = ta_with("hello");
-        t.set_cursor(5);
+        t.set_cursor(/*pos*/ 5);
         t.insert_str("!");
         assert_eq!(t.text(), "hello!");
         assert_eq!(t.cursor(), 6);
 
-        t.insert_str_at(0, "X");
+        t.insert_str_at(/*pos*/ 0, "X");
         assert_eq!(t.text(), "Xhello!");
         assert_eq!(t.cursor(), 7);
 
         // Insert after the cursor should not move it
-        t.set_cursor(1);
+        t.set_cursor(/*pos*/ 1);
         let end = t.text().len();
         t.insert_str_at(end, "Y");
         assert_eq!(t.text(), "Xhello!Y");
@@ -1487,21 +1552,21 @@ mod tests {
         // replace_range cases
         // 1) cursor before range
         let mut t = ta_with("abcd");
-        t.set_cursor(1);
+        t.set_cursor(/*pos*/ 1);
         t.replace_range(2..3, "Z");
         assert_eq!(t.text(), "abZd");
         assert_eq!(t.cursor(), 1);
 
         // 2) cursor inside range
         let mut t = ta_with("abcd");
-        t.set_cursor(2);
+        t.set_cursor(/*pos*/ 2);
         t.replace_range(1..3, "Q");
         assert_eq!(t.text(), "aQd");
         assert_eq!(t.cursor(), 2);
 
         // 3) cursor after range with shifted by diff
         let mut t = ta_with("abcd");
-        t.set_cursor(4);
+        t.set_cursor(/*pos*/ 4);
         t.replace_range(0..1, "AA");
         assert_eq!(t.text(), "AAbcd");
         assert_eq!(t.cursor(), 5);
@@ -1511,8 +1576,8 @@ mod tests {
     fn insert_str_at_clamps_to_char_boundary() {
         let mut t = TextArea::new();
         t.insert_str("你");
-        t.set_cursor(0);
-        t.insert_str_at(1, "A");
+        t.set_cursor(/*pos*/ 0);
+        t.insert_str_at(/*pos*/ 1, "A");
         assert_eq!(t.text(), "A你");
         assert_eq!(t.cursor(), 1);
     }
@@ -1521,7 +1586,7 @@ mod tests {
     fn set_text_clamps_cursor_to_char_boundary() {
         let mut t = TextArea::new();
         t.insert_str("abcd");
-        t.set_cursor(1);
+        t.set_cursor(/*pos*/ 1);
         t.set_text_clearing_elements("你");
         assert_eq!(t.cursor(), 0);
         t.insert_str("a");
@@ -1531,26 +1596,26 @@ mod tests {
     #[test]
     fn delete_backward_and_forward_edges() {
         let mut t = ta_with("abc");
-        t.set_cursor(1);
-        t.delete_backward(1);
+        t.set_cursor(/*pos*/ 1);
+        t.delete_backward(/*n*/ 1);
         assert_eq!(t.text(), "bc");
         assert_eq!(t.cursor(), 0);
 
         // deleting backward at start is a no-op
-        t.set_cursor(0);
-        t.delete_backward(1);
+        t.set_cursor(/*pos*/ 0);
+        t.delete_backward(/*n*/ 1);
         assert_eq!(t.text(), "bc");
         assert_eq!(t.cursor(), 0);
 
         // forward delete removes next grapheme
-        t.set_cursor(1);
-        t.delete_forward(1);
+        t.set_cursor(/*pos*/ 1);
+        t.delete_forward(/*n*/ 1);
         assert_eq!(t.text(), "b");
         assert_eq!(t.cursor(), 1);
 
         // forward delete at end is a no-op
         t.set_cursor(t.text().len());
-        t.delete_forward(1);
+        t.delete_forward(/*n*/ 1);
         assert_eq!(t.text(), "b");
     }
 
@@ -1563,7 +1628,7 @@ mod tests {
 
         let elem_start = t.elements[0].range.start;
         t.set_cursor(elem_start);
-        t.delete_forward(1);
+        t.delete_forward(/*n*/ 1);
 
         assert_eq!(t.text(), "ab");
         assert_eq!(t.cursor(), elem_start);
@@ -1580,7 +1645,7 @@ mod tests {
 
         // From inside a word, delete from word start to cursor
         let mut t = ta_with("foo bar");
-        t.set_cursor(6); // inside "bar" (after 'a')
+        t.set_cursor(/*pos*/ 6); // inside "bar" (after 'a')
         t.delete_backward_word();
         assert_eq!(t.text(), "foo r");
         assert_eq!(t.cursor(), 4);
@@ -1594,27 +1659,27 @@ mod tests {
 
         // kill_to_end_of_line when not at EOL
         let mut t = ta_with("abc\ndef");
-        t.set_cursor(1); // on first line, middle
+        t.set_cursor(/*pos*/ 1); // on first line, middle
         t.kill_to_end_of_line();
         assert_eq!(t.text(), "a\ndef");
         assert_eq!(t.cursor(), 1);
 
         // kill_to_end_of_line when at EOL deletes newline
         let mut t = ta_with("abc\ndef");
-        t.set_cursor(3); // EOL of first line
+        t.set_cursor(/*pos*/ 3); // EOL of first line
         t.kill_to_end_of_line();
         assert_eq!(t.text(), "abcdef");
         assert_eq!(t.cursor(), 3);
 
         // kill_to_beginning_of_line from middle of line
         let mut t = ta_with("abc\ndef");
-        t.set_cursor(5); // on second line, after 'e'
+        t.set_cursor(/*pos*/ 5); // on second line, after 'e'
         t.kill_to_beginning_of_line();
         assert_eq!(t.text(), "abc\nef");
 
         // kill_to_beginning_of_line at beginning of non-first line removes the previous newline
         let mut t = ta_with("abc\ndef");
-        t.set_cursor(4); // beginning of second line
+        t.set_cursor(/*pos*/ 4); // beginning of second line
         t.kill_to_beginning_of_line();
         assert_eq!(t.text(), "abcdef");
         assert_eq!(t.cursor(), 3);
@@ -1623,13 +1688,13 @@ mod tests {
     #[test]
     fn delete_forward_word_variants() {
         let mut t = ta_with("hello   world ");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.delete_forward_word();
         assert_eq!(t.text(), "   world ");
         assert_eq!(t.cursor(), 0);
 
         let mut t = ta_with("hello   world ");
-        t.set_cursor(1);
+        t.set_cursor(/*pos*/ 1);
         t.delete_forward_word();
         assert_eq!(t.text(), "h   world ");
         assert_eq!(t.cursor(), 1);
@@ -1641,13 +1706,13 @@ mod tests {
         assert_eq!(t.cursor(), t.text().len());
 
         let mut t = ta_with("foo   \nbar");
-        t.set_cursor(3);
+        t.set_cursor(/*pos*/ 3);
         t.delete_forward_word();
         assert_eq!(t.text(), "foo");
         assert_eq!(t.cursor(), 3);
 
         let mut t = ta_with("foo\nbar");
-        t.set_cursor(3);
+        t.set_cursor(/*pos*/ 3);
         t.delete_forward_word();
         assert_eq!(t.text(), "foo");
         assert_eq!(t.cursor(), 3);
@@ -1665,7 +1730,7 @@ mod tests {
         t.insert_element("<element>");
         t.insert_str(" tail");
 
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.delete_forward_word();
         assert_eq!(t.text(), " tail");
         assert_eq!(t.cursor(), 0);
@@ -1675,7 +1740,7 @@ mod tests {
         t.insert_element("<element>");
         t.insert_str(" tail");
 
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.delete_forward_word();
         assert_eq!(t.text(), " tail");
         assert_eq!(t.cursor(), 0);
@@ -1721,7 +1786,7 @@ mod tests {
     #[test]
     fn delete_forward_word_respects_word_separators() {
         let mut t = ta_with("path/to/file");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.delete_forward_word();
         assert_eq!(t.text(), "/to/file");
         assert_eq!(t.cursor(), 0);
@@ -1731,13 +1796,13 @@ mod tests {
         assert_eq!(t.cursor(), 0);
 
         let mut t = ta_with("/ foo");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.delete_forward_word();
         assert_eq!(t.text(), " foo");
         assert_eq!(t.cursor(), 0);
 
         let mut t = ta_with(" /foo");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.delete_forward_word();
         assert_eq!(t.text(), "foo");
         assert_eq!(t.cursor(), 0);
@@ -1746,7 +1811,7 @@ mod tests {
     #[test]
     fn yank_restores_last_kill() {
         let mut t = ta_with("hello");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.kill_to_end_of_line();
         assert_eq!(t.text(), "");
         assert_eq!(t.cursor(), 0);
@@ -1766,7 +1831,7 @@ mod tests {
         assert_eq!(t.cursor(), 11);
 
         let mut t = ta_with("hello");
-        t.set_cursor(5);
+        t.set_cursor(/*pos*/ 5);
         t.kill_to_beginning_of_line();
         assert_eq!(t.text(), "");
         assert_eq!(t.cursor(), 0);
@@ -1779,7 +1844,7 @@ mod tests {
     #[test]
     fn kill_buffer_persists_across_set_text() {
         let mut t = ta_with("restore me");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.kill_to_end_of_line();
         assert!(t.text().is_empty());
 
@@ -1817,7 +1882,7 @@ mod tests {
     #[test]
     fn control_b_and_f_move_cursor() {
         let mut t = ta_with("abcd");
-        t.set_cursor(1);
+        t.set_cursor(/*pos*/ 1);
 
         t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert_eq!(t.cursor(), 2);
@@ -1829,7 +1894,7 @@ mod tests {
     #[test]
     fn control_b_f_fallback_control_chars_move_cursor() {
         let mut t = ta_with("abcd");
-        t.set_cursor(2);
+        t.set_cursor(/*pos*/ 2);
 
         // Simulate terminals that send C0 control chars without CONTROL modifier.
         // ^B (U+0002) should move left
@@ -1873,13 +1938,13 @@ mod tests {
     #[test]
     fn delete_forward_word_with_without_alt_modifier() {
         let mut t = ta_with("hello world");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT));
         assert_eq!(t.text(), " world");
         assert_eq!(t.cursor(), 0);
 
         let mut t = ta_with("hello");
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(t.text(), "ello");
         assert_eq!(t.cursor(), 0);
@@ -1888,7 +1953,7 @@ mod tests {
     #[test]
     fn delete_forward_word_alt_d() {
         let mut t = ta_with("hello world");
-        t.set_cursor(6);
+        t.set_cursor(/*pos*/ 6);
         t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
         pretty_assertions::assert_eq!(t.text(), "hello ");
         pretty_assertions::assert_eq!(t.cursor(), 6);
@@ -1898,13 +1963,13 @@ mod tests {
     fn control_h_backspace() {
         // Test Ctrl+H as backspace
         let mut t = ta_with("12345");
-        t.set_cursor(3); // cursor after '3'
+        t.set_cursor(/*pos*/ 3); // cursor after '3'
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(t.text(), "1245");
         assert_eq!(t.cursor(), 2);
 
         // Test Ctrl+H at beginning (should be no-op)
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(t.text(), "1245");
         assert_eq!(t.cursor(), 0);
@@ -1967,19 +2032,19 @@ mod tests {
         let second_line_start = t.text().find("two").unwrap();
         t.set_cursor(second_line_start + 1);
 
-        t.move_cursor_to_beginning_of_line(false);
+        t.move_cursor_to_beginning_of_line(/*move_up_at_bol*/ false);
         assert_eq!(t.cursor(), second_line_start);
 
         // Ctrl-A behavior: if at BOL, go to beginning of previous line
-        t.move_cursor_to_beginning_of_line(true);
+        t.move_cursor_to_beginning_of_line(/*move_up_at_bol*/ true);
         assert_eq!(t.cursor(), 0); // beginning of first line
 
         // Move to EOL of first line
-        t.move_cursor_to_end_of_line(false);
+        t.move_cursor_to_end_of_line(/*move_down_at_eol*/ false);
         assert_eq!(t.cursor(), 3);
 
         // Ctrl-E: if at EOL, go to end of next line
-        t.move_cursor_to_end_of_line(true);
+        t.move_cursor_to_end_of_line(/*move_down_at_eol*/ true);
         // end of second line ("two") is right before its '\n'
         let end_second_nl = t.text().find("\nthree").unwrap();
         assert_eq!(t.cursor(), end_second_nl);
@@ -1991,13 +2056,13 @@ mod tests {
         // Place cursor at absolute end of the text
         t.set_cursor(t.text().len());
         // Should remain at end without panicking
-        t.move_cursor_to_end_of_line(true);
+        t.move_cursor_to_end_of_line(/*move_down_at_eol*/ true);
         assert_eq!(t.cursor(), t.text().len());
 
         // Also verify behavior when at EOL of a non-final line:
         let eol_first_line = 3; // index of '\n' in "one\ntwo"
         t.set_cursor(eol_first_line);
-        t.move_cursor_to_end_of_line(true);
+        t.move_cursor_to_end_of_line(/*move_down_at_eol*/ true);
         assert_eq!(t.cursor(), t.text().len()); // moves to end of next (last) line
     }
 
@@ -2018,6 +2083,80 @@ mod tests {
         // If at end, end_of_next_word returns len
         t.set_cursor(t.text().len());
         assert_eq!(t.end_of_next_word(), t.text().len());
+    }
+
+    #[test]
+    fn word_navigation_cjk_each_char_is_boundary() {
+        let text = "你好世界";
+        let mut t = ta_with(text);
+
+        t.set_cursor(/*pos*/ text.len());
+        assert_eq!(t.beginning_of_previous_word(), 9);
+
+        t.set_cursor(/*pos*/ 9);
+        assert_eq!(t.beginning_of_previous_word(), 6);
+
+        t.set_cursor(/*pos*/ 6);
+        assert_eq!(t.beginning_of_previous_word(), 3);
+
+        t.set_cursor(/*pos*/ 3);
+        assert_eq!(t.beginning_of_previous_word(), 0);
+    }
+
+    #[test]
+    fn word_navigation_cjk_forward() {
+        let text = "你好世界";
+        let mut t = ta_with(text);
+
+        t.set_cursor(/*pos*/ 0);
+        assert_eq!(t.end_of_next_word(), 3);
+
+        t.set_cursor(/*pos*/ 3);
+        assert_eq!(t.end_of_next_word(), 6);
+
+        t.set_cursor(/*pos*/ 6);
+        assert_eq!(t.end_of_next_word(), 9);
+
+        t.set_cursor(/*pos*/ 9);
+        assert_eq!(t.end_of_next_word(), 12);
+    }
+
+    #[test]
+    fn word_navigation_mixed_ascii_cjk() {
+        let text = "hello你好";
+        let mut t = ta_with(text);
+
+        t.set_cursor(/*pos*/ 0);
+        assert_eq!(t.end_of_next_word(), 5);
+
+        t.set_cursor(/*pos*/ 5);
+        assert_eq!(t.end_of_next_word(), 8);
+
+        t.set_cursor(/*pos*/ text.len());
+        assert_eq!(t.beginning_of_previous_word(), 8);
+
+        t.set_cursor(/*pos*/ 8);
+        assert_eq!(t.beginning_of_previous_word(), 5);
+
+        t.set_cursor(/*pos*/ 5);
+        assert_eq!(t.beginning_of_previous_word(), 0);
+    }
+
+    #[test]
+    fn word_navigation_preserves_separator_breaks_within_unicode_segments() {
+        let mut t = ta_with("can't 32.3 foo.bar");
+
+        t.set_cursor(/*pos*/ 5);
+        assert_eq!(t.beginning_of_previous_word(), 4);
+
+        t.set_cursor(/*pos*/ 4);
+        assert_eq!(t.beginning_of_previous_word(), 3);
+
+        t.set_cursor(/*pos*/ 10);
+        assert_eq!(t.beginning_of_previous_word(), 9);
+
+        t.set_cursor(/*pos*/ 18);
+        assert_eq!(t.beginning_of_previous_word(), 15);
     }
 
     #[test]
@@ -2052,7 +2191,7 @@ mod tests {
     fn cursor_pos_with_state_basic_and_scroll_behaviors() {
         // Case 1: No wrapping needed, height fits — scroll ignored, y maps directly.
         let mut t = ta_with("hello world");
-        t.set_cursor(3);
+        t.set_cursor(/*pos*/ 3);
         let area = Rect::new(2, 5, 20, 3);
         // Even if an absurd scroll is provided, when content fits the area the
         // effective scroll is 0 and the cursor position matches cursor_pos.
@@ -2080,7 +2219,7 @@ mod tests {
         let wrap_width = 5;
         let lines = t.desired_height(wrap_width);
         // Place cursor near start so an excessive scroll moves it to top row.
-        t.set_cursor(1);
+        t.set_cursor(/*pos*/ 1);
         let area = Rect::new(0, 0, wrap_width, 3);
         let state = TextAreaState {
             scroll: lines.saturating_mul(2),
@@ -2093,15 +2232,15 @@ mod tests {
     fn wrapped_navigation_across_visual_lines() {
         let mut t = ta_with("abcdefghij");
         // Force wrapping at width 4: lines -> ["abcd", "efgh", "ij"]
-        let _ = t.desired_height(4);
+        let _ = t.desired_height(/*width*/ 4);
 
         // From the very start, moving down should go to the start of the next wrapped line (index 4)
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         t.move_cursor_down();
         assert_eq!(t.cursor(), 4);
 
         // Cursor at boundary index 4 should be displayed at start of second wrapped line
-        t.set_cursor(4);
+        t.set_cursor(/*pos*/ 4);
         let area = Rect::new(0, 0, 4, 10);
         let (x, y) = t.cursor_pos(area).unwrap();
         assert_eq!((x, y), (0, 1));
@@ -2113,7 +2252,7 @@ mod tests {
         assert_eq!((x, y), (0, 0));
 
         // Place cursor in the middle of the second wrapped line ("efgh"), at 'g'
-        t.set_cursor(6);
+        t.set_cursor(/*pos*/ 6);
         // Move up should go to same column on previous wrapped line -> index 2 ('c')
         t.move_cursor_up();
         assert_eq!(t.cursor(), 2);
@@ -2131,13 +2270,13 @@ mod tests {
     fn cursor_pos_with_state_after_movements() {
         let mut t = ta_with("abcdefghij");
         // Wrap width 4 -> visual lines: abcd | efgh | ij
-        let _ = t.desired_height(4);
+        let _ = t.desired_height(/*width*/ 4);
         let area = Rect::new(0, 0, 4, 2);
         let mut state = TextAreaState::default();
         let mut buf = Buffer::empty(area);
 
         // Start at beginning
-        t.set_cursor(0);
+        t.set_cursor(/*pos*/ 0);
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
         let (x, y) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x, y), (0, 0));
@@ -2161,7 +2300,7 @@ mod tests {
         assert_eq!((x, y), (0, 0));
 
         // Column preservation across moves: set to col 2 on first line, move down
-        t.set_cursor(2);
+        t.set_cursor(/*pos*/ 2);
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
         let (x0, y0) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x0, y0), (2, 0));
@@ -2176,7 +2315,7 @@ mod tests {
         // Include spaces and an explicit newline to exercise boundaries
         let mut t = ta_with("word1  word2\nword3");
         // Width 6 will wrap "word1  " and then "word2" before the newline
-        let _ = t.desired_height(6);
+        let _ = t.desired_height(/*width*/ 6);
 
         // Put cursor on the second wrapped line before the newline, at column 1 of "word2"
         let start_word2 = t.text().find("word2").unwrap();
@@ -2200,7 +2339,7 @@ mod tests {
     fn wrapped_navigation_with_wide_graphemes() {
         // Four thumbs up, each of display width 2, with width 3 to force wrapping inside grapheme boundaries
         let mut t = ta_with("👍👍👍👍");
-        let _ = t.desired_height(3);
+        let _ = t.desired_height(/*width*/ 3);
 
         // Put cursor after the second emoji (which should be on first wrapped line)
         t.set_cursor("👍👍".len());
@@ -2320,8 +2459,8 @@ mod tests {
                     8 => ta.move_cursor_right(),
                     9 => ta.move_cursor_up(),
                     10 => ta.move_cursor_down(),
-                    11 => ta.move_cursor_to_beginning_of_line(true),
-                    12 => ta.move_cursor_to_end_of_line(true),
+                    11 => ta.move_cursor_to_beginning_of_line(/*move_up_at_bol*/ true),
+                    12 => ta.move_cursor_to_end_of_line(/*move_down_at_eol*/ true),
                     13 => {
                         // Insert an element with a unique sentinel payload
                         let payload =

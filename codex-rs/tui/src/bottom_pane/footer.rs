@@ -1068,7 +1068,9 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        snapshot_footer_with_mode_indicator(name, 80, &props, None);
+        snapshot_footer_with_mode_indicator(
+            name, /*width*/ 80, &props, /*collaboration_mode_indicator*/ None,
+        );
     }
 
     fn draw_footer_frame<B: Backend>(
@@ -1135,7 +1137,10 @@ mod tests {
                 };
                 let right_line = if status_line_active {
                     let full = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
-                    let compact = mode_indicator_line(collaboration_mode_indicator, false);
+                    let compact = mode_indicator_line(
+                        collaboration_mode_indicator,
+                        /*show_cycle_hint*/ false,
+                    );
                     let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
                     if can_show_left_with_context(area, left_width, full_width) {
                         full
@@ -1455,14 +1460,14 @@ mod tests {
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_wide",
-            120,
+            /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
-            50,
+            /*width*/ 50,
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
@@ -1484,7 +1489,7 @@ mod tests {
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_running_hides_hint",
-            120,
+            /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
@@ -1557,7 +1562,7 @@ mod tests {
 
         snapshot_footer_with_mode_indicator(
             "footer_status_line_enabled_mode_right",
-            120,
+            /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
@@ -1579,7 +1584,7 @@ mod tests {
 
         snapshot_footer_with_mode_indicator(
             "footer_status_line_disabled_context_right",
-            120,
+            /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
@@ -1602,9 +1607,9 @@ mod tests {
         // has status line and no collaboration mode
         snapshot_footer_with_mode_indicator(
             "footer_status_line_enabled_no_mode_right",
-            120,
+            /*width*/ 120,
             &props,
-            None,
+            /*collaboration_mode_indicator*/ None,
         );
 
         let props = FooterProps {
@@ -1626,7 +1631,7 @@ mod tests {
 
         snapshot_footer_with_mode_indicator(
             "footer_status_line_truncated_with_gap",
-            40,
+            /*width*/ 40,
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
@@ -1686,8 +1691,11 @@ mod tests {
             active_agent_label: None,
         };
 
-        let screen =
-            render_footer_with_mode_indicator(80, &props, Some(CollaborationModeIndicator::Plan));
+        let screen = render_footer_with_mode_indicator(
+            /*width*/ 80,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+        );
         let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
             collapsed.contains("Plan mode"),

@@ -8,6 +8,11 @@ use std::process::ExitCode;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+const STRICT_LINTS: [&str; 2] = [
+    "argument-comment-mismatch",
+    "uncommented-anonymous-literal-argument",
+];
+
 fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
@@ -85,14 +90,13 @@ fn has_library_selection(args: &[OsString]) -> bool {
 fn set_default_env(command: &mut Command) -> Result<(), String> {
     if let Some(flags) = env::var_os("DYLINT_RUSTFLAGS") {
         let mut flags = flags.to_string_lossy().to_string();
-        append_flag_if_missing(&mut flags, "-D uncommented-anonymous-literal-argument");
+        for strict_lint in STRICT_LINTS {
+            append_flag_if_missing(&mut flags, &format!("-D {strict_lint}"));
+        }
         append_flag_if_missing(&mut flags, "-A unknown_lints");
         command.env("DYLINT_RUSTFLAGS", flags);
     } else {
-        command.env(
-            "DYLINT_RUSTFLAGS",
-            "-D uncommented-anonymous-literal-argument -A unknown_lints",
-        );
+        command.env("DYLINT_RUSTFLAGS", strict_rustflags());
     }
 
     if env::var_os("CARGO_INCREMENTAL").is_none() {
@@ -106,6 +110,15 @@ fn set_default_env(command: &mut Command) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn strict_rustflags() -> String {
+    let strict_flags = STRICT_LINTS
+        .iter()
+        .map(|lint| format!("-D {lint}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{strict_flags} -A unknown_lints")
 }
 
 fn append_flag_if_missing(flags: &mut String, flag: &str) {
@@ -253,6 +266,7 @@ fn exit_code_from_status(code: Option<i32>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::normalize_nightly_library_filename;
+    use super::strict_rustflags;
     use std::path::Path;
 
     #[test]
@@ -274,6 +288,14 @@ mod tests {
                 "libargument_comment_lint@nightly-2025-09-18.dylib"
             )),
             None
+        );
+    }
+
+    #[test]
+    fn strict_rustflags_promotes_both_enforced_lints() {
+        assert_eq!(
+            strict_rustflags(),
+            "-D argument-comment-mismatch -D uncommented-anonymous-literal-argument -A unknown_lints"
         );
     }
 }

@@ -16,7 +16,7 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::error::Result;
+use codex_protocol::error::Result;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -770,14 +770,25 @@ mod tests {
         assert_eq!(
             args.args,
             vec![
+                // Start from a read-only view of the full filesystem.
                 "--ro-bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
+                // Recreate a writable /dev inside the sandbox.
                 "--dev".to_string(),
                 "/dev".to_string(),
+                // Make the writable root itself writable again.
                 "--bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
+                // Mask the default protected .codex subpath under that writable
+                // root. Because the root is `/` in this test, the carveout path
+                // appears as `/.codex`.
+                "--ro-bind".to_string(),
+                "/dev/null".to_string(),
+                "/.codex".to_string(),
+                // Rebind /dev after the root bind so device nodes remain
+                // writable/usable inside the writable root.
                 "--bind".to_string(),
                 "/dev".to_string(),
                 "/dev".to_string(),

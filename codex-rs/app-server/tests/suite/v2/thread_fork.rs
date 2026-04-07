@@ -24,8 +24,10 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -37,6 +39,11 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+use super::analytics::assert_basic_thread_initialized_event;
+use super::analytics::enable_analytics_capture;
+use super::analytics::thread_initialized_event;
+use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -53,7 +60,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         "2025-01-05T12:00:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let original_path = codex_home
@@ -107,6 +114,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
 
     assert_ne!(thread.id, conversation_id);
+    assert_eq!(thread.forked_from_id, Some(conversation_id.clone()));
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
     assert_eq!(thread.status, ThreadStatus::Idle);
@@ -174,6 +182,214 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![body.clone(), body.clone(), body]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    let first_table_index = config_toml
+        .find("\n[")
+        .expect("test config must include a table header");
+    config_toml.insert_str(
+        first_table_index,
+        "\ndeveloper_instructions = \"Config developer instructions sentinel\"\n",
+    );
+    std::fs::write(config_path, config_toml)?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let disabled_instruction_config = json!({
+        "include_permissions_instructions": false,
+        "include_apps_instructions": false,
+        "include_environment_context": false,
+        "features.apps": false,
+        "features.plugins": false,
+        "features.codex_hooks": false,
+        "skills.bundled.enabled": false,
+    });
+
+    let fork_params = [
+        (
+            json!({
+                "threadId": conversation_id.clone(),
+                "config": disabled_instruction_config.clone(),
+            }),
+            /*expect_instructions*/ true,
+        ),
+        (
+            json!({
+                "threadId": conversation_id.clone(),
+                "config": disabled_instruction_config.clone(),
+                "baseInstructions": null,
+                "developerInstructions": null,
+            }),
+            /*expect_instructions*/ false,
+        ),
+    ];
+
+    let mut forked_thread_ids = Vec::new();
+    for (params, _expect_instructions) in fork_params {
+        let fork_id = mcp.send_raw_request("thread/fork", Some(params)).await?;
+        let fork_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+        )
+        .await??;
+        let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+        forked_thread_ids.push(thread.id.clone());
+
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id,
+                input: vec![UserInput::Text {
+                    text: "continue".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let turn_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        )
+        .await??;
+        let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+    }
+
+    let refork_id = mcp
+        .send_raw_request(
+            "thread/fork",
+            Some(json!({
+                "threadId": forked_thread_ids[1].clone(),
+                "config": disabled_instruction_config.clone(),
+            })),
+        )
+        .await?;
+    let refork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(refork_resp)?;
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "continue again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    for (request, expect_instructions) in requests.into_iter().zip([true, false, false]) {
+        let payload = request.body_json();
+        assert_eq!(
+            payload.get("instructions").is_some(),
+            expect_instructions,
+            "unexpected instructions field in payload: {payload:?}"
+        );
+        let developer_texts = request.message_input_texts("developer");
+        assert_eq!(
+            developer_texts
+                .iter()
+                .any(|text| { text.contains("Config developer instructions sentinel") }),
+            expect_instructions,
+            "unexpected config developer instruction presence: {developer_texts:?}"
+        );
+        assert!(
+            developer_texts.iter().all(|text| !text.is_empty()),
+            "did not expect empty developer instruction messages: {developer_texts:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+        /*general_analytics_enabled*/ true,
+    )?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
+    let event = thread_initialized_event(&payload)?;
+    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "forked");
     Ok(())
 }
 
@@ -249,6 +465,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
         codex_home.path(),
         &model_server.uri(),
         &chatgpt_base_url,
+        /*general_analytics_enabled*/ false,
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -267,7 +484,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
         "2025-01-05T12:00:00Z",
         "Saved user message",
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let refresh_token_url = format!("{}/oauth/token", server.uri());
@@ -331,7 +548,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         "2025-01-05T12:00:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -509,7 +726,13 @@ fn create_config_toml_with_chatgpt_base_url(
     codex_home: &Path,
     server_uri: &str,
     chatgpt_base_url: &str,
+    general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
+    let general_analytics_toml = if general_analytics_enabled {
+        "\ngeneral_analytics = true".to_string()
+    } else {
+        String::new()
+    };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -521,6 +744,9 @@ sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
+
+[features]
+{general_analytics_toml}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

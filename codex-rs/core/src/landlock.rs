@@ -1,10 +1,11 @@
-use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
 use std::collections::HashMap;
@@ -48,11 +49,24 @@ where
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),
     );
-    let arg0 = Some("codex-linux-sandbox");
+    let codex_linux_sandbox_exe = codex_linux_sandbox_exe.as_ref();
+    // Preserve the helper alias when we already have it; otherwise force argv0
+    // so arg0 dispatch still reaches the Linux sandbox path.
+    let arg0 = if codex_linux_sandbox_exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some(CODEX_LINUX_SANDBOX_ARG0)
+    {
+        // Old bubblewrap builds without `--argv0` need a real helper path whose
+        // basename still dispatches to the Linux sandbox entrypoint.
+        codex_linux_sandbox_exe.to_string_lossy().into_owned()
+    } else {
+        CODEX_LINUX_SANDBOX_ARG0.to_string()
+    };
     spawn_child_async(SpawnChildRequest {
-        program: codex_linux_sandbox_exe.as_ref().to_path_buf(),
+        program: codex_linux_sandbox_exe.to_path_buf(),
         args,
-        arg0,
+        arg0: Some(&arg0),
         cwd: command_cwd,
         network_sandbox_policy,
         network,

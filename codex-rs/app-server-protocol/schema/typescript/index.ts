@@ -41,9 +41,6 @@ export type { InputModality } from "./InputModality";
 export type { LocalShellAction } from "./LocalShellAction";
 export type { LocalShellExecAction } from "./LocalShellExecAction";
 export type { LocalShellStatus } from "./LocalShellStatus";
-export type { MacOsAutomationPermission } from "./MacOsAutomationPermission";
-export type { MacOsContactsPermission } from "./MacOsContactsPermission";
-export type { MacOsPreferencesPermission } from "./MacOsPreferencesPermission";
 export type { MessagePhase } from "./MessagePhase";
 export type { ModeKind } from "./ModeKind";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
@@ -58,6 +55,7 @@ export type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSumm
 export type { ReasoningSummary } from "./ReasoningSummary";
 export type { RequestId } from "./RequestId";
 export type { Resource } from "./Resource";
+export type { ResourceContent } from "./ResourceContent";
 export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
 export type { ReviewDecision } from "./ReviewDecision";

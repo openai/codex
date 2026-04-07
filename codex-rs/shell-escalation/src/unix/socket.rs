@@ -60,8 +60,12 @@ fn extract_fds(control: &[u8]) -> Vec<OwnedFd> {
         if level == libc::SOL_SOCKET && ty == libc::SCM_RIGHTS {
             let data_ptr = unsafe { libc::CMSG_DATA(cmsg).cast::<RawFd>() };
             let fd_count: usize = {
-                let cmsg_data_len =
-                    unsafe { (*cmsg).cmsg_len as usize } - unsafe { libc::CMSG_LEN(0) as usize };
+                // `cmsghdr::cmsg_len` is not typed consistently across targets, so normalize it
+                // before doing the size arithmetic.
+                #[allow(clippy::useless_conversion, clippy::expect_used)]
+                let cmsg_data_len = usize::try_from(unsafe { (*cmsg).cmsg_len })
+                    .expect("cmsghdr length fits")
+                    - unsafe { libc::CMSG_LEN(0) as usize };
                 cmsg_data_len / size_of::<RawFd>()
             };
             for i in 0..fd_count {
@@ -437,7 +441,7 @@ mod tests {
             id: 7,
             label: "round-trip".to_string(),
         };
-        let send_fds = fd_list(1)?;
+        let send_fds = fd_list(/*count*/ 1)?;
 
         let receive_task =
             tokio::spawn(async move { server.receive_with_fds::<TestPayload>().await });
@@ -470,7 +474,7 @@ mod tests {
     async fn async_datagram_sockets_round_trip_messages() -> std::io::Result<()> {
         let (server, client) = AsyncDatagramSocket::pair()?;
         let data = b"datagram payload".to_vec();
-        let send_fds = fd_list(1)?;
+        let send_fds = fd_list(/*count*/ 1)?;
         let receive_task = tokio::spawn(async move { server.receive_with_fds().await });
 
         client.send_with_fds(&data, &send_fds).await?;
@@ -495,7 +499,7 @@ mod tests {
     fn send_stream_chunk_rejects_excessive_fd_counts() -> std::io::Result<()> {
         let (socket, _peer) = Socket::pair_raw(Domain::UNIX, Type::STREAM, None)?;
         let fds = fd_list(MAX_FDS_PER_MESSAGE + 1)?;
-        let err = send_stream_chunk(&socket, b"hello", &fds, true).unwrap_err();
+        let err = send_stream_chunk(&socket, b"hello", &fds, /*include_fds*/ true).unwrap_err();
         assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
         Ok(())
     }

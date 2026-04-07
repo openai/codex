@@ -115,10 +115,10 @@ fn is_mutating_event_filters_non_mutating_event_kinds() {
 fn register_dedupes_by_path_and_scope() {
     let watcher = Arc::new(FileWatcher::noop());
     let (subscriber, _rx) = watcher.add_subscriber();
-    let _first = subscriber.register_path(path("/tmp/skills"), false);
-    let _second = subscriber.register_path(path("/tmp/skills"), false);
-    let _third = subscriber.register_path(path("/tmp/skills"), true);
-    let _fourth = subscriber.register_path(path("/tmp/other-skills"), true);
+    let _first = subscriber.register_path(path("/tmp/skills"), /*recursive*/ false);
+    let _second = subscriber.register_path(path("/tmp/skills"), /*recursive*/ false);
+    let _third = subscriber.register_path(path("/tmp/skills"), /*recursive*/ true);
+    let _fourth = subscriber.register_path(path("/tmp/other-skills"), /*recursive*/ true);
 
     assert_eq!(
         watcher.watch_counts_for_test(&path("/tmp/skills")),
@@ -134,7 +134,7 @@ fn register_dedupes_by_path_and_scope() {
 fn watch_registration_drop_unregisters_paths() {
     let watcher = Arc::new(FileWatcher::noop());
     let (subscriber, _rx) = watcher.add_subscriber();
-    let registration = subscriber.register_path(path("/tmp/skills"), true);
+    let registration = subscriber.register_path(path("/tmp/skills"), /*recursive*/ true);
 
     drop(registration);
 
@@ -146,7 +146,7 @@ fn subscriber_drop_unregisters_paths() {
     let watcher = Arc::new(FileWatcher::noop());
     let registration = {
         let (subscriber, _rx) = watcher.add_subscriber();
-        subscriber.register_path(path("/tmp/skills"), true)
+        subscriber.register_path(path("/tmp/skills"), /*recursive*/ true)
     };
 
     assert_eq!(watcher.watch_counts_for_test(&path("/tmp/skills")), None);
@@ -174,8 +174,8 @@ fn recursive_registration_downgrades_to_non_recursive_after_drop() {
 
     let watcher = Arc::new(FileWatcher::new().expect("watcher"));
     let (subscriber, _rx) = watcher.add_subscriber();
-    let non_recursive = subscriber.register_path(root.clone(), false);
-    let recursive = subscriber.register_path(root.clone(), true);
+    let non_recursive = subscriber.register_path(root.clone(), /*recursive*/ false);
+    let recursive = subscriber.register_path(root.clone(), /*recursive*/ true);
 
     {
         let inner = watcher.inner.as_ref().expect("watcher inner");
@@ -209,7 +209,7 @@ fn unregister_holds_state_lock_until_unwatch_finishes() {
     let watcher = Arc::new(FileWatcher::new().expect("watcher"));
     let (unregister_subscriber, _unregister_rx) = watcher.add_subscriber();
     let (register_subscriber, _register_rx) = watcher.add_subscriber();
-    let registration = unregister_subscriber.register_path(root.clone(), true);
+    let registration = unregister_subscriber.register_path(root.clone(), /*recursive*/ true);
 
     let inner = watcher.inner.as_ref().expect("watcher inner");
     let inner_guard = inner.lock().expect("inner lock");
@@ -229,7 +229,8 @@ fn unregister_holds_state_lock_until_unwatch_finishes() {
 
     let register_root = root.clone();
     let register_thread = std::thread::spawn(move || {
-        let registration = register_subscriber.register_path(register_root, false);
+        let registration =
+            register_subscriber.register_path(register_root, /*recursive*/ false);
         (register_subscriber, registration)
     });
 
@@ -257,8 +258,8 @@ async fn matching_subscribers_are_notified() {
     let watcher = Arc::new(FileWatcher::noop());
     let (skills_subscriber, skills_rx) = watcher.add_subscriber();
     let (plugins_subscriber, plugins_rx) = watcher.add_subscriber();
-    let _skills = skills_subscriber.register_path(path("/tmp/skills"), true);
-    let _plugins = plugins_subscriber.register_path(path("/tmp/plugins"), true);
+    let _skills = skills_subscriber.register_path(path("/tmp/skills"), /*recursive*/ true);
+    let _plugins = plugins_subscriber.register_path(path("/tmp/plugins"), /*recursive*/ true);
     let mut skills_rx = ThrottledWatchReceiver::new(skills_rx, TEST_THROTTLE_INTERVAL);
     let mut plugins_rx = ThrottledWatchReceiver::new(plugins_rx, TEST_THROTTLE_INTERVAL);
 
@@ -285,7 +286,7 @@ async fn matching_subscribers_are_notified() {
 async fn non_recursive_watch_ignores_grandchildren() {
     let watcher = Arc::new(FileWatcher::noop());
     let (subscriber, rx) = watcher.add_subscriber();
-    let _registration = subscriber.register_path(path("/tmp/skills"), false);
+    let _registration = subscriber.register_path(path("/tmp/skills"), /*recursive*/ false);
     let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
 
     watcher
@@ -300,7 +301,8 @@ async fn non_recursive_watch_ignores_grandchildren() {
 async fn ancestor_events_notify_child_watches() {
     let watcher = Arc::new(FileWatcher::noop());
     let (subscriber, rx) = watcher.add_subscriber();
-    let _registration = subscriber.register_path(path("/tmp/skills/rust/SKILL.md"), false);
+    let _registration =
+        subscriber.register_path(path("/tmp/skills/rust/SKILL.md"), /*recursive*/ false);
     let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
 
     watcher.send_paths_for_test(vec![path("/tmp/skills")]).await;
@@ -321,7 +323,7 @@ async fn ancestor_events_notify_child_watches() {
 async fn spawn_event_loop_filters_non_mutating_events() {
     let watcher = Arc::new(FileWatcher::noop());
     let (subscriber, rx) = watcher.add_subscriber();
-    let _registration = subscriber.register_path(path("/tmp/skills"), true);
+    let _registration = subscriber.register_path(path("/tmp/skills"), /*recursive*/ true);
     let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
     let (raw_tx, raw_rx) = mpsc::unbounded_channel();
     watcher.spawn_event_loop_for_test(raw_rx);

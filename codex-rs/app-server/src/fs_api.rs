@@ -34,7 +34,7 @@ pub(crate) struct FsApi {
 impl Default for FsApi {
     fn default() -> Self {
         Self {
-            file_system: Arc::new(LOCAL_FS),
+            file_system: Arc::clone(&LOCAL_FS),
         }
     }
 }

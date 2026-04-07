@@ -1,6 +1,6 @@
+use codex_config::config_toml::ConfigToml;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::SESSIONS_SUBDIR;
-use codex_core::config::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_core::personality_migration::PersonalityMigrationStatus;
 use codex_core::personality_migration::maybe_migrate_personality;
@@ -71,6 +71,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             agent_role: None,
             model_provider: None,
             base_instructions: None,
+            developer_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
         },
@@ -116,6 +117,7 @@ async fn write_rollout_with_meta_only(dir: &Path, thread_id: ThreadId) -> io::Re
             agent_role: None,
             model_provider: None,
             base_instructions: None,
+            developer_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
         },

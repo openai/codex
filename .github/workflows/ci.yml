@@ -12,15 +12,21 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Verify codex-rs Cargo manifests inherit workspace settings
+        run: python3 .github/scripts/verify_cargo_workspace_manifests.py
+
+      - name: Verify Bazel clippy flags match Cargo workspace lints
+        run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
         with:
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 22
 
@@ -28,7 +34,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@v2
+      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
 
       - name: Stage npm package
         id: stage_npm_package
@@ -47,7 +53,7 @@ jobs:
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: codex-npm-staging
           path: ${{ steps.stage_npm_package.outputs.pack_output }}

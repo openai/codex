@@ -342,7 +342,7 @@ fn list_marketplaces_dedupes_multiple_roots_in_same_repo() {
             AbsolutePathBuf::try_from(repo_root.clone()).unwrap(),
             AbsolutePathBuf::try_from(nested_root).unwrap(),
         ],
-        None,
+        /*home_dir*/ None,
     )
     .unwrap()
     .marketplaces;
@@ -397,10 +397,12 @@ fn list_marketplaces_reads_marketplace_display_name() {
     )
     .unwrap();
 
-    let marketplaces =
-        list_marketplaces_with_home(&[AbsolutePathBuf::try_from(repo_root).unwrap()], None)
-            .unwrap()
-            .marketplaces;
+    let marketplaces = list_marketplaces_with_home(
+        &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+        /*home_dir*/ None,
+    )
+    .unwrap()
+    .marketplaces;
 
     assert_eq!(
         marketplaces[0].interface,
@@ -458,7 +460,7 @@ fn list_marketplaces_skips_marketplaces_that_fail_to_load() {
             AbsolutePathBuf::try_from(valid_repo_root).unwrap(),
             AbsolutePathBuf::try_from(invalid_repo_root).unwrap(),
         ],
-        None,
+        /*home_dir*/ None,
     )
     .unwrap()
     .marketplaces;
@@ -503,7 +505,7 @@ fn list_marketplaces_reports_marketplace_load_errors() {
             AbsolutePathBuf::try_from(valid_repo_root).unwrap(),
             AbsolutePathBuf::try_from(invalid_repo_root).unwrap(),
         ],
-        None,
+        /*home_dir*/ None,
     )
     .unwrap();
 
@@ -566,10 +568,12 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
     )
     .unwrap();
 
-    let marketplaces =
-        list_marketplaces_with_home(&[AbsolutePathBuf::try_from(repo_root).unwrap()], None)
-            .unwrap()
-            .marketplaces;
+    let marketplaces = list_marketplaces_with_home(
+        &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+        /*home_dir*/ None,
+    )
+    .unwrap()
+    .marketplaces;
 
     assert_eq!(
         marketplaces[0].plugins[0].policy.installation,
@@ -634,10 +638,12 @@ fn list_marketplaces_ignores_legacy_top_level_policy_fields() {
     )
     .unwrap();
 
-    let marketplaces =
-        list_marketplaces_with_home(&[AbsolutePathBuf::try_from(repo_root).unwrap()], None)
-            .unwrap()
-            .marketplaces;
+    let marketplaces = list_marketplaces_with_home(
+        &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+        /*home_dir*/ None,
+    )
+    .unwrap()
+    .marketplaces;
 
     assert_eq!(
         marketplaces[0].plugins[0].policy.installation,
@@ -690,10 +696,12 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
     )
     .unwrap();
 
-    let marketplaces =
-        list_marketplaces_with_home(&[AbsolutePathBuf::try_from(repo_root).unwrap()], None)
-            .unwrap()
-            .marketplaces;
+    let marketplaces = list_marketplaces_with_home(
+        &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+        /*home_dir*/ None,
+    )
+    .unwrap()
+    .marketplaces;
 
     assert_eq!(
         marketplaces[0].plugins[0].interface,
@@ -748,18 +756,16 @@ fn resolve_marketplace_plugin_rejects_non_relative_local_paths() {
     )
     .unwrap();
 
-    let err = resolve_marketplace_plugin(
-        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
-        "local-plugin",
-        Some(Product::Codex),
-    )
-    .unwrap_err();
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap();
+    let err = resolve_marketplace_plugin(&marketplace_path, "local-plugin", Some(Product::Codex))
+        .unwrap_err();
 
     assert_eq!(
         err.to_string(),
         format!(
             "invalid marketplace file `{}`: local plugin source path must start with `./`",
-            repo_root.join(".agents/plugins/marketplace.json").display()
+            marketplace_path.display()
         )
     );
 }

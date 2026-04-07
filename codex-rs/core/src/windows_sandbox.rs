@@ -1,15 +1,15 @@
 use crate::config::Config;
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::profile::ConfigProfile;
-use crate::config::types::WindowsSandboxModeToml;
-use crate::default_client::originator;
-use crate::protocol::SandboxPolicy;
+use codex_config::config_toml::ConfigToml;
+use codex_config::profile_toml::ConfigProfile;
+use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_features::FeaturesToml;
+use codex_login::default_client::originator;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::SandboxPolicy;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -180,13 +180,15 @@ pub fn run_elevated_setup(
     codex_home: &Path,
 ) -> anyhow::Result<()> {
     codex_windows_sandbox::run_elevated_setup(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        /*read_roots_override*/ None,
-        /*write_roots_override*/ None,
+        codex_windows_sandbox::SandboxSetupRequest {
+            policy,
+            policy_cwd,
+            command_cwd,
+            env_map,
+            codex_home,
+            proxy_enforced: false,
+        },
+        codex_windows_sandbox::SetupRootOverrides::default(),
     )
 }
 
@@ -234,6 +236,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         env_map,
         codex_home,
         extra_read_roots,
+        /*proxy_enforced*/ false,
     )
 }
 
@@ -360,7 +363,7 @@ fn emit_windows_sandbox_setup_success_metrics(
     originator_tag: &str,
     duration: std::time::Duration,
 ) {
-    let Some(metrics) = codex_otel::metrics::global() else {
+    let Some(metrics) = codex_otel::global() else {
         return;
     };
     let mode_tag = windows_sandbox_setup_mode_tag(mode);
@@ -386,7 +389,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     duration: std::time::Duration,
     _err: &anyhow::Error,
 ) {
-    let Some(metrics) = codex_otel::metrics::global() else {
+    let Some(metrics) = codex_otel::global() else {
         return;
     };
     let mode_tag = windows_sandbox_setup_mode_tag(mode);

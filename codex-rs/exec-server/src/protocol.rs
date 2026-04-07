@@ -5,6 +5,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::ProcessId;
+
 pub const INITIALIZE_METHOD: &str = "initialize";
 pub const INITIALIZED_METHOD: &str = "initialized";
 pub const EXEC_METHOD: &str = "process/start";
@@ -13,6 +15,7 @@ pub const EXEC_WRITE_METHOD: &str = "process/write";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
+pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
@@ -52,7 +55,7 @@ pub struct InitializeResponse {}
 pub struct ExecParams {
     /// Client-chosen logical process handle scoped to this connection/session.
     /// This is a protocol key, not an OS pid.
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
@@ -63,13 +66,13 @@ pub struct ExecParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
-    pub process_id: String,
+    pub process_id: ProcessId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadParams {
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub after_seq: Option<u64>,
     pub max_bytes: Option<usize>,
     pub wait_ms: Option<u64>,
@@ -90,25 +93,36 @@ pub struct ReadResponse {
     pub next_seq: u64,
     pub exited: bool,
     pub exit_code: Option<i32>,
+    pub closed: bool,
+    pub failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteParams {
-    pub process_id: String,
+    pub process_id: ProcessId,
     pub chunk: ByteChunk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteStatus {
+    Accepted,
+    UnknownProcess,
+    StdinClosed,
+    Starting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteResponse {
-    pub accepted: bool,
+    pub status: WriteStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminateParams {
-    pub process_id: String,
+    pub process_id: ProcessId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,7 +142,8 @@ pub enum ExecOutputStream {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecOutputDeltaNotification {
-    pub process_id: String,
+    pub process_id: ProcessId,
+    pub seq: u64,
     pub stream: ExecOutputStream,
     pub chunk: ByteChunk,
 }
@@ -136,8 +151,16 @@ pub struct ExecOutputDeltaNotification {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecExitedNotification {
-    pub process_id: String,
+    pub process_id: ProcessId,
+    pub seq: u64,
     pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecClosedNotification {
+    pub process_id: ProcessId,
+    pub seq: u64,
 }
 
 mod base64_bytes {

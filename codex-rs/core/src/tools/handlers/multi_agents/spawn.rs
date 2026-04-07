@@ -1,5 +1,7 @@
 use super::*;
+use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
+use crate::agent::control::render_input_preview;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 
@@ -8,7 +10,6 @@ use crate::agent::next_thread_spawn_depth;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
     type Output = SpawnAgentResult;
 
@@ -36,7 +37,7 @@ impl ToolHandler for Handler {
             .map(str::trim)
             .filter(|role| !role.is_empty());
         let input_items = parse_collab_input(args.message, args.items)?;
-        let prompt = input_preview(&input_items);
+        let prompt = render_input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
@@ -58,8 +59,10 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        let mut config = build_agent_spawn_config(
+            session.get_base_instructions().await.as_ref(),
+            turn.as_ref(),
+        )?;
         apply_requested_spawn_agent_model_overrides(
             &session,
             turn.as_ref(),
@@ -85,10 +88,11 @@ impl ToolHandler for Handler {
                     &turn.session_source,
                     child_depth,
                     role_name,
-                    args.task_name.clone(),
+                    /*task_name*/ None,
                 )?),
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                    fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
                 },
             )
             .await
@@ -111,7 +115,7 @@ impl ToolHandler for Handler {
             }
             None => None,
         };
-        let (new_agent_path, new_agent_nickname, new_agent_role) =
+        let (_new_agent_path, new_agent_nickname, new_agent_role) =
             match (&agent_snapshot, new_agent_metadata) {
                 (Some(snapshot), _) => (
                     snapshot.session_source.get_agent_path().map(String::from),
@@ -134,7 +138,6 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
-        let task_name = new_agent_path.clone();
         session
             .send_event(
                 &turn,
@@ -161,8 +164,7 @@ impl ToolHandler for Handler {
         );
 
         Ok(SpawnAgentResult {
-            agent_id: task_name.is_none().then(|| new_thread_id.to_string()),
-            task_name,
+            agent_id: new_thread_id.to_string(),
             nickname,
         })
     }
@@ -172,7 +174,6 @@ impl ToolHandler for Handler {
 struct SpawnAgentArgs {
     message: Option<String>,
     items: Option<Vec<UserInput>>,
-    task_name: Option<String>,
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
@@ -182,8 +183,7 @@ struct SpawnAgentArgs {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SpawnAgentResult {
-    agent_id: Option<String>,
-    task_name: Option<String>,
+    agent_id: String,
     nickname: Option<String>,
 }
 

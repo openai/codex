@@ -1,15 +1,17 @@
-use async_trait::async_trait;
-use tokio::sync::broadcast;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use tokio::sync::watch;
+use tracing::trace;
+
+use crate::ExecBackend;
 use crate::ExecProcess;
-use crate::ExecServerClient;
 use crate::ExecServerError;
-use crate::ExecServerEvent;
+use crate::StartedExecProcess;
+use crate::client::ExecServerClient;
+use crate::client::Session;
 use crate::protocol::ExecParams;
-use crate::protocol::ExecResponse;
-use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
-use crate::protocol::TerminateResponse;
 use crate::protocol::WriteResponse;
 
 #[derive(Clone)]
@@ -17,35 +19,68 @@ pub(crate) struct RemoteProcess {
     client: ExecServerClient,
 }
 
+struct RemoteExecProcess {
+    session: Session,
+}
+
 impl RemoteProcess {
     pub(crate) fn new(client: ExecServerClient) -> Self {
+        trace!("remote process new");
         Self { client }
     }
 }
 
 #[async_trait]
-impl ExecProcess for RemoteProcess {
-    async fn start(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        self.client.exec(params).await
+impl ExecBackend for RemoteProcess {
+    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
+        let process_id = params.process_id.clone();
+        let session = self.client.register_session(&process_id).await?;
+        if let Err(err) = self.client.exec(params).await {
+            session.unregister().await;
+            return Err(err);
+        }
+
+        Ok(StartedExecProcess {
+            process: Arc::new(RemoteExecProcess { session }),
+        })
+    }
+}
+
+#[async_trait]
+impl ExecProcess for RemoteExecProcess {
+    fn process_id(&self) -> &crate::ProcessId {
+        self.session.process_id()
     }
 
-    async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
-        self.client.read(params).await
+    fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        self.session.subscribe_wake()
     }
 
-    async fn write(
+    async fn read(
         &self,
-        process_id: &str,
-        chunk: Vec<u8>,
-    ) -> Result<WriteResponse, ExecServerError> {
-        self.client.write(process_id, chunk).await
+        after_seq: Option<u64>,
+        max_bytes: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError> {
+        self.session.read(after_seq, max_bytes, wait_ms).await
     }
 
-    async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
-        self.client.terminate(process_id).await
+    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
+        trace!("exec process write");
+        self.session.write(chunk).await
     }
 
-    fn subscribe_events(&self) -> broadcast::Receiver<ExecServerEvent> {
-        self.client.event_receiver()
+    async fn terminate(&self) -> Result<(), ExecServerError> {
+        trace!("exec process terminate");
+        self.session.terminate().await
+    }
+}
+
+impl Drop for RemoteExecProcess {
+    fn drop(&mut self) {
+        let session = self.session.clone();
+        tokio::spawn(async move {
+            session.unregister().await;
+        });
     }
 }

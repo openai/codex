@@ -1,4 +1,3 @@
-#![cfg(feature = "vt100-tests")]
 #![expect(clippy::expect_used)]
 
 use crate::test_backend::VT100Backend;
@@ -23,20 +22,20 @@ macro_rules! assert_contains {
 }
 
 struct TestScenario {
-    term: codex_tui::custom_terminal::Terminal<VT100Backend>,
+    term: codex_tui::Terminal<VT100Backend>,
 }
 
 impl TestScenario {
     fn new(width: u16, height: u16, viewport: Rect) -> Self {
         let backend = VT100Backend::new(width, height);
-        let mut term = codex_tui::custom_terminal::Terminal::with_options(backend)
-            .expect("failed to construct terminal");
+        let mut term =
+            codex_tui::Terminal::with_options(backend).expect("failed to construct terminal");
         term.set_viewport_area(viewport);
         Self { term }
     }
 
     fn run_insert(&mut self, lines: Vec<Line<'static>>) {
-        codex_tui::insert_history::insert_history_lines(&mut self.term, lines)
+        codex_tui::insert_history_lines(&mut self.term, lines)
             .expect("Failed to insert history lines in test");
     }
 }
@@ -44,8 +43,10 @@ impl TestScenario {
 #[test]
 fn basic_insertion_no_wrap() {
     // Screen of 20x6; viewport is the last row (height=1 at y=5)
-    let area = Rect::new(0, 5, 20, 1);
-    let mut scenario = TestScenario::new(20, 6, area);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 5, /*width*/ 20, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 20, /*height*/ 6, area);
 
     let lines = vec!["first".into(), "second".into()];
     scenario.run_insert(lines);
@@ -56,8 +57,10 @@ fn basic_insertion_no_wrap() {
 
 #[test]
 fn long_token_wraps() {
-    let area = Rect::new(0, 5, 20, 1);
-    let mut scenario = TestScenario::new(20, 6, area);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 5, /*width*/ 20, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 20, /*height*/ 6, area);
 
     let long = "A".repeat(45); // > 2 lines at width 20
     let lines = vec![long.clone().into()];
@@ -86,8 +89,10 @@ fn long_token_wraps() {
 
 #[test]
 fn emoji_and_cjk() {
-    let area = Rect::new(0, 5, 20, 1);
-    let mut scenario = TestScenario::new(20, 6, area);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 5, /*width*/ 20, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 20, /*height*/ 6, area);
 
     let text = String::from("😀😀😀😀😀 你好世界");
     let lines = vec![text.clone().into()];
@@ -103,8 +108,10 @@ fn emoji_and_cjk() {
 
 #[test]
 fn mixed_ansi_spans() {
-    let area = Rect::new(0, 5, 20, 1);
-    let mut scenario = TestScenario::new(20, 6, area);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 5, /*width*/ 20, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 20, /*height*/ 6, area);
 
     let line = vec!["red".red(), "+plain".into()].into();
     scenario.run_insert(vec![line]);
@@ -114,8 +121,10 @@ fn mixed_ansi_spans() {
 
 #[test]
 fn cursor_restoration() {
-    let area = Rect::new(0, 5, 20, 1);
-    let mut scenario = TestScenario::new(20, 6, area);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 5, /*width*/ 20, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 20, /*height*/ 6, area);
 
     let lines = vec!["x".into()];
     scenario.run_insert(lines);
@@ -125,8 +134,10 @@ fn cursor_restoration() {
 #[test]
 fn word_wrap_no_mid_word_split() {
     // Screen of 40x10; viewport is the last row
-    let area = Rect::new(0, 9, 40, 1);
-    let mut scenario = TestScenario::new(40, 10, area);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 9, /*width*/ 40, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 40, /*height*/ 10, area);
 
     let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
     scenario.run_insert(vec![sample.into()]);
@@ -140,8 +151,10 @@ fn word_wrap_no_mid_word_split() {
 #[test]
 fn em_dash_and_space_word_wrap() {
     // Repro from report: ensure we break before "inside", not mid-word.
-    let area = Rect::new(0, 9, 40, 1);
-    let mut scenario = TestScenario::new(40, 10, area);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 9, /*width*/ 40, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 40, /*height*/ 10, area);
 
     let sample = "Mara found an old key on the shore. Curious, she opened a tarnished box half-buried in sand—and inside lay a single, glowing seed.";
     scenario.run_insert(vec![sample.into()]);

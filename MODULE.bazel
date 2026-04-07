@@ -3,16 +3,35 @@ module(name = "codex")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.6.8")
+# The upstream LLVM archive contains a few unix-only symlink entries and is
+# missing a couple of MinGW compatibility archives that windows-gnullvm needs
+# during extraction and linking, so patch it until upstream grows native support.
+single_version_override(
+    module_name = "llvm",
+    patch_strip = 1,
+    patches = [
+        "//patches:llvm_windows_symlink_extract.patch",
+    ],
+)
+# Abseil picks a MinGW pthread TLS path that does not match our hermetic
+# windows-gnullvm toolchain; force it onto the portable C++11 thread-local path.
+single_version_override(
+    module_name = "abseil-cpp",
+    patch_strip = 1,
+    patches = [
+        "//patches:abseil_windows_gnullvm_thread_identity.patch",
+    ],
+)
 
 register_toolchains("@llvm//toolchain:all")
 
 osx = use_extension("@llvm//extensions:osx.bzl", "osx")
 osx.from_archive(
-    sha256 = "6a4922f89487a96d7054ec6ca5065bfddd9f1d017c74d82f1d79cecf7feb8228",
-    strip_prefix = "Payload/Library/Developer/CommandLineTools/SDKs/MacOSX26.2.sdk",
+    sha256 = "1bde70c0b1c2ab89ff454acbebf6741390d7b7eb149ca2a3ca24cc9203a408b7",
+    strip_prefix = "Payload/Library/Developer/CommandLineTools/SDKs/MacOSX26.4.sdk",
     type = "pkg",
     urls = [
-        "https://swcdn.apple.com/content/downloads/26/44/047-81934-A_28TPKM5SD1/ps6pk6dk4x02vgfa5qsctq6tgf23t5f0w2/CLTools_macOSNMOS_SDK.pkg",
+        "https://swcdn.apple.com/content/downloads/32/53/047-96692-A_OAHIHT53YB/ybtshxmrcju8m2qvw3w5elr4rajtg1x3y3/CLTools_macOSNMOS_SDK.pkg",
     ],
 )
 osx.frameworks(names = [
@@ -44,9 +63,80 @@ bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.43")
+# `rules_rs` 0.0.43 does not model `windows-gnullvm` as a distinct Windows exec
+# platform, so patch it until upstream grows that support for both x86_64 and
+# aarch64.
+single_version_override(
+    module_name = "rules_rs",
+    patch_strip = 1,
+    patches = [
+        "//patches:rules_rs_windows_gnullvm_exec.patch",
+        "//patches:rules_rs_delete_git_worktree_pointer.patch",
+        "//patches:rules_rs_windows_exec_linker.patch",
+    ],
+    version = "0.0.43",
+)
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
+# Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++
+# toolchain. On `windows-gnullvm`, llvm-mingw does not ship
+# `libssp_nonshared`, so strip the forwarded stack-protector flags there.
+rules_rust.patch(
+    patches = [
+        "//patches:rules_rust_windows_gnullvm_build_script.patch",
+        "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
+        "//patches:rules_rust_windows_bootstrap_process_wrapper_linker.patch",
+        "//patches:rules_rust_windows_build_script_runner_paths.patch",
+        "//patches:rules_rust_windows_msvc_direct_link_args.patch",
+        "//patches:rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
+        "//patches:rules_rust_windows_exec_bin_target.patch",
+        "//patches:rules_rust_windows_exec_std.patch",
+        "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
+        "//patches:rules_rust_repository_set_exec_constraints.patch",
+    ],
+    strip = 1,
+)
 use_repo(rules_rust, "rules_rust")
+
+nightly_rust = use_extension(
+    "@rules_rs//rs/experimental:rules_rust_reexported_extensions.bzl",
+    "rust",
+)
+nightly_rust.toolchain(
+    versions = ["nightly/2025-09-18"],
+    dev_components = True,
+    edition = "2024",
+)
+# Keep Windows exec tools on MSVC so Bazel helper binaries link correctly, but
+# lint crate targets as `windows-gnullvm` to preserve the repo's actual cfgs.
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64",
+    dev_components = True,
+    edition = "2024",
+    exec_triple = "x86_64-pc-windows-msvc",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+    ],
+    target_triple = "x86_64-pc-windows-msvc",
+    versions = ["nightly/2025-09-18"],
+)
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+    ],
+    target_triple = "x86_64-pc-windows-gnullvm",
+)
+use_repo(nightly_rust, "rust_toolchains")
 
 toolchains = use_extension("@rules_rs//rs/experimental/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
@@ -56,6 +146,7 @@ toolchains.toolchain(
 use_repo(toolchains, "default_rust_toolchains")
 
 register_toolchains("@default_rust_toolchains//:all")
+register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
@@ -65,10 +156,33 @@ crate.from_cargo(
         "aarch64-unknown-linux-gnu",
         "aarch64-unknown-linux-musl",
         "aarch64-apple-darwin",
+        # Keep both Windows ABIs in the generated Cargo metadata: the V8
+        # experiment still consumes release assets that only exist under the
+        # MSVC names while targeting the GNU toolchain.
+        "aarch64-pc-windows-msvc",
         "aarch64-pc-windows-gnullvm",
         "x86_64-unknown-linux-gnu",
         "x86_64-unknown-linux-musl",
         "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "x86_64-pc-windows-gnullvm",
+    ],
+    use_experimental_platforms = True,
+)
+crate.from_cargo(
+    name = "argument_comment_lint_crates",
+    cargo_lock = "//tools/argument-comment-lint:Cargo.lock",
+    cargo_toml = "//tools/argument-comment-lint:Cargo.toml",
+    platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "aarch64-apple-darwin",
+        "aarch64-pc-windows-msvc",
+        "aarch64-pc-windows-gnullvm",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
         "x86_64-pc-windows-gnullvm",
     ],
     use_experimental_platforms = True,
@@ -78,8 +192,18 @@ bazel_dep(name = "zstd", version = "1.5.7")
 
 crate.annotation(
     crate = "zstd-sys",
-    gen_build_script = "off",
-    deps = ["@zstd"],
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:zstd-sys_windows_msvc_include_dirs.patch",
+    ],
+)
+crate.annotation(
+    crate = "ring",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:ring_windows_msvc_include_dirs.patch",
+    ],
 )
 crate.annotation(
     build_script_env = {
@@ -89,12 +213,28 @@ crate.annotation(
     patch_args = ["-p1"],
     patches = [
         "//patches:aws-lc-sys_memcmp_check.patch",
+        "//patches:aws-lc-sys_windows_msvc_prebuilt_nasm.patch",
+        "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
     ],
 )
 
+crate.annotation(
+    # The build script only validates embedded source/version metadata.
+    crate = "rustc_apfloat",
+    gen_build_script = "off",
+)
+
 inject_repo(crate, "zstd")
+use_repo(crate, "argument_comment_lint_crates")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
+single_version_override(
+    module_name = "bzip2",
+    patch_strip = 1,
+    patches = [
+        "//patches:bzip2_windows_stack_args.patch",
+    ],
+)
 
 crate.annotation(
     crate = "bzip2-sys",
@@ -108,19 +248,29 @@ bazel_dep(name = "zlib", version = "1.3.1.bcr.8")
 
 crate.annotation(
     crate = "libz-sys",
-    gen_build_script = "off",
-    deps = ["@zlib"],
+    gen_build_script = "on",
 )
 
 inject_repo(crate, "zlib")
 
-# TODO(zbarsky): Enable annotation after fixing windows arm64 builds.
+bazel_dep(name = "xz", version = "5.4.5.bcr.8")
+single_version_override(
+    module_name = "xz",
+    patch_strip = 1,
+    patches = [
+        "//patches:xz_windows_stack_args.patch",
+    ],
+)
+
 crate.annotation(
     crate = "lzma-sys",
-    gen_build_script = "on",
+    gen_build_script = "off",
+    deps = ["@xz//:lzma"],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
+
+inject_repo(crate, "xz")
 
 crate.annotation(
     build_script_data = [

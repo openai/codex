@@ -1,5 +1,0 @@
-import %workspace%/.github/workflows/ci.bazelrc
-
-common --build_metadata=REPO_URL=https://github.com/openai/codex.git
-common --build_metadata=ROLE=CI
-common --build_metadata=VISIBILITY=PUBLIC

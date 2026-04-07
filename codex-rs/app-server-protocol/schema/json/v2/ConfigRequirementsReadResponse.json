@@ -1,6 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ],
+      "type": "string"
+    },
     "AskForApproval": {
       "oneOf": [
         {
@@ -102,6 +110,13 @@
       },
       "type": "object"
     },
+    "NetworkDomainPermission": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
     "NetworkRequirements": {
       "properties": {
         "allowLocalBinding": {
@@ -111,6 +126,7 @@
           ]
         },
         "allowUnixSockets": {
+          "description": "Legacy compatibility view derived from `unix_sockets`.",
           "items": {
             "type": "string"
           },
@@ -126,11 +142,18 @@
           ]
         },
         "allowedDomains": {
+          "description": "Legacy compatibility view derived from `domains`.",
           "items": {
             "type": "string"
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "dangerFullAccessDenylistOnly": {
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -147,11 +170,22 @@
           ]
         },
         "deniedDomains": {
+          "description": "Legacy compatibility view derived from `domains`.",
           "items": {
             "type": "string"
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "domains": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkDomainPermission"
+          },
+          "description": "Canonical network permission map for `experimental_network`.",
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -169,6 +203,13 @@
             "null"
           ]
         },
+        "managedAllowedDomainsOnly": {
+          "description": "When true, only managed allowlist entries are respected while managed network enforcement is active.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "socksPort": {
           "format": "uint16",
           "minimum": 0.0,
@@ -176,9 +217,26 @@
             "integer",
             "null"
           ]
+        },
+        "unixSockets": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkUnixSocketPermission"
+          },
+          "description": "Canonical unix socket permission map for `experimental_network`.",
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": "object"
+    },
+    "NetworkUnixSocketPermission": {
+      "enum": [
+        "allow",
+        "none"
+      ],
+      "type": "string"
     },
     "ResidencyRequirement": {
       "enum": [

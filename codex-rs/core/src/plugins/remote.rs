@@ -1,6 +1,6 @@
-use crate::auth::CodexAuth;
 use crate::config::Config;
-use crate::default_client::build_reqwest_client;
+use codex_login::CodexAuth;
+use codex_login::default_client::build_reqwest_client;
 use codex_protocol::protocol::Product;
 use serde::Deserialize;
 use std::time::Duration;

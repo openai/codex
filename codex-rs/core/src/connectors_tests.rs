@@ -1,19 +1,19 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use crate::config::types::AppConfig;
-use crate::config::types::AppToolConfig;
-use crate::config::types::AppToolsConfig;
-use crate::config::types::AppsDefaultConfig;
 use crate::config_loader::AppRequirementToml;
 use crate::config_loader::AppsRequirementsToml;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use crate::mcp_connection_manager::ToolInfo;
+use codex_config::types::AppConfig;
+use codex_config::types::AppToolConfig;
+use codex_config::types::AppToolsConfig;
+use codex_config::types::AppsDefaultConfig;
 use codex_features::Feature;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::ToolInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
@@ -171,7 +171,7 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             codex_app_tool(
                 "calendar_list_events",
                 "calendar",
-                None,
+                /*connector_name*/ None,
                 &["sample", "sample"],
             ),
         ),
@@ -229,8 +229,8 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
         .build()
         .await
         .expect("config should load");
-    let _ = config.features.set_enabled(Feature::Apps, true);
-    let cache_key = accessible_connectors_cache_key(&config, None);
+    let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
+    let cache_key = accessible_connectors_cache_key(&config, /*auth*/ None);
     let tools = HashMap::from([
         (
             "mcp__codex_apps__calendar_list_events".to_string(),
@@ -253,7 +253,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
     ]);
 
     let cached = with_accessible_connectors_cache_cleared(|| {
-        refresh_accessible_connectors_cache_from_mcp_tools(&config, None, &tools);
+        refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools);
         read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
     });
 
@@ -367,8 +367,8 @@ fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
         Some(&apps_config),
         Some("calendar"),
         "events/create",
-        None,
-        Some(&annotations(Some(true), None)),
+        /*tool_title*/ None,
+        Some(&annotations(Some(true), /*open_world_hint*/ None)),
     );
 
     assert_eq!(
@@ -392,7 +392,7 @@ fn app_is_enabled_uses_default_for_unconfigured_apps() {
     };
 
     assert!(!app_is_enabled(&apps_config, Some("calendar")));
-    assert!(!app_is_enabled(&apps_config, None));
+    assert!(!app_is_enabled(&apps_config, /*connector_id*/ None));
 }
 
 #[test]
@@ -518,7 +518,13 @@ enabled = true
         .await
         .expect("config should build");
 
-    let policy = app_tool_policy(&config, Some("connector_123123"), "events.list", None, None);
+    let policy = app_tool_policy(
+        &config,
+        Some("connector_123123"),
+        "events.list",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+    );
     assert_eq!(
         policy,
         AppToolPolicy {
@@ -555,7 +561,13 @@ async fn cloud_requirements_disable_connector_applies_without_user_apps_table() 
         .await
         .expect("config should build");
 
-    let policy = app_tool_policy(&config, Some("connector_123123"), "events.list", None, None);
+    let policy = app_tool_policy(
+        &config,
+        Some("connector_123123"),
+        "events.list",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+    );
     assert_eq!(
         policy,
         AppToolPolicy {
@@ -602,7 +614,13 @@ enabled = true
                 .expect("apps config"),
             );
 
-    let policy = app_tool_policy(&config, Some("connector_123123"), "events.list", None, None);
+    let policy = app_tool_policy(
+        &config,
+        Some("connector_123123"),
+        "events.list",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+    );
     assert_eq!(
         policy,
         AppToolPolicy {
@@ -637,7 +655,13 @@ async fn local_requirements_disable_connector_applies_without_user_apps_table() 
         ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
             .expect("requirements stack");
 
-    let policy = app_tool_policy(&config, Some("connector_123123"), "events.list", None, None);
+    let policy = app_tool_policy(
+        &config,
+        Some("connector_123123"),
+        "events.list",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+    );
     assert_eq!(
         policy,
         AppToolPolicy {
@@ -699,8 +723,10 @@ fn app_tool_policy_honors_default_app_enabled_false() {
         Some(&apps_config),
         Some("calendar"),
         "events/list",
-        None,
-        Some(&annotations(None, None)),
+        /*tool_title*/ None,
+        Some(&annotations(
+            /*destructive_hint*/ None, /*open_world_hint*/ None,
+        )),
     );
 
     assert_eq!(
@@ -737,8 +763,10 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
         Some(&apps_config),
         Some("calendar"),
         "events/list",
-        None,
-        Some(&annotations(None, None)),
+        /*tool_title*/ None,
+        Some(&annotations(
+            /*destructive_hint*/ None, /*open_world_hint*/ None,
+        )),
     );
 
     assert_eq!(
@@ -779,7 +807,7 @@ fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
         Some(&apps_config),
         Some("calendar"),
         "events/create",
-        None,
+        /*tool_title*/ None,
         Some(&annotations(Some(true), Some(true))),
     );
 
@@ -813,7 +841,7 @@ fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
         Some(&apps_config),
         Some("calendar"),
         "events/create",
-        None,
+        /*tool_title*/ None,
         Some(&annotations(Some(true), Some(true))),
     );
 
@@ -847,8 +875,10 @@ fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() 
         Some(&apps_config),
         Some("calendar"),
         "events/list",
-        None,
-        Some(&annotations(None, None)),
+        /*tool_title*/ None,
+        Some(&annotations(
+            /*destructive_hint*/ None, /*open_world_hint*/ None,
+        )),
     );
 
     assert_eq!(
@@ -883,8 +913,10 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
         Some(&apps_config),
         Some("calendar"),
         "events/list",
-        None,
-        Some(&annotations(None, None)),
+        /*tool_title*/ None,
+        Some(&annotations(
+            /*destructive_hint*/ None, /*open_world_hint*/ None,
+        )),
     );
 
     assert_eq!(

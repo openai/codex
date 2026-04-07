@@ -1,6 +1,8 @@
 //! Path normalization, symlink resolution, and atomic writes shared across Codex crates.
 
-pub mod env;
+pub(crate) mod env;
+pub use env::is_headless_environment;
+pub use env::is_wsl;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
@@ -82,7 +84,7 @@ pub fn resolve_symlink_write_paths(path: &Path) -> io::Result<SymlinkWritePaths>
         let next = if target.is_absolute() {
             AbsolutePathBuf::from_absolute_path(&target)
         } else if let Some(parent) = current.parent() {
-            AbsolutePathBuf::resolve_path_against_base(&target, parent)
+            Ok(AbsolutePathBuf::resolve_path_against_base(&target, parent))
         } else {
             return Ok(SymlinkWritePaths {
                 read_path: None,

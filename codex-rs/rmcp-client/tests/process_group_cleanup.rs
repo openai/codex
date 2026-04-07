@@ -77,7 +77,7 @@ async fn drop_kills_wrapper_process_group() -> Result<()> {
             OsString::from(child_pid_file_str),
         )])),
         &[],
-        None,
+        /*cwd*/ None,
     )
     .await?;
 

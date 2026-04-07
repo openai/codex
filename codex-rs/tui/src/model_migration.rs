@@ -432,15 +432,15 @@ mod tests {
             migration_copy_for_models(
                 "gpt-5.1-codex-mini",
                 "gpt-5.1-codex-max",
-                None,
+                /*model_link*/ None,
                 Some(
                     "Upgrade to gpt-5.2-codex for the latest and greatest agentic coding model."
                         .to_string(),
                 ),
-                None,
+                /*migration_markdown*/ None,
                 "gpt-5.1-codex-max".to_string(),
                 Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
-                true,
+                /*can_opt_out*/ true,
             ),
         );
 
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn prompt_snapshot_gpt5_family() {
-        let backend = VT100Backend::new(65, 22);
+        let backend = VT100Backend::new(/*width*/ 65, /*height*/ 22);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 65, 22));
 
@@ -465,11 +465,11 @@ mod tests {
                 "gpt-5",
                 "gpt-5.1",
                 Some("https://www.codex.com/models/gpt-5.1".to_string()),
-                None,
-                None,
+                /*migration_copy*/ None,
+                /*migration_markdown*/ None,
                 "gpt-5.1".to_string(),
                 Some("Broad world knowledge with strong general reasoning.".to_string()),
-                false,
+                /*can_opt_out*/ false,
             ),
         );
         {
@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn prompt_snapshot_gpt5_codex() {
-        let backend = VT100Backend::new(60, 22);
+        let backend = VT100Backend::new(/*width*/ 60, /*height*/ 22);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 22));
 
@@ -492,11 +492,11 @@ mod tests {
                 "gpt-5-codex",
                 "gpt-5.1-codex-max",
                 Some("https://www.codex.com/models/gpt-5.1-codex-max".to_string()),
-                None,
-                None,
+                /*migration_copy*/ None,
+                /*migration_markdown*/ None,
                 "gpt-5.1-codex-max".to_string(),
                 Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
-                false,
+                /*can_opt_out*/ false,
             ),
         );
         {
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn prompt_snapshot_gpt5_codex_mini() {
-        let backend = VT100Backend::new(60, 22);
+        let backend = VT100Backend::new(/*width*/ 60, /*height*/ 22);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 22));
 
@@ -519,11 +519,11 @@ mod tests {
                 "gpt-5-codex-mini",
                 "gpt-5.1-codex-mini",
                 Some("https://www.codex.com/models/gpt-5.1-codex-mini".to_string()),
-                None,
-                None,
+                /*migration_copy*/ None,
+                /*migration_markdown*/ None,
                 "gpt-5.1-codex-mini".to_string(),
                 Some("Optimized for codex. Cheaper, faster, but less capable.".to_string()),
-                false,
+                /*can_opt_out*/ false,
             ),
         );
         {
@@ -542,11 +542,11 @@ mod tests {
                 "gpt-old",
                 "gpt-new",
                 Some("https://www.codex.com/models/gpt-new".to_string()),
-                None,
-                None,
+                /*migration_copy*/ None,
+                /*migration_markdown*/ None,
                 "gpt-new".to_string(),
                 Some("Latest recommended model for better performance.".to_string()),
-                true,
+                /*can_opt_out*/ true,
             ),
         );
 
@@ -571,11 +571,11 @@ mod tests {
                 "gpt-old",
                 "gpt-new",
                 Some("https://www.codex.com/models/gpt-new".to_string()),
-                None,
-                None,
+                /*migration_copy*/ None,
+                /*migration_markdown*/ None,
                 "gpt-new".to_string(),
                 Some("Latest recommended model for better performance.".to_string()),
-                true,
+                /*can_opt_out*/ true,
             ),
         );
 
@@ -608,7 +608,7 @@ mod tests {
             },
         );
 
-        let backend = VT100Backend::new(40, 16);
+        let backend = VT100Backend::new(/*width*/ 40, /*height*/ 16);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 40, 16));
 

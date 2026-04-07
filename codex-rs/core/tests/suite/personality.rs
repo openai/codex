@@ -1,7 +1,7 @@
-use codex_core::config::types::Personality;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::manager::RefreshStrategy;
+use codex_config::types::Personality;
 use codex_features::Feature;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -66,7 +66,7 @@ async fn base_instructions_override_disables_personality_template() {
         .enable(Feature::Personality)
         .expect("test config should allow feature update");
     config.personality = Some(Personality::Friendly);
-    config.base_instructions = Some("override instructions".to_string());
+    config.base_instructions = Some(Some("override instructions".to_string()));
 
     let model_info =
         codex_core::test_support::construct_model_info_offline("gpt-5.2-codex", &config);
@@ -661,7 +661,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         availability_nux: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(128_000),
@@ -684,7 +684,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
-        .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config
                 .features
@@ -777,7 +777,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         availability_nux: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(128_000),
@@ -804,7 +804,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     .await;
 
     let mut builder = test_codex()
-        .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config
                 .features

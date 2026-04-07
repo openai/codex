@@ -8,8 +8,8 @@ use std::io;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
 use windows_sys::Win32::System::Threading::InitializeProcThreadAttributeList;
-use windows_sys::Win32::System::Threading::UpdateProcThreadAttribute;
 use windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
+use windows_sys::Win32::System::Threading::UpdateProcThreadAttribute;
 
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
 

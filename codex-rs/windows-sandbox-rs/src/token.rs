@@ -78,7 +78,7 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
         &mut p_new_dacl,
     );
     if res != ERROR_SUCCESS {
-        return Err(anyhow!("SetEntriesInAclW failed: {}", res));
+        return Err(anyhow!("SetEntriesInAclW failed: {res}"));
     }
     let mut info = TokenDefaultDaclInfo {
         default_dacl: p_new_dacl,
@@ -95,8 +95,7 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
             LocalFree(p_new_dacl as HLOCAL);
         }
         return Err(anyhow!(
-            "SetTokenInformation(TokenDefaultDacl) failed: {}",
-            err
+            "SetTokenInformation(TokenDefaultDacl) failed: {err}",
         ));
     }
     if !p_new_dacl.is_null() {
@@ -130,7 +129,7 @@ pub unsafe fn world_sid() -> Result<Vec<u8>> {
 /// Caller is responsible for freeing the returned SID with `LocalFree`.
 pub unsafe fn convert_string_sid_to_sid(s: &str) -> Option<*mut c_void> {
     #[link(name = "advapi32")]
-    extern "system" {
+    unsafe extern "system" {
         fn ConvertStringSidToSidW(StringSid: *const u16, Sid: *mut *mut c_void) -> i32;
     }
     let mut psid: *mut c_void = std::ptr::null_mut();
@@ -153,7 +152,7 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
         | TOKEN_ADJUST_PRIVILEGES;
     let mut h: HANDLE = 0;
     #[link(name = "advapi32")]
-    extern "system" {
+    unsafe extern "system" {
         fn OpenProcessToken(
             ProcessHandle: HANDLE,
             DesiredAccess: u32,
@@ -277,7 +276,7 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     }
     let err = GetLastError();
     if err != 0 {
-        return Err(anyhow!("AdjustTokenPrivileges error {}", err));
+        return Err(anyhow!("AdjustTokenPrivileges error {err}"));
     }
     Ok(())
 }

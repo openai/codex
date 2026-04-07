@@ -2,12 +2,13 @@
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use codex_features::Feature;
+use codex_login::AuthManager;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -29,8 +30,10 @@ use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
+use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
+use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -40,10 +43,12 @@ use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
+use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
@@ -355,44 +360,13 @@ pub async fn run_main_with_transport(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
+    let environment_manager = Arc::new(EnvironmentManager::from_env());
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
     let (outbound_control_tx, mut outbound_control_rx) =
         mpsc::channel::<OutboundControlEvent>(CHANNEL_CAPACITY);
 
-    enum TransportRuntime {
-        Stdio,
-        WebSocket {
-            accept_handle: JoinHandle<()>,
-            shutdown_token: CancellationToken,
-        },
-    }
-
-    let mut stdio_handles = Vec::<JoinHandle<()>>::new();
-    let transport_runtime = match transport {
-        AppServerTransport::Stdio => {
-            start_stdio_connection(transport_event_tx.clone(), &mut stdio_handles).await?;
-            TransportRuntime::Stdio
-        }
-        AppServerTransport::WebSocket { bind_address } => {
-            let shutdown_token = CancellationToken::new();
-            let accept_handle = start_websocket_acceptor(
-                bind_address,
-                transport_event_tx.clone(),
-                shutdown_token.clone(),
-                policy_from_settings(&auth)?,
-            )
-            .await?;
-            TransportRuntime::WebSocket {
-                accept_handle,
-                shutdown_token,
-            }
-        }
-    };
-    let single_client_mode = matches!(&transport_runtime, TransportRuntime::Stdio);
-    let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled = !single_client_mode;
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
     let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
@@ -425,11 +399,8 @@ pub async fn run_main_with_transport(
                 }
             }
 
-            let auth_manager = AuthManager::shared(
-                config.codex_home.clone(),
-                /*enable_codex_api_key_env*/ false,
-                config.cli_auth_credentials_store_mode,
-            );
+            let auth_manager =
+                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
             cloud_requirements_loader(
                 auth_manager,
                 config.chatgpt_base_url,
@@ -488,7 +459,9 @@ pub async fn run_main_with_transport(
             range: None,
         });
     }
-    if let Some(warning) = codex_core::config::system_bwrap_warning() {
+    if let Some(warning) =
+        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
             details: None,
@@ -531,13 +504,13 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = codex_state::StateRuntime::init(
+    let state_db = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
     )
     .await
-    .ok()
-    .map(log_db::start);
+    .ok();
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -557,6 +530,61 @@ pub async fn run_main_with_transport(
             None => error!("{}", warning.summary),
         }
     }
+
+    let transport_shutdown_token = CancellationToken::new();
+    let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
+
+    let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
+    let shutdown_when_no_connections = single_client_mode;
+    let graceful_signal_restart_enabled = !single_client_mode;
+    let mut app_server_client_name_rx = None;
+
+    match transport {
+        AppServerTransport::Stdio => {
+            let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
+            app_server_client_name_rx = Some(stdio_client_name_rx);
+            start_stdio_connection(
+                transport_event_tx.clone(),
+                &mut transport_accept_handles,
+                stdio_client_name_tx,
+            )
+            .await?;
+        }
+        AppServerTransport::WebSocket { bind_address } => {
+            let accept_handle = start_websocket_acceptor(
+                bind_address,
+                transport_event_tx.clone(),
+                transport_shutdown_token.clone(),
+                policy_from_settings(&auth)?,
+            )
+            .await?;
+            transport_accept_handles.push(accept_handle);
+        }
+        AppServerTransport::Off => {}
+    }
+
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+
+    let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
+    if transport_accept_handles.is_empty() && !remote_control_enabled {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "no transport configured; use --listen or enable remote control",
+        ));
+    }
+
+    let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
+        config.chatgpt_base_url.clone(),
+        state_db.clone(),
+        auth_manager.clone(),
+        transport_event_tx.clone(),
+        transport_shutdown_token.clone(),
+        app_server_client_name_rx,
+        remote_control_enabled,
+    )
+    .await?;
+    transport_accept_handles.push(remote_control_accept_handle);
 
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
@@ -616,12 +644,15 @@ pub async fn run_main_with_transport(
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let outbound_control_tx = outbound_control_tx;
+        let auth_manager =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
+            environment_manager,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
@@ -629,15 +660,14 @@ pub async fn run_main_with_transport(
             log_db,
             config_warnings,
             session_source,
-            enable_codex_api_key_env: false,
+            auth_manager,
+            rpc_transport: analytics_rpc_transport(transport),
+            remote_control_handle: Some(remote_control_handle),
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
-        let websocket_accept_shutdown = match &transport_runtime {
-            TransportRuntime::WebSocket { shutdown_token, .. } => Some(shutdown_token.clone()),
-            TransportRuntime::Stdio => None,
-        };
+        let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
             let mut shutdown_state = ShutdownState::default();
@@ -650,9 +680,7 @@ pub async fn run_main_with_transport(
                     shutdown_state.update(running_turn_count, connections.len()),
                     ShutdownAction::Finish
                 ) {
-                    if let Some(shutdown_token) = &websocket_accept_shutdown {
-                        shutdown_token.cancel();
-                    }
+                    transport_shutdown_token.cancel();
                     let _ = outbound_control_tx
                         .send(OutboundControlEvent::DisconnectAll)
                         .await;
@@ -846,16 +874,8 @@ pub async fn run_main_with_transport(
     let _ = processor_handle.await;
     let _ = outbound_handle.await;
 
-    if let TransportRuntime::WebSocket {
-        accept_handle,
-        shutdown_token,
-    } = transport_runtime
-    {
-        shutdown_token.cancel();
-        let _ = accept_handle.await;
-    }
-
-    for handle in stdio_handles {
+    transport_shutdown_token.cancel();
+    for handle in transport_accept_handles {
         let _ = handle.await;
     }
 
@@ -864,6 +884,15 @@ pub async fn run_main_with_transport(
     }
 
     Ok(())
+}
+
+fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTransport {
+    match transport {
+        AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
+        AppServerTransport::WebSocket { .. } | AppServerTransport::Off => {
+            AppServerRpcTransport::Websocket
+        }
+    }
 }
 
 #[cfg(test)]
@@ -880,7 +909,10 @@ mod tests {
 
     #[test]
     fn log_format_from_env_value_defaults_for_non_json_values() {
-        assert_eq!(LogFormat::from_env_value(None), LogFormat::Default);
+        assert_eq!(
+            LogFormat::from_env_value(/*value*/ None),
+            LogFormat::Default
+        );
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);

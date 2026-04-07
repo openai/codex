@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use pretty_assertions::assert_eq;
 
 use super::DEFAULT_LISTEN_URL;
@@ -9,7 +11,9 @@ fn parse_listen_url_accepts_default_websocket_url() {
         parse_listen_url(DEFAULT_LISTEN_URL).expect("default listen URL should parse");
     assert_eq!(
         bind_address,
-        "127.0.0.1:0".parse().expect("valid socket address")
+        "127.0.0.1:0"
+            .parse::<SocketAddr>()
+            .expect("valid socket address")
     );
 }
 
@@ -19,7 +23,9 @@ fn parse_listen_url_accepts_websocket_url() {
         parse_listen_url("ws://127.0.0.1:1234").expect("websocket listen URL should parse");
     assert_eq!(
         bind_address,
-        "127.0.0.1:1234".parse().expect("valid socket address")
+        "127.0.0.1:1234"
+            .parse::<SocketAddr>()
+            .expect("valid socket address")
     );
 }
 

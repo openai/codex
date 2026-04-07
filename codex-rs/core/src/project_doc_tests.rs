@@ -1,11 +1,22 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
+use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+async fn get_user_instructions(config: &Config) -> Option<String> {
+    super::get_user_instructions_with_fs(config, LOCAL_FS.as_ref()).await
+}
+
+async fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    super::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await
+}
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
 /// the maximum number of bytes to embed from AGENTS.md. The caller can
@@ -75,12 +86,24 @@ async fn make_config_with_project_root_markers(
 async fn no_doc_file_returns_none() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
-    let res = get_user_instructions(&make_config(&tmp, 4096, None).await).await;
+    let res =
+        get_user_instructions(&make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await)
+            .await;
     assert!(
         res.is_none(),
         "Expected None when AGENTS.md is absent and no system instructions provided"
     );
     assert!(res.is_none(), "Expected None when AGENTS.md is absent");
+}
+
+#[tokio::test]
+async fn no_environment_returns_none() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
+
+    let res = super::get_user_instructions(&config, /*environment*/ None).await;
+
+    assert_eq!(res, None);
 }
 
 /// Small file within the byte-limit is returned unmodified.
@@ -89,9 +112,10 @@ async fn doc_smaller_than_limit_is_returned() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "hello world").unwrap();
 
-    let res = get_user_instructions(&make_config(&tmp, 4096, None).await)
-        .await
-        .expect("doc expected");
+    let res =
+        get_user_instructions(&make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await)
+            .await
+            .expect("doc expected");
 
     assert_eq!(
         res, "hello world",
@@ -108,7 +132,7 @@ async fn doc_larger_than_limit_is_truncated() {
     let huge = "A".repeat(LIMIT * 2); // 2 KiB
     fs::write(tmp.path().join("AGENTS.md"), &huge).unwrap();
 
-    let res = get_user_instructions(&make_config(&tmp, LIMIT, None).await)
+    let res = get_user_instructions(&make_config(&tmp, LIMIT, /*instructions*/ None).await)
         .await
         .expect("doc expected");
 
@@ -137,7 +161,7 @@ async fn finds_doc_in_repo_root() {
     std::fs::create_dir_all(&nested).unwrap();
 
     // Build config pointing at the nested dir.
-    let mut cfg = make_config(&repo, 4096, None).await;
+    let mut cfg = make_config(&repo, /*limit*/ 4096, /*instructions*/ None).await;
     cfg.cwd = nested.abs();
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
@@ -150,7 +174,8 @@ async fn zero_byte_limit_disables_docs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
 
-    let res = get_user_instructions(&make_config(&tmp, 0, None).await).await;
+    let res =
+        get_user_instructions(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await).await;
     assert!(
         res.is_none(),
         "With limit 0 the function should return None"
@@ -158,9 +183,21 @@ async fn zero_byte_limit_disables_docs() {
 }
 
 #[tokio::test]
+async fn zero_byte_limit_disables_discovery() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
+
+    let discovery =
+        discover_project_doc_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
+            .await
+            .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+}
+
+#[tokio::test]
 async fn js_repl_instructions_are_appended_when_enabled() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut cfg = make_config(&tmp, 4096, None).await;
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     cfg.features
         .enable(Feature::JsRepl)
         .expect("test config should allow js_repl");
@@ -175,7 +212,7 @@ async fn js_repl_instructions_are_appended_when_enabled() {
 #[tokio::test]
 async fn js_repl_tools_only_instructions_are_feature_gated() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut cfg = make_config(&tmp, 4096, None).await;
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     let mut features = cfg.features.get().clone();
     features
         .enable(Feature::JsRepl)
@@ -194,7 +231,7 @@ async fn js_repl_tools_only_instructions_are_feature_gated() {
 #[tokio::test]
 async fn js_repl_image_detail_original_does_not_change_instructions() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut cfg = make_config(&tmp, 4096, None).await;
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     let mut features = cfg.features.get().clone();
     features
         .enable(Feature::JsRepl)
@@ -219,7 +256,7 @@ async fn merges_existing_instructions_with_project_doc() {
 
     const INSTRUCTIONS: &str = "base instructions";
 
-    let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)).await)
+    let res = get_user_instructions(&make_config(&tmp, /*limit*/ 4096, Some(INSTRUCTIONS)).await)
         .await
         .expect("should produce a combined instruction string");
 
@@ -236,7 +273,8 @@ async fn keeps_existing_instructions_when_doc_missing() {
 
     const INSTRUCTIONS: &str = "some instructions";
 
-    let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)).await).await;
+    let res =
+        get_user_instructions(&make_config(&tmp, /*limit*/ 4096, Some(INSTRUCTIONS)).await).await;
 
     assert_eq!(res, Some(INSTRUCTIONS.to_string()));
 }
@@ -262,7 +300,7 @@ async fn concatenates_root_and_cwd_docs() {
     std::fs::create_dir_all(&nested).unwrap();
     fs::write(nested.join("AGENTS.md"), "crate doc").unwrap();
 
-    let mut cfg = make_config(&repo, 4096, None).await;
+    let mut cfg = make_config(&repo, /*limit*/ 4096, /*instructions*/ None).await;
     cfg.cwd = nested.abs();
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
@@ -279,14 +317,26 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     fs::create_dir_all(nested.join(".git")).unwrap();
     fs::write(nested.join("AGENTS.md"), "child doc").unwrap();
 
-    let mut cfg = make_config_with_project_root_markers(&root, 4096, None, &[".codex-root"]).await;
+    let mut cfg = make_config_with_project_root_markers(
+        &root,
+        /*limit*/ 4096,
+        /*instructions*/ None,
+        &[".codex-root"],
+    )
+    .await;
     cfg.cwd = nested.abs();
 
-    let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
-    let expected_parent =
-        dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path");
-    let expected_child =
-        dunce::canonicalize(cfg.cwd.as_path().join("AGENTS.md")).expect("canonical child doc path");
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    let expected_parent = AbsolutePathBuf::try_from(
+        dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path"),
+    )
+    .expect("absolute parent doc path");
+    let expected_child = AbsolutePathBuf::try_from(
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical child doc path"),
+    )
+    .expect("absolute child doc path");
     assert_eq!(discovery.len(), 2);
     assert_eq!(discovery[0], expected_parent);
     assert_eq!(discovery[1], expected_child);
@@ -302,7 +352,7 @@ async fn agents_local_md_preferred() {
     fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "versioned").unwrap();
     fs::write(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME), "local").unwrap();
 
-    let cfg = make_config(&tmp, 4096, None).await;
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
 
     let res = get_user_instructions(&cfg)
         .await
@@ -310,7 +360,9 @@ async fn agents_local_md_preferred() {
 
     assert_eq!(res, "local");
 
-    let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
         discovery[0].file_name().unwrap().to_string_lossy(),
@@ -324,7 +376,13 @@ async fn uses_configured_fallback_when_agents_missing() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("EXAMPLE.md"), "example instructions").unwrap();
 
-    let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md"]).await;
+    let cfg = make_config_with_fallback(
+        &tmp,
+        /*limit*/ 4096,
+        /*instructions*/ None,
+        &["EXAMPLE.md"],
+    )
+    .await;
 
     let res = get_user_instructions(&cfg)
         .await
@@ -340,7 +398,13 @@ async fn agents_md_preferred_over_fallbacks() {
     fs::write(tmp.path().join("AGENTS.md"), "primary").unwrap();
     fs::write(tmp.path().join("EXAMPLE.md"), "secondary").unwrap();
 
-    let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md", ".example.md"]).await;
+    let cfg = make_config_with_fallback(
+        &tmp,
+        /*limit*/ 4096,
+        /*instructions*/ None,
+        &["EXAMPLE.md", ".example.md"],
+    )
+    .await;
 
     let res = get_user_instructions(&cfg)
         .await
@@ -348,7 +412,9 @@ async fn agents_md_preferred_over_fallbacks() {
 
     assert_eq!(res, "primary");
 
-    let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert!(
         discovery[0]
@@ -360,11 +426,78 @@ async fn agents_md_preferred_over_fallbacks() {
 }
 
 #[tokio::test]
+async fn agents_md_directory_is_ignored() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(tmp.path().join("AGENTS.md")).unwrap();
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg).await;
+    assert_eq!(res, None);
+
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agents_md_special_file_is_ignored() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("AGENTS.md");
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("path without nul");
+    // SAFETY: `c_path` is a valid, nul-terminated path and `mkfifo` does not
+    // retain the pointer after the call.
+    let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) };
+    assert_eq!(rc, 0);
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg).await;
+    assert_eq!(res, None);
+
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+}
+
+#[tokio::test]
+async fn override_directory_falls_back_to_agents_md_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME)).unwrap();
+    fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "primary").unwrap();
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg)
+        .await
+        .expect("AGENTS.md should be used when override is a directory");
+    assert_eq!(res, "primary");
+
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery.len(), 1);
+    assert_eq!(
+        discovery[0]
+            .file_name()
+            .expect("file name")
+            .to_string_lossy(),
+        DEFAULT_PROJECT_DOC_FILENAME
+    );
+}
+
+#[tokio::test]
 async fn skills_are_not_appended_to_project_doc() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
 
-    let cfg = make_config(&tmp, 4096, None).await;
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     create_skill(
         cfg.codex_home.clone(),
         "pdf-processing",
@@ -380,7 +513,7 @@ async fn skills_are_not_appended_to_project_doc() {
 #[tokio::test]
 async fn apps_feature_does_not_emit_user_instructions_by_itself() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut cfg = make_config(&tmp, 4096, None).await;
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     cfg.features
         .enable(Feature::Apps)
         .expect("test config should allow apps");
@@ -394,7 +527,7 @@ async fn apps_feature_does_not_append_to_project_doc_user_instructions() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
 
-    let mut cfg = make_config(&tmp, 4096, None).await;
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     cfg.features
         .enable(Feature::Apps)
         .expect("test config should allow apps");

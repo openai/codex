@@ -426,7 +426,7 @@ mod tests {
             panic!("expected hook prompt message");
         };
 
-        let parsed = parse_hook_prompt_message(None, &content).expect("parsed hook prompt");
+        let parsed = parse_hook_prompt_message(/*id*/ None, &content).expect("parsed hook prompt");
         assert_eq!(parsed.fragments, original);
     }
 

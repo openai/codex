@@ -3,8 +3,8 @@
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -354,8 +354,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
-            codex_core::config::types::McpServerConfig {
-                transport: codex_core::config::types::McpServerTransportConfig::Stdio {
+            codex_config::types::McpServerConfig {
+                transport: codex_config::types::McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: None,
@@ -371,6 +371,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         );
         config
@@ -466,6 +467,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         );
         config
@@ -717,8 +719,8 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
-            codex_core::config::types::McpServerConfig {
-                transport: codex_core::config::types::McpServerTransportConfig::Stdio {
+            codex_config::types::McpServerConfig {
+                transport: codex_config::types::McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: None,
@@ -734,6 +736,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         );
         config

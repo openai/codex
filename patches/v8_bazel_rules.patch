@@ -29,11 +29,17 @@ index 9648e4a..88efd41 100644
              "@v8//bazel/config:is_gcc": [
                  "-Wno-extra",
                  "-Wno-array-bounds",
-@@ -155,7 +149,12 @@ def _default_args():
-             "@v8//bazel/config:is_windows": [
-                 "/std:c++20",
-             ],
+@@ -155,7 +149,15 @@ def _default_args():
+-            "@v8//bazel/config:is_windows": [
+-                "/std:c++20",
+-            ],
 -            "//conditions:default": [],
++            "@v8//bazel/config:is_windows": [
++                "-Wno-invalid-offsetof",
++                "-Wno-deprecated-this-capture",
++                "-Wno-deprecated-declarations",
++                "-std=c++20",
++            ],
 +            "//conditions:default": [
 +                "-Wno-invalid-offsetof",
 +                "-Wno-deprecated-this-capture",
@@ -43,8 +49,14 @@ index 9648e4a..88efd41 100644
          }) + select({
              "@v8//bazel/config:is_gcc_fastbuild": [
                  # Non-debug builds without optimizations fail because
-@@ -184,7 +183,7 @@ def _default_args():
-                 "Advapi32.lib",
+@@ -180,10 +179,10 @@ def _default_args():
+             "@v8//bazel/config:is_windows": [
+-                "Winmm.lib",
+-                "DbgHelp.lib",
+-                "Advapi32.lib",
++                "-lwinmm",
++                "-ldbghelp",
++                "-ladvapi32",
              ],
              "@v8//bazel/config:is_macos": ["-pthread"],
 -            "//conditions:default": ["-Wl,--no-as-needed -ldl -latomic -pthread"],
@@ -179,7 +191,6 @@ index 85f31b7..7314584 100644
 +    actual = "@simdutf//:simdutf",
  )
  
- v8_library(
 @@ -4593,7 +4598,7 @@ v8_library(
      copts = ["-Wno-implicit-fallthrough"],
      icu_deps = [
@@ -225,3 +236,39 @@ index 5fda2f4..381386c 100644
  # Copyright 2021 the V8 project authors. All rights reserved.
  # Use of this source code is governed by a BSD-style license that can be
  # found in the LICENSE file.
+@@ -16,10 +18,7 @@ cc_library(
+     ]),
+     copts = select({
+         "@platforms//os:windows": [
+-            "/wd4005",  # Macro redefinition.
+-            "/wd4068",  # Unknown pragmas.
+-            "/wd4267",  # Conversion from size_t on 64-bits.
+-            "/utf-8",  # ICU source files are in UTF-8.
++            "-Wno-deprecated-declarations",
+         ],
+         "//conditions:default": [
+             "-Wno-deprecated-declarations",
+@@ -65,10 +64,7 @@ cc_library(
+     ]),
+     copts = select({
+         "@platforms//os:windows": [
+-            "/wd4005",  # Macro redefinition.
+-            "/wd4068",  # Unknown pragmas.
+-            "/wd4267",  # Conversion from size_t on 64-bits.
+-            "/utf-8",  # ICU source files are in UTF-8.
++            "-Wno-deprecated-declarations",
+         ],
+         "//conditions:default": [
+             "-Wno-deprecated-declarations",
+@@ -93,10 +89,7 @@ cc_library(
+     ]),
+     copts = select({
+         "@platforms//os:windows": [
+-            "/wd4005",  # Macro redefinition.
+-            "/wd4068",  # Unknown pragmas.
+-            "/wd4267",  # Conversion from size_t on 64-bits.
+-            "/utf-8",  # ICU source files are in UTF-8.
++            "-Wno-deprecated-declarations",
+         ],
+         "//conditions:default": [],
+     }),
