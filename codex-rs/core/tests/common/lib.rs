@@ -111,7 +111,17 @@ pub trait PathExt {
 
 impl PathExt for Path {
     fn abs(&self) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(self.to_path_buf()).expect("path should already be absolute")
+        if let Ok(path) = AbsolutePathBuf::try_from(self.to_path_buf()) {
+            return path;
+        }
+        if cfg!(windows)
+            && let Some(path) = self.to_str()
+            && path.starts_with('/')
+        {
+            return AbsolutePathBuf::try_from(test_path_buf(path))
+                .expect("windows test path should be absolute");
+        }
+        panic!("path should already be absolute");
     }
 }
 

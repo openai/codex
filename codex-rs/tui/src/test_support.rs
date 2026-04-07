@@ -8,8 +8,17 @@ pub(crate) trait PathExt {
 
 impl PathExt for Path {
     fn abs(&self) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(self.to_path_buf())
-            .unwrap_or_else(|_| panic!("path should already be absolute"))
+        if let Ok(path) = AbsolutePathBuf::try_from(self.to_path_buf()) {
+            return path;
+        }
+        if cfg!(windows)
+            && let Some(path) = self.to_str()
+            && path.starts_with('/')
+        {
+            return AbsolutePathBuf::try_from(test_path_buf(path))
+                .expect("windows test path should be absolute");
+        }
+        panic!("path should already be absolute");
     }
 }
 
@@ -24,5 +33,19 @@ impl PathBufExt for PathBuf {
 }
 
 pub(crate) fn test_path_display(path: &str) -> String {
-    Path::new(path).abs().display().to_string()
+    test_path_buf(path).abs().display().to_string()
+}
+
+pub(crate) fn test_path_buf(path: &str) -> PathBuf {
+    if cfg!(windows) {
+        let mut platform_path = PathBuf::from(r"C:\");
+        platform_path.extend(
+            path.trim_start_matches('/')
+                .split('/')
+                .filter(|segment| !segment.is_empty()),
+        );
+        platform_path
+    } else {
+        PathBuf::from(path)
+    }
 }
