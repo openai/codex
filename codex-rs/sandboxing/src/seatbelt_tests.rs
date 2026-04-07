@@ -28,8 +28,10 @@ use tempfile::TempDir;
 fn assert_seatbelt_denied(stderr: &[u8], path: &Path) {
     let stderr = String::from_utf8_lossy(stderr);
     let path_display = path.display().to_string();
+    let denied_path = stderr.contains(&path_display);
+    let denied_operation = stderr.contains("Operation not permitted");
     assert!(
-        (stderr.contains(&path_display) && stderr.contains("Operation not permitted"))
+        (denied_path && denied_operation)
             || stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted"),
         "unexpected stderr: {stderr}"
     );

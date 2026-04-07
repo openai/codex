@@ -15,10 +15,12 @@ path = "src/bin/codex-exec-server.rs"
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-arg0 = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

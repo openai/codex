@@ -12,7 +12,15 @@ use codex_exec_server::ExecProcess;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::SandboxLaunchConfig;
+use codex_sandboxing::SandboxLaunchMode;
+use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 use test_case::test_case;
 use tokio::sync::watch;
 use tokio::time::Duration;
@@ -213,6 +221,76 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
     Ok(())
 }
 
+fn platform_sandbox_type() -> SandboxType {
+    if cfg!(target_os = "macos") {
+        SandboxType::MacosSeatbelt
+    } else if cfg!(target_os = "linux") {
+        SandboxType::LinuxSeccomp
+    } else {
+        unreachable!("unix exec-server tests only run on macOS and Linux");
+    }
+}
+
+fn write_outside_workspace_sandbox(workspace_root: &std::path::Path) -> SandboxLaunchConfig {
+    let policy = SandboxPolicy::new_workspace_write_policy();
+    SandboxLaunchConfig {
+        mode: SandboxLaunchMode::Require,
+        policy: policy.clone(),
+        file_system_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            &policy,
+            workspace_root,
+        ),
+        network_policy: NetworkSandboxPolicy::from(&policy),
+        sandbox_policy_cwd: workspace_root.to_path_buf(),
+        additional_permissions: None,
+        enforce_managed_network: false,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        use_legacy_landlock: false,
+    }
+}
+
+async fn assert_exec_process_sandbox_denies_write_outside_workspace(
+    use_remote: bool,
+) -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let workspace_root = temp_dir.path().join("workspace");
+    std::fs::create_dir(&workspace_root)?;
+    let blocked_path = temp_dir.path().join("blocked.txt");
+    let context = create_process_context(use_remote).await?;
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-sandbox-denied"),
+            argv: vec![
+                "/usr/bin/python3".to_string(),
+                "-c".to_string(),
+                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('blocked')"
+                    .to_string(),
+                blocked_path.to_string_lossy().into_owned(),
+            ],
+            cwd: workspace_root.clone(),
+            env: Default::default(),
+            tty: false,
+            arg0: None,
+            sandbox: Some(write_outside_workspace_sandbox(&workspace_root)),
+        })
+        .await?;
+
+    assert_eq!(session.sandbox_type, platform_sandbox_type());
+    let StartedExecProcess { process, .. } = session;
+    let wake_rx = process.subscribe_wake();
+    let (_output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+
+    assert_ne!(exit_code, Some(0));
+    assert!(closed);
+    assert!(
+        !blocked_path.exists(),
+        "sandboxed process unexpectedly wrote outside the workspace root"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
     let mut context = create_process_context(/*use_remote*/ true).await?;
@@ -283,4 +361,11 @@ async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_process_preserves_queued_events_before_subscribe(use_remote: bool) -> Result<()> {
     assert_exec_process_preserves_queued_events_before_subscribe(use_remote).await
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_process_sandbox_denies_write_outside_workspace(use_remote: bool) -> Result<()> {
+    assert_exec_process_sandbox_denies_write_outside_workspace(use_remote).await
 }
