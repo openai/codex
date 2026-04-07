@@ -9600,7 +9600,7 @@ impl ChatWidget {
                 models
                     .into_iter()
                     .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_fast_mode)
+                    .map(|preset| preset.supports_fast_mode())
             })
             .unwrap_or(false)
     }

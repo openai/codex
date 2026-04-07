@@ -20,6 +20,7 @@ use crate::config_types::ReasoningSummary;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+pub const SPEED_TIER_FAST: &str = "fast";
 
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
@@ -132,9 +133,9 @@ pub struct ModelPreset {
     /// Whether this model supports personality-specific instructions.
     #[serde(default)]
     pub supports_personality: bool,
-    /// Whether this model supports Fast Mode.
+    /// Additional speed tiers this model can run with beyond the standard path.
     #[serde(default)]
-    pub supports_fast_mode: bool,
+    pub additional_speed_tiers: Vec<String>,
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -256,7 +257,7 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     pub priority: i32,
     #[serde(default)]
-    pub supports_fast_mode: bool,
+    pub additional_speed_tiers: Vec<String>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
@@ -433,7 +434,7 @@ impl From<ModelInfo> for ModelPreset {
                 .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             supports_personality,
-            supports_fast_mode: info.supports_fast_mode,
+            additional_speed_tiers: info.additional_speed_tiers,
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
@@ -455,6 +456,12 @@ impl From<ModelInfo> for ModelPreset {
 }
 
 impl ModelPreset {
+    pub fn supports_fast_mode(&self) -> bool {
+        self.additional_speed_tiers
+            .iter()
+            .any(|tier| tier == SPEED_TIER_FAST)
+    }
+
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
@@ -533,7 +540,7 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
-            supports_fast_mode: false,
+            additional_speed_tiers: Vec::new(),
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
@@ -779,7 +786,7 @@ mod tests {
             availability_nux: Some(ModelAvailabilityNux {
                 message: "Try Spark.".to_string(),
             }),
-            supports_fast_mode: true,
+            additional_speed_tiers: vec![SPEED_TIER_FAST.to_string()],
             ..test_model(/*spec*/ None)
         });
 
@@ -789,6 +796,6 @@ mod tests {
                 message: "Try Spark.".to_string(),
             })
         );
-        assert!(preset.supports_fast_mode);
+        assert!(preset.supports_fast_mode());
     }
 }

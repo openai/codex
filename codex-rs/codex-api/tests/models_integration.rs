@@ -75,7 +75,7 @@ async fn models_client_hits_models_endpoint() {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
-            supports_fast_mode: false,
+            additional_speed_tiers: Vec::new(),
             upgrade: None,
             base_instructions: "base instructions".to_string(),
             model_messages: None,

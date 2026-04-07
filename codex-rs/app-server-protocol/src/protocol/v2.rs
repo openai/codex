@@ -1790,7 +1790,7 @@ pub struct Model {
     #[serde(default)]
     pub supports_personality: bool,
     #[serde(default)]
-    pub supports_fast_mode: bool,
+    pub additional_speed_tiers: Vec<String>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }

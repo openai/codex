@@ -346,6 +346,11 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
 }
 
 fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
+    let additional_speed_tiers = if supports_fast_mode {
+        vec![codex_protocol::openai_models::SPEED_TIER_FAST]
+    } else {
+        Vec::new()
+    };
     serde_json::from_value(json!({
         "slug": slug,
         "display_name": slug,
@@ -356,7 +361,7 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "visibility": "list",
         "supported_in_api": true,
         "priority": priority,
-        "supports_fast_mode": supports_fast_mode,
+        "additional_speed_tiers": additional_speed_tiers,
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",

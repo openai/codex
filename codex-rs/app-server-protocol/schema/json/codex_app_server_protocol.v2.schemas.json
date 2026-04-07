@@ -6031,6 +6031,13 @@
     },
     "Model": {
       "properties": {
+        "additionalSpeedTiers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "availabilityNux": {
           "anyOf": [
             {
@@ -6077,10 +6084,6 @@
             "$ref": "#/definitions/ReasoningEffortOption"
           },
           "type": "array"
-        },
-        "supportsFastMode": {
-          "default": false,
-          "type": "boolean"
         },
         "supportsPersonality": {
           "default": false,
