@@ -206,19 +206,17 @@ pub fn build_tool_registry_plan(
         plan.register_handler("js_repl_reset", ToolHandlerKind::JsReplReset);
     }
 
-    if config.request_user_input {
-        plan.push_spec(
-            create_request_user_input_tool(request_user_input_tool_description(
-                config.default_mode_request_user_input,
-            )),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        plan.register_handler(
-            REQUEST_USER_INPUT_TOOL_NAME,
-            ToolHandlerKind::RequestUserInput,
-        );
-    }
+    plan.push_spec(
+        create_request_user_input_tool(request_user_input_tool_description(
+            config.default_mode_request_user_input,
+        )),
+        /*supports_parallel_tool_calls*/ false,
+        config.code_mode_enabled,
+    );
+    plan.register_handler(
+        REQUEST_USER_INPUT_TOOL_NAME,
+        ToolHandlerKind::RequestUserInput,
+    );
 
     if config.request_permissions_tool_enabled {
         plan.push_spec(

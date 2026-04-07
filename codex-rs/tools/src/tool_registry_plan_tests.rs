@@ -522,9 +522,9 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "close_agent",
             "spawn_agents_on_csv",
             "report_agent_job_result",
+            REQUEST_USER_INPUT_TOOL_NAME,
         ],
     );
-    assert_lacks_tool_name(&tools, "request_user_input");
 }
 
 #[test]

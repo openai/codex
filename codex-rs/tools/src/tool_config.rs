@@ -143,7 +143,8 @@ impl ToolsConfig {
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let hide_spawn_agent_metadata = features.enabled(Feature::DebugHideSpawnAgentMetadata);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
-        let include_default_mode_request_user_input = features.enabled(Feature::DefaultModeRequestUserInput);
+        let include_default_mode_request_user_input =
+            features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
             model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
         let include_tool_suggest = features.enabled(Feature::ToolSuggest)
