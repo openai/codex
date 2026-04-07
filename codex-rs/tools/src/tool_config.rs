@@ -142,7 +142,7 @@ impl ToolsConfig {
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
-        let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
+        let include_request_user_input = true;
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
