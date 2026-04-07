@@ -1,5 +1,6 @@
 use codex_core::config::Config;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_login::token_data::TokenData;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -32,7 +33,10 @@ async fn apps_enabled(config: &Config) -> bool {
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     );
-    config.features.apps_enabled(Some(&auth_manager)).await
+    let auth = auth_manager.auth().await;
+    config
+        .features
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
 }
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     if !apps_enabled(config).await {

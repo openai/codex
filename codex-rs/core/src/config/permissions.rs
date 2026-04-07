@@ -4,10 +4,10 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_config_types::FilesystemPermissionToml;
-use codex_config_types::NetworkToml;
-use codex_config_types::PermissionProfileToml;
-use codex_config_types::PermissionsToml;
+use codex_config::permissions_toml::FilesystemPermissionToml;
+use codex_config::permissions_toml::NetworkToml;
+use codex_config::permissions_toml::PermissionProfileToml;
+use codex_config::permissions_toml::PermissionsToml;
 use codex_network_proxy::NetworkProxyConfig;
 #[cfg(test)]
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;

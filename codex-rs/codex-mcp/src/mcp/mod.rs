@@ -12,6 +12,7 @@ use async_channel::unbounded;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::Resource;
@@ -20,7 +21,6 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
 use serde_json::Value;
 
 use crate::mcp::auth::compute_auth_statuses;

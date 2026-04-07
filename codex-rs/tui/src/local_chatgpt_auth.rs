@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use codex_app_server_protocol::AuthMode;
-use codex_login::AuthCredentialsStoreMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::load_auth_dot_json;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -408,6 +408,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-app-server-protocol",
+ "codex-config",
  "codex-core",
  "codex-features",
  "codex-login",
@@ -1411,7 +1412,6 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-config",
- "codex-config-types",
  "codex-core",
  "codex-exec-server",
  "codex-features",
@@ -1607,6 +1607,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-config",
  "codex-connectors",
  "codex-core",
  "codex-git-utils",
@@ -1709,6 +1710,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-backend-client",
+ "codex-config",
  "codex-core",
  "codex-login",
  "codex-otel",
@@ -1806,8 +1808,13 @@ dependencies = [
  "anyhow",
  "codex-app-server-protocol",
  "codex-execpolicy",
+ "codex-features",
+ "codex-git-utils",
+ "codex-model-provider-info",
+ "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "dunce",
  "futures",
  "multimap",
  "pretty_assertions",
@@ -1823,28 +1830,6 @@ dependencies = [
  "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
  "wildmatch",
-]
-
-[[package]]
-name = "codex-config-types"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-app-server-protocol",
- "codex-config",
- "codex-features",
- "codex-git-utils",
- "codex-login",
- "codex-model-provider-info",
- "codex-network-proxy",
- "codex-protocol",
- "codex-rmcp-client",
- "codex-utils-absolute-path",
- "dunce",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "tracing",
 ]
 
 [[package]]
@@ -1881,7 +1866,6 @@ dependencies = [
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",
- "codex-config-types",
  "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
@@ -2139,7 +2123,6 @@ dependencies = [
 name = "codex-features"
 version = "0.0.0"
 dependencies = [
- "codex-login",
  "codex-otel",
  "codex-protocol",
  "pretty_assertions",
@@ -2398,6 +2381,7 @@ dependencies = [
  "codex-api",
  "codex-app-server-protocol",
  "codex-collaboration-mode-templates",
+ "codex-config",
  "codex-feedback",
  "codex-login",
  "codex-model-provider-info",
@@ -2593,6 +2577,7 @@ dependencies = [
  "anyhow",
  "axum",
  "codex-client",
+ "codex-config",
  "codex-keyring-store",
  "codex-protocol",
  "codex-utils-cargo-bin",
@@ -2810,7 +2795,6 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
- "codex-config-types",
  "codex-core",
  "codex-features",
  "codex-feedback",

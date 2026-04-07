@@ -1,4 +1,4 @@
-use codex_config_types::ConfigToml;
+use codex_config::config_toml::ConfigToml;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::SESSIONS_SUBDIR;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;

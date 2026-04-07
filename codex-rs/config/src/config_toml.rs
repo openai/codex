@@ -1,43 +1,34 @@
 //! Schema-heavy configuration TOML types used by Codex.
 
-pub mod permissions;
-pub mod profile;
-pub mod schema;
-
-pub use permissions::FilesystemPermissionToml;
-pub use permissions::FilesystemPermissionsToml;
-pub use permissions::NetworkDomainPermissionToml;
-pub use permissions::NetworkDomainPermissionsToml;
-pub use permissions::NetworkToml;
-pub use permissions::NetworkUnixSocketPermissionToml;
-pub use permissions::NetworkUnixSocketPermissionsToml;
-pub use permissions::PermissionProfileToml;
-pub use permissions::PermissionsToml;
-pub use permissions::overlay_network_domain_permissions;
-pub use profile::ConfigProfile;
-
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::permissions_toml::PermissionsToml;
+use crate::profile_toml::ConfigProfile;
+use crate::types::AnalyticsConfigToml;
+use crate::types::ApprovalsReviewer;
+use crate::types::AppsConfigToml;
+use crate::types::AuthCredentialsStoreMode;
+use crate::types::FeedbackConfigToml;
+use crate::types::History;
+use crate::types::McpServerConfig;
+use crate::types::MemoriesToml;
+use crate::types::Notice;
+use crate::types::OAuthCredentialsStoreMode;
+use crate::types::OtelConfigToml;
+use crate::types::PluginConfig;
+use crate::types::SandboxWorkspaceWrite;
+use crate::types::ShellEnvironmentPolicyToml;
+use crate::types::SkillsConfig;
+use crate::types::ToolSuggestConfig;
+use crate::types::Tui;
+use crate::types::UriBasedFileOpener;
+use crate::types::WindowsToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_config::types::ApprovalsReviewer;
-use codex_config::types::AppsConfigToml;
-use codex_config::types::History;
-use codex_config::types::McpServerConfig;
-use codex_config::types::MemoriesToml;
-use codex_config::types::Notice;
-use codex_config::types::PluginConfig;
-use codex_config::types::SandboxWorkspaceWrite;
-use codex_config::types::ShellEnvironmentPolicyToml;
-use codex_config::types::SkillsConfig;
-use codex_config::types::ToolSuggestConfig;
-use codex_config::types::UriBasedFileOpener;
-use codex_config::types::WindowsToml;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
-use codex_login::AuthCredentialsStoreMode;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -58,7 +49,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -248,7 +238,7 @@ pub struct ConfigToml {
     pub file_opener: Option<UriBasedFileOpener>,
 
     /// Collection of settings that are specific to the TUI.
-    pub tui: Option<codex_config::types::Tui>,
+    pub tui: Option<Tui>,
 
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
@@ -365,18 +355,18 @@ pub struct ConfigToml {
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
     /// Defaults to `true`.
-    pub analytics: Option<codex_config::types::AnalyticsConfigToml>,
+    pub analytics: Option<AnalyticsConfigToml>,
 
     /// When `false`, disables feedback collection across Codex product surfaces.
     /// Defaults to `true`.
-    pub feedback: Option<codex_config::types::FeedbackConfigToml>,
+    pub feedback: Option<FeedbackConfigToml>,
 
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
     /// OTEL configuration.
-    pub otel: Option<codex_config::types::OtelConfigToml>,
+    pub otel: Option<OtelConfigToml>,
 
     /// Windows-specific configuration.
     #[serde(default)]
@@ -386,7 +376,7 @@ pub struct ConfigToml {
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
     /// Collection of in-product notices (different from notifications)
-    /// See [`codex_config::types::Notice`] for more details
+    /// See [`crate::types::Notice`] for more details
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
@@ -593,7 +583,7 @@ impl ConfigToml {
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
         resolved_cwd: &Path,
-        sandbox_policy_constraint: Option<&codex_config::Constrained<SandboxPolicy>>,
+        sandbox_policy_constraint: Option<&crate::Constrained<SandboxPolicy>>,
     ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()

@@ -3,9 +3,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-use codex_config::types::ApprovalsReviewer;
-use codex_config::types::Personality;
-use codex_config::types::WindowsToml;
+use crate::config_toml::ToolsToml;
+use crate::types::AnalyticsConfigToml;
+use crate::types::ApprovalsReviewer;
+use crate::types::Personality;
+use crate::types::WindowsToml;
 use codex_features::FeaturesToml;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -14,8 +16,6 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-
-use crate::ToolsToml;
 
 /// Collection of common configuration options that a user can define as a unit
 /// in `config.toml`.
@@ -58,7 +58,7 @@ pub struct ConfigProfile {
     pub tools_view_image: Option<bool>,
     pub tools: Option<ToolsToml>,
     pub web_search: Option<WebSearchMode>,
-    pub analytics: Option<codex_config::types::AnalyticsConfigToml>,
+    pub analytics: Option<AnalyticsConfigToml>,
     #[serde(default)]
     pub windows: Option<WindowsToml>,
     /// Optional feature toggles scoped to this profile.

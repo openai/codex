@@ -134,7 +134,6 @@ arboard = { workspace = true }
 
 [dev-dependencies]
 codex-cli = { workspace = true }
-codex-config-types = { workspace = true }
 codex-core = { workspace = true }
 codex-mcp = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

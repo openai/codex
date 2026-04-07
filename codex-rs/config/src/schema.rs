@@ -1,4 +1,5 @@
-use codex_config::types::RawMcpServerConfig;
+use crate::config_toml::ConfigToml;
+use crate::types::RawMcpServerConfig;
 use codex_features::FEATURES;
 use codex_features::legacy_feature_keys;
 use schemars::r#gen::SchemaGenerator;
@@ -11,8 +12,6 @@ use schemars::schema::SchemaObject;
 use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
-
-use crate::ConfigToml;
 
 /// Schema for the `[features]` map with known + legacy keys only.
 pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {

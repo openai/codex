@@ -15,7 +15,7 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::test_support;
-use codex_config_types::ConfigToml;
+use codex_config::config_toml::ConfigToml;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;

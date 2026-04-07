@@ -1,4 +1,4 @@
-use codex_login::AuthCredentialsStoreMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
 use codex_login::token_data::TokenData;
 use std::path::Path;
