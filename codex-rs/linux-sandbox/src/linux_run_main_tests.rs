@@ -93,6 +93,7 @@ fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
         },
     )
     .args;

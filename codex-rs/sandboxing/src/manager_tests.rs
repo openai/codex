@@ -272,6 +272,7 @@ fn transform_linux_seccomp_request(
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
             codex_linux_sandbox_exe: Some(codex_linux_sandbox_exe),
+            linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
