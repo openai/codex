@@ -14,6 +14,7 @@
 mod approval_request;
 mod prompt;
 mod review;
+mod review_analytics;
 mod review_session;
 mod review_session_analytics;
 
@@ -28,7 +29,9 @@ pub(crate) use approval_request::guardian_approval_request_to_json;
 pub(crate) use review::GUARDIAN_REJECTION_MESSAGE;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::review_approval_request;
+#[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;
+pub(crate) use review::review_delegated_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
 pub(crate) use review_session::GuardianReviewSessionManager;
 

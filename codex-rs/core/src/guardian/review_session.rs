@@ -60,7 +60,6 @@ const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
 );
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) enum GuardianReviewSessionOutcome {
     Completed {
         result: anyhow::Result<Option<String>>,

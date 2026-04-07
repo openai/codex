@@ -1,5 +1,9 @@
 use std::sync::Arc;
+use std::time::Instant;
 
+use codex_analytics::GuardianReviewDecision;
+use codex_analytics::GuardianReviewFailureKind;
+use codex_analytics::GuardianReviewTerminalStatus;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -24,9 +28,15 @@ use super::approval_request::guardian_request_turn_id;
 use super::prompt::build_guardian_prompt_items;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
+use super::review_analytics::GuardianReviewAnalyticsInput;
+use super::review_analytics::duration_millis_u64;
+use super::review_analytics::guardian_reviewed_action;
+use super::review_analytics::now_unix_timestamp_secs;
+use super::review_analytics::track_guardian_review;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
+use super::review_session_analytics::GuardianReviewSessionReport;
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "This action was rejected due to unacceptable risk. ",
@@ -39,9 +49,17 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
 
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
-    Completed(anyhow::Result<GuardianAssessment>),
-    TimedOut,
-    Aborted,
+    Completed {
+        result: anyhow::Result<GuardianAssessment>,
+        report: Option<GuardianReviewSessionReport>,
+        failure_kind: Option<GuardianReviewFailureKind>,
+    },
+    TimedOut {
+        report: Option<GuardianReviewSessionReport>,
+    },
+    Aborted {
+        report: Option<GuardianReviewSessionReport>,
+    },
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -78,10 +96,15 @@ async fn run_guardian_review(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     external_cancel: Option<CancellationToken>,
+    delegated_review: bool,
 ) -> ReviewDecision {
+    let review_started_at = Instant::now();
+    let started_at = now_unix_timestamp_secs();
     let assessment_id = guardian_request_id(&request).to_string();
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
+    let (trigger, reviewed_action, reviewed_action_truncated) = guardian_reviewed_action(&request);
+    let retry_reason_for_analytics = retry_reason.clone();
     session
         .send_event(
             turn.as_ref(),
@@ -101,6 +124,28 @@ async fn run_guardian_review(
         .as_ref()
         .is_some_and(CancellationToken::is_cancelled)
     {
+        track_guardian_review(
+            session.as_ref(),
+            GuardianReviewAnalyticsInput {
+                review_id: assessment_id.clone(),
+                target_item_id: assessment_id.clone(),
+                turn_id: assessment_turn_id.clone(),
+                trigger,
+                retry_reason: retry_reason_for_analytics,
+                delegated_review,
+                reviewed_action,
+                reviewed_action_truncated,
+                decision: GuardianReviewDecision::Aborted,
+                terminal_status: GuardianReviewTerminalStatus::Aborted,
+                failure_kind: Some(GuardianReviewFailureKind::Cancelled),
+                assessment: None,
+                report: None,
+                started_at,
+                completed_at: Some(now_unix_timestamp_secs()),
+                completion_latency_ms: Some(duration_millis_u64(review_started_at.elapsed())),
+            },
+        )
+        .await;
         session
             .send_event(
                 turn.as_ref(),
@@ -131,26 +176,68 @@ async fn run_guardian_review(
             )
             .await
         }
-        Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
+        Err(err) => GuardianReviewOutcome::Completed {
+            result: Err(err.into()),
+            report: None,
+            failure_kind: Some(GuardianReviewFailureKind::PromptBuildError),
+        },
     };
 
-    let assessment = match outcome {
-        GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
-        GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale: format!("Automatic approval review failed: {err}"),
-            evidence: vec![],
-        },
-        GuardianReviewOutcome::TimedOut => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale:
-                "Automatic approval review timed out while evaluating the requested approval."
-                    .to_string(),
-            evidence: vec![],
-        },
-        GuardianReviewOutcome::Aborted => {
+    let (assessment, report, failure_kind) = match outcome {
+        GuardianReviewOutcome::Completed {
+            result: Ok(assessment),
+            report,
+            failure_kind,
+        } => (assessment, report, failure_kind),
+        GuardianReviewOutcome::Completed {
+            result: Err(err),
+            report,
+            failure_kind,
+        } => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                risk_score: 100,
+                rationale: format!("Automatic approval review failed: {err}"),
+                evidence: vec![],
+            },
+            report,
+            failure_kind.or(Some(GuardianReviewFailureKind::SessionError)),
+        ),
+        GuardianReviewOutcome::TimedOut { report } => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                risk_score: 100,
+                rationale:
+                    "Automatic approval review timed out while evaluating the requested approval."
+                        .to_string(),
+                evidence: vec![],
+            },
+            report,
+            Some(GuardianReviewFailureKind::Timeout),
+        ),
+        GuardianReviewOutcome::Aborted { report } => {
+            track_guardian_review(
+                session.as_ref(),
+                GuardianReviewAnalyticsInput {
+                    review_id: assessment_id.clone(),
+                    target_item_id: assessment_id.clone(),
+                    turn_id: assessment_turn_id.clone(),
+                    trigger,
+                    retry_reason: retry_reason_for_analytics,
+                    delegated_review,
+                    reviewed_action,
+                    reviewed_action_truncated,
+                    decision: GuardianReviewDecision::Aborted,
+                    terminal_status: GuardianReviewTerminalStatus::Aborted,
+                    failure_kind: Some(GuardianReviewFailureKind::Cancelled),
+                    assessment: None,
+                    report,
+                    started_at,
+                    completed_at: Some(now_unix_timestamp_secs()),
+                    completion_latency_ms: Some(duration_millis_u64(review_started_at.elapsed())),
+                },
+            )
+            .await;
             session
                 .send_event(
                     turn.as_ref(),
@@ -170,6 +257,42 @@ async fn run_guardian_review(
     };
 
     let approved = assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
+    let decision = if approved {
+        GuardianReviewDecision::Approved
+    } else {
+        GuardianReviewDecision::Denied
+    };
+    let terminal_status = if approved {
+        GuardianReviewTerminalStatus::Approved
+    } else if matches!(failure_kind, Some(GuardianReviewFailureKind::Timeout)) {
+        GuardianReviewTerminalStatus::TimedOut
+    } else if failure_kind.is_some() {
+        GuardianReviewTerminalStatus::FailedClosed
+    } else {
+        GuardianReviewTerminalStatus::Denied
+    };
+    track_guardian_review(
+        session.as_ref(),
+        GuardianReviewAnalyticsInput {
+            review_id: assessment_id.clone(),
+            target_item_id: assessment_id.clone(),
+            turn_id: assessment_turn_id.clone(),
+            trigger,
+            retry_reason: retry_reason_for_analytics,
+            delegated_review,
+            reviewed_action,
+            reviewed_action_truncated,
+            decision,
+            terminal_status,
+            failure_kind,
+            assessment: Some(&assessment),
+            report,
+            started_at,
+            completed_at: Some(now_unix_timestamp_secs()),
+            completion_latency_ms: Some(duration_millis_u64(review_started_at.elapsed())),
+        },
+    )
+    .await;
     let verdict = if approved { "approved" } else { "denied" };
     let warning = format!(
         "Automatic approval review {verdict} (risk: {}): {}",
@@ -222,10 +345,12 @@ pub(crate) async fn review_approval_request(
         request,
         retry_reason,
         /*external_cancel*/ None,
+        /*delegated_review*/ false,
     )
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
@@ -239,6 +364,25 @@ pub(crate) async fn review_approval_request_with_cancel(
         request,
         retry_reason,
         Some(cancel_token),
+        /*delegated_review*/ false,
+    )
+    .await
+}
+
+pub(crate) async fn review_delegated_approval_request_with_cancel(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    cancel_token: CancellationToken,
+) -> ReviewDecision {
+    run_guardian_review(
+        Arc::clone(session),
+        Arc::clone(turn),
+        request,
+        retry_reason,
+        Some(cancel_token),
+        /*delegated_review*/ true,
     )
     .await
 }
@@ -267,7 +411,13 @@ pub(super) async fn run_guardian_review_session(
     let live_network_config = match session.services.network_proxy.as_ref() {
         Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
             Ok(config) => Some(config),
-            Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
+            Err(err) => {
+                return GuardianReviewOutcome::Completed {
+                    result: Err(err),
+                    report: None,
+                    failure_kind: Some(GuardianReviewFailureKind::SessionError),
+                };
+            }
         },
         None => None,
     };
@@ -317,7 +467,13 @@ pub(super) async fn run_guardian_review_session(
     );
     let guardian_config = match guardian_config {
         Ok(config) => config,
-        Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
+        Err(err) => {
+            return GuardianReviewOutcome::Completed {
+                result: Err(err),
+                report: None,
+                failure_kind: Some(GuardianReviewFailureKind::SessionError),
+            };
+        }
     };
 
     match session
@@ -336,13 +492,32 @@ pub(super) async fn run_guardian_review_session(
         })
         .await
     {
-        GuardianReviewSessionOutcome::Completed { result, report: _ } => match result {
-            Ok(last_agent_message) => GuardianReviewOutcome::Completed(parse_guardian_assessment(
-                last_agent_message.as_deref(),
-            )),
-            Err(err) => GuardianReviewOutcome::Completed(Err(err)),
+        GuardianReviewSessionOutcome::Completed { result, report } => match result {
+            Ok(last_agent_message) => {
+                match parse_guardian_assessment(last_agent_message.as_deref()) {
+                    Ok(assessment) => GuardianReviewOutcome::Completed {
+                        result: Ok(assessment),
+                        report,
+                        failure_kind: None,
+                    },
+                    Err(err) => GuardianReviewOutcome::Completed {
+                        result: Err(err),
+                        report,
+                        failure_kind: Some(GuardianReviewFailureKind::ParseError),
+                    },
+                }
+            }
+            Err(err) => GuardianReviewOutcome::Completed {
+                result: Err(err),
+                report,
+                failure_kind: Some(GuardianReviewFailureKind::SessionError),
+            },
         },
-        GuardianReviewSessionOutcome::TimedOut { report: _ } => GuardianReviewOutcome::TimedOut,
-        GuardianReviewSessionOutcome::Aborted { report: _ } => GuardianReviewOutcome::Aborted,
+        GuardianReviewSessionOutcome::TimedOut { report } => {
+            GuardianReviewOutcome::TimedOut { report }
+        }
+        GuardianReviewSessionOutcome::Aborted { report } => {
+            GuardianReviewOutcome::Aborted { report }
+        }
     }
 }

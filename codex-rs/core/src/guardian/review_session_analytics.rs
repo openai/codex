@@ -7,7 +7,6 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::TokenUsage;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct GuardianReviewSessionReport {
     pub(crate) guardian_thread_id: String,
     pub(crate) session_kind: GuardianReviewSessionKind,
