@@ -69,6 +69,8 @@ print_failed_bazel_test_logs() {
   local console_log="$1"
   local testlogs_dir=
   local -a bazel_info_cmd=(bazel)
+  local rust_test_summary
+  rust_test_summary="$(mktemp)"
 
   local failed_target_logs=()
   while IFS= read -r target_log; do
@@ -95,6 +97,7 @@ print_failed_bazel_test_logs() {
 
   if [[ ${#failed_target_logs[@]} -eq 0 ]]; then
     echo "No failed Bazel test targets were found in console output."
+    rm -f "$rust_test_summary"
     return
   fi
 
@@ -129,6 +132,31 @@ print_failed_bazel_test_logs() {
     echo
     if [[ -f "$test_log" ]]; then
       cat "$test_log"
+      awk -v target="$target" '
+        /^failures:$/ {
+          in_failures = 1
+          next
+        }
+        in_failures && /^    / {
+          print "F\t" target "\t" substr($0, 5)
+          next
+        }
+        in_failures && $0 !~ /^$/ {
+          in_failures = 0
+        }
+        /^test result: FAILED\./ {
+          line = $0
+          sub(/^test result: FAILED\. /, "", line)
+          sub(/; finished.*$/, "", line)
+          field_count = split(line, fields, "; ")
+          printf "T\t%s", target
+          for (i = 1; i <= field_count; i++) {
+            split(fields[i], parts, " ")
+            printf "\t%d", parts[1]
+          }
+          print ""
+        }
+      ' "$test_log" >> "$rust_test_summary"
     else
       echo "Missing test log: $test_log"
     fi
@@ -140,6 +168,47 @@ print_failed_bazel_test_logs() {
     local target="${target_log%%$'\t'*}"
     echo "  FAIL ${target}"
   done
+
+  echo
+  awk -F '\t' '
+    BEGIN {
+      print "Rust test failures across failed Bazel targets:"
+    }
+    $1 == "F" {
+      saw_failure = 1
+      if ($2 != current_target) {
+        if (current_target != "") {
+          print ""
+        }
+        current_target = $2
+        print "  " current_target
+      }
+      print "    " $3
+    }
+    $1 == "T" {
+      passed += $3
+      failed += $4
+      ignored += $5
+      measured += $6
+      filtered += $7
+      result_count += 1
+    }
+    END {
+      if (!saw_failure) {
+        print "  No Rust test failure names found in test logs."
+      }
+
+      print ""
+      print "Rust test result totals across failed Bazel targets:"
+      if (result_count > 0) {
+        printf "  %d passed; %d failed; %d ignored; %d measured; %d filtered out\n",
+          passed, failed, ignored, measured, filtered
+      } else {
+        print "  No Rust test result totals found in test logs."
+      }
+    }
+  ' "$rust_test_summary"
+  rm -f "$rust_test_summary"
 }
 
 bazel_args=()
