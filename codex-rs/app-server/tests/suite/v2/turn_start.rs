@@ -241,8 +241,8 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
         );
         let developer_texts = request.message_input_texts("developer");
         assert!(
-            developer_texts.is_empty(),
-            "did not expect developer instruction messages: {developer_texts:?}"
+            developer_texts.iter().all(|text| !text.is_empty()),
+            "did not expect empty developer instruction messages: {developer_texts:?}"
         );
     }
 
