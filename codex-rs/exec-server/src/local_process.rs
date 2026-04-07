@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -54,7 +53,6 @@ use crate::rpc::invalid_request;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
-static CONFIGURED_CODEX_LINUX_SANDBOX_EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
 #[cfg(test)]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
 #[cfg(not(test))]
@@ -111,11 +109,6 @@ struct ExecServerRuntimeConfig {
 
 impl ExecServerRuntimeConfig {
     fn detect() -> Self {
-        if let Some(codex_linux_sandbox_exe) = CONFIGURED_CODEX_LINUX_SANDBOX_EXE.get().cloned() {
-            return Self {
-                codex_linux_sandbox_exe,
-            };
-        }
         let env_path = std::env::var_os("CODEX_LINUX_SANDBOX_EXE").map(PathBuf::from);
         let sibling_path = std::env::current_exe().ok().and_then(|current_exe| {
             current_exe
@@ -133,10 +126,6 @@ struct StartedProcess {
     process_id: ProcessId,
     sandbox_type: SandboxType,
     wake_tx: watch::Sender<u64>,
-}
-
-pub(crate) fn configure_codex_linux_sandbox_exe(codex_linux_sandbox_exe: Option<PathBuf>) {
-    let _ = CONFIGURED_CODEX_LINUX_SANDBOX_EXE.set(codex_linux_sandbox_exe);
 }
 
 impl Default for LocalProcess {
