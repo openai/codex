@@ -708,9 +708,9 @@ fn normalized_project_trust_keys(path: &Path) -> Vec<String> {
             .to_string(),
     );
     if normalized_path == normalized_canonical_path {
-        vec![normalized_path]
+        vec![normalized_canonical_path]
     } else {
-        vec![normalized_path, normalized_canonical_path]
+        vec![normalized_canonical_path, normalized_path]
     }
 }
 

@@ -133,6 +133,7 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
+        cmd.env("CODEX_APP_SERVER_MANAGED_CONFIG_PATH", "");
         cmd.env("RUST_LOG", "info");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.args(args);

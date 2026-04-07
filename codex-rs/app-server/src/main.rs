@@ -7,10 +7,10 @@ use codex_arg0::arg0_dispatch_or_else;
 use codex_core::config_loader::LoaderOverrides;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_cli::CliConfigOverrides;
-use std::path::PathBuf;
 
-// Debug-only test hook: lets integration tests point the server at a temporary
-// managed config file without writing to /etc.
+// Debug-only test hook: lets integration tests disable host-managed config or
+// point the server at a temporary managed config file without writing to /etc.
+#[cfg(debug_assertions)]
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
 
 #[derive(Debug, Parser)]
@@ -40,11 +40,7 @@ struct AppServerArgs {
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
-        let managed_config_path = managed_config_path_from_debug_env();
-        let loader_overrides = LoaderOverrides {
-            managed_config_path,
-            ..Default::default()
-        };
+        let loader_overrides = loader_overrides_from_debug_env();
         let transport = args.listen;
         let session_source = args.session_source;
         let auth = args.auth.try_into_settings()?;
@@ -63,17 +59,20 @@ fn main() -> anyhow::Result<()> {
     })
 }
 
-fn managed_config_path_from_debug_env() -> Option<PathBuf> {
+fn loader_overrides_from_debug_env() -> LoaderOverrides {
     #[cfg(debug_assertions)]
     {
         if let Ok(value) = std::env::var(MANAGED_CONFIG_PATH_ENV_VAR) {
             return if value.is_empty() {
-                None
+                LoaderOverrides::without_managed_config_for_tests()
             } else {
-                Some(PathBuf::from(value))
+                LoaderOverrides {
+                    managed_config_path: Some(std::path::PathBuf::from(value)),
+                    ..Default::default()
+                }
             };
         }
     }
 
-    None
+    LoaderOverrides::default()
 }
