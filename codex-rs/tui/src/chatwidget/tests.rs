@@ -20,6 +20,7 @@ pub(super) use crate::test_support::PathBufExt;
 pub(super) use crate::test_support::test_path_display;
 pub(super) use crate::tui::FrameRequester;
 pub(super) use assert_matches::assert_matches;
+pub(super) use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 pub(super) use codex_app_server_protocol::AppSummary;
 pub(super) use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 pub(super) use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;

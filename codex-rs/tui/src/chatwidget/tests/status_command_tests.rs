@@ -206,3 +206,63 @@ async fn usage_limit_error_opens_workspace_owner_prompt_after_rate_limits_refres
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::NotifyWorkspaceOwner));
 }
+
+#[tokio::test]
+async fn notify_workspace_owner_success_adds_confirmation_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.start_notify_workspace_owner();
+
+    chat.finish_notify_workspace_owner(Ok(AddCreditsNudgeEmailStatus::Sent));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one confirmation message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Workspace owner notified."),
+        "expected success message, got {rendered:?}"
+    );
+    assert!(
+        !chat.notify_workspace_owner_in_flight,
+        "notify-owner state should clear after success"
+    );
+}
+
+#[tokio::test]
+async fn notify_workspace_owner_cooldown_adds_info_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.start_notify_workspace_owner();
+
+    chat.finish_notify_workspace_owner(Ok(AddCreditsNudgeEmailStatus::CooldownActive));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one cooldown message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Workspace owner was already notified recently."),
+        "expected cooldown message, got {rendered:?}"
+    );
+    assert!(
+        !chat.notify_workspace_owner_in_flight,
+        "notify-owner state should clear after cooldown"
+    );
+}
+
+#[tokio::test]
+async fn notify_workspace_owner_error_adds_retry_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.start_notify_workspace_owner();
+
+    chat.finish_notify_workspace_owner(Err("backend failed".to_string()));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one error message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Could not notify your workspace owner. Please try again."),
+        "expected retry message, got {rendered:?}"
+    );
+    assert!(
+        !chat.notify_workspace_owner_in_flight,
+        "notify-owner state should clear after errors"
+    );
+}
