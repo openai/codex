@@ -273,10 +273,9 @@ pub async fn discover_project_doc_paths(
             if cursor == root {
                 break;
             }
-            let parent = cursor.parent();
-            if parent == cursor {
+            let Some(parent) = cursor.parent() else {
                 break;
-            }
+            };
             cursor = parent;
         }
         dirs.reverse();

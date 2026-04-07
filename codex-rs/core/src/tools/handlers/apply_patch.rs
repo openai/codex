@@ -67,8 +67,11 @@ fn write_permissions_for_paths(
 ) -> Option<PermissionProfile> {
     let write_paths = file_paths
         .iter()
-        .map(AbsolutePathBuf::parent)
-        .map(AbsolutePathBuf::into_path_buf)
+        .map(|path| {
+            path.parent()
+                .unwrap_or_else(|| path.clone())
+                .into_path_buf()
+        })
         .filter(|path| {
             !file_system_sandbox_policy.can_write_path_with_cwd(path.as_path(), cwd.as_path())
         })

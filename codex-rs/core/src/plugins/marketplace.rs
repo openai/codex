@@ -376,9 +376,24 @@ fn resolve_plugin_source_path(
 fn marketplace_root_dir(
     marketplace_path: &AbsolutePathBuf,
 ) -> Result<AbsolutePathBuf, MarketplaceError> {
-    let plugins_dir = marketplace_path.parent();
-    let dot_agents_dir = plugins_dir.parent();
-    let marketplace_root = dot_agents_dir.parent();
+    let Some(plugins_dir) = marketplace_path.parent() else {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "marketplace file must live under `<root>/.agents/plugins/`".to_string(),
+        });
+    };
+    let Some(dot_agents_dir) = plugins_dir.parent() else {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "marketplace file must live under `<root>/.agents/plugins/`".to_string(),
+        });
+    };
+    let Some(marketplace_root) = dot_agents_dir.parent() else {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "marketplace file must live under `<root>/.agents/plugins/`".to_string(),
+        });
+    };
 
     if plugins_dir.as_path().file_name().and_then(|s| s.to_str()) != Some("plugins")
         || dot_agents_dir

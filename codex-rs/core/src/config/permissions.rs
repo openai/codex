@@ -88,7 +88,7 @@ pub(crate) fn get_readable_roots_required_for_codex_runtime(
         if let Some(arg0_root) = arg0_root.as_ref()
             && path.as_path().starts_with(arg0_root.as_path())
         {
-            Some(path.parent())
+            path.parent()
         } else {
             Some(path)
         }

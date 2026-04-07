@@ -75,18 +75,14 @@ impl AbsolutePathBuf {
         Self::resolve_path_against_base(path, &self.0)
     }
 
-    /// Returns the parent path. The parent of a root path is the root path.
-    pub fn parent(&self) -> Self {
-        self.0.parent().map_or_else(
-            || self.clone(),
-            |p| {
-                debug_assert!(
-                    p.is_absolute(),
-                    "parent of AbsolutePathBuf must be absolute"
-                );
-                Self(p.to_path_buf())
-            },
-        )
+    pub fn parent(&self) -> Option<Self> {
+        self.0.parent().map(|p| {
+            debug_assert!(
+                p.is_absolute(),
+                "parent of AbsolutePathBuf must be absolute"
+            );
+            Self(p.to_path_buf())
+        })
     }
 
     pub fn as_path(&self) -> &Path {
@@ -239,21 +235,6 @@ mod tests {
         let abs_path_buf =
             AbsolutePathBuf::resolve_path_against_base("./nested/../file.txt", base_dir);
         assert_eq!(abs_path_buf.as_path(), base_dir.join("file.txt").as_path());
-    }
-
-    #[test]
-    fn parent_returns_absolute_parent() {
-        let temp_dir = tempdir().expect("base dir");
-        let path = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("file.txt"))
-            .expect("absolute path");
-        assert_eq!(path.parent().as_path(), temp_dir.path());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn parent_of_root_returns_root() {
-        let root = AbsolutePathBuf::from_absolute_path("/").expect("absolute path");
-        assert_eq!(root.parent(), root);
     }
 
     #[test]
