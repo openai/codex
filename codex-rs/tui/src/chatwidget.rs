@@ -5065,10 +5065,6 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                if !self.can_use_fast_mode() {
-                    self.add_error_message(self.fast_mode_unavailable_message().to_string());
-                    return;
-                }
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
                     None
                 } else {
@@ -5372,10 +5368,6 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Fast => {
-                if !self.can_use_fast_mode() {
-                    self.add_error_message(self.fast_mode_unavailable_message().to_string());
-                    return;
-                }
                 if trimmed.is_empty() {
                     self.dispatch_command(cmd);
                     return;
@@ -9476,7 +9468,6 @@ impl ChatWidget {
         self.has_chatgpt_account = has_chatgpt_account;
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
-        self.sync_fast_command_enabled();
     }
 
     pub(crate) fn should_show_fast_status(
@@ -9489,28 +9480,8 @@ impl ChatWidget {
             && self.has_chatgpt_account
     }
 
-    fn fast_mode_feature_enabled(&self) -> bool {
+    fn fast_mode_enabled(&self) -> bool {
         self.config.features.enabled(Feature::FastMode)
-    }
-
-    fn can_use_fast_mode(&self) -> bool {
-        self.fast_mode_feature_enabled()
-            && self.has_chatgpt_account
-            && self
-                .model_catalog
-                .try_list_models()
-                .ok()
-                .is_some_and(|models| models.into_iter().any(|preset| preset.supports_fast_mode()))
-    }
-
-    fn fast_mode_unavailable_message(&self) -> &'static str {
-        if !self.fast_mode_feature_enabled() {
-            "Fast mode is not available."
-        } else if !self.has_chatgpt_account {
-            "Fast mode requires ChatGPT sign-in."
-        } else {
-            "Fast mode is not available for your current models."
-        }
     }
 
     pub(crate) fn set_realtime_audio_device(
@@ -9594,7 +9565,7 @@ impl ChatWidget {
 
     fn sync_fast_command_enabled(&mut self) {
         self.bottom_pane
-            .set_fast_command_enabled(self.can_use_fast_mode());
+            .set_fast_command_enabled(self.fast_mode_enabled());
     }
 
     fn sync_personality_command_enabled(&mut self) {
