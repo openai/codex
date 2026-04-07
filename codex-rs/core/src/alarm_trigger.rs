@@ -150,17 +150,17 @@ fn timing_for_new_trigger_with_timezone(
             ))
         }
         AlarmTrigger::Schedule { rrule: Some(_), .. } => {
-            let first = first_schedule_occurrence(&normalized, timezone)?;
-            let Some(first) = first else {
+            let due_or_next = next_schedule_occurrence_at_or_after(&normalized, now, timezone)?;
+            let Some(due_or_next) = due_or_next else {
                 return Ok(timing(
                     normalized, /*pending_run*/ false, /*next_run_at*/ None, now,
                 ));
             };
-            let pending_run = first <= now.timestamp();
+            let pending_run = due_or_next <= now.timestamp();
             let next_run_at = if pending_run {
                 next_schedule_occurrence_after(&normalized, now, timezone)?
             } else {
-                Some(first)
+                Some(due_or_next)
             };
             Ok(timing(normalized, pending_run, next_run_at, now))
         }
@@ -363,26 +363,32 @@ fn schedule_dtstart_utc(trigger: &AlarmTrigger, timezone: Tz) -> Result<DateTime
     local_dtstart_to_utc(dtstart, timezone)
 }
 
-fn first_schedule_occurrence(trigger: &AlarmTrigger, timezone: Tz) -> Result<Option<i64>, String> {
-    let dtstart = schedule_dtstart_utc(trigger, timezone)?;
-    let after = dtstart
-        .checked_sub_signed(ChronoDuration::seconds(1))
-        .unwrap_or(dtstart);
-    next_schedule_occurrence_after(trigger, after, timezone)
-}
-
 fn next_schedule_occurrence_after(
     trigger: &AlarmTrigger,
     after: DateTime<Utc>,
     timezone: Tz,
 ) -> Result<Option<i64>, String> {
     let set = parse_rrule_set(trigger, timezone)?;
+    let after = after
+        .checked_add_signed(ChronoDuration::seconds(1))
+        .unwrap_or(after);
     let result = set.after(after.with_timezone(&timezone)).all(1);
     Ok(result
         .dates
         .into_iter()
         .next()
         .map(|next| next.with_timezone(&Utc).timestamp()))
+}
+
+fn next_schedule_occurrence_at_or_after(
+    trigger: &AlarmTrigger,
+    at: DateTime<Utc>,
+    timezone: Tz,
+) -> Result<Option<i64>, String> {
+    let after = at
+        .checked_sub_signed(ChronoDuration::seconds(1))
+        .unwrap_or(at);
+    next_schedule_occurrence_after(trigger, after, timezone)
 }
 
 fn parse_rrule_set(trigger: &AlarmTrigger, timezone: Tz) -> Result<RRuleSet, String> {
@@ -459,6 +465,12 @@ mod tests {
         Utc.timestamp_opt(timestamp, 0)
             .single()
             .expect("valid timestamp")
+    }
+
+    fn utc_datetime(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(year, month, day, hour, 0, 0)
+            .single()
+            .expect("valid datetime")
     }
 
     #[test]
@@ -581,6 +593,44 @@ mod tests {
         .expect("trigger should be valid");
         assert_eq!(timing.pending_run, false);
         assert_eq!(timing.next_run_at, Some(1_704_099_600));
+    }
+
+    #[test]
+    fn schedule_recurring_historical_dtstart_waits_for_next_future_occurrence() {
+        let timing = timing_for_new_trigger_with_timezone(
+            AlarmTrigger::Schedule {
+                dtstart: Some("2024-01-01T09:00:00".to_string()),
+                rrule: Some("FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0".to_string()),
+            },
+            utc_datetime(2024, 1, 2, 8),
+            utc_datetime(2024, 1, 2, 8),
+            Tz::UTC,
+        )
+        .expect("trigger should be valid");
+        assert_eq!(timing.pending_run, false);
+        assert_eq!(
+            timing.next_run_at,
+            Some(utc_datetime(2024, 1, 2, 9).timestamp())
+        );
+    }
+
+    #[test]
+    fn schedule_recurring_due_now_becomes_pending() {
+        let timing = timing_for_new_trigger_with_timezone(
+            AlarmTrigger::Schedule {
+                dtstart: Some("2024-01-01T09:00:00".to_string()),
+                rrule: Some("FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0".to_string()),
+            },
+            utc_datetime(2024, 1, 2, 9),
+            utc_datetime(2024, 1, 2, 9),
+            Tz::UTC,
+        )
+        .expect("trigger should be valid");
+        assert_eq!(timing.pending_run, true);
+        assert_eq!(
+            timing.next_run_at,
+            Some(utc_datetime(2024, 1, 3, 9).timestamp())
+        );
     }
 
     #[test]
