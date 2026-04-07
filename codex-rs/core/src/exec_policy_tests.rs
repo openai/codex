@@ -10,6 +10,8 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::RequirementsExecPolicy;
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ProjectConfig;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -74,14 +76,14 @@ async fn write_project_trust_config(
 ) -> std::io::Result<()> {
     tokio::fs::write(
         codex_home.join(codex_config::CONFIG_TOML_FILE),
-        toml::to_string(&crate::config::ConfigToml {
+        toml::to_string(&ConfigToml {
             projects: Some(
                 trusted_projects
                     .iter()
                     .map(|(project, trust_level)| {
                         (
                             project.to_string_lossy().to_string(),
-                            crate::config::ProjectConfig {
+                            ProjectConfig {
                                 trust_level: Some(*trust_level),
                             },
                         )
