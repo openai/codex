@@ -122,7 +122,10 @@ mod tests {
     fn test_exact_match_finds_sequence() {
         let lines = to_vec(&["foo", "bar", "baz"]);
         let pattern = to_vec(&["bar", "baz"]);
-        assert_eq!(seek_sequence(&lines, &pattern, 0, false), Some(1));
+        assert_eq!(
+            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            Some(1)
+        );
     }
 
     #[test]
@@ -130,7 +133,10 @@ mod tests {
         let lines = to_vec(&["foo   ", "bar\t\t"]);
         // Pattern omits trailing whitespace.
         let pattern = to_vec(&["foo", "bar"]);
-        assert_eq!(seek_sequence(&lines, &pattern, 0, false), Some(0));
+        assert_eq!(
+            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            Some(0)
+        );
     }
 
     #[test]
@@ -138,7 +144,10 @@ mod tests {
         let lines = to_vec(&["    foo   ", "   bar\t"]);
         // Pattern omits any additional whitespace.
         let pattern = to_vec(&["foo", "bar"]);
-        assert_eq!(seek_sequence(&lines, &pattern, 0, false), Some(0));
+        assert_eq!(
+            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            Some(0)
+        );
     }
 
     #[test]
@@ -146,6 +155,9 @@ mod tests {
         let lines = to_vec(&["just one line"]);
         let pattern = to_vec(&["too", "many", "lines"]);
         // Should not panic – must return None when pattern cannot possibly fit.
-        assert_eq!(seek_sequence(&lines, &pattern, 0, false), None);
+        assert_eq!(
+            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+            None
+        );
     }
 }

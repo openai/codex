@@ -1,9 +1,6 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
-use crate::protocol::AskForApproval;
-use crate::protocol::EventMsg;
-use crate::protocol::SandboxPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -14,6 +11,11 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
@@ -25,10 +27,8 @@ fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
     turn.sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
-    turn.file_system_sandbox_policy =
-        crate::protocol::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
-    turn.network_sandbox_policy =
-        crate::protocol::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
+    turn.file_system_sandbox_policy = FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+    turn.network_sandbox_policy = NetworkSandboxPolicy::from(turn.sandbox_policy.get());
 }
 
 #[test]
@@ -47,13 +47,19 @@ fn node_version_parses_v_prefix_and_suffix() {
 #[test]
 fn truncate_utf8_prefix_by_bytes_preserves_character_boundaries() {
     let input = "aé🙂z";
-    assert_eq!(truncate_utf8_prefix_by_bytes(input, 0), "");
-    assert_eq!(truncate_utf8_prefix_by_bytes(input, 1), "a");
-    assert_eq!(truncate_utf8_prefix_by_bytes(input, 2), "a");
-    assert_eq!(truncate_utf8_prefix_by_bytes(input, 3), "aé");
-    assert_eq!(truncate_utf8_prefix_by_bytes(input, 6), "aé");
-    assert_eq!(truncate_utf8_prefix_by_bytes(input, 7), "aé🙂");
-    assert_eq!(truncate_utf8_prefix_by_bytes(input, 8), "aé🙂z");
+    assert_eq!(truncate_utf8_prefix_by_bytes(input, /*max_bytes*/ 0), "");
+    assert_eq!(truncate_utf8_prefix_by_bytes(input, /*max_bytes*/ 1), "a");
+    assert_eq!(truncate_utf8_prefix_by_bytes(input, /*max_bytes*/ 2), "a");
+    assert_eq!(truncate_utf8_prefix_by_bytes(input, /*max_bytes*/ 3), "aé");
+    assert_eq!(truncate_utf8_prefix_by_bytes(input, /*max_bytes*/ 6), "aé");
+    assert_eq!(
+        truncate_utf8_prefix_by_bytes(input, /*max_bytes*/ 7),
+        "aé🙂"
+    );
+    assert_eq!(
+        truncate_utf8_prefix_by_bytes(input, /*max_bytes*/ 8),
+        "aé🙂z"
+    );
 }
 
 #[test]
@@ -203,7 +209,7 @@ async fn wait_for_exec_tool_calls_map_drains_inflight_calls_without_hanging() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reset_waits_for_exec_lock_before_clearing_exec_tool_calls() {
-    let manager = JsReplManager::new(None, Vec::new())
+    let manager = JsReplManager::new(/*node_path*/ None, Vec::new())
         .await
         .expect("manager should initialize");
     let permit = manager
@@ -300,8 +306,11 @@ async fn emitted_image_content_item_does_not_force_original_when_enabled() {
         .expect("test turn features should allow feature update");
     turn.model_info.supports_image_detail_original = true;
 
-    let content_item =
-        emitted_image_content_item(&turn, "data:image/png;base64,AAA".to_string(), None);
+    let content_item = emitted_image_content_item(
+        &turn,
+        "data:image/png;base64,AAA".to_string(),
+        /*detail*/ None,
+    );
 
     assert_eq!(
         content_item,
@@ -427,7 +436,7 @@ fn summarize_tool_call_error_marks_error_payload() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reset_clears_inflight_exec_tool_calls_without_waiting() {
-    let manager = JsReplManager::new(None, Vec::new())
+    let manager = JsReplManager::new(/*node_path*/ None, Vec::new())
         .await
         .expect("manager should initialize");
     let exec_id = Uuid::new_v4().to_string();
@@ -460,7 +469,7 @@ async fn reset_clears_inflight_exec_tool_calls_without_waiting() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reset_aborts_inflight_exec_tool_tasks() {
-    let manager = JsReplManager::new(None, Vec::new())
+    let manager = JsReplManager::new(/*node_path*/ None, Vec::new())
         .await
         .expect("manager should initialize");
     let exec_id = Uuid::new_v4().to_string();
@@ -621,14 +630,14 @@ async fn interrupt_turn_exec_clears_matching_submitted_exec() -> anyhow::Result<
         return Ok(());
     }
 
-    let manager = JsReplManager::new(None, Vec::new())
+    let manager = JsReplManager::new(/*node_path*/ None, Vec::new())
         .await
         .expect("manager should initialize");
     let (_session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let dependency_env = HashMap::new();
     let mut state = manager
-        .start_kernel(Arc::clone(&turn), &dependency_env, None)
+        .start_kernel(Arc::clone(&turn), &dependency_env, /*thread_id*/ None)
         .await
         .map_err(anyhow::Error::msg)?;
     let child = Arc::clone(&state.child);
@@ -667,14 +676,14 @@ async fn interrupt_turn_exec_resets_matching_pending_kernel_start() -> anyhow::R
         return Ok(());
     }
 
-    let manager = JsReplManager::new(None, Vec::new())
+    let manager = JsReplManager::new(/*node_path*/ None, Vec::new())
         .await
         .expect("manager should initialize");
     let (_session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let dependency_env = HashMap::new();
     let mut state = manager
-        .start_kernel(Arc::clone(&turn), &dependency_env, None)
+        .start_kernel(Arc::clone(&turn), &dependency_env, /*thread_id*/ None)
         .await
         .map_err(anyhow::Error::msg)?;
     state.top_level_exec_state = TopLevelExecState::FreshKernel {
@@ -711,14 +720,14 @@ async fn interrupt_turn_exec_does_not_reset_reused_kernel_before_submit() -> any
         return Ok(());
     }
 
-    let manager = JsReplManager::new(None, Vec::new())
+    let manager = JsReplManager::new(/*node_path*/ None, Vec::new())
         .await
         .expect("manager should initialize");
     let (_session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let dependency_env = HashMap::new();
     let mut state = manager
-        .start_kernel(Arc::clone(&turn), &dependency_env, None)
+        .start_kernel(Arc::clone(&turn), &dependency_env, /*thread_id*/ None)
         .await
         .map_err(anyhow::Error::msg)?;
     state.top_level_exec_state = TopLevelExecState::ReusedKernelPending {

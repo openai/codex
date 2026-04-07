@@ -1018,7 +1018,9 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_connect_accept(None, req).await.unwrap_err();
+        let response = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
@@ -1043,7 +1045,9 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let (response, _request) = http_connect_accept(None, req).await.unwrap();
+        let (response, _request) = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -1075,7 +1079,9 @@ mod tests {
         let proxy_addr = listener
             .local_addr()
             .expect("proxy listener should expose local addr");
-        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(state, listener, None));
+        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(
+            state, listener, /*policy_decider*/ None,
+        ));
 
         let mut stream = tokio::net::TcpStream::connect(proxy_addr)
             .await
@@ -1125,7 +1131,9 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await.unwrap();
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
@@ -1148,7 +1156,9 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await.unwrap();
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
 
         if cfg!(target_os = "macos") {
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -1178,7 +1188,9 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await.unwrap();
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     }
 
@@ -1200,7 +1212,9 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_connect_accept(None, req).await.unwrap_err();
+        let response = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
@@ -1221,7 +1235,7 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await;
+        let response = http_plain_proxy(/*policy_decider*/ None, req).await;
         assert_eq!(response.unwrap().status(), StatusCode::BAD_REQUEST);
     }
 

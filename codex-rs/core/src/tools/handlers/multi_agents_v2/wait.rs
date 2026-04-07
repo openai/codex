@@ -1,17 +1,11 @@
 use super::*;
-use crate::agent::status::is_final;
-use futures::FutureExt;
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
 use tokio::time::timeout_at;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
     type Output = WaitAgentResult;
 
@@ -33,21 +27,6 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
-        let receiver_thread_ids = resolve_agent_targets(&session, &turn, args.targets).await?;
-        let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
-        for receiver_thread_id in &receiver_thread_ids {
-            let agent_metadata = session
-                .services
-                .agent_control
-                .get_agent_metadata(*receiver_thread_id)
-                .unwrap_or_default();
-            receiver_agents.push(CollabAgentRef {
-                thread_id: *receiver_thread_id,
-                agent_nickname: agent_metadata.agent_nickname,
-                agent_role: agent_metadata.agent_role,
-            });
-        }
-
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
         let timeout_ms = match timeout_ms {
             ms if ms <= 0 => {
@@ -58,91 +37,23 @@ impl ToolHandler for Handler {
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
+        let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
+
         session
             .send_event(
                 &turn,
                 CollabWaitingBeginEvent {
                     sender_thread_id: session.conversation_id,
-                    receiver_thread_ids: receiver_thread_ids.clone(),
-                    receiver_agents: receiver_agents.clone(),
+                    receiver_thread_ids: Vec::new(),
+                    receiver_agents: Vec::new(),
                     call_id: call_id.clone(),
                 }
                 .into(),
             )
             .await;
 
-        let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
-        let mut initial_final_statuses = Vec::new();
-        for id in &receiver_thread_ids {
-            match session.services.agent_control.subscribe_status(*id).await {
-                Ok(rx) => {
-                    let status = rx.borrow().clone();
-                    if is_final(&status) {
-                        initial_final_statuses.push((*id, status));
-                    }
-                    status_rxs.push((*id, rx));
-                }
-                Err(crate::error::CodexErr::ThreadNotFound(_)) => {
-                    initial_final_statuses.push((*id, AgentStatus::NotFound));
-                }
-                Err(err) => {
-                    let mut statuses = HashMap::with_capacity(1);
-                    statuses.insert(*id, session.services.agent_control.get_status(*id).await);
-                    session
-                        .send_event(
-                            &turn,
-                            CollabWaitingEndEvent {
-                                sender_thread_id: session.conversation_id,
-                                call_id: call_id.clone(),
-                                agent_statuses: build_wait_agent_statuses(
-                                    &statuses,
-                                    &receiver_agents,
-                                ),
-                                statuses,
-                            }
-                            .into(),
-                        )
-                        .await;
-                    return Err(collab_agent_error(*id, err));
-                }
-            }
-        }
-
-        let statuses = if !initial_final_statuses.is_empty() {
-            initial_final_statuses
-        } else {
-            let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs {
-                let session = session.clone();
-                futures.push(wait_for_final_status(session, id, rx));
-            }
-            let mut results = Vec::new();
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            loop {
-                match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
-                        results.push(result);
-                        break;
-                    }
-                    Ok(Some(None)) => continue,
-                    Ok(None) | Err(_) => break,
-                }
-            }
-            if !results.is_empty() {
-                loop {
-                    match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
-                        Some(None) | None => break,
-                    }
-                }
-            }
-            results
-        };
-
-        let timed_out = statuses.is_empty();
-        let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
-        let agent_statuses = build_wait_agent_statuses(&statuses_by_id, &receiver_agents);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        let timed_out = !wait_for_mailbox_change(&mut mailbox_seq_rx, deadline).await;
         let result = WaitAgentResult::from_timed_out(timed_out);
 
         session
@@ -151,8 +62,8 @@ impl ToolHandler for Handler {
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id,
-                    agent_statuses,
-                    statuses: statuses_by_id,
+                    agent_statuses: Vec::new(),
+                    statuses: HashMap::new(),
                 }
                 .into(),
             )
@@ -163,9 +74,8 @@ impl ToolHandler for Handler {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WaitArgs {
-    #[serde(default)]
-    targets: Vec<String>,
     timeout_ms: Option<i64>,
 }
 
@@ -207,24 +117,12 @@ impl ToolOutput for WaitAgentResult {
     }
 }
 
-async fn wait_for_final_status(
-    session: std::sync::Arc<Session>,
-    thread_id: ThreadId,
-    mut status_rx: Receiver<AgentStatus>,
-) -> Option<(ThreadId, AgentStatus)> {
-    let mut status = status_rx.borrow().clone();
-    if is_final(&status) {
-        return Some((thread_id, status));
-    }
-
-    loop {
-        if status_rx.changed().await.is_err() {
-            let latest = session.services.agent_control.get_status(thread_id).await;
-            return is_final(&latest).then_some((thread_id, latest));
-        }
-        status = status_rx.borrow().clone();
-        if is_final(&status) {
-            return Some((thread_id, status));
-        }
+async fn wait_for_mailbox_change(
+    mailbox_seq_rx: &mut tokio::sync::watch::Receiver<u64>,
+    deadline: Instant,
+) -> bool {
+    match timeout_at(deadline, mailbox_seq_rx.changed()).await {
+        Ok(Ok(())) => true,
+        Ok(Err(_)) | Err(_) => false,
     }
 }

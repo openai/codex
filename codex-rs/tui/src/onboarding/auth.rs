@@ -1,14 +1,14 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::AuthManager;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
-use codex_core::auth::read_openai_api_key_from_env;
-use codex_login::DeviceCode;
-use codex_login::ServerOptions;
-use codex_login::ShutdownHandle;
-use codex_login::run_login_server;
+use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::AccountLoginCompletedNotification;
+use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::AuthMode as AppServerAuthMode;
+use codex_app_server_protocol::CancelLoginAccountParams;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::LoginAccountResponse;
+use codex_login::read_openai_api_key_from_env;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -30,9 +30,11 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use codex_core::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use std::cell::Cell;
+use std::sync::Arc;
 use std::sync::RwLock;
+use uuid::Uuid;
 
 use crate::LoginStatus;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
@@ -74,9 +76,6 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
         }
     }
 }
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Notify;
 
 use super::onboarding_screen::StepState;
 
@@ -86,6 +85,7 @@ mod headless_chatgpt_login;
 pub(crate) enum SignInState {
     PickMode,
     ChatGptContinueInBrowser(ContinueInBrowserState),
+    #[allow(dead_code)]
     ChatGptDeviceCode(ContinueWithDeviceCodeState),
     ChatGptSuccessMessage,
     ChatGptSuccess,
@@ -101,6 +101,23 @@ pub(crate) enum SignInOption {
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
+fn onboarding_request_id() -> codex_app_server_protocol::RequestId {
+    codex_app_server_protocol::RequestId::String(Uuid::new_v4().to_string())
+}
+
+pub(super) async fn cancel_login_attempt(
+    request_handle: &AppServerRequestHandle,
+    login_id: String,
+) {
+    let _ = request_handle
+        .request_typed::<codex_app_server_protocol::CancelLoginAccountResponse>(
+            ClientRequest::CancelLoginAccount {
+                request_id: onboarding_request_id(),
+                params: CancelLoginAccountParams { login_id },
+            },
+        )
+        .await;
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct ApiKeyInputState {
@@ -111,21 +128,54 @@ pub(crate) struct ApiKeyInputState {
 #[derive(Clone)]
 /// Used to manage the lifecycle of SpawnedLogin and ensure it gets cleaned up.
 pub(crate) struct ContinueInBrowserState {
+    login_id: String,
     auth_url: String,
-    shutdown_flag: Option<ShutdownHandle>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ContinueWithDeviceCodeState {
-    device_code: Option<DeviceCode>,
-    cancel: Option<Arc<Notify>>,
+    request_id: String,
+    login_id: Option<String>,
+    verification_url: Option<String>,
+    user_code: Option<String>,
 }
 
-impl Drop for ContinueInBrowserState {
-    fn drop(&mut self) {
-        if let Some(handle) = &self.shutdown_flag {
-            handle.shutdown();
+impl ContinueWithDeviceCodeState {
+    pub(crate) fn pending(request_id: String) -> Self {
+        Self {
+            request_id,
+            login_id: None,
+            verification_url: None,
+            user_code: None,
         }
+    }
+
+    pub(crate) fn ready(
+        request_id: String,
+        login_id: String,
+        verification_url: String,
+        user_code: String,
+    ) -> Self {
+        Self {
+            request_id,
+            login_id: Some(login_id),
+            verification_url: Some(verification_url),
+            user_code: Some(user_code),
+        }
+    }
+
+    pub(crate) fn login_id(&self) -> Option<&str> {
+        self.login_id.as_deref()
+    }
+
+    pub(crate) fn is_showing_copyable_auth(&self) -> bool {
+        self.verification_url
+            .as_deref()
+            .is_some_and(|url| !url.is_empty())
+            && self
+                .user_code
+                .as_deref()
+                .is_some_and(|user_code| !user_code.is_empty())
     }
 }
 
@@ -165,23 +215,7 @@ impl KeyboardHandler for AuthModeWidget {
             }
             KeyCode::Esc => {
                 tracing::info!("Esc pressed");
-                let mut sign_in_state = self.sign_in_state.write().unwrap();
-                match &*sign_in_state {
-                    SignInState::ChatGptContinueInBrowser(_) => {
-                        *sign_in_state = SignInState::PickMode;
-                        drop(sign_in_state);
-                        self.request_frame.schedule_frame();
-                    }
-                    SignInState::ChatGptDeviceCode(state) => {
-                        if let Some(cancel) = &state.cancel {
-                            cancel.notify_one();
-                        }
-                        *sign_in_state = SignInState::PickMode;
-                        drop(sign_in_state);
-                        self.request_frame.schedule_frame();
-                    }
-                    _ => {}
-                }
+                self.cancel_active_attempt();
             }
             _ => {}
         }
@@ -193,21 +227,65 @@ impl KeyboardHandler for AuthModeWidget {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(crate) struct AuthModeWidget {
     pub request_frame: FrameRequester,
     pub highlighted_mode: SignInOption,
-    pub error: Option<String>,
+    pub error: Arc<RwLock<Option<String>>>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
-    pub codex_home: PathBuf,
-    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub login_status: LoginStatus,
-    pub auth_manager: Arc<AuthManager>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub app_server_request_handle: AppServerRequestHandle,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub animations_enabled: bool,
+    pub animations_suppressed: Cell<bool>,
 }
 
 impl AuthModeWidget {
+    pub(crate) fn set_animations_suppressed(&self, suppressed: bool) {
+        self.animations_suppressed.set(suppressed);
+    }
+
+    pub(crate) fn should_suppress_animations(&self) -> bool {
+        matches!(
+            &*self.sign_in_state.read().unwrap(),
+            SignInState::ChatGptContinueInBrowser(_) | SignInState::ChatGptDeviceCode(_)
+        )
+    }
+
+    pub(crate) fn cancel_active_attempt(&self) {
+        let mut sign_in_state = self.sign_in_state.write().unwrap();
+        match &*sign_in_state {
+            SignInState::ChatGptContinueInBrowser(state) => {
+                let request_handle = self.app_server_request_handle.clone();
+                let login_id = state.login_id.clone();
+                tokio::spawn(async move {
+                    cancel_login_attempt(&request_handle, login_id).await;
+                });
+            }
+            SignInState::ChatGptDeviceCode(state) => {
+                if let Some(login_id) = state.login_id().map(str::to_owned) {
+                    let request_handle = self.app_server_request_handle.clone();
+                    tokio::spawn(async move {
+                        cancel_login_attempt(&request_handle, login_id).await;
+                    });
+                }
+            }
+            _ => return,
+        }
+        *sign_in_state = SignInState::PickMode;
+        drop(sign_in_state);
+        self.set_error(/*message*/ None);
+        self.request_frame.schedule_frame();
+    }
+
+    fn set_error(&self, message: Option<String>) {
+        *self.error.write().unwrap() = message;
+    }
+
+    fn error_message(&self) -> Option<String> {
+        self.error.read().unwrap().clone()
+    }
+
     fn is_api_login_allowed(&self) -> bool {
         !matches!(self.forced_login_method, Some(ForcedLoginMethod::Chatgpt))
     }
@@ -285,7 +363,7 @@ impl AuthModeWidget {
 
     fn disallow_api_login(&mut self) {
         self.highlighted_mode = SignInOption::ChatGpt;
-        self.error = Some(API_KEY_DISABLED_MESSAGE.to_string());
+        self.set_error(Some(API_KEY_DISABLED_MESSAGE.to_string()));
         *self.sign_in_state.write().unwrap() = SignInState::PickMode;
         self.request_frame.schedule_frame();
     }
@@ -382,9 +460,9 @@ impl AuthModeWidget {
             //     But leaving this for a future cleanup.
             "  Press Enter to continue".dim().into(),
         );
-        if let Some(err) = &self.error {
+        if let Some(err) = self.error_message() {
             lines.push("".into());
-            lines.push(err.as_str().red().into());
+            lines.push(err.red().into());
         }
 
         Paragraph::new(lines)
@@ -394,7 +472,7 @@ impl AuthModeWidget {
 
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
         let mut spans = vec!["  ".into()];
-        if self.animations_enabled {
+        if self.animations_enabled && !self.animations_suppressed.get() {
             // Schedule a follow-up frame to keep the shimmer animation going.
             self.request_frame
                 .schedule_frame_in(std::time::Duration::from_millis(100));
@@ -543,9 +621,9 @@ impl AuthModeWidget {
             "  Press Enter to save".dim().into(),
             "  Press Esc to go back".dim().into(),
         ];
-        if let Some(error) = &self.error {
+        if let Some(error) = self.error_message() {
             footer_lines.push("".into());
-            footer_lines.push(error.as_str().red().into());
+            footer_lines.push(error.red().into());
         }
         Paragraph::new(footer_lines)
             .wrap(Wrap { trim: false })
@@ -562,13 +640,13 @@ impl AuthModeWidget {
                 match key_event.code {
                     KeyCode::Esc => {
                         *guard = SignInState::PickMode;
-                        self.error = None;
+                        self.set_error(/*message*/ None);
                         should_request_frame = true;
                     }
                     KeyCode::Enter => {
                         let trimmed = state.value.trim().to_string();
                         if trimmed.is_empty() {
-                            self.error = Some("API key cannot be empty".to_string());
+                            self.set_error(Some("API key cannot be empty".to_string()));
                             should_request_frame = true;
                         } else {
                             should_save = Some(trimmed);
@@ -581,7 +659,7 @@ impl AuthModeWidget {
                         } else {
                             state.value.pop();
                         }
-                        self.error = None;
+                        self.set_error(/*message*/ None);
                         should_request_frame = true;
                     }
                     KeyCode::Char(c)
@@ -595,7 +673,7 @@ impl AuthModeWidget {
                             state.prepopulated_from_env = false;
                         }
                         state.value.push(c);
-                        self.error = None;
+                        self.set_error(/*message*/ None);
                         should_request_frame = true;
                     }
                     _ => {}
@@ -628,7 +706,7 @@ impl AuthModeWidget {
             } else {
                 state.value.push_str(trimmed);
             }
-            self.error = None;
+            self.set_error(/*message*/ None);
         } else {
             return false;
         }
@@ -643,7 +721,7 @@ impl AuthModeWidget {
             self.disallow_api_login();
             return;
         }
-        self.error = None;
+        self.set_error(/*message*/ None);
         let prefill_from_env = read_openai_api_key_from_env();
         let mut guard = self.sign_in_state.write().unwrap();
         match &mut *guard {
@@ -673,39 +751,53 @@ impl AuthModeWidget {
             self.disallow_api_login();
             return;
         }
-        match login_with_api_key(
-            &self.codex_home,
-            &api_key,
-            self.cli_auth_credentials_store_mode,
-        ) {
-            Ok(()) => {
-                self.error = None;
-                self.login_status = LoginStatus::AuthMode(AuthMode::ApiKey);
-                self.auth_manager.reload();
-                *self.sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
-            }
-            Err(err) => {
-                self.error = Some(format!("Failed to save API key: {err}"));
-                let mut guard = self.sign_in_state.write().unwrap();
-                if let SignInState::ApiKeyEntry(existing) = &mut *guard {
-                    if existing.value.is_empty() {
-                        existing.value.push_str(&api_key);
-                    }
-                    existing.prepopulated_from_env = false;
-                } else {
-                    *guard = SignInState::ApiKeyEntry(ApiKeyInputState {
+        self.set_error(/*message*/ None);
+        let request_handle = self.app_server_request_handle.clone();
+        let sign_in_state = self.sign_in_state.clone();
+        let error = self.error.clone();
+        let request_frame = self.request_frame.clone();
+        tokio::spawn(async move {
+            match request_handle
+                .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
+                    request_id: onboarding_request_id(),
+                    params: LoginAccountParams::ApiKey {
+                        api_key: api_key.clone(),
+                    },
+                })
+                .await
+            {
+                Ok(LoginAccountResponse::ApiKey {}) => {
+                    *error.write().unwrap() = None;
+                    *sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
+                }
+                Ok(other) => {
+                    *error.write().unwrap() = Some(format!(
+                        "Unexpected account/login/start response: {other:?}"
+                    ));
+                    *sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
+                        value: api_key,
+                        prepopulated_from_env: false,
+                    });
+                }
+                Err(err) => {
+                    *error.write().unwrap() = Some(format!("Failed to save API key: {err}"));
+                    *sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
                         value: api_key,
                         prepopulated_from_env: false,
                     });
                 }
             }
-        }
-
+            request_frame.schedule_frame();
+        });
         self.request_frame.schedule_frame();
     }
 
     fn handle_existing_chatgpt_login(&mut self) -> bool {
-        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::Chatgpt)) {
+        if matches!(
+            self.login_status,
+            LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
+                | LoginStatus::AuthMode(AppServerAuthMode::ChatgptAuthTokens)
+        ) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
             true
@@ -722,52 +814,41 @@ impl AuthModeWidget {
             return;
         }
 
-        self.error = None;
-        let opts = ServerOptions::new(
-            self.codex_home.clone(),
-            CLIENT_ID.to_string(),
-            self.forced_chatgpt_workspace_id.clone(),
-            self.cli_auth_credentials_store_mode,
-        );
-
-        match run_login_server(opts) {
-            Ok(child) => {
-                let sign_in_state = self.sign_in_state.clone();
-                let request_frame = self.request_frame.clone();
-                let auth_manager = self.auth_manager.clone();
-                tokio::spawn(async move {
-                    let auth_url = child.auth_url.clone();
-                    {
-                        *sign_in_state.write().unwrap() =
-                            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
-                                auth_url,
-                                shutdown_flag: Some(child.cancel_handle()),
-                            });
-                    }
-                    request_frame.schedule_frame();
-                    let r = child.block_until_done().await;
-                    match r {
-                        Ok(()) => {
-                            // Force the auth manager to reload the new auth information.
-                            auth_manager.reload();
-
-                            *sign_in_state.write().unwrap() = SignInState::ChatGptSuccessMessage;
-                            request_frame.schedule_frame();
-                        }
-                        _ => {
-                            *sign_in_state.write().unwrap() = SignInState::PickMode;
-                            // self.error = Some(e.to_string());
-                            request_frame.schedule_frame();
-                        }
-                    }
-                });
+        self.set_error(/*message*/ None);
+        let request_handle = self.app_server_request_handle.clone();
+        let sign_in_state = self.sign_in_state.clone();
+        let error = self.error.clone();
+        let request_frame = self.request_frame.clone();
+        tokio::spawn(async move {
+            match request_handle
+                .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
+                    request_id: onboarding_request_id(),
+                    params: LoginAccountParams::Chatgpt,
+                })
+                .await
+            {
+                Ok(LoginAccountResponse::Chatgpt { login_id, auth_url }) => {
+                    maybe_open_auth_url_in_browser(&request_handle, &auth_url);
+                    *error.write().unwrap() = None;
+                    *sign_in_state.write().unwrap() =
+                        SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                            login_id,
+                            auth_url,
+                        });
+                }
+                Ok(other) => {
+                    *sign_in_state.write().unwrap() = SignInState::PickMode;
+                    *error.write().unwrap() = Some(format!(
+                        "Unexpected account/login/start response: {other:?}"
+                    ));
+                }
+                Err(err) => {
+                    *sign_in_state.write().unwrap() = SignInState::PickMode;
+                    *error.write().unwrap() = Some(err.to_string());
+                }
             }
-            Err(e) => {
-                *self.sign_in_state.write().unwrap() = SignInState::PickMode;
-                self.error = Some(e.to_string());
-                self.request_frame.schedule_frame();
-            }
-        }
+            request_frame.schedule_frame();
+        });
     }
 
     fn start_device_code_login(&mut self) {
@@ -775,14 +856,45 @@ impl AuthModeWidget {
             return;
         }
 
-        self.error = None;
-        let opts = ServerOptions::new(
-            self.codex_home.clone(),
-            CLIENT_ID.to_string(),
-            self.forced_chatgpt_workspace_id.clone(),
-            self.cli_auth_credentials_store_mode,
+        self.set_error(/*message*/ None);
+        headless_chatgpt_login::start_headless_chatgpt_login(self);
+    }
+
+    pub(crate) fn on_account_login_completed(
+        &mut self,
+        notification: AccountLoginCompletedNotification,
+    ) {
+        let Some(login_id) = notification.login_id else {
+            return;
+        };
+        let guard = self.sign_in_state.read().unwrap();
+        let is_matching_login = matches!(
+            &*guard,
+            SignInState::ChatGptContinueInBrowser(state) if state.login_id == login_id
+        ) || matches!(
+            &*guard,
+            SignInState::ChatGptDeviceCode(state) if state.login_id() == Some(login_id.as_str())
         );
-        headless_chatgpt_login::start_headless_chatgpt_login(self, opts);
+        drop(guard);
+        if !is_matching_login {
+            return;
+        }
+
+        if notification.success {
+            self.set_error(/*message*/ None);
+            *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccessMessage;
+        } else {
+            self.set_error(notification.error);
+            *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+        }
+        self.request_frame.schedule_frame();
+    }
+
+    pub(crate) fn on_account_updated(&mut self, notification: AccountUpdatedNotification) {
+        self.login_status = notification
+            .auth_mode
+            .map(LoginStatus::AuthMode)
+            .unwrap_or(LoginStatus::NotAuthenticated);
     }
 }
 
@@ -829,62 +941,163 @@ impl WidgetRef for AuthModeWidget {
     }
 }
 
+pub(super) fn maybe_open_auth_url_in_browser(request_handle: &AppServerRequestHandle, url: &str) {
+    if !matches!(request_handle, AppServerRequestHandle::InProcess(_)) {
+        return;
+    }
+
+    if let Err(err) = webbrowser::open(url) {
+        tracing::warn!("failed to open browser for login URL: {err}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_client::AppServerRequestHandle;
+    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+    use codex_app_server_client::InProcessAppServerClient;
+    use codex_app_server_client::InProcessClientStartArgs;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+    use codex_config::types::AuthCredentialsStoreMode;
+    use codex_core::config::ConfigBuilder;
+
+    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
-    use codex_core::auth::AuthCredentialsStoreMode;
-
-    fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
+    async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
         let codex_home_path = codex_home.path().to_path_buf();
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home_path.clone())
+            .build()
+            .await
+            .unwrap();
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            cli_overrides: Vec::new(),
+            loader_overrides: Default::default(),
+            cloud_requirements: cloud_requirements_loader_for_storage(
+                codex_home_path.clone(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                "https://chatgpt.com/backend-api/".to_string(),
+            ),
+            feedback: codex_feedback::CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "test".to_string(),
+            client_version: "test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .unwrap();
         let widget = AuthModeWidget {
             request_frame: FrameRequester::test_dummy(),
             highlighted_mode: SignInOption::ChatGpt,
-            error: None,
+            error: Arc::new(RwLock::new(None)),
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-            codex_home: codex_home_path.clone(),
-            cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             login_status: LoginStatus::NotAuthenticated,
-            auth_manager: AuthManager::shared(
-                codex_home_path,
-                false,
-                AuthCredentialsStoreMode::File,
-            ),
-            forced_chatgpt_workspace_id: None,
+            app_server_request_handle: AppServerRequestHandle::InProcess(client.request_handle()),
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             animations_enabled: true,
+            animations_suppressed: std::cell::Cell::new(false),
         };
         (widget, codex_home)
     }
 
-    #[test]
-    fn api_key_flow_disabled_when_chatgpt_forced() {
-        let (mut widget, _tmp) = widget_forced_chatgpt();
+    #[tokio::test]
+    async fn api_key_flow_disabled_when_chatgpt_forced() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
 
         widget.start_api_key_entry();
 
-        assert_eq!(widget.error.as_deref(), Some(API_KEY_DISABLED_MESSAGE));
+        assert_eq!(
+            widget.error_message().as_deref(),
+            Some(API_KEY_DISABLED_MESSAGE)
+        );
         assert!(matches!(
             &*widget.sign_in_state.read().unwrap(),
             SignInState::PickMode
         ));
     }
 
-    #[test]
-    fn saving_api_key_is_blocked_when_chatgpt_forced() {
-        let (mut widget, _tmp) = widget_forced_chatgpt();
+    #[tokio::test]
+    async fn saving_api_key_is_blocked_when_chatgpt_forced() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
 
         widget.save_api_key("sk-test".to_string());
 
-        assert_eq!(widget.error.as_deref(), Some(API_KEY_DISABLED_MESSAGE));
+        assert_eq!(
+            widget.error_message().as_deref(),
+            Some(API_KEY_DISABLED_MESSAGE)
+        );
         assert!(matches!(
             &*widget.sign_in_state.read().unwrap(),
             SignInState::PickMode
         ));
         assert_eq!(widget.login_status, LoginStatus::NotAuthenticated);
+    }
+
+    #[tokio::test]
+    async fn existing_chatgpt_auth_tokens_login_counts_as_signed_in() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
+        widget.login_status = LoginStatus::AuthMode(AppServerAuthMode::ChatgptAuthTokens);
+
+        let handled = widget.handle_existing_chatgpt_login();
+
+        assert_eq!(handled, true);
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::ChatGptSuccess
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_active_attempt_resets_browser_login_state() {
+        let (widget, _tmp) = widget_forced_chatgpt().await;
+        *widget.error.write().unwrap() = Some("still logging in".to_string());
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                login_id: "login-1".to_string(),
+                auth_url: "https://auth.example.com".to_string(),
+            });
+
+        widget.cancel_active_attempt();
+
+        assert_eq!(widget.error_message(), None);
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickMode
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_active_attempt_notifies_device_code_login() {
+        let (widget, _tmp) = widget_forced_chatgpt().await;
+        *widget.error.write().unwrap() = Some("still logging in".to_string());
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ChatGptDeviceCode(ContinueWithDeviceCodeState::ready(
+                "request-1".to_string(),
+                "login-1".to_string(),
+                "https://chatgpt.com/device".to_string(),
+                "ABCD-EFGH".to_string(),
+            ));
+
+        widget.cancel_active_attempt();
+
+        assert_eq!(widget.error_message(), None);
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickMode
+        ));
     }
 
     /// Collects all buffer cell symbols that contain the OSC 8 open sequence
@@ -908,12 +1121,13 @@ mod tests {
 
     #[test]
     fn continue_in_browser_renders_osc8_hyperlink() {
-        let (widget, _tmp) = widget_forced_chatgpt();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
         let url = "https://auth.example.com/login?state=abc123";
         *widget.sign_in_state.write().unwrap() =
             SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                login_id: "login-1".to_string(),
                 auth_url: url.to_string(),
-                shutdown_flag: None,
             });
 
         // Render into a narrow buffer so the URL wraps across multiple rows.
@@ -924,6 +1138,55 @@ mod tests {
         // Every character of the URL should be present as an OSC 8 cell.
         let found = collect_osc8_chars(&buf, area, url);
         assert_eq!(found, url, "OSC 8 hyperlink should cover the full URL");
+    }
+
+    #[test]
+    fn auth_widget_suppresses_animations_when_device_code_is_visible() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ChatGptDeviceCode(ContinueWithDeviceCodeState::ready(
+                "request-1".to_string(),
+                "login-1".to_string(),
+                "https://chatgpt.com/device".to_string(),
+                "ABCD-EFGH".to_string(),
+            ));
+
+        assert_eq!(widget.should_suppress_animations(), true);
+    }
+
+    #[test]
+    fn auth_widget_suppresses_animations_while_requesting_device_code() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
+        *widget.sign_in_state.write().unwrap() = SignInState::ChatGptDeviceCode(
+            ContinueWithDeviceCodeState::pending("request-1".to_string()),
+        );
+
+        assert_eq!(widget.should_suppress_animations(), true);
+    }
+
+    #[tokio::test]
+    async fn device_code_login_completion_advances_to_success_message() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ChatGptDeviceCode(ContinueWithDeviceCodeState::ready(
+                "request-1".to_string(),
+                "login-1".to_string(),
+                "https://chatgpt.com/device".to_string(),
+                "ABCD-EFGH".to_string(),
+            ));
+
+        widget.on_account_login_completed(AccountLoginCompletedNotification {
+            login_id: Some("login-1".to_string()),
+            success: true,
+            error: None,
+        });
+
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::ChatGptSuccessMessage
+        ));
     }
 
     #[test]

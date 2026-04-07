@@ -63,7 +63,6 @@ fn guardian_review_request_includes_patch_context() {
             id: "call-1".to_string(),
             cwd: expected_cwd,
             files: request.file_paths,
-            change_count: 1usize,
             patch: expected_patch,
         }
     );
@@ -126,8 +125,8 @@ fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
         timeout_ms: None,
     };
 
-    let command =
-        ApplyPatchRuntime::build_sandbox_command(&request, None).expect("build sandbox command");
+    let command = ApplyPatchRuntime::build_sandbox_command(&request, /*codex_self_exe*/ None)
+        .expect("build sandbox command");
 
     assert_eq!(
         command.program,

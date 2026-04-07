@@ -5,7 +5,7 @@ use std::env;
 use std::io;
 
 use bel::BelBackend;
-use codex_core::config::types::NotificationMethod;
+use codex_config::types::NotificationMethod;
 use osc9::Osc9Backend;
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ fn supports_osc9() -> bool {
 #[cfg(test)]
 mod tests {
     use super::detect_backend;
-    use codex_core::config::types::NotificationMethod;
+    use codex_config::types::NotificationMethod;
     use serial_test::serial;
     use std::ffi::OsString;
 

@@ -13,10 +13,10 @@ use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex::Session;
 use crate::codex::build_prompt;
 use crate::codex::built_tools;
-use crate::error::Result as CodexResult;
+use codex_otel::STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC;
+use codex_otel::STARTUP_PREWARM_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
-use codex_otel::metrics::names::STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC;
-use codex_otel::metrics::names::STARTUP_PREWARM_DURATION_METRIC;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 
 pub(crate) struct SessionStartupPrewarmHandle {
@@ -217,9 +217,9 @@ async fn schedule_startup_prewarm_inner(
         Vec::new(),
         startup_router.as_ref(),
         startup_turn_context.as_ref(),
-        BaseInstructions {
+        Some(BaseInstructions {
             text: base_instructions,
-        },
+        }),
     );
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state

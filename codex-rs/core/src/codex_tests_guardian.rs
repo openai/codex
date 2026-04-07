@@ -7,7 +7,6 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
-use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -24,6 +23,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::codex_linux_sandbox_exe_or_skip;
@@ -425,11 +425,14 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     ));
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
-    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_watcher = Arc::new(SkillsWatcher::noop());
 

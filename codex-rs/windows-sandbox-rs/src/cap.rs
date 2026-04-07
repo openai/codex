@@ -34,7 +34,7 @@ fn make_random_cap_sid_string() -> String {
     let b = rng.next_u32();
     let c = rng.next_u32();
     let d = rng.next_u32();
-    format!("S-1-5-21-{}-{}-{}-{}", a, b, c, d)
+    format!("S-1-5-21-{a}-{b}-{c}-{d}")
 }
 
 fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {

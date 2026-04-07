@@ -41,11 +41,17 @@ if not defined manifest if exist "%~dpn0.runfiles_manifest" set "manifest=%~dpn0
 if not defined manifest if exist "%~f0.exe.runfiles_manifest" set "manifest=%~f0.exe.runfiles_manifest"
 
 if defined manifest if exist "%manifest%" (
-  for /f "usebackq tokens=1,* delims= " %%A in (`findstr /b /c:"%logical_path% " "%manifest%"`) do (
-    endlocal & set "%~1=%%B" & exit /b 0
-  )
-  for /f "usebackq tokens=1,* delims= " %%A in (`findstr /b /c:"%workspace_logical_path% " "%manifest%"`) do (
-    endlocal & set "%~1=%%B" & exit /b 0
+  rem Read the manifest directly instead of shelling out to findstr. In the
+  rem GitHub Windows runner, the nested `findstr` path produced
+  rem `FINDSTR: Cannot open D:MANIFEST`, which then broke runfile resolution for
+  rem Bazel tests even though the manifest file was present.
+  for /f "usebackq tokens=1,* delims= " %%A in ("%manifest%") do (
+    if "%%A"=="%logical_path%" (
+      endlocal & set "%~1=%%B" & exit /b 0
+    )
+    if "%%A"=="%workspace_logical_path%" (
+      endlocal & set "%~1=%%B" & exit /b 0
+    )
   )
 )
 

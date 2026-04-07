@@ -3,7 +3,6 @@ use crate::agent::control::ListedAgent;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
     type Output = ListAgentsResult;
 
@@ -40,6 +39,7 @@ impl ToolHandler for Handler {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ListAgentsArgs {
     path_prefix: Option<String>,
 }

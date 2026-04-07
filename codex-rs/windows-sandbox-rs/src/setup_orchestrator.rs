@@ -201,7 +201,7 @@ fn run_setup_refresh_inner(
             &format!("setup refresh: exited with status {status:?}"),
             Some(&sandbox_dir(request.codex_home)),
         );
-        return Err(anyhow!("setup refresh failed with status {}", status));
+        return Err(anyhow!("setup refresh failed with status {status}"));
     }
     Ok(())
 }

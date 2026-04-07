@@ -36,7 +36,7 @@ fn unified_exec_env_overrides_existing_values() {
 
 #[test]
 fn exec_server_process_id_matches_unified_exec_process_id() {
-    assert_eq!(exec_server_process_id(4321), "4321");
+    assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
 }
 
 #[test]

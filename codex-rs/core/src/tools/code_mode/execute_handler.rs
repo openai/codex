@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -53,7 +51,6 @@ impl CodeModeExecuteHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for CodeModeExecuteHandler {
     type Output = FunctionToolOutput;
 

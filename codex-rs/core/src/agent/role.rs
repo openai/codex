@@ -17,6 +17,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::resolve_relative_paths_in_config_toml;
 use anyhow::anyhow;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::config_toml::ConfigToml;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -63,6 +64,12 @@ async fn apply_role_to_config_inner(
         return Ok(());
     };
     let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
+    if role_layer_toml
+        .as_table()
+        .is_some_and(toml::map::Map::is_empty)
+    {
+        return Ok(());
+    }
     let (preserve_current_profile, preserve_current_provider) =
         preservation_policy(config, &role_layer_toml);
 
@@ -221,7 +228,7 @@ mod reload {
     fn deserialize_effective_config(
         config: &Config,
         config_layer_stack: &ConfigLayerStack,
-    ) -> anyhow::Result<crate::config::ConfigToml> {
+    ) -> anyhow::Result<ConfigToml> {
         Ok(deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             &config.codex_home,

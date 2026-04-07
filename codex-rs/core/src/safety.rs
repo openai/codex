@@ -2,15 +2,20 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::protocol::AskForApproval;
-use crate::protocol::FileSystemSandboxPolicy;
-use crate::protocol::SandboxPolicy;
 use crate::util::resolve_path;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
+
+const PATCH_REJECTED_OUTSIDE_PROJECT_REASON: &str =
+    "writing outside of the project; rejected by user approval settings";
+const PATCH_REJECTED_READ_ONLY_REASON: &str =
+    "writing is blocked by read-only sandbox; rejected by user approval settings";
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -85,9 +90,7 @@ pub fn assess_patch_safety(
                 None => {
                     if rejects_sandbox_approval {
                         SafetyCheck::Reject {
-                            reason:
-                                "writing outside of the project; rejected by user approval settings"
-                                    .to_string(),
+                            reason: patch_rejection_reason(sandbox_policy).to_string(),
                         }
                     } else {
                         SafetyCheck::AskUser
@@ -97,11 +100,19 @@ pub fn assess_patch_safety(
         }
     } else if rejects_sandbox_approval {
         SafetyCheck::Reject {
-            reason: "writing outside of the project; rejected by user approval settings"
-                .to_string(),
+            reason: patch_rejection_reason(sandbox_policy).to_string(),
         }
     } else {
         SafetyCheck::AskUser
+    }
+}
+
+fn patch_rejection_reason(sandbox_policy: &SandboxPolicy) -> &'static str {
+    match sandbox_policy {
+        SandboxPolicy::ReadOnly { .. } => PATCH_REJECTED_READ_ONLY_REASON,
+        SandboxPolicy::WorkspaceWrite { .. }
+        | SandboxPolicy::DangerFullAccess
+        | SandboxPolicy::ExternalSandbox { .. } => PATCH_REJECTED_OUTSIDE_PROJECT_REASON,
     }
 }
 

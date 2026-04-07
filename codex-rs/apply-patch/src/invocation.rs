@@ -524,14 +524,14 @@ mod tests {
 
     #[test]
     fn test_heredoc() {
-        assert_match(&heredoc_script(""), None);
+        assert_match(&heredoc_script(""), /*expected_workdir*/ None);
     }
 
     #[test]
     fn test_heredoc_non_login_shell() {
         let script = heredoc_script("");
         let args = strs_to_strings(&["bash", "-c", &script]);
-        assert_match_args(args, None);
+        assert_match_args(args, /*expected_workdir*/ None);
     }
 
     #[test]
@@ -565,17 +565,20 @@ PATCH"#,
     #[test]
     fn test_powershell_heredoc() {
         let script = heredoc_script("");
-        assert_match_args(args_powershell(&script), None);
+        assert_match_args(args_powershell(&script), /*expected_workdir*/ None);
     }
     #[test]
     fn test_powershell_heredoc_no_profile() {
         let script = heredoc_script("");
-        assert_match_args(args_powershell_no_profile(&script), None);
+        assert_match_args(
+            args_powershell_no_profile(&script),
+            /*expected_workdir*/ None,
+        );
     }
     #[test]
     fn test_pwsh_heredoc() {
         let script = heredoc_script("");
-        assert_match_args(args_pwsh(&script), None);
+        assert_match_args(args_pwsh(&script), /*expected_workdir*/ None);
     }
 
     #[test]

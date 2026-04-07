@@ -659,18 +659,18 @@ mod tests {
 
     #[test]
     fn parse_host_port_defaults_for_empty_string() {
-        assert!(parse_host_port("", 1234).is_err());
+        assert!(parse_host_port("", /*default_port*/ 1234).is_err());
     }
 
     #[test]
     fn parse_host_port_defaults_for_whitespace() {
-        assert!(parse_host_port("   ", 5555).is_err());
+        assert!(parse_host_port("   ", /*default_port*/ 5555).is_err());
     }
 
     #[test]
     fn parse_host_port_parses_host_port_without_scheme() {
         assert_eq!(
-            parse_host_port("127.0.0.1:8080", 3128).unwrap(),
+            parse_host_port("127.0.0.1:8080", /*default_port*/ 3128).unwrap(),
             SocketAddressParts {
                 host: "127.0.0.1".to_string(),
                 port: 8080,
@@ -681,7 +681,11 @@ mod tests {
     #[test]
     fn parse_host_port_parses_host_port_with_scheme_and_path() {
         assert_eq!(
-            parse_host_port("http://example.com:8080/some/path", 3128).unwrap(),
+            parse_host_port(
+                "http://example.com:8080/some/path",
+                /*default_port*/ 3128
+            )
+            .unwrap(),
             SocketAddressParts {
                 host: "example.com".to_string(),
                 port: 8080,
@@ -692,7 +696,11 @@ mod tests {
     #[test]
     fn parse_host_port_strips_userinfo() {
         assert_eq!(
-            parse_host_port("http://user:pass@host.example:5555", 3128).unwrap(),
+            parse_host_port(
+                "http://user:pass@host.example:5555",
+                /*default_port*/ 3128
+            )
+            .unwrap(),
             SocketAddressParts {
                 host: "host.example".to_string(),
                 port: 5555,
@@ -703,7 +711,7 @@ mod tests {
     #[test]
     fn parse_host_port_parses_ipv6_with_brackets() {
         assert_eq!(
-            parse_host_port("http://[::1]:9999", 3128).unwrap(),
+            parse_host_port("http://[::1]:9999", /*default_port*/ 3128).unwrap(),
             SocketAddressParts {
                 host: "::1".to_string(),
                 port: 9999,
@@ -714,7 +722,7 @@ mod tests {
     #[test]
     fn parse_host_port_does_not_treat_unbracketed_ipv6_as_host_port() {
         assert_eq!(
-            parse_host_port("2001:db8::1", 3128).unwrap(),
+            parse_host_port("2001:db8::1", /*default_port*/ 3128).unwrap(),
             SocketAddressParts {
                 host: "2001:db8::1".to_string(),
                 port: 3128,
@@ -725,7 +733,7 @@ mod tests {
     #[test]
     fn parse_host_port_falls_back_to_default_port_when_port_is_invalid() {
         assert_eq!(
-            parse_host_port("example.com:notaport", 3128).unwrap(),
+            parse_host_port("example.com:notaport", /*default_port*/ 3128).unwrap(),
             SocketAddressParts {
                 host: "example.com".to_string(),
                 port: 3128,
@@ -735,13 +743,16 @@ mod tests {
 
     #[test]
     fn host_and_port_from_network_addr_defaults_for_empty_string() {
-        assert_eq!(host_and_port_from_network_addr("", 1234), "<missing>");
+        assert_eq!(
+            host_and_port_from_network_addr("", /*default_port*/ 1234),
+            "<missing>"
+        );
     }
 
     #[test]
     fn host_and_port_from_network_addr_formats_ipv6() {
         assert_eq!(
-            host_and_port_from_network_addr("http://[::1]:8080", 3128),
+            host_and_port_from_network_addr("http://[::1]:8080", /*default_port*/ 3128),
             "[::1]:8080"
         );
     }
@@ -749,7 +760,7 @@ mod tests {
     #[test]
     fn resolve_addr_maps_localhost_to_loopback() {
         assert_eq!(
-            resolve_addr("localhost", 3128).unwrap(),
+            resolve_addr("localhost", /*default_port*/ 3128).unwrap(),
             "127.0.0.1:3128".parse::<SocketAddr>().unwrap()
         );
     }
@@ -757,7 +768,7 @@ mod tests {
     #[test]
     fn resolve_addr_parses_ip_literals() {
         assert_eq!(
-            resolve_addr("1.2.3.4", 80).unwrap(),
+            resolve_addr("1.2.3.4", /*default_port*/ 80).unwrap(),
             "1.2.3.4:80".parse::<SocketAddr>().unwrap()
         );
     }
@@ -765,7 +776,7 @@ mod tests {
     #[test]
     fn resolve_addr_parses_ipv6_literals() {
         assert_eq!(
-            resolve_addr("http://[::1]:8080", 3128).unwrap(),
+            resolve_addr("http://[::1]:8080", /*default_port*/ 3128).unwrap(),
             "[::1]:8080".parse::<SocketAddr>().unwrap()
         );
     }
@@ -773,7 +784,7 @@ mod tests {
     #[test]
     fn resolve_addr_falls_back_to_loopback_for_hostnames() {
         assert_eq!(
-            resolve_addr("http://example.com:5555", 3128).unwrap(),
+            resolve_addr("http://example.com:5555", /*default_port*/ 3128).unwrap(),
             "127.0.0.1:5555".parse::<SocketAddr>().unwrap()
         );
     }

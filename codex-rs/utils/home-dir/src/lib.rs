@@ -120,7 +120,8 @@ mod tests {
 
     #[test]
     fn find_codex_home_without_env_uses_default_home_dir() {
-        let resolved = find_codex_home_from_env(None).expect("default CODEX_HOME");
+        let resolved =
+            find_codex_home_from_env(/*codex_home_env*/ None).expect("default CODEX_HOME");
         let mut expected = home_dir().expect("home dir");
         expected.push(".codex");
         assert_eq!(resolved, expected);

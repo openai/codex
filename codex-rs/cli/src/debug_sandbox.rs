@@ -509,7 +509,7 @@ mod tests {
 
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
-            None,
+            /*codex_linux_sandbox_exe*/ None,
             /*full_auto*/ false,
             Some(codex_home_path),
         )
@@ -543,7 +543,7 @@ mod tests {
 
         let err = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
-            None,
+            /*codex_linux_sandbox_exe*/ None,
             /*full_auto*/ true,
             Some(codex_home.path().to_path_buf()),
         )

@@ -26,6 +26,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_core::shell::default_user_shell;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use pretty_assertions::assert_eq;
@@ -67,11 +68,12 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let (shell_command, expected_output) = current_shell_output_command("hello from bang")?;
 
     let shell_id = mcp
         .send_thread_shell_command_request(ThreadShellCommandParams {
             thread_id: thread.id.clone(),
-            command: "printf 'hello from bang\\n'".to_string(),
+            command: shell_command,
         })
         .await?;
     let shell_resp: JSONRPCResponse = timeout(
@@ -81,7 +83,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     .await??;
     let _: ThreadShellCommandResponse = to_response::<ThreadShellCommandResponse>(shell_resp)?;
 
-    let started = wait_for_command_execution_started(&mut mcp, None).await?;
+    let started = wait_for_command_execution_started(&mut mcp, /*expected_id*/ None).await?;
     let ThreadItem::CommandExecution {
         id, source, status, ..
     } = &started.item
@@ -93,7 +95,10 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(status, &CommandExecutionStatus::InProgress);
 
     let delta = wait_for_command_execution_output_delta(&mut mcp, &command_id).await?;
-    assert_eq!(delta.delta, "hello from bang\n");
+    assert_eq!(
+        delta.delta.trim_end_matches(['\r', '\n']),
+        expected_output.trim_end_matches(['\r', '\n'])
+    );
 
     let completed = wait_for_command_execution_completed(&mut mcp, Some(&command_id)).await?;
     let ThreadItem::CommandExecution {
@@ -110,7 +115,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(id, &command_id);
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::Completed);
-    assert_eq!(aggregated_output.as_deref(), Some("hello from bang\n"));
+    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
     assert_eq!(*exit_code, Some(0));
 
     timeout(
@@ -147,7 +152,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     };
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::Completed);
-    assert_eq!(aggregated_output.as_deref(), Some("hello from bang\n"));
+    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
 
     Ok(())
 }
@@ -167,7 +172,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-approve",
         )?,
@@ -196,6 +201,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let (shell_command, expected_output) = current_shell_output_command("active turn bang")?;
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -240,7 +246,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     let shell_id = mcp
         .send_thread_shell_command_request(ThreadShellCommandParams {
             thread_id: thread.id.clone(),
-            command: "printf 'active turn bang\\n'".to_string(),
+            command: shell_command,
         })
         .await?;
     let shell_resp: JSONRPCResponse = timeout(
@@ -269,7 +275,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
         unreachable!("helper returns command execution item");
     };
     assert_eq!(source, &CommandExecutionSource::UserShell);
-    assert_eq!(aggregated_output.as_deref(), Some("active turn bang\n"));
+    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
 
     mcp.send_response(
         request_id,
@@ -309,13 +315,31 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
                     source: CommandExecutionSource::UserShell,
                     aggregated_output,
                     ..
-                } if aggregated_output.as_deref() == Some("active turn bang\n")
+                } if aggregated_output.as_deref() == Some(expected_output.as_str())
             )
         }),
         "expected active-turn shell command to be persisted on the existing turn"
     );
 
     Ok(())
+}
+
+fn current_shell_output_command(text: &str) -> Result<(String, String)> {
+    let command_and_output = match default_user_shell().name() {
+        "powershell" => {
+            let escaped_text = text.replace('\'', "''");
+            (
+                format!("Write-Output '{escaped_text}'"),
+                format!("{text}\r\n"),
+            )
+        }
+        "cmd" => (format!("echo {text}"), format!("{text}\r\n")),
+        _ => {
+            let quoted_text = shlex::try_quote(text)?;
+            (format!("printf '%s\\n' {quoted_text}"), format!("{text}\n"))
+        }
+    };
+    Ok(command_and_output)
 }
 
 async fn wait_for_command_execution_started(
@@ -345,7 +369,7 @@ async fn wait_for_command_execution_started_by_source(
     expected_source: CommandExecutionSource,
 ) -> Result<ItemStartedNotification> {
     loop {
-        let started = wait_for_command_execution_started(mcp, None).await?;
+        let started = wait_for_command_execution_started(mcp, /*expected_id*/ None).await?;
         let ThreadItem::CommandExecution { source, .. } = &started.item else {
             continue;
         };

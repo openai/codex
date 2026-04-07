@@ -1,6 +1,7 @@
 use super::*;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_protocol::auth::KnownPlan;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 
@@ -66,6 +67,44 @@ fn id_token_info_parses_hc_plan_as_enterprise() {
     assert_eq!(info.email.as_deref(), Some("user@example.com"));
     assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Enterprise"));
     assert_eq!(info.is_workspace_account(), true);
+}
+
+#[test]
+fn id_token_info_parses_usage_based_business_plans() {
+    let self_serve_business_jwt = fake_jwt(serde_json::json!({
+        "email": "user@example.com",
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": "self_serve_business_usage_based"
+        }
+    }));
+    let self_serve_business =
+        parse_chatgpt_jwt_claims(&self_serve_business_jwt).expect("should parse");
+    assert_eq!(
+        self_serve_business.get_chatgpt_plan_type().as_deref(),
+        Some("Self Serve Business Usage Based")
+    );
+    assert_eq!(
+        self_serve_business.get_chatgpt_plan_type_raw().as_deref(),
+        Some("self_serve_business_usage_based")
+    );
+    assert_eq!(self_serve_business.is_workspace_account(), true);
+
+    let enterprise_cbp_jwt = fake_jwt(serde_json::json!({
+        "email": "user@example.com",
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": "enterprise_cbp_usage_based"
+        }
+    }));
+    let enterprise_cbp = parse_chatgpt_jwt_claims(&enterprise_cbp_jwt).expect("should parse");
+    assert_eq!(
+        enterprise_cbp.get_chatgpt_plan_type().as_deref(),
+        Some("Enterprise CBP Usage Based")
+    );
+    assert_eq!(
+        enterprise_cbp.get_chatgpt_plan_type_raw().as_deref(),
+        Some("enterprise_cbp_usage_based")
+    );
+    assert_eq!(enterprise_cbp.is_workspace_account(), true);
 }
 
 #[test]

@@ -631,7 +631,7 @@ text(JSON.stringify(returnsUndefined));
             event_rx,
             control_rx,
             initial_response_tx,
-            60_000,
+            /*initial_yield_time_ms*/ 60_000,
         ));
 
         event_tx.send(RuntimeEvent::Started).unwrap();

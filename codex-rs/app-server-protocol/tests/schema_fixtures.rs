@@ -23,7 +23,7 @@ fn typescript_schema_fixtures_match_generated() -> Result<()> {
 #[test]
 fn json_schema_fixtures_match_generated() -> Result<()> {
     assert_schema_fixtures_match_generated("json", |output_dir| {
-        generate_json_with_experimental(output_dir, false)
+        generate_json_with_experimental(output_dir, /*experimental_api*/ false)
     })
 }
 

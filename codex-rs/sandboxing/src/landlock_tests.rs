@@ -114,6 +114,12 @@ fn split_policy_flags_are_included() {
 
 #[test]
 fn proxy_network_requires_managed_requirements() {
-    assert_eq!(allow_network_for_proxy(false), false);
-    assert_eq!(allow_network_for_proxy(true), true);
+    assert_eq!(
+        allow_network_for_proxy(/*enforce_managed_network*/ false),
+        false
+    );
+    assert_eq!(
+        allow_network_for_proxy(/*enforce_managed_network*/ true),
+        true
+    );
 }

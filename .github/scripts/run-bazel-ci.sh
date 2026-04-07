@@ -4,6 +4,8 @@ set -euo pipefail
 
 print_failed_bazel_test_logs=0
 use_node_test_env=0
+remote_download_toplevel=0
+windows_msvc_host_platform=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -13,6 +15,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --use-node-test-env)
       use_node_test_env=1
+      shift
+      ;;
+    --remote-download-toplevel)
+      remote_download_toplevel=1
+      shift
+      ;;
+    --windows-msvc-host-platform)
+      windows_msvc_host_platform=1
       shift
       ;;
     --)
@@ -27,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -35,6 +45,15 @@ bazel_startup_args=()
 if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
   bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
 fi
+
+run_bazel() {
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    MSYS2_ARG_CONV_EXCL='*' bazel "$@"
+    return
+  fi
+
+  bazel "$@"
+}
 
 ci_config=ci-linux
 case "${RUNNER_OS:-}" in
@@ -55,7 +74,7 @@ print_bazel_test_log_tails() {
     bazel_info_cmd+=("${bazel_startup_args[@]}")
   fi
 
-  testlogs_dir="$("${bazel_info_cmd[@]}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
 
   local failed_targets=()
   while IFS= read -r target; do
@@ -107,11 +126,80 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ $use_node_test_env -eq 1 && "${RUNNER_OS:-}" != "Windows" ]]; then
+if [[ $use_node_test_env -eq 1 ]]; then
   # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
   # before the `actions/setup-node` runtime on PATH.
   node_bin="$(which node)"
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    node_bin="$(cygpath -w "${node_bin}")"
+  fi
   bazel_args+=("--test_env=CODEX_JS_REPL_NODE_PATH=${node_bin}")
+fi
+
+post_config_bazel_args=()
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; then
+  has_host_platform_override=0
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --host_platform=* ]]; then
+      has_host_platform_override=1
+      break
+    fi
+  done
+
+  if [[ $has_host_platform_override -eq 0 ]]; then
+    # Keep Windows Bazel targets on `windows-gnullvm` for cfg coverage, but opt
+    # specific jobs into an MSVC exec platform when they need helper binaries
+    # like Rust test wrappers and V8 generators to resolve a compatible host
+    # toolchain.
+    post_config_bazel_args+=("--host_platform=//:local_windows_msvc")
+  fi
+fi
+
+if [[ $remote_download_toplevel -eq 1 ]]; then
+  # Override the CI config's remote_download_minimal setting when callers need
+  # the built artifact to exist on disk after the command completes.
+  post_config_bazel_args+=(--remote_download_toplevel)
+fi
+
+if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
+  # Windows self-hosted runners can run multiple Bazel jobs concurrently. Give
+  # each job its own repo contents cache so they do not fight over the shared
+  # path configured in `ci-windows`.
+  post_config_bazel_args+=("--repo_contents_cache=${BAZEL_REPO_CONTENTS_CACHE}")
+fi
+
+if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
+  post_config_bazel_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
+fi
+
+if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
+  post_config_bazel_args+=(
+    "--execution_log_compact_file=${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR}/execution-log-${bazel_args[0]}-${GITHUB_JOB:-local}-$$.zst"
+  )
+fi
+
+if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  windows_action_env_vars=(
+    INCLUDE
+    LIB
+    LIBPATH
+    PATH
+    UCRTVersion
+    UniversalCRTSdkDir
+    VCINSTALLDIR
+    VCToolsInstallDir
+    WindowsLibPath
+    WindowsSdkBinPath
+    WindowsSdkDir
+    WindowsSDKLibVersion
+    WindowsSDKVersion
+  )
+
+  for env_var in "${windows_action_env_vars[@]}"; do
+    if [[ -n "${!env_var:-}" ]]; then
+      post_config_bazel_args+=("--action_env=${env_var}" "--host_action_env=${env_var}")
+    fi
+  done
 fi
 
 bazel_console_log="$(mktemp)"
@@ -128,12 +216,18 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   # seen in CI (for example "is not a symlink" or permission errors while
   # materializing external repos such as rules_perl). We still use BuildBuddy for
   # remote execution/cache; this only disables the startup-level repo contents cache.
+  bazel_run_args=(
+    "${bazel_args[@]}"
+    "--config=${ci_config}"
+    "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+  )
+  if (( ${#post_config_bazel_args[@]} > 0 )); then
+    bazel_run_args+=("${post_config_bazel_args[@]}")
+  fi
   set +e
-  "${bazel_cmd[@]}" \
+  run_bazel "${bazel_cmd[@]:1}" \
     --noexperimental_remote_repo_contents_cache \
-    "${bazel_args[@]}" \
-    "--config=${ci_config}" \
-    "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}" \
+    "${bazel_run_args[@]}" \
     -- \
     "${bazel_targets[@]}" \
     2>&1 | tee "$bazel_console_log"
@@ -157,12 +251,18 @@ else
   #   clear remote cache/execution endpoints configured in .bazelrc.
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
+  bazel_run_args=(
+    "${bazel_args[@]}"
+    --remote_cache=
+    --remote_executor=
+  )
+  if (( ${#post_config_bazel_args[@]} > 0 )); then
+    bazel_run_args+=("${post_config_bazel_args[@]}")
+  fi
   set +e
-  "${bazel_cmd[@]}" \
+  run_bazel "${bazel_cmd[@]:1}" \
     --noexperimental_remote_repo_contents_cache \
-    "${bazel_args[@]}" \
-    --remote_cache= \
-    --remote_executor= \
+    "${bazel_run_args[@]}" \
     -- \
     "${bazel_targets[@]}" \
     2>&1 | tee "$bazel_console_log"

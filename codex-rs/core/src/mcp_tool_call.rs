@@ -19,29 +19,28 @@ use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::load_global_mcp_servers;
-use crate::config::types::AppToolApproval;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
-use crate::protocol::EventMsg;
-use crate::protocol::McpInvocation;
-use crate::protocol::McpToolCallBeginEvent;
-use crate::protocol::McpToolCallEndEvent;
-use crate::state_db;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
+use codex_config::types::AppToolApproval;
 use codex_features::Feature;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -51,6 +50,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rollout::state_db;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::Serialize;
@@ -583,7 +583,7 @@ fn custom_mcp_tool_approval_mode(
         .and_then(|table| table.get("mcp_servers"))
         .cloned()
         .and_then(|value| {
-            HashMap::<String, crate::config::types::McpServerConfig>::deserialize(value).ok()
+            HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
         })
         .and_then(|servers| servers.get(server).cloned())
         .and_then(|server| server.tools.get(tool_name).cloned())
@@ -700,14 +700,14 @@ async fn maybe_request_mcp_tool_approval(
 
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
     let approval_required = requires_mcp_tool_approval(annotations);
+    if !approval_required && approval_mode != AppToolApproval::Prompt {
+        return None;
+    }
+
     let mut monitor_reason = None;
     let auto_approved_by_policy = approval_mode == AppToolApproval::Approve;
 
     if auto_approved_by_policy {
-        if !approval_required {
-            return None;
-        }
-
         match maybe_monitor_auto_approved_mcp_tool_call(
             sess,
             turn_context,
@@ -727,10 +727,6 @@ async fn maybe_request_mcp_tool_approval(
                 ));
             }
         }
-    }
-
-    if approval_mode == AppToolApproval::Auto && !approval_required {
-        return None;
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
@@ -1545,8 +1541,7 @@ fn project_mcp_tool_approval_config_folder(config: &Config, server: &str) -> Opt
                 .and_then(|table| table.get("mcp_servers"))
                 .cloned()
                 .and_then(|value| {
-                    HashMap::<String, crate::config::types::McpServerConfig>::deserialize(value)
-                        .ok()
+                    HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
                 })?;
             if servers.contains_key(server) {
                 layer

@@ -2,9 +2,9 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::latest_metrics;
+use codex_otel::Result;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
-use codex_otel::metrics::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
@@ -21,16 +21,20 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         "gpt-5.1",
         "gpt-5.1",
         Some("account-id".to_string()),
-        None,
+        /*account_email*/ None,
         Some(TelemetryAuthMode::ApiKey),
         "test_originator".to_string(),
-        true,
+        /*log_user_prompts*/ true,
         "tty".to_string(),
         SessionSource::Cli,
     )
     .with_metrics(metrics);
 
-    manager.counter("codex.session_started", 1, &[("source", "tui")]);
+    manager.counter(
+        "codex.session_started",
+        /*inc*/ 1,
+        &[("source", "tui")],
+    );
     manager.shutdown_metrics()?;
 
     let resource_metrics = latest_metrics(&exporter);
@@ -77,16 +81,20 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
         "gpt-4o",
         "gpt-4o",
         Some("account-id".to_string()),
-        None,
+        /*account_email*/ None,
         Some(TelemetryAuthMode::ApiKey),
         "test_originator".to_string(),
-        true,
+        /*log_user_prompts*/ true,
         "tty".to_string(),
         SessionSource::Cli,
     )
     .with_metrics_without_metadata_tags(metrics);
 
-    manager.counter("codex.session_started", 1, &[("source", "tui")]);
+    manager.counter(
+        "codex.session_started",
+        /*inc*/ 1,
+        &[("source", "tui")],
+    );
     manager.shutdown_metrics()?;
 
     let resource_metrics = latest_metrics(&exporter);
@@ -117,18 +125,18 @@ fn manager_attaches_optional_service_name_tag() -> Result<()> {
         ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",
-        None,
-        None,
-        None,
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "tty".to_string(),
         SessionSource::Cli,
     )
     .with_metrics_service_name("my_app_server_client")
     .with_metrics(metrics);
 
-    manager.counter("codex.session_started", 1, &[]);
+    manager.counter("codex.session_started", /*inc*/ 1, &[]);
     manager.shutdown_metrics()?;
 
     let resource_metrics = latest_metrics(&exporter);

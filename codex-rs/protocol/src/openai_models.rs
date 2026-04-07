@@ -537,7 +537,7 @@ mod tests {
             default_verbosity: None,
             apply_patch_tool_type: None,
             web_search_tool_type: WebSearchToolType::Text,
-            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
             context_window: None,
@@ -606,7 +606,10 @@ mod tests {
             model.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
-        assert_eq!(model.get_model_instructions(None), "Hello\n");
+        assert_eq!(
+            model.get_model_instructions(/*personality*/ None),
+            "Hello\n"
+        );
 
         let model_no_personality = test_model(Some(ModelMessages {
             instructions_template: Some("Hello\n{{ personality }}".to_string()),
@@ -628,7 +631,10 @@ mod tests {
             model_no_personality.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
-        assert_eq!(model_no_personality.get_model_instructions(None), "Hello\n");
+        assert_eq!(
+            model_no_personality.get_model_instructions(/*personality*/ None),
+            "Hello\n"
+        );
     }
 
     #[test]
@@ -651,7 +657,7 @@ mod tests {
     fn get_personality_message_returns_default_when_personality_is_none() {
         let personality_template = personality_variables();
         assert_eq!(
-            personality_template.get_personality_message(None),
+            personality_template.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
     }
@@ -672,7 +678,7 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(
-            personality_variables.get_personality_message(None),
+            personality_variables.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
 
@@ -694,7 +700,7 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(
-            personality_variables.get_personality_message(None),
+            personality_variables.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
 
@@ -715,7 +721,10 @@ mod tests {
             personality_variables.get_personality_message(Some(Personality::None)),
             Some(String::new())
         );
-        assert_eq!(personality_variables.get_personality_message(None), None);
+        assert_eq!(
+            personality_variables.get_personality_message(/*personality*/ None),
+            None
+        );
     }
 
     #[test]
@@ -763,7 +772,7 @@ mod tests {
             availability_nux: Some(ModelAvailabilityNux {
                 message: "Try Spark.".to_string(),
             }),
-            ..test_model(None)
+            ..test_model(/*spec*/ None)
         });
 
         assert_eq!(

@@ -44,7 +44,7 @@ use winapi::um::processthreadsapi::*;
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 
-pub mod conpty;
+pub(crate) mod conpty;
 mod procthreadattr;
 mod psuedocon;
 

@@ -506,8 +506,14 @@ mod tests {
             }),
         );
         let tampered = token.replace(".eyJleHAi", ".eyJleHBi");
-        let err = verify_signed_bearer_token(&tampered, shared_secret, None, None, 30)
-            .expect_err("tampered jwt should fail");
+        let err = verify_signed_bearer_token(
+            &tampered,
+            shared_secret,
+            /*issuer*/ None,
+            /*audience*/ None,
+            /*max_clock_skew_seconds*/ 30,
+        )
+        .expect_err("tampered jwt should fail");
         assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
     }
 
@@ -522,8 +528,14 @@ mod tests {
                 "aud": "audience",
             }),
         );
-        verify_signed_bearer_token(&token, shared_secret, Some("issuer"), Some("audience"), 30)
-            .expect("valid signed token should verify");
+        verify_signed_bearer_token(
+            &token,
+            shared_secret,
+            Some("issuer"),
+            Some("audience"),
+            /*max_clock_skew_seconds*/ 30,
+        )
+        .expect("valid signed token should verify");
     }
 
     #[test]
@@ -536,8 +548,14 @@ mod tests {
                 "aud": ["other-audience", "audience"],
             }),
         );
-        verify_signed_bearer_token(&token, shared_secret, None, Some("audience"), 30)
-            .expect("jwt audience arrays should verify");
+        verify_signed_bearer_token(
+            &token,
+            shared_secret,
+            /*issuer*/ None,
+            Some("audience"),
+            /*max_clock_skew_seconds*/ 30,
+        )
+        .expect("jwt audience arrays should verify");
     }
 
     #[test]
@@ -550,9 +568,14 @@ mod tests {
         );
         let header_segment = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
         let token = format!("{header_segment}.{claims_segment}.");
-        let err =
-            verify_signed_bearer_token(&token, b"0123456789abcdef0123456789abcdef", None, None, 30)
-                .expect_err("alg=none jwt should be rejected");
+        let err = verify_signed_bearer_token(
+            &token,
+            b"0123456789abcdef0123456789abcdef",
+            /*issuer*/ None,
+            /*audience*/ None,
+            /*max_clock_skew_seconds*/ 30,
+        )
+        .expect_err("alg=none jwt should be rejected");
         assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
     }
 
@@ -565,8 +588,14 @@ mod tests {
                 "iss": "issuer",
             }),
         );
-        let err = verify_signed_bearer_token(&token, shared_secret, None, None, 30)
-            .expect_err("jwt without exp should be rejected");
+        let err = verify_signed_bearer_token(
+            &token,
+            shared_secret,
+            /*issuer*/ None,
+            /*audience*/ None,
+            /*max_clock_skew_seconds*/ 30,
+        )
+        .expect_err("jwt without exp should be rejected");
         assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
     }
 

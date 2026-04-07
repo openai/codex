@@ -6,7 +6,7 @@
 diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 --- a/orig/v8-14.6.202.11/MODULE.bazel
 +++ b/mod/v8-14.6.202.11/MODULE.bazel
-@@ -8,7 +8,57 @@
+@@ -8,7 +8,65 @@
  bazel_dep(name = "rules_python", version = "1.0.0")
  bazel_dep(name = "platforms", version = "1.0.0")
  bazel_dep(name = "abseil-cpp", version = "20250814.0")
@@ -42,11 +42,12 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +    urls = ["https://github.com/fastfloat/fast_float/archive/refs/tags/v8.0.2.tar.gz"],
 +)
 +
-+git_repository(
++http_archive(
 +    name = "simdutf",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["simdutf.cpp"],\n    hdrs = ["simdutf.h"],\n    copts = ["-std=c++20"],\n    include_prefix = "third_party/simdutf",\n    visibility = ["//visibility:public"],\n)\n',
-+    commit = "93b35aec29256f705c97f675fe4623578bd7a395",
-+    remote = "https://chromium.googlesource.com/chromium/src/third_party/simdutf",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["src/simdutf.cpp"],\n    hdrs = glob(["include/**/*.h"]),\n    textual_hdrs = glob(["src/**/*.h", "src/**/*.cpp"], exclude = ["src/simdutf.cpp"]),\n    copts = ["-std=c++20"],\n    include_prefix = "third_party/simdutf",\n    includes = ["include", "src"],\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
++    sha256 = "0180de81a1dd48a87b8c0442ffa81734f3db91a7350914107a449935124e3c6f",
++    strip_prefix = "simdutf-7.7.0",
++    urls = ["https://github.com/simdutf/simdutf/archive/refs/tags/v7.7.0.tar.gz"],
 +)
 +
 +git_repository(
@@ -62,10 +63,10 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +    commit = "3d2de1816307bac63c16a297e8c4dc501b4076df",
 +    remote = "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git",
 +)
-
+ 
  pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
  pip.parse(
-@@ -22,171 +72,3 @@
+@@ -22,171 +80,3 @@
  )
  use_repo(pip, "v8_python_deps")
  
@@ -241,16 +242,29 @@ diff --git a/orig/v8-14.6.202.11/bazel/highway.patch b/mod/v8-14.6.202.11/bazel/
 new file mode 100644
 --- /dev/null
 +++ b/mod/v8-14.6.202.11/bazel/highway.patch
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,25 @@
 +diff --git a/BUILD b/BUILD
 +--- a/BUILD
 ++++ b/BUILD
 +@@ -2,7 +2,7 @@
 + load("@bazel_skylib//lib:selects.bzl", "selects")
 + load("@rules_license//rules:license.bzl", "license")
-+
++ 
 +-load("@rules_cc//cc:defs.bzl", "cc_test")
 ++load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 + # Placeholder#2 for Guitar, do not remove
-+
++ 
 + package(
++@@ -134,11 +134,7 @@ COPTS = select({
++     ],
++ })
++ 
++-DEFINES = select({
++-    ":compiler_msvc": ["HWY_SHARED_DEFINE"],
++-    ":compiler_clangcl": ["HWY_SHARED_DEFINE"],
++-    "//conditions:default": [],
++-})
+++DEFINES = []
++ 
++ # Unused on Bazel builds, where this is not defined/known; Copybara replaces
++ # usages with an empty list.

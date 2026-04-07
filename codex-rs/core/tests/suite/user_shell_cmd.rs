@@ -350,13 +350,22 @@ async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Re
         .submit(Op::RunUserShellCommand { command })
         .await?;
 
-    let end_event = wait_for_event_match(&test.codex, |ev| match ev {
+    let ExecCommandEndEvent {
+        exit_code,
+        stdout,
+        stderr,
+        ..
+    } = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::ExecCommandEnd(event) => Some(event.clone()),
         _ => None,
     })
     .await;
-    assert_eq!(end_event.exit_code, 0);
-    assert_eq!(end_event.stdout.trim(), "not-set");
+
+    assert_eq!(
+        exit_code, 0,
+        "shell command should execute successfully. stdout=`{stdout}`, stderr=`{stderr}`",
+    );
+    assert_eq!(stdout.trim(), "not-set");
 
     Ok(())
 }

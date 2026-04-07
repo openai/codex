@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
@@ -39,7 +38,6 @@ where
     })
 }
 
-#[async_trait]
 impl ToolHandler for CodeModeWaitHandler {
     type Output = FunctionToolOutput;
 

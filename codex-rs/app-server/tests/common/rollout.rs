@@ -84,6 +84,7 @@ pub fn create_fake_rollout_with_source(
         agent_role: None,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
+        developer_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
     };
@@ -167,6 +168,7 @@ pub fn create_fake_rollout_with_text_elements(
         agent_role: None,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
+        developer_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
     };

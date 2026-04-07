@@ -6,9 +6,6 @@ use pretty_assertions::assert_eq;
 
 use crate::codex::make_session_and_context;
 use crate::exec_env::create_env;
-use crate::is_safe_command::is_known_safe_command;
-use crate::powershell::try_find_powershell_executable_blocking;
-use crate::powershell::try_find_pwsh_executable_blocking;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -20,6 +17,9 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_shell_command::powershell::try_find_powershell_executable_blocking;
+use codex_shell_command::powershell::try_find_pwsh_executable_blocking;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -63,12 +63,12 @@ fn commands_generated_by_shell_command_handler_can_be_matched_by_is_known_safe_c
 }
 
 fn assert_safe(shell: &Shell, command: &str) {
-    assert!(is_known_safe_command(
-        &shell.derive_exec_args(command, /* use_login_shell */ true)
-    ));
-    assert!(is_known_safe_command(
-        &shell.derive_exec_args(command, /* use_login_shell */ false)
-    ));
+    assert!(is_known_safe_command(&shell.derive_exec_args(
+        command, /* use_login_shell */ /*use_login_shell*/ true
+    )));
+    assert!(is_known_safe_command(&shell.derive_exec_args(
+        command, /* use_login_shell */ /*use_login_shell*/ false
+    )));
 }
 
 #[tokio::test]
@@ -82,7 +82,9 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let sandbox_permissions = SandboxPermissions::RequireEscalated;
     let justification = Some("because tests".to_string());
 
-    let expected_command = session.user_shell().derive_exec_args(&command, true);
+    let expected_command = session
+        .user_shell()
+        .derive_exec_args(&command, /*use_login_shell*/ true);
     let expected_cwd = turn_context.resolve_path(workdir.clone());
     let expected_env = create_env(
         &turn_context.shell_environment_policy,
@@ -105,7 +107,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         &session,
         &turn_context,
         session.conversation_id,
-        true,
+        /*allow_login_shell*/ true,
     )
     .expect("login shells should be allowed");
 
@@ -132,17 +134,24 @@ fn shell_command_handler_respects_explicit_login_flag() {
         shell_snapshot,
     };
 
-    let login_command = ShellCommandHandler::base_command(&shell, "echo login shell", true);
+    let login_command = ShellCommandHandler::base_command(
+        &shell,
+        "echo login shell",
+        /*use_login_shell*/ true,
+    );
     assert_eq!(
         login_command,
-        shell.derive_exec_args("echo login shell", true)
+        shell.derive_exec_args("echo login shell", /*use_login_shell*/ true)
     );
 
-    let non_login_command =
-        ShellCommandHandler::base_command(&shell, "echo non login shell", false);
+    let non_login_command = ShellCommandHandler::base_command(
+        &shell,
+        "echo non login shell",
+        /*use_login_shell*/ false,
+    );
     assert_eq!(
         non_login_command,
-        shell.derive_exec_args("echo non login shell", false)
+        shell.derive_exec_args("echo non login shell", /*use_login_shell*/ false)
     );
 }
 
@@ -165,20 +174,23 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         &session,
         &turn_context,
         session.conversation_id,
-        false,
+        /*allow_login_shell*/ false,
     )
     .expect("non-login shells should still be allowed");
 
     assert_eq!(
         exec_params.command,
-        session.user_shell().derive_exec_args("echo hello", false)
+        session
+            .user_shell()
+            .derive_exec_args("echo hello", /*use_login_shell*/ false)
     );
 }
 
 #[test]
 fn shell_command_handler_rejects_login_when_disallowed() {
-    let err = ShellCommandHandler::resolve_use_login_shell(Some(true), false)
-        .expect_err("explicit login should be rejected");
+    let err =
+        ShellCommandHandler::resolve_use_login_shell(Some(true), /*allow_login_shell*/ false)
+            .expect_err("explicit login should be rejected");
 
     assert!(
         err.to_string()

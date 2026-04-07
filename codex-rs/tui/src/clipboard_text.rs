@@ -202,13 +202,16 @@ mod tests {
 
     #[test]
     fn osc52_sequence_encodes_text_for_terminal_clipboard() {
-        assert_eq!(osc52_sequence("hello", false), "\u{1b}]52;c;aGVsbG8=\u{7}");
+        assert_eq!(
+            osc52_sequence("hello", /*tmux*/ false),
+            "\u{1b}]52;c;aGVsbG8=\u{7}"
+        );
     }
 
     #[test]
     fn osc52_sequence_wraps_tmux_passthrough() {
         assert_eq!(
-            osc52_sequence("hello", true),
+            osc52_sequence("hello", /*tmux*/ true),
             "\u{1b}Ptmux;\u{1b}\u{1b}]52;c;aGVsbG8=\u{7}\u{1b}\\"
         );
     }

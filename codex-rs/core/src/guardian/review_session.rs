@@ -17,6 +17,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
@@ -33,11 +34,10 @@ use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
-use crate::config::types::McpServerConfig;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::protocol::SandboxPolicy;
 use crate::rollout::recorder::RolloutRecorder;
+use codex_config::types::McpServerConfig;
 use codex_features::Feature;
+use codex_model_provider_info::ModelProviderInfo;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
@@ -137,7 +137,7 @@ impl GuardianReviewSessionReuseKey {
             model_reasoning_summary: spawn_config.model_reasoning_summary,
             permissions: spawn_config.permissions.clone(),
             developer_instructions: spawn_config.developer_instructions.clone(),
-            base_instructions: spawn_config.base_instructions.clone(),
+            base_instructions: spawn_config.base_instructions.clone().flatten(),
             user_instructions: spawn_config.user_instructions.clone(),
             compact_prompt: spawn_config.compact_prompt.clone(),
             cwd: spawn_config.cwd.to_path_buf(),
@@ -746,9 +746,13 @@ mod tests {
     #[test]
     fn guardian_review_session_config_change_invalidates_cached_session() {
         let parent_config = crate::config::test_config();
-        let cached_spawn_config =
-            build_guardian_review_session_config(&parent_config, None, "active-model", None)
-                .expect("cached guardian config");
+        let cached_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("cached guardian config");
         let cached_reuse_key =
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
 
@@ -757,9 +761,9 @@ mod tests {
             Some("https://guardian.example.invalid/v1".to_string());
         let next_spawn_config = build_guardian_review_session_config(
             &changed_parent_config,
-            None,
+            /*live_network_config*/ None,
             "active-model",
-            None,
+            /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
@@ -775,7 +779,7 @@ mod tests {
     async fn run_before_review_deadline_times_out_before_future_completes() {
         let outcome = run_before_review_deadline(
             tokio::time::Instant::now() + Duration::from_millis(10),
-            None,
+            /*external_cancel*/ None,
             async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             },
@@ -816,7 +820,7 @@ mod tests {
 
         let outcome = run_before_review_deadline_with_cancel(
             tokio::time::Instant::now() + Duration::from_millis(10),
-            None,
+            /*external_cancel*/ None,
             &cancel_token,
             async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -862,7 +866,7 @@ mod tests {
 
         let outcome = run_before_review_deadline_with_cancel(
             tokio::time::Instant::now() + Duration::from_secs(1),
-            None,
+            /*external_cancel*/ None,
             &cancel_token,
             async { 42usize },
         )

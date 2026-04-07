@@ -1,9 +1,9 @@
 use codex_execpolicy::Decision;
+use codex_execpolicy::PatternToken;
 use codex_execpolicy::Policy;
-use codex_execpolicy::rule::PatternToken;
-use codex_execpolicy::rule::PrefixPattern;
-use codex_execpolicy::rule::PrefixRule;
-use codex_execpolicy::rule::RuleRef;
+use codex_execpolicy::PrefixPattern;
+use codex_execpolicy::PrefixRule;
+use codex_execpolicy::RuleRef;
 use multimap::MultiMap;
 use serde::Deserialize;
 use std::sync::Arc;

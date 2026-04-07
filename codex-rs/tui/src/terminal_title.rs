@@ -23,8 +23,14 @@ use std::io::stdout;
 use crossterm::Command;
 use ratatui::crossterm::execute;
 
+/// Practical upper bound on title length, measured in Rust `char`s.
+///
+/// Most terminals silently truncate titles beyond a few hundred characters.
+/// 240 leaves headroom for the OSC framing bytes while keeping titles
+/// readable in tab bars and window managers.
 const MAX_TERMINAL_TITLE_CHARS: usize = 240;
 
+/// Outcome of a [`set_terminal_title`] call.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum SetTerminalTitleResult {
     /// A sanitized title was written, or stdout is not a terminal so no write was needed.
@@ -108,6 +114,8 @@ fn sanitize_terminal_title(title: &str) -> String {
 
     for ch in title.chars() {
         if ch.is_whitespace() {
+            // Only set pending if we've already written content; this
+            // strips leading whitespace without an extra trim pass.
             pending_space = !sanitized.is_empty();
             continue;
         }
@@ -116,10 +124,13 @@ fn sanitize_terminal_title(title: &str) -> String {
             continue;
         }
 
-        if pending_space && chars_written < MAX_TERMINAL_TITLE_CHARS {
-            sanitized.push(' ');
-            chars_written += 1;
-            pending_space = false;
+        if pending_space {
+            let remaining = MAX_TERMINAL_TITLE_CHARS.saturating_sub(chars_written);
+            if remaining > 1 {
+                sanitized.push(' ');
+                chars_written += 1;
+                pending_space = false;
+            }
         }
 
         if chars_written >= MAX_TERMINAL_TITLE_CHARS {
@@ -192,6 +203,14 @@ mod tests {
         let input = "a".repeat(MAX_TERMINAL_TITLE_CHARS + 10);
         let sanitized = sanitize_terminal_title(&input);
         assert_eq!(sanitized.len(), MAX_TERMINAL_TITLE_CHARS);
+    }
+
+    #[test]
+    fn truncation_prefers_visible_char_over_pending_space() {
+        let input = format!("{} b", "a".repeat(MAX_TERMINAL_TITLE_CHARS - 1));
+        let sanitized = sanitize_terminal_title(&input);
+        assert_eq!(sanitized.len(), MAX_TERMINAL_TITLE_CHARS);
+        assert_eq!(sanitized.chars().last(), Some('b'));
     }
 
     #[test]

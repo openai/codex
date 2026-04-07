@@ -1,7 +1,0 @@
----
-source: tui_app_server/src/multi_agents.rs
-assertion_line: 784
-expression: cell_to_text(&cell)
----
-• Resumed Robie [explorer]
-  └ Interrupted

@@ -1,8 +1,8 @@
 use super::emit_turn_network_proxy_metric;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::metrics::names::TURN_NETWORK_PROXY_METRIC;
+use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry::KeyValue;
@@ -25,11 +25,11 @@ fn test_session_telemetry() -> SessionTelemetry {
         ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",
-        None,
-        None,
-        None,
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "tty".to_string(),
         SessionSource::Cli,
     )
@@ -75,7 +75,11 @@ fn metric_point(resource_metrics: &ResourceMetrics) -> (BTreeMap<String, String>
 fn emit_turn_network_proxy_metric_records_active_turn() {
     let session_telemetry = test_session_telemetry();
 
-    emit_turn_network_proxy_metric(&session_telemetry, true, ("tmp_mem_enabled", "true"));
+    emit_turn_network_proxy_metric(
+        &session_telemetry,
+        /*network_proxy_active*/ true,
+        ("tmp_mem_enabled", "true"),
+    );
 
     let snapshot = session_telemetry
         .snapshot_metrics()
@@ -96,7 +100,11 @@ fn emit_turn_network_proxy_metric_records_active_turn() {
 fn emit_turn_network_proxy_metric_records_inactive_turn() {
     let session_telemetry = test_session_telemetry();
 
-    emit_turn_network_proxy_metric(&session_telemetry, false, ("tmp_mem_enabled", "false"));
+    emit_turn_network_proxy_metric(
+        &session_telemetry,
+        /*network_proxy_active*/ false,
+        ("tmp_mem_enabled", "false"),
+    );
 
     let snapshot = session_telemetry
         .snapshot_metrics()

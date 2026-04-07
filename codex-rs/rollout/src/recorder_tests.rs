@@ -71,14 +71,15 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         &config,
         RolloutRecorderParams::new(
             thread_id,
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
-            BaseInstructions::default(),
+            Some(BaseInstructions::default()),
+            /*developer_instructions*/ None,
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await?;
 
@@ -155,7 +156,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
         .await
         .expect("state db should initialize");
     state_db
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
 
@@ -164,14 +165,15 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
         &config,
         RolloutRecorderParams::new(
             thread_id,
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Cli,
-            BaseInstructions::default(),
+            Some(BaseInstructions::default()),
+            /*developer_instructions*/ None,
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
         Some(state_db.clone()),
-        None,
+        /*state_builder*/ None,
     )
     .await?;
 
@@ -257,7 +259,7 @@ async fn metadata_irrelevant_events_fall_back_to_upsert_when_thread_missing() ->
         Some(&builder),
         items.as_slice(),
         config.model_provider_id.as_str(),
-        None,
+        /*new_thread_memory_mode*/ None,
     )
     .await;
 
@@ -283,13 +285,13 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
     let default_provider = config.model_provider_id.clone();
     let page1 = RolloutRecorder::list_threads(
         &config,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page1.items.len(), 1);
@@ -298,13 +300,13 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
 
     let page2 = RolloutRecorder::list_threads(
         &config,
-        1,
+        /*page_size*/ 1,
         Some(&cursor),
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page2.items.len(), 1);
@@ -330,7 +332,7 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
     .await
     .expect("state db should initialize");
     runtime
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
     let created_at = chrono::Utc
@@ -355,13 +357,13 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
     let default_provider = config.model_provider_id.clone();
     let page = RolloutRecorder::list_threads(
         &config,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page.items.len(), 0);
@@ -392,7 +394,7 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
     .await
     .expect("state db should initialize");
     runtime
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
     let created_at = chrono::Utc
@@ -417,13 +419,13 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
     let default_provider = config.model_provider_id.clone();
     let page = RolloutRecorder::list_threads(
         &config,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page.items.len(), 1);

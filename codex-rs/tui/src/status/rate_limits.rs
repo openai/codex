@@ -366,7 +366,7 @@ mod tests {
         let codex = RateLimitSnapshotDisplay {
             limit_name: "codex".to_string(),
             captured_at: now,
-            primary: Some(window(10.0)),
+            primary: Some(window(/*used_percent*/ 10.0)),
             secondary: None,
             credits: Some(CreditsSnapshotDisplay {
                 has_credits: true,
@@ -377,7 +377,7 @@ mod tests {
         let other = RateLimitSnapshotDisplay {
             limit_name: "codex-other".to_string(),
             captured_at: now,
-            primary: Some(window(20.0)),
+            primary: Some(window(/*used_percent*/ 20.0)),
             secondary: None,
             credits: Some(CreditsSnapshotDisplay {
                 has_credits: true,

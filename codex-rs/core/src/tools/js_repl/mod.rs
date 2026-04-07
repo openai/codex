@@ -31,7 +31,6 @@ use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
@@ -47,6 +46,7 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
+use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 

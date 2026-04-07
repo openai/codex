@@ -32,7 +32,7 @@ fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
         NetworkSandboxPolicy::Enabled,
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
-        false,
+        /*has_managed_network_requirements*/ false,
     );
     assert_eq!(sandbox, SandboxType::None);
 }
@@ -40,13 +40,14 @@ fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
 #[test]
 fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
     let manager = SandboxManager::new();
-    let expected = get_platform_sandbox(false).unwrap_or(SandboxType::None);
+    let expected =
+        get_platform_sandbox(/*windows_sandbox_enabled*/ false).unwrap_or(SandboxType::None);
     let sandbox = manager.select_initial(
         &FileSystemSandboxPolicy::unrestricted(),
         NetworkSandboxPolicy::Enabled,
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
-        true,
+        /*has_managed_network_requirements*/ true,
     );
     assert_eq!(sandbox, expected);
 }
@@ -54,7 +55,8 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
 #[test]
 fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
     let manager = SandboxManager::new();
-    let expected = get_platform_sandbox(false).unwrap_or(SandboxType::None);
+    let expected =
+        get_platform_sandbox(/*windows_sandbox_enabled*/ false).unwrap_or(SandboxType::None);
     let sandbox = manager.select_initial(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -65,7 +67,7 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
         NetworkSandboxPolicy::Enabled,
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
-        false,
+        /*has_managed_network_requirements*/ false,
     );
     assert_eq!(sandbox, expected);
 }

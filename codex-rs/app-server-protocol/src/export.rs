@@ -2690,7 +2690,7 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
     fn generate_json_filters_experimental_fields_and_methods() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
-        generate_json_with_experimental(&output_dir, false)?;
+        generate_json_with_experimental(&output_dir, /*experimental_api*/ false)?;
 
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;

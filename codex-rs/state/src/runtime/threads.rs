@@ -1030,6 +1030,7 @@ mod tests {
                 agent_role: None,
                 model_provider: None,
                 base_instructions: None,
+                developer_instructions: None,
                 dynamic_tools: None,
                 memory_mode: Some("polluted".to_string()),
             },
@@ -1037,7 +1038,10 @@ mod tests {
         })];
 
         runtime
-            .apply_rollout_items(&builder, &items, None, None)
+            .apply_rollout_items(
+                &builder, &items, /*new_thread_memory_mode*/ None,
+                /*updated_at_override*/ None,
+            )
             .await
             .expect("apply_rollout_items should succeed");
 
@@ -1085,6 +1089,7 @@ mod tests {
                 agent_role: None,
                 model_provider: None,
                 base_instructions: None,
+                developer_instructions: None,
                 dynamic_tools: None,
                 memory_mode: None,
             },
@@ -1096,7 +1101,10 @@ mod tests {
         })];
 
         runtime
-            .apply_rollout_items(&builder, &items, None, None)
+            .apply_rollout_items(
+                &builder, &items, /*new_thread_memory_mode*/ None,
+                /*updated_at_override*/ None,
+            )
             .await
             .expect("apply_rollout_items should succeed");
 
@@ -1329,7 +1337,12 @@ mod tests {
             DateTime::<Utc>::from_timestamp(1_700_001_234, 0).expect("timestamp");
 
         runtime
-            .apply_rollout_items(&builder, &items, None, Some(override_updated_at))
+            .apply_rollout_items(
+                &builder,
+                &items,
+                /*new_thread_memory_mode*/ None,
+                Some(override_updated_at),
+            )
             .await
             .expect("apply_rollout_items should succeed");
 

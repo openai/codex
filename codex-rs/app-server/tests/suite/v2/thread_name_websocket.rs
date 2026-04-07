@@ -43,14 +43,14 @@ async fn thread_name_updated_broadcasts_for_loaded_threads() -> Result<()> {
         send_request(
             &mut ws1,
             "thread/resume",
-            10,
+            /*id*/ 10,
             Some(serde_json::to_value(ThreadResumeParams {
                 thread_id: conversation_id.clone(),
                 ..Default::default()
             })?),
         )
         .await?;
-        let resume_resp: JSONRPCResponse = read_response_for_id(&mut ws1, 10).await?;
+        let resume_resp: JSONRPCResponse = read_response_for_id(&mut ws1, /*id*/ 10).await?;
         let resume: ThreadResumeResponse = to_response::<ThreadResumeResponse>(resume_resp)?;
         assert_eq!(resume.thread.id, conversation_id);
 
@@ -58,15 +58,19 @@ async fn thread_name_updated_broadcasts_for_loaded_threads() -> Result<()> {
         send_request(
             &mut ws1,
             "thread/name/set",
-            11,
+            /*id*/ 11,
             Some(serde_json::to_value(ThreadSetNameParams {
                 thread_id: conversation_id.clone(),
                 name: renamed.to_string(),
             })?),
         )
         .await?;
-        let (rename_resp, ws1_notification) =
-            read_response_and_notification_for_method(&mut ws1, 11, "thread/name/updated").await?;
+        let (rename_resp, ws1_notification) = read_response_and_notification_for_method(
+            &mut ws1,
+            /*id*/ 11,
+            "thread/name/updated",
+        )
+        .await?;
         let _: ThreadSetNameResponse = to_response::<ThreadSetNameResponse>(rename_resp)?;
         assert_thread_name_updated(ws1_notification, &conversation_id, renamed)?;
 
@@ -105,15 +109,19 @@ async fn thread_name_updated_broadcasts_for_not_loaded_threads() -> Result<()> {
         send_request(
             &mut ws1,
             "thread/name/set",
-            20,
+            /*id*/ 20,
             Some(serde_json::to_value(ThreadSetNameParams {
                 thread_id: conversation_id.clone(),
                 name: renamed.to_string(),
             })?),
         )
         .await?;
-        let (rename_resp, ws1_notification) =
-            read_response_and_notification_for_method(&mut ws1, 20, "thread/name/updated").await?;
+        let (rename_resp, ws1_notification) = read_response_and_notification_for_method(
+            &mut ws1,
+            /*id*/ 20,
+            "thread/name/updated",
+        )
+        .await?;
         let _: ThreadSetNameResponse = to_response::<ThreadSetNameResponse>(rename_resp)?;
         assert_thread_name_updated(ws1_notification, &conversation_id, renamed)?;
 
@@ -135,11 +143,11 @@ async fn thread_name_updated_broadcasts_for_not_loaded_threads() -> Result<()> {
 }
 
 async fn initialize_both_clients(ws1: &mut WsClient, ws2: &mut WsClient) -> Result<()> {
-    send_initialize_request(ws1, 1, "ws_client_one").await?;
-    timeout(DEFAULT_READ_TIMEOUT, read_response_for_id(ws1, 1)).await??;
+    send_initialize_request(ws1, /*id*/ 1, "ws_client_one").await?;
+    timeout(DEFAULT_READ_TIMEOUT, read_response_for_id(ws1, /*id*/ 1)).await??;
 
-    send_initialize_request(ws2, 2, "ws_client_two").await?;
-    timeout(DEFAULT_READ_TIMEOUT, read_response_for_id(ws2, 2)).await??;
+    send_initialize_request(ws2, /*id*/ 2, "ws_client_two").await?;
+    timeout(DEFAULT_READ_TIMEOUT, read_response_for_id(ws2, /*id*/ 2)).await??;
     Ok(())
 }
 
@@ -151,7 +159,7 @@ fn create_rollout(codex_home: &std::path::Path, filename_ts: &str) -> Result<Str
         "Saved user message",
         Vec::new(),
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )
 }
 

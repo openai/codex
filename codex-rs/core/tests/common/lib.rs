@@ -287,7 +287,7 @@ where
     F: Fn(&codex_protocol::protocol::EventMsg) -> Option<T>,
 {
     let ev = wait_for_event(codex, |ev| matcher(ev).is_some()).await;
-    matcher(&ev).unwrap()
+    matcher(&ev).expect("EventMsg should match matcher predicate")
 }
 
 pub async fn wait_for_event_with_timeout<F>(
@@ -417,7 +417,7 @@ pub mod fs_wait {
         let deadline = Instant::now() + timeout;
         loop {
             if path.exists() {
-                return Ok(path.clone());
+                return Ok(path);
             }
             let now = Instant::now();
             if now >= deadline {
@@ -427,7 +427,7 @@ pub mod fs_wait {
             match rx.recv_timeout(remaining) {
                 Ok(Ok(_event)) => {
                     if path.exists() {
-                        return Ok(path.clone());
+                        return Ok(path);
                     }
                 }
                 Ok(Err(err)) => return Err(err.into()),

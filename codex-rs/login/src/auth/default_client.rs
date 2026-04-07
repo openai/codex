@@ -119,6 +119,7 @@ pub fn originator() -> Originator {
 
 pub fn is_first_party_originator(originator_value: &str) -> bool {
     originator_value == DEFAULT_ORIGINATOR
+        || originator_value == "codex-tui"
         || originator_value == "codex_vscode"
         || originator_value.starts_with("Codex ")
 }

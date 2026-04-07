@@ -23,6 +23,31 @@ pub struct LoaderOverrides {
     pub macos_managed_config_requirements_base64: Option<String>,
 }
 
+impl LoaderOverrides {
+    /// Returns overrides that ignore host-managed configuration.
+    ///
+    /// This is intended for tests that should load only repo-controlled config fixtures.
+    pub fn without_managed_config_for_tests() -> Self {
+        Self::with_managed_config_path_for_tests(
+            std::env::temp_dir()
+                .join("codex-config-tests")
+                .join("managed_config.toml"),
+        )
+    }
+
+    /// Returns overrides with host MDM disabled and managed config loaded from `managed_config_path`.
+    ///
+    /// This is intended for tests that supply an explicit managed config fixture.
+    pub fn with_managed_config_path_for_tests(managed_config_path: PathBuf) -> Self {
+        Self {
+            managed_config_path: Some(managed_config_path),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigLayerEntry {
     pub name: ConfigLayerSource,
