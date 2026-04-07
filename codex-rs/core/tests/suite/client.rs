@@ -1668,6 +1668,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1782,6 +1783,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
+            submission_type: None,
         })
         .await
         .unwrap();
