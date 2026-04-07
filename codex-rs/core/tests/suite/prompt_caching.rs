@@ -435,6 +435,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         writable_roots: vec![writable.path().try_into().unwrap()],
         read_only_access: Default::default(),
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -714,6 +715,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         writable_roots: vec![writable.abs()],
         read_only_access: Default::default(),
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

@@ -573,6 +573,8 @@ allow_upstream_proxy = false
                 "workspace".to_string(),
                 PermissionProfileToml {
                     filesystem: Some(FilesystemPermissionsToml {
+                        allow_limited_git_writes: false,
+
                         glob_scan_max_depth: None,
                         entries: BTreeMap::from([
                             (
@@ -628,6 +630,8 @@ async fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> 
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
@@ -678,6 +682,8 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
@@ -724,6 +730,8 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 "workspace".to_string(),
                 PermissionProfileToml {
                     filesystem: Some(FilesystemPermissionsToml {
+                        allow_limited_git_writes: false,
+
                         glob_scan_max_depth: None,
                         entries: BTreeMap::from([
                             (
@@ -795,6 +803,8 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 readable_roots: vec![cwd.path().join("docs").abs(),],
             },
             network_access: false,
+            allow_limited_git_writes: false,
+
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         }
@@ -821,6 +831,7 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
                 },
                 access: FileSystemAccessMode::Write,
             }],
+            allow_limited_git_writes: false,
             glob_scan_max_depth: None,
         }),
     };
@@ -859,6 +870,7 @@ async fn permission_profile_override_preserves_configured_network_proxy() -> std
                 },
                 access: FileSystemAccessMode::Write,
             }],
+            allow_limited_git_writes: false,
             glob_scan_max_depth: None,
         }),
     };
@@ -871,6 +883,8 @@ async fn permission_profile_override_preserves_configured_network_proxy() -> std
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
@@ -929,6 +943,8 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: Some(2),
                             entries: BTreeMap::from([(
                                 ":project_roots".to_string(),
@@ -1004,6 +1020,8 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
@@ -1048,6 +1066,8 @@ async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io:
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 external_write_path.to_string(),
@@ -1092,6 +1112,8 @@ async fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> s
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
@@ -1152,6 +1174,8 @@ async fn load_workspace_permission_profile(
 async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: Some(FilesystemPermissionsToml {
+            allow_limited_git_writes: false,
+
             glob_scan_max_depth: None,
             entries: BTreeMap::from([(
                 ":future_special_path".to_string(),
@@ -1199,6 +1223,8 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: Some(FilesystemPermissionsToml {
+            allow_limited_git_writes: false,
+
             glob_scan_max_depth: None,
             entries: BTreeMap::from([(
                 ":future_special_path".to_string(),
@@ -1267,6 +1293,8 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
 async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: Some(FilesystemPermissionsToml {
+            allow_limited_git_writes: false,
+
             glob_scan_max_depth: None,
             entries: BTreeMap::new(),
         }),
@@ -1302,6 +1330,8 @@ async fn permissions_profiles_reject_project_root_parent_traversal() -> std::io:
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":project_roots".to_string(),
@@ -1348,6 +1378,8 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
@@ -1514,6 +1546,8 @@ trust_level = "trusted"
                 writable_roots: vec![writable_root.clone()],
                 read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
+                allow_limited_git_writes: false,
+
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }
@@ -1555,6 +1589,8 @@ exclude_slash_tmp = true
                 writable_roots: vec![writable_root],
                 read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
+                allow_limited_git_writes: false,
+
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }

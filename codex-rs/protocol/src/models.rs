@@ -120,6 +120,7 @@ impl SandboxPermissions {
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, JsonSchema, TS)]
 pub struct FileSystemPermissions {
     pub entries: Vec<FileSystemSandboxEntry>,
+    pub allow_limited_git_writes: bool,
     pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
@@ -149,6 +150,7 @@ impl FileSystemPermissions {
         }
         Self {
             entries,
+            allow_limited_git_writes: false,
             glob_scan_max_depth: None,
         }
     }
@@ -207,6 +209,8 @@ struct LegacyFileSystemPermissions {
 struct CanonicalFileSystemPermissions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     entries: Vec<FileSystemSandboxEntry>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    allow_limited_git_writes: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     glob_scan_max_depth: Option<NonZeroUsize>,
 }
@@ -228,6 +232,7 @@ impl Serialize for FileSystemPermissions {
         } else {
             CanonicalFileSystemPermissions {
                 entries: self.entries.clone(),
+                allow_limited_git_writes: self.allow_limited_git_writes,
                 glob_scan_max_depth: self.glob_scan_max_depth,
             }
             .serialize(serializer)
@@ -243,9 +248,11 @@ impl<'de> Deserialize<'de> for FileSystemPermissions {
         match FileSystemPermissionsDe::deserialize(deserializer)? {
             FileSystemPermissionsDe::Canonical(CanonicalFileSystemPermissions {
                 entries,
+                allow_limited_git_writes,
                 glob_scan_max_depth,
             }) => Ok(Self {
                 entries,
+                allow_limited_git_writes,
                 glob_scan_max_depth,
             }),
             FileSystemPermissionsDe::Legacy(LegacyFileSystemPermissions { read, write }) => {
@@ -350,6 +357,7 @@ impl From<&FileSystemSandboxPolicy> for FileSystemPermissions {
         };
         Self {
             entries,
+            allow_limited_git_writes: value.allow_limited_git_writes,
             glob_scan_max_depth: value.glob_scan_max_depth.and_then(NonZeroUsize::new),
         }
     }
@@ -358,6 +366,7 @@ impl From<&FileSystemSandboxPolicy> for FileSystemPermissions {
 impl From<&FileSystemPermissions> for FileSystemSandboxPolicy {
     fn from(value: &FileSystemPermissions) -> Self {
         let mut policy = FileSystemSandboxPolicy::restricted(value.entries.clone());
+        policy.allow_limited_git_writes = value.allow_limited_git_writes;
         policy.glob_scan_max_depth = value.glob_scan_max_depth.map(usize::from);
         policy
     }
@@ -1496,6 +1505,7 @@ mod tests {
                 path: FileSystemPath::Path { path },
                 access: FileSystemAccessMode::Read,
             }],
+            allow_limited_git_writes: false,
             glob_scan_max_depth: NonZeroUsize::new(2),
         };
 

@@ -55,6 +55,8 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
+
                             glob_scan_max_depth: None,
                             entries: BTreeMap::new(),
                         }),
@@ -227,6 +229,8 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
 #[test]
 fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths() {
     let filesystem = FilesystemPermissionsToml {
+        allow_limited_git_writes: false,
+
         glob_scan_max_depth: None,
         entries: BTreeMap::from([
             (
@@ -261,6 +265,8 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
 #[test]
 fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
     let filesystem = FilesystemPermissionsToml {
+        allow_limited_git_writes: false,
+
         glob_scan_max_depth: None,
         entries: BTreeMap::from([(
             ":project_roots".to_string(),
@@ -277,6 +283,8 @@ fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
     );
 
     let configured_filesystem = FilesystemPermissionsToml {
+        allow_limited_git_writes: false,
+
         glob_scan_max_depth: Some(2),
         ..filesystem
     };
@@ -309,6 +317,8 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                 "workspace".to_string(),
                 PermissionProfileToml {
                     filesystem: Some(FilesystemPermissionsToml {
+                        allow_limited_git_writes: false,
+
                         glob_scan_max_depth: None,
                         entries: BTreeMap::from([(
                             ":project_roots".to_string(),

@@ -99,6 +99,10 @@ pub(crate) fn compile_permission_profile(
 
     let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
     let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(entries);
+    file_system_sandbox_policy.allow_limited_git_writes = profile
+        .filesystem
+        .as_ref()
+        .is_some_and(|filesystem| filesystem.allow_limited_git_writes);
     file_system_sandbox_policy.glob_scan_max_depth = glob_scan_max_depth;
     Ok((file_system_sandbox_policy, network_sandbox_policy))
 }

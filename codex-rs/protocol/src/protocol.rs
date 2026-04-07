@@ -1150,6 +1150,11 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
 
+        /// When set to `true`, Git metadata stays writable except for
+        /// sensitive subpaths like config and hooks.
+        #[serde(default)]
+        allow_limited_git_writes: bool,
+
         /// When set to `true`, will NOT include the per-user `TMPDIR`
         /// environment variable among the default writable roots. Defaults to
         /// `false`.
@@ -1235,6 +1240,7 @@ impl SandboxPolicy {
             writable_roots: vec![],
             read_only_access: ReadOnlyAccess::FullAccess,
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -1323,6 +1329,7 @@ impl SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
+                allow_limited_git_writes,
             } => {
                 // Start from explicitly configured writable roots.
                 let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
@@ -1393,6 +1400,7 @@ impl SandboxPolicy {
                             read_only_subpaths: default_read_only_subpaths_for_writable_root(
                                 &writable_root,
                                 protect_missing_dot_codex,
+                                *allow_limited_git_writes,
                             ),
                             root: writable_root,
                         }
@@ -1406,6 +1414,7 @@ impl SandboxPolicy {
 fn default_read_only_subpaths_for_writable_root(
     writable_root: &AbsolutePathBuf,
     protect_missing_dot_codex: bool,
+    allow_limited_git_writes: bool,
 ) -> Vec<AbsolutePathBuf> {
     let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
     let top_level_git = writable_root.join(".git");
@@ -1419,9 +1428,21 @@ fn default_read_only_subpaths_for_writable_root(
             && is_git_pointer_file(&top_level_git)
             && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
         {
-            subpaths.push(gitdir);
+            if allow_limited_git_writes {
+                subpaths.push(gitdir.join("config"));
+                subpaths.push(gitdir.join("hooks"));
+            } else {
+                subpaths.push(gitdir);
+            }
         }
-        subpaths.push(top_level_git);
+        if allow_limited_git_writes {
+            if top_level_git_is_dir {
+                subpaths.push(top_level_git.join("config"));
+                subpaths.push(top_level_git.join("hooks"));
+            }
+        } else {
+            subpaths.push(top_level_git);
+        }
     }
 
     let top_level_agents = writable_root.join(".agents");
@@ -4410,6 +4431,8 @@ mod tests {
                 readable_roots: vec![],
             },
             network_access: false,
+            allow_limited_git_writes: false,
+
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
         };
@@ -4636,6 +4659,8 @@ mod tests {
                 readable_roots: vec![docs],
             },
             network_access: false,
+            allow_limited_git_writes: false,
+
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -4708,6 +4733,8 @@ mod tests {
                 writable_roots: vec![],
                 read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
+                allow_limited_git_writes: false,
+
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
@@ -4728,6 +4755,8 @@ mod tests {
                     readable_roots: vec![nested_readable_root],
                 },
                 network_access: false,
+                allow_limited_git_writes: false,
+
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },

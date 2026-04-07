@@ -365,6 +365,7 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
                 readable_roots: vec![docs.clone()],
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         },
@@ -429,6 +430,7 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },
@@ -495,6 +497,7 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },
@@ -786,6 +789,7 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
             writable_roots: vec![],
             read_only_access: Default::default(),
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },
@@ -837,6 +841,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             .collect(),
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -1038,6 +1043,65 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
 }
 
 #[test]
+fn create_seatbelt_args_with_allow_limited_git_writes_carves_out_config_and_hooks() {
+    let tmp = TempDir::new().expect("tempdir");
+    let PopulatedTmp {
+        vulnerable_root,
+        dot_git_canonical,
+        empty_root,
+        ..
+    } = populate_tmpdir(tmp.path());
+    let cwd = tmp.path().join("cwd");
+    fs::create_dir_all(&cwd).expect("create cwd");
+
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![vulnerable_root, empty_root]
+            .into_iter()
+            .map(|p| p.try_into().unwrap())
+            .collect(),
+        read_only_access: Default::default(),
+        network_access: false,
+        allow_limited_git_writes: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+
+    let args = create_seatbelt_command_args(
+        vec!["true".to_string()],
+        &policy,
+        &cwd,
+        /*enforce_managed_network*/ false,
+        /*network*/ None,
+    );
+    let writable_definitions: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.starts_with("-DWRITABLE_ROOT_"))
+        .cloned()
+        .collect();
+
+    let dot_git_definition = format!("={}", dot_git_canonical.to_string_lossy());
+    assert!(
+        !writable_definitions
+            .iter()
+            .any(|arg| arg.ends_with(&dot_git_definition)),
+        "allow_limited_git_writes should not carve out the entire .git directory in {writable_definitions:#?}"
+    );
+
+    for protected_path in [
+        dot_git_canonical.join("config"),
+        dot_git_canonical.join("hooks"),
+    ] {
+        let protected_definition = format!("={}", protected_path.to_string_lossy());
+        assert!(
+            writable_definitions
+                .iter()
+                .any(|arg| arg.ends_with(&protected_definition)),
+            "expected protected Git path {protected_path:?} in {writable_definitions:#?}"
+        );
+    }
+}
+
+#[test]
 fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_descendant_carveouts() {
     let tmp = TempDir::new().expect("tempdir");
     let repo_root = tmp.path().join("repo");
@@ -1056,6 +1120,7 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_desce
         writable_roots: vec![repo_root.as_path().try_into().expect("absolute repo root")],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -1112,6 +1177,7 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
         writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -1208,6 +1274,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

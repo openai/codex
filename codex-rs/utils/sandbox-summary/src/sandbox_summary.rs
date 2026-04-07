@@ -24,6 +24,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
             read_only_access: _,
+            allow_limited_git_writes: _,
         } => {
             let mut summary = "workspace-write".to_string();
 
@@ -89,6 +90,7 @@ mod tests {
             writable_roots: vec![writable_root.clone()],
             read_only_access: Default::default(),
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         });

@@ -31,6 +31,8 @@ pub struct PermissionProfileToml {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct FilesystemPermissionsToml {
+    #[serde(default)]
+    pub allow_limited_git_writes: bool,
     /// Optional maximum depth for expanding unreadable glob patterns on
     /// platforms that snapshot glob matches before sandbox startup.
     #[schemars(range(min = 1))]

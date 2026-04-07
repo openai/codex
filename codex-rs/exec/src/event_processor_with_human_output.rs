@@ -485,6 +485,7 @@ fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
             read_only_access: _,
+            allow_limited_git_writes: _,
         } => {
             let mut summary = "workspace-write".to_string();
             let mut writable_entries = vec!["workdir".to_string()];

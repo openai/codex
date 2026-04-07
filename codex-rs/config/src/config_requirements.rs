@@ -1963,6 +1963,7 @@ allowed_approvals_reviewers = ["user"]
                     writable_roots: vec![AbsolutePathBuf::from_absolute_path(root)?],
                     read_only_access: Default::default(),
                     network_access: false,
+                    allow_limited_git_writes: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
                 })

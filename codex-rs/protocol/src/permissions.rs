@@ -139,6 +139,8 @@ pub enum FileSystemSandboxKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct FileSystemSandboxPolicy {
     pub kind: FileSystemSandboxKind,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_limited_git_writes: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub glob_scan_max_depth: Option<usize>,
@@ -157,6 +159,7 @@ struct FileSystemSemanticSignature {
     has_full_disk_read_access: bool,
     has_full_disk_write_access: bool,
     include_platform_defaults: bool,
+    allow_limited_git_writes: bool,
     readable_roots: Vec<AbsolutePathBuf>,
     writable_roots: Vec<WritableRoot>,
     unreadable_roots: Vec<AbsolutePathBuf>,
@@ -261,6 +264,7 @@ impl Default for FileSystemSandboxPolicy {
     fn default() -> Self {
         Self {
             kind: FileSystemSandboxKind::Restricted,
+            allow_limited_git_writes: false,
             glob_scan_max_depth: None,
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -276,6 +280,7 @@ impl FileSystemSandboxPolicy {
     pub fn unrestricted() -> Self {
         Self {
             kind: FileSystemSandboxKind::Unrestricted,
+            allow_limited_git_writes: false,
             glob_scan_max_depth: None,
             entries: Vec::new(),
         }
@@ -284,6 +289,7 @@ impl FileSystemSandboxPolicy {
     pub fn external_sandbox() -> Self {
         Self {
             kind: FileSystemSandboxKind::ExternalSandbox,
+            allow_limited_git_writes: false,
             glob_scan_max_depth: None,
             entries: Vec::new(),
         }
@@ -292,6 +298,7 @@ impl FileSystemSandboxPolicy {
     pub fn restricted(entries: Vec<FileSystemSandboxEntry>) -> Self {
         Self {
             kind: FileSystemSandboxKind::Restricted,
+            allow_limited_git_writes: false,
             glob_scan_max_depth: None,
             entries,
         }
@@ -326,6 +333,7 @@ impl FileSystemSandboxPolicy {
             return rebuilt;
         }
         rebuilt.glob_scan_max_depth = existing.glob_scan_max_depth;
+        rebuilt.allow_limited_git_writes = existing.allow_limited_git_writes;
 
         for deny_entry in existing
             .entries
@@ -387,7 +395,12 @@ impl FileSystemSandboxPolicy {
     /// into split filesystem policy.
     pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
         let mut file_system_policy = Self::from(sandbox_policy);
-        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox_policy {
+        if let SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            allow_limited_git_writes,
+            ..
+        } = sandbox_policy
+        {
             let legacy_writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
             file_system_policy.entries.retain(|entry| {
                 if entry.access != FileSystemAccessMode::Read {
@@ -405,7 +418,9 @@ impl FileSystemSandboxPolicy {
 
             if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
                 for protected_path in default_read_only_subpaths_for_writable_root(
-                    &cwd_root, /*protect_missing_dot_codex*/ true,
+                    &cwd_root,
+                    /*protect_missing_dot_codex*/ true,
+                    *allow_limited_git_writes,
                 ) {
                     append_default_read_only_path_if_no_explicit_rule(
                         &mut file_system_policy.entries,
@@ -417,6 +432,7 @@ impl FileSystemSandboxPolicy {
                 for protected_path in default_read_only_subpaths_for_writable_root(
                     writable_root,
                     /*protect_missing_dot_codex*/ false,
+                    *allow_limited_git_writes,
                 ) {
                     append_default_read_only_path_if_no_explicit_rule(
                         &mut file_system_policy.entries,
@@ -607,10 +623,14 @@ impl FileSystemSandboxPolicy {
                 .ok()
                 .is_some_and(|cwd| normalize_effective_absolute_path(cwd) == root);
             let mut read_only_subpaths: Vec<AbsolutePathBuf> =
-                default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex)
-                    .into_iter()
-                    .filter(|path| !has_explicit_resolved_path_entry(&resolved_entries, path))
-                    .collect();
+                default_read_only_subpaths_for_writable_root(
+                    &root,
+                    protect_missing_dot_codex,
+                    self.allow_limited_git_writes,
+                )
+                .into_iter()
+                .filter(|path| !has_explicit_resolved_path_entry(&resolved_entries, path))
+                .collect();
             // Narrower explicit non-write entries carve out broader writable roots.
             // More specific write entries still remain writable because they appear
             // as separate WritableRoot values and are checked independently.
@@ -882,6 +902,7 @@ impl FileSystemSandboxPolicy {
                         ),
                         read_only_access,
                         network_access: network_policy.is_enabled(),
+                        allow_limited_git_writes: self.allow_limited_git_writes,
                         exclude_tmpdir_env_var: !tmpdir_writable,
                         exclude_slash_tmp: !slash_tmp_writable,
                     }
@@ -924,6 +945,7 @@ impl FileSystemSandboxPolicy {
             has_full_disk_read_access: self.has_full_disk_read_access(),
             has_full_disk_write_access: self.has_full_disk_write_access(),
             include_platform_defaults: self.include_platform_defaults(),
+            allow_limited_git_writes: self.allow_limited_git_writes,
             readable_roots: self.get_readable_roots_with_cwd(cwd),
             writable_roots: self.get_writable_roots_with_cwd(cwd),
             unreadable_roots: self.get_unreadable_roots_with_cwd(cwd),
@@ -1308,6 +1330,7 @@ fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
 fn default_read_only_subpaths_for_writable_root(
     writable_root: &AbsolutePathBuf,
     protect_missing_dot_codex: bool,
+    allow_limited_git_writes: bool,
 ) -> Vec<AbsolutePathBuf> {
     let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
     let top_level_git = writable_root.join(".git");
@@ -1321,9 +1344,21 @@ fn default_read_only_subpaths_for_writable_root(
             && is_git_pointer_file(&top_level_git)
             && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
         {
-            subpaths.push(gitdir);
+            if allow_limited_git_writes {
+                subpaths.push(gitdir.join("config"));
+                subpaths.push(gitdir.join("hooks"));
+            } else {
+                subpaths.push(gitdir);
+            }
         }
-        subpaths.push(top_level_git);
+        if allow_limited_git_writes {
+            if top_level_git_is_dir {
+                subpaths.push(top_level_git.join("config"));
+                subpaths.push(top_level_git.join("hooks"));
+            }
+        } else {
+            subpaths.push(top_level_git);
+        }
     }
 
     let top_level_agents = writable_root.join(".agents");
@@ -1572,6 +1607,7 @@ mod tests {
                 readable_roots: vec![],
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -1599,6 +1635,7 @@ mod tests {
                 readable_roots: vec![],
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
