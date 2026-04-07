@@ -59,6 +59,7 @@ async fn submit_turn_with_policies(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
     Ok(())
