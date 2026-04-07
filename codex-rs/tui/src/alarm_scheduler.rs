@@ -107,11 +107,14 @@ pub(crate) fn format_alarm_trigger(trigger: &AlarmTrigger) -> String {
             format!("delay {seconds}s{suffix}")
         }
         AlarmTrigger::Schedule { dtstart, rrule } => match (dtstart, rrule) {
-            (Some(dtstart), Some(rrule)) => {
-                format!("schedule from {}; {rrule}", format_alarm_dtstart(dtstart))
-            }
+            (Some(dtstart), Some(rrule)) => format_alarm_rrule(rrule, Some(dtstart))
+                .unwrap_or_else(|| {
+                    format!("schedule from {}; {rrule}", format_alarm_dtstart(dtstart))
+                }),
             (Some(dtstart), None) => format!("at {}", format_alarm_dtstart(dtstart)),
-            (None, Some(rrule)) => format!("schedule {rrule}"),
+            (None, Some(rrule)) => {
+                format_alarm_rrule(rrule, None).unwrap_or_else(|| format!("schedule {rrule}"))
+            }
             (None, None) => "invalid schedule".to_string(),
         },
     }
@@ -150,6 +153,124 @@ fn format_alarm_time(dtstart: NaiveDateTime) -> String {
             dtstart.second()
         )
     }
+}
+
+fn format_alarm_rrule(rrule: &str, dtstart: Option<&str>) -> Option<String> {
+    let freq = rrule_part(rrule, "FREQ")?;
+    let interval = rrule_part(rrule, "INTERVAL")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1);
+    let byday = rrule_part(rrule, "BYDAY");
+    let byhour = rrule_part(rrule, "BYHOUR").and_then(|value| value.parse::<u32>().ok());
+    let byminute = rrule_part(rrule, "BYMINUTE")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    let bysecond = rrule_part(rrule, "BYSECOND")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    let time = format_alarm_rrule_time(byhour, byminute, bysecond, dtstart);
+
+    match freq {
+        "HOURLY" => {
+            let cadence = if interval == 1 {
+                "hourly".to_string()
+            } else {
+                format!("every {interval} hours")
+            };
+            if byminute == 0 && bysecond == 0 {
+                Some(format!("{cadence} on the hour"))
+            } else {
+                Some(format!("{cadence} at :{byminute:02}"))
+            }
+        }
+        "DAILY" => {
+            let cadence = if interval == 1 {
+                "daily".to_string()
+            } else {
+                format!("every {interval} days")
+            };
+            Some(match time {
+                Some(time) => format!("{cadence} at {time}"),
+                None => cadence,
+            })
+        }
+        "WEEKLY" => {
+            let cadence = byday.and_then(format_alarm_rrule_days).unwrap_or_else(|| {
+                if interval == 1 {
+                    "weekly".to_string()
+                } else {
+                    format!("every {interval} weeks")
+                }
+            });
+            Some(match time {
+                Some(time) => format!("{cadence} at {time}"),
+                None => cadence,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn rrule_part<'a>(rrule: &'a str, key: &str) -> Option<&'a str> {
+    rrule.split(';').find_map(|part| {
+        part.split_once('=').and_then(|(part_key, value)| {
+            (part_key.eq_ignore_ascii_case(key) && !value.is_empty()).then_some(value)
+        })
+    })
+}
+
+fn format_alarm_rrule_days(byday: &str) -> Option<String> {
+    if byday == "MO,TU,WE,TH,FR" {
+        return Some("weekdays".to_string());
+    }
+    if byday == "SA,SU" {
+        return Some("weekends".to_string());
+    }
+    let days = byday
+        .split(',')
+        .filter_map(format_alarm_rrule_day)
+        .collect::<Vec<_>>()
+        .join(", ");
+    (!days.is_empty()).then_some(days)
+}
+
+fn format_alarm_rrule_day(day: &str) -> Option<&'static str> {
+    match day {
+        "MO" => Some("Mondays"),
+        "TU" => Some("Tuesdays"),
+        "WE" => Some("Wednesdays"),
+        "TH" => Some("Thursdays"),
+        "FR" => Some("Fridays"),
+        "SA" => Some("Saturdays"),
+        "SU" => Some("Sundays"),
+        _ => None,
+    }
+}
+
+fn format_alarm_rrule_time(
+    byhour: Option<u32>,
+    byminute: u32,
+    bysecond: u32,
+    dtstart: Option<&str>,
+) -> Option<String> {
+    let dtstart = byhour.is_none().then_some(dtstart).flatten();
+    let hour = match byhour {
+        Some(hour) => hour,
+        None => {
+            let dtstart = dtstart?;
+            let dtstart = NaiveDateTime::parse_from_str(dtstart, LOCAL_DATE_TIME_FORMAT).ok()?;
+            dtstart.hour()
+        }
+    };
+    if hour > 23 || byminute > 59 || bysecond > 59 {
+        return None;
+    }
+    let dtstart = NaiveDateTime::parse_from_str(
+        &format!("2000-01-01T{hour:02}:{byminute:02}:{bysecond:02}"),
+        LOCAL_DATE_TIME_FORMAT,
+    )
+    .ok()?;
+    Some(format_alarm_time(dtstart))
 }
 
 pub(crate) fn trigger_is_recurring(trigger: &AlarmTrigger) -> bool {
@@ -320,13 +441,13 @@ Return only the JSON object requested by the response schema.
 Rules:
 - Extract the alarm prompt by removing the scheduling phrase but preserving the user's requested task.
 - Use delivery "after-turn" unless the user clearly asks for same-turn/current-turn steering; then use "steer-current-turn".
-- Treat `/loop` as recurring by default. Only create a one-shot alarm when the user clearly asks for a single run, one-time reminder, or other one-off action.
+- Treat `/loop` as recurring by default when there is no explicit one-time timing. A bare absolute date/time is a single run; do not infer recurrence solely from the `/loop` command name.
 - For "now", "immediately", or specs with no explicit timing, use { "kind": "delay", "seconds": 0, "repeat": true } unless the user clearly asked for one-shot behavior. This means the alarm fires whenever the thread is idle.
 - For delay triggers, set dtstart and rrule to null.
 - For schedule triggers, set seconds and repeat to null.
 - For relative timing like "in 30 seconds", use a delay trigger with seconds set to the relative delay and repeat true unless the user clearly asked for one-shot behavior.
 - For interval timing like "every 5 minutes", use a delay trigger with seconds set to the interval and repeat true.
-- For one-shot wall-clock timing like "at 9pm once" or "one time at 9pm", use a schedule trigger with dtstart set to the next matching local datetime in YYYY-MM-DDTHH:MM:SS and rrule null.
+- For absolute wall-clock timing like "at 9pm", "tomorrow at 8am", or "at 10:57", use a one-shot schedule trigger with dtstart set to the next matching local datetime in YYYY-MM-DDTHH:MM:SS and rrule null unless the user explicitly asks for recurrence with words like "every", "daily", "weekly", "hourly", "each", "repeat", or "recurring".
 - For recurring calendar timing, use a schedule trigger with rrule set to an RFC 5545 RRULE string and dtstart set when the user supplies a start datetime; otherwise null.
 - For schedule triggers, use floating local wall-clock datetimes without timezone suffixes.
 "#;
@@ -374,6 +495,52 @@ mod tests {
     }
 
     #[test]
+    fn format_alarm_trigger_renders_daily_rrule_as_local_time() {
+        assert_eq!(
+            format_alarm_trigger(&AlarmTrigger::Schedule {
+                dtstart: Some("2026-04-07T21:00:00".to_string()),
+                rrule: Some("FREQ=DAILY;BYHOUR=21;BYMINUTE=0;BYSECOND=0".to_string()),
+            }),
+            "daily at 9:00 PM"
+        );
+    }
+
+    #[test]
+    fn format_alarm_trigger_renders_weekday_rrule_as_local_time() {
+        assert_eq!(
+            format_alarm_trigger(&AlarmTrigger::Schedule {
+                dtstart: Some("2026-04-07T17:00:00".to_string()),
+                rrule: Some(
+                    "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=17;BYMINUTE=0;BYSECOND=0".to_string(),
+                ),
+            }),
+            "weekdays at 5:00 PM"
+        );
+    }
+
+    #[test]
+    fn format_alarm_trigger_renders_hourly_rrule_as_text() {
+        assert_eq!(
+            format_alarm_trigger(&AlarmTrigger::Schedule {
+                dtstart: None,
+                rrule: Some("FREQ=HOURLY;BYMINUTE=0;BYSECOND=0".to_string()),
+            }),
+            "hourly on the hour"
+        );
+    }
+
+    #[test]
+    fn format_alarm_trigger_preserves_unrecognized_rrule() {
+        assert_eq!(
+            format_alarm_trigger(&AlarmTrigger::Schedule {
+                dtstart: Some("2026-04-07T21:00:00".to_string()),
+                rrule: Some("FREQ=YEARLY;BYMONTH=4".to_string()),
+            }),
+            "schedule from Apr 7, 2026 9:00 PM; FREQ=YEARLY;BYMONTH=4"
+        );
+    }
+
+    #[test]
     fn parser_output_schema_avoids_unsupported_union_keywords() {
         let schema = output_schema();
         assert_eq!(schema.pointer("/properties/trigger/oneOf"), None);
@@ -390,10 +557,8 @@ mod tests {
             PARSE_ALARM_SYSTEM_PROMPT
                 .contains(r#"{ "kind": "delay", "seconds": 0, "repeat": true }"#)
         );
-        assert!(
-            PARSE_ALARM_SYSTEM_PROMPT
-                .contains("Only create a one-shot alarm when the user clearly asks")
-        );
+        assert!(PARSE_ALARM_SYSTEM_PROMPT.contains("A bare absolute date/time is a single run"));
+        assert!(PARSE_ALARM_SYSTEM_PROMPT.contains("For absolute wall-clock timing like"));
     }
 
     #[test]

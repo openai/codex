@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/alarms.rs
+expression: popup
+---
+  Thread alarms
+  Review an alarm, then press Enter to delete it.
+
+› 1. at Apr 7, 2026 10:57 AM • one-shot  tell me to take a piss
+                                         Press Enter to delete this alarm.
+  2. weekdays at 5:00 PM                 wrap up for the day
+
+  Press enter to confirm or esc to go back
