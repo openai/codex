@@ -391,16 +391,10 @@ async fn derive_new_contents_from_chunks(
     fs: &dyn ExecutorFileSystem,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
     let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
-    let original_bytes = fs.read_file(&path_abs).await.map_err(|err| {
+    let original_contents = fs.read_file_text(&path_abs).await.map_err(|err| {
         ApplyPatchError::IoError(IoError {
             context: format!("Failed to read file to update {}", path.display()),
             source: err,
-        })
-    })?;
-    let original_contents = String::from_utf8(original_bytes).map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!("Failed to read file to update {}", path.display()),
-            source: io::Error::new(io::ErrorKind::InvalidData, err),
         })
     })?;
 

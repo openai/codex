@@ -171,27 +171,13 @@ pub async fn maybe_parse_apply_patch_verified(
                             path.as_path(),
                             &effective_cwd,
                         );
-                        let original_bytes = match fs.read_file(&path_abs).await {
+                        let content = match fs.read_file_text(&path_abs).await {
                             Ok(content) => content,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(
                                     ApplyPatchError::IoError(IoError {
                                         context: format!("Failed to read {}", path.display()),
                                         source: e,
-                                    }),
-                                );
-                            }
-                        };
-                        let content = match String::from_utf8(original_bytes) {
-                            Ok(content) => content,
-                            Err(e) => {
-                                return MaybeApplyPatchVerified::CorrectnessError(
-                                    ApplyPatchError::IoError(IoError {
-                                        context: format!("Failed to read {}", path.display()),
-                                        source: std::io::Error::new(
-                                            std::io::ErrorKind::InvalidData,
-                                            e,
-                                        ),
                                     }),
                                 );
                             }
