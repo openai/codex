@@ -60,6 +60,7 @@ pub async fn append_session_index_entry(
     line.push('\n');
     file.write_all(line.as_bytes()).await?;
     file.flush().await?;
+    file.sync_all().await?;
     Ok(())
 }
 

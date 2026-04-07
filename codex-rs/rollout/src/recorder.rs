@@ -98,10 +98,10 @@ enum RolloutCmd {
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     Shutdown {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
 }
 
@@ -525,7 +525,7 @@ impl RolloutRecorder {
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
         rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
+            .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))?
     }
 
     pub async fn load_rollout_items(
@@ -613,9 +613,9 @@ impl RolloutRecorder {
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
         match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
-            Ok(_) => rx_done
-                .await
-                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}")))?,
+            Ok(_) => rx_done.await.map_err(|e| {
+                IoError::other(format!("failed waiting for rollout shutdown: {e}"))
+            })??,
             Err(e) => {
                 warn!("failed to send rollout shutdown command: {e}");
                 return Err(IoError::other(format!(
@@ -805,35 +805,75 @@ async fn rollout_writer(
                             buffered_items.clear();
                         }
 
+                        flush_writer(writer.as_mut()).await?;
                         Ok(())
                     }
                     .await;
 
-                    if let Err(err) = result {
-                        let kind = err.kind();
-                        let message = err.to_string();
-                        let _ = ack.send(Err(IoError::new(kind, message.clone())));
-                        return Err(IoError::new(kind, message));
+                    match result {
+                        Ok(()) => {
+                            let _ = ack.send(Ok(()));
+                        }
+                        Err(err) => {
+                            let return_err = clone_io_error(&err);
+                            let _ = ack.send(Err(err));
+                            return Err(return_err);
+                        }
                     }
+                } else if let Err(err) = flush_writer(writer.as_mut()).await {
+                    let return_err = clone_io_error(&err);
+                    let _ = ack.send(Err(err));
+                    return Err(return_err);
+                } else {
+                    let _ = ack.send(Ok(()));
                 }
-                let _ = ack.send(Ok(()));
             }
             RolloutCmd::Flush { ack } => {
                 // Deferred fresh threads may not have an initialized file yet.
-                if let Some(writer) = writer.as_mut()
-                    && let Err(e) = writer.file.flush().await
-                {
-                    let _ = ack.send(());
-                    return Err(e);
+                match flush_writer(writer.as_mut()).await {
+                    Ok(()) => {
+                        let _ = ack.send(Ok(()));
+                    }
+                    Err(err) => {
+                        let return_err = clone_io_error(&err);
+                        let _ = ack.send(Err(err));
+                        return Err(return_err);
+                    }
                 }
-                let _ = ack.send(());
             }
-            RolloutCmd::Shutdown { ack } => {
-                let _ = ack.send(());
-            }
+            RolloutCmd::Shutdown { ack } => match sync_writer(writer.as_mut()).await {
+                Ok(()) => {
+                    let _ = ack.send(Ok(()));
+                    break;
+                }
+                Err(err) => {
+                    let return_err = clone_io_error(&err);
+                    let _ = ack.send(Err(err));
+                    return Err(return_err);
+                }
+            },
         }
     }
 
+    Ok(())
+}
+
+fn clone_io_error(err: &IoError) -> IoError {
+    IoError::new(err.kind(), err.to_string())
+}
+
+async fn sync_writer(writer: Option<&mut JsonlWriter>) -> std::io::Result<()> {
+    if let Some(writer) = writer {
+        writer.file.flush().await?;
+        writer.file.sync_all().await?;
+    }
+    Ok(())
+}
+
+async fn flush_writer(writer: Option<&mut JsonlWriter>) -> std::io::Result<()> {
+    if let Some(writer) = writer {
+        writer.file.flush().await?;
+    }
     Ok(())
 }
 

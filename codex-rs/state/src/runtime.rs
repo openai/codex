@@ -139,6 +139,17 @@ impl StateRuntime {
     pub fn codex_home(&self) -> &Path {
         self.codex_home.as_path()
     }
+
+    /// Checkpoint both runtime SQLite databases so WAL contents are persisted to the main files.
+    pub async fn checkpoint_wal(&self) -> anyhow::Result<()> {
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(self.pool.as_ref())
+            .await?;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(self.logs_pool.as_ref())
+            .await?;
+        Ok(())
+    }
 }
 
 fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {

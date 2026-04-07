@@ -5646,6 +5646,11 @@ mod handlers {
             };
             sess.send_event_raw(event).await;
         }
+        if let Some(state_db) = sess.services.state_db.as_deref()
+            && let Err(e) = state_db.checkpoint_wal().await
+        {
+            warn!("failed to checkpoint state db WAL during shutdown: {e}");
+        }
 
         let event = Event {
             id: sub_id,
