@@ -6,7 +6,7 @@ use std::process::Output;
 
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 const MISSING_BWRAP_WARNING: &str = "Codex could not find system bubblewrap on PATH. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime.";
-const USER_NAMESPACE_WARNING: &str = "Codex's linux sandbox uses bubblewrap and needs access to create user namespaces. Install bubblewrap for your Linux distribution.";
+const USER_NAMESPACE_WARNING: &str = "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces. Install bubblewrap for your Linux distribution.";
 const USER_NAMESPACE_FAILURES: [&str; 4] = [
     "loopback: Failed RTM_NEWADDR",
     "loopback: Failed RTM_NEWLINK",
