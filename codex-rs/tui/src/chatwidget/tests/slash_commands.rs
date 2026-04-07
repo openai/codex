@@ -571,6 +571,8 @@ async fn undo_started_hides_interrupt_hint() {
 async fn fast_slash_command_updates_and_persists_local_service_tier() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
 
     chat.dispatch_command(SlashCommand::Fast);
 
@@ -599,10 +601,34 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
 }
 
 #[tokio::test]
+async fn fast_slash_command_is_ignored_without_chatgpt_auth() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    set_fast_mode_test_catalog(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Fast);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                service_tier: Some(Some(ServiceTier::Fast)),
+                ..
+            }) | AppEvent::PersistServiceTierSelection {
+                service_tier: Some(ServiceTier::Fast),
+            }
+        )),
+        "fast-mode events should not be emitted without ChatGPT auth; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn user_turn_carries_service_tier_after_fast_toggle() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
 
     chat.dispatch_command(SlashCommand::Fast);
@@ -627,6 +653,7 @@ async fn user_turn_clears_service_tier_after_fast_is_turned_off() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
 
     chat.dispatch_command(SlashCommand::Fast);
