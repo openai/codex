@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-codex-core = { workspace = true }
+codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

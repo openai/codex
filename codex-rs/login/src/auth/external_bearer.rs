@@ -2,6 +2,7 @@ use super::manager::ExternalAuth;
 use super::manager::ExternalAuthRefreshContext;
 use super::manager::ExternalAuthTokens;
 use async_trait::async_trait;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use std::fmt;
 use std::io;
@@ -28,25 +29,31 @@ impl BearerTokenRefresher {
 
 #[async_trait]
 impl ExternalAuth for BearerTokenRefresher {
-    fn auth_mode(&self) -> crate::AuthMode {
-        crate::AuthMode::ApiKey
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::ApiKey
     }
 
     async fn resolve(&self) -> io::Result<Option<ExternalAuthTokens>> {
         let access_token = {
             let mut cached = self.state.cached_token.lock().await;
-            if let Some(cached_token) = cached.as_ref()
-                && cached_token.fetched_at.elapsed() < self.state.config.refresh_interval()
-            {
-                cached_token.access_token.clone()
-            } else {
-                let access_token = run_provider_auth_command(&self.state.config).await?;
-                *cached = Some(CachedExternalBearerToken {
-                    access_token: access_token.clone(),
-                    fetched_at: Instant::now(),
-                });
-                access_token
+            if let Some(cached_token) = cached.as_ref() {
+                let should_use_cached_token = match self.state.config.refresh_interval() {
+                    Some(refresh_interval) => cached_token.fetched_at.elapsed() < refresh_interval,
+                    None => true,
+                };
+                if should_use_cached_token {
+                    return Ok(Some(ExternalAuthTokens::access_token_only(
+                        cached_token.access_token.clone(),
+                    )));
+                }
             }
+
+            let access_token = run_provider_auth_command(&self.state.config).await?;
+            *cached = Some(CachedExternalBearerToken {
+                access_token: access_token.clone(),
+                fetched_at: Instant::now(),
+            });
+            access_token
         };
         Ok(Some(ExternalAuthTokens::access_token_only(access_token)))
     }

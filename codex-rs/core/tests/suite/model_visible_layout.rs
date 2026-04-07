@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::config::types::Personality;
+use codex_config::types::Personality;
 use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;

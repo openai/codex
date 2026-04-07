@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::CodexAuth;
+use codex_login::CodexAuth;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;

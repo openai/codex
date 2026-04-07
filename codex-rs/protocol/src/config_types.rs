@@ -283,8 +283,9 @@ pub struct ModelProviderAuthInfo {
     pub timeout_ms: NonZeroU64,
 
     /// Maximum age for the cached token before rerunning the command.
+    /// Set to `0` to disable proactive refresh and only rerun after a 401 retry path.
     #[serde(default = "default_provider_auth_refresh_interval_ms")]
-    pub refresh_interval_ms: NonZeroU64,
+    pub refresh_interval_ms: u64,
 
     /// Working directory used when running the token command.
     #[serde(default = "default_provider_auth_cwd")]
@@ -297,8 +298,8 @@ impl ModelProviderAuthInfo {
         Duration::from_millis(self.timeout_ms.get())
     }
 
-    pub fn refresh_interval(&self) -> Duration {
-        Duration::from_millis(self.refresh_interval_ms.get())
+    pub fn refresh_interval(&self) -> Option<Duration> {
+        NonZeroU64::new(self.refresh_interval_ms).map(|value| Duration::from_millis(value.get()))
     }
 }
 
@@ -309,11 +310,8 @@ fn default_provider_auth_timeout_ms() -> NonZeroU64 {
     )
 }
 
-fn default_provider_auth_refresh_interval_ms() -> NonZeroU64 {
-    non_zero_u64(
-        DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS,
-        "model_providers.<id>.auth.refresh_interval_ms",
-    )
+fn default_provider_auth_refresh_interval_ms() -> u64 {
+    DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS
 }
 
 fn non_zero_u64(value: u64, field_name: &str) -> NonZeroU64 {

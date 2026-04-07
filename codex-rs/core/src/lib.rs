@@ -5,12 +5,9 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-pub mod api_bridge;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
-pub use codex_login as auth;
-mod auth_env_telemetry;
 mod client;
 mod client_common;
 pub mod codex;
@@ -30,9 +27,7 @@ pub mod config_loader;
 pub mod connectors;
 mod context_manager;
 mod contextual_user_message;
-pub use codex_utils_path::env;
 mod environment_context;
-pub mod error;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
@@ -46,26 +41,25 @@ mod hook_runtime;
 pub mod instructions;
 pub mod landlock;
 pub mod mcp;
-mod mcp_connection_manager;
+mod mcp_skill_dependencies;
 mod mcp_tool_approval_templates;
-pub mod models_manager;
 mod network_policy_decision;
 pub mod network_proxy_loader;
 mod original_image_detail;
-pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
-pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
-pub use mcp_connection_manager::SandboxState;
-pub use text_encoding::bytes_to_string_smart;
+pub use codex_mcp::mcp_connection_manager;
+pub use codex_mcp::mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
+pub use codex_mcp::mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
+pub use codex_mcp::mcp_connection_manager::SandboxState;
 mod mcp_tool_call;
 mod memories;
 pub mod mention_syntax;
 pub mod message_history;
-mod model_provider_info;
 pub mod utils;
 pub use utils::path_utils;
 pub mod personality_migration;
 pub mod plugins;
-mod provider_auth;
+#[doc(hidden)]
+pub mod prompt_debug;
 pub(crate) mod mentions {
     pub(crate) use crate::plugins::build_connector_slug_counts;
     pub(crate) use crate::plugins::build_skill_name_counts;
@@ -94,29 +88,17 @@ pub(crate) use skills::injection;
 pub(crate) use skills::loader;
 pub(crate) use skills::manager;
 pub(crate) use skills::maybe_emit_implicit_skill_invocation;
-pub(crate) use skills::model;
 pub(crate) use skills::render_skills_section;
 pub(crate) use skills::resolve_skill_dependencies_for_turn;
 pub(crate) use skills::skills_load_input_from_config;
 mod skills_watcher;
 mod stream_events_utils;
 pub mod test_support;
-mod text_encoding;
 mod unified_exec;
 pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
-pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
-pub use model_provider_info::DEFAULT_OLLAMA_PORT;
-pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
-pub use model_provider_info::ModelProviderInfo;
-pub use model_provider_info::OLLAMA_OSS_PROVIDER_ID;
-pub use model_provider_info::OPENAI_PROVIDER_ID;
-pub use model_provider_info::WireApi;
-pub use model_provider_info::built_in_model_providers;
-pub use model_provider_info::create_oss_provider_with_base_url;
 mod event_mapping;
-mod response_debug_context;
 pub mod review_format;
 pub mod review_prompts;
 mod thread_manager;
@@ -131,20 +113,6 @@ pub type ConversationManager = ThreadManager;
 pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]
 pub type CodexConversation = CodexThread;
-// Re-export common auth types for workspace consumers
-pub use auth::AuthManager;
-pub use auth::CodexAuth;
-pub use codex_analytics::AnalyticsEventsClient;
-pub use codex_analytics::AppServerRpcTransport;
-mod default_client_forwarding;
-
-/// Default Codex HTTP client headers and reqwest construction.
-///
-/// Implemented in [`codex_login::default_client`]; this module re-exports that API for crates
-/// that import `codex_core::default_client`.
-pub mod default_client {
-    pub use super::default_client_forwarding::*;
-}
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
@@ -154,7 +122,6 @@ pub mod shell;
 pub mod shell_snapshot;
 pub mod spawn;
 pub mod state_db_bridge;
-pub use codex_rollout::state_db;
 mod thread_rollout_truncation;
 mod tools;
 pub mod turn_diff_tracker;
@@ -188,12 +155,6 @@ mod state;
 mod tasks;
 mod user_shell_command;
 pub mod util;
-pub(crate) use codex_protocol::protocol;
-pub(crate) use codex_shell_command::bash;
-pub(crate) use codex_shell_command::is_dangerous_command;
-pub(crate) use codex_shell_command::is_safe_command;
-pub(crate) use codex_shell_command::parse_command;
-pub(crate) use codex_shell_command::powershell;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
@@ -202,8 +163,6 @@ pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;
-pub use codex_sandboxing::get_platform_sandbox;
-pub use codex_tools::parse_tool_input_schema;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub use exec_policy::ExecPolicyError;

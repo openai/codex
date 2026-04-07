@@ -1,8 +1,28 @@
 use super::*;
 use codex_app_server_protocol::AppInfo;
 use pretty_assertions::assert_eq;
+use rmcp::model::JsonObject;
+use rmcp::model::Tool;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+fn mcp_tool(name: &str, description: &str) -> Tool {
+    Tool {
+        name: name.to_string().into(),
+        title: None,
+        description: Some(description.to_string().into()),
+        input_schema: Arc::new(JsonObject::from_iter([(
+            "type".to_string(),
+            json!("object"),
+        )])),
+        output_schema: None,
+        annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
+    }
+}
 
 #[test]
 fn create_tool_search_tool_deduplicates_and_renders_enabled_apps() {
@@ -132,6 +152,124 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
             },
             output_schema: None,
         })
+    );
+}
+
+#[test]
+fn collect_tool_search_output_tools_groups_results_by_namespace() {
+    let calendar_create_event = mcp_tool("calendar-create-event", "Create a calendar event.");
+    let gmail_read_email = mcp_tool("gmail-read-email", "Read an email.");
+    let calendar_list_events = mcp_tool("calendar-list-events", "List calendar events.");
+
+    let tools = collect_tool_search_output_tools([
+        ToolSearchResultSource {
+            tool_namespace: "mcp__codex_apps__calendar",
+            tool_name: "_create_event",
+            tool: &calendar_create_event,
+            connector_name: Some("Calendar"),
+            connector_description: Some("Plan events"),
+        },
+        ToolSearchResultSource {
+            tool_namespace: "mcp__codex_apps__gmail",
+            tool_name: "_read_email",
+            tool: &gmail_read_email,
+            connector_name: Some("Gmail"),
+            connector_description: Some("Read mail"),
+        },
+        ToolSearchResultSource {
+            tool_namespace: "mcp__codex_apps__calendar",
+            tool_name: "_list_events",
+            tool: &calendar_list_events,
+            connector_name: Some("Calendar"),
+            connector_description: Some("Plan events"),
+        },
+    ])
+    .expect("collect tool search output tools");
+
+    assert_eq!(
+        tools,
+        vec![
+            ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                name: "mcp__codex_apps__calendar".to_string(),
+                description: "Plan events".to_string(),
+                tools: vec![
+                    ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                        name: "_create_event".to_string(),
+                        description: "Create a calendar event.".to_string(),
+                        strict: false,
+                        defer_loading: Some(true),
+                        parameters: JsonSchema::Object {
+                            properties: Default::default(),
+                            required: None,
+                            additional_properties: None,
+                        },
+                        output_schema: None,
+                    }),
+                    ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                        name: "_list_events".to_string(),
+                        description: "List calendar events.".to_string(),
+                        strict: false,
+                        defer_loading: Some(true),
+                        parameters: JsonSchema::Object {
+                            properties: Default::default(),
+                            required: None,
+                            additional_properties: None,
+                        },
+                        output_schema: None,
+                    }),
+                ],
+            }),
+            ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                name: "mcp__codex_apps__gmail".to_string(),
+                description: "Read mail".to_string(),
+                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                    name: "_read_email".to_string(),
+                    description: "Read an email.".to_string(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: JsonSchema::Object {
+                        properties: Default::default(),
+                        required: None,
+                        additional_properties: None,
+                    },
+                    output_schema: None,
+                })],
+            }),
+        ],
+    );
+}
+
+#[test]
+fn collect_tool_search_output_tools_falls_back_to_connector_name_description() {
+    let gmail_batch_read_email = mcp_tool("gmail-batch-read-email", "Read multiple emails.");
+
+    let tools = collect_tool_search_output_tools([ToolSearchResultSource {
+        tool_namespace: "mcp__codex_apps__gmail",
+        tool_name: "_batch_read_email",
+        tool: &gmail_batch_read_email,
+        connector_name: Some("Gmail"),
+        connector_description: None,
+    }])
+    .expect("collect tool search output tools");
+
+    assert_eq!(
+        tools,
+        vec![ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+            name: "mcp__codex_apps__gmail".to_string(),
+            description: "Tools for working with Gmail.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "_batch_read_email".to_string(),
+                description: "Read multiple emails.".to_string(),
+                strict: false,
+                defer_loading: Some(true),
+                parameters: JsonSchema::Object {
+                    properties: Default::default(),
+                    required: None,
+                    additional_properties: None,
+                },
+                output_schema: None,
+            })],
+        })],
     );
 }
 

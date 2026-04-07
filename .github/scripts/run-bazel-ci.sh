@@ -5,6 +5,7 @@ set -euo pipefail
 print_failed_bazel_test_logs=0
 use_node_test_env=0
 remote_download_toplevel=0
+windows_msvc_host_platform=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,6 +21,10 @@ while [[ $# -gt 0 ]]; do
       remote_download_toplevel=1
       shift
       ;;
+    --windows-msvc-host-platform)
+      windows_msvc_host_platform=1
+      shift
+      ;;
     --)
       shift
       break
@@ -32,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -121,14 +126,35 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ $use_node_test_env -eq 1 && "${RUNNER_OS:-}" != "Windows" ]]; then
+if [[ $use_node_test_env -eq 1 ]]; then
   # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
   # before the `actions/setup-node` runtime on PATH.
   node_bin="$(which node)"
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    node_bin="$(cygpath -w "${node_bin}")"
+  fi
   bazel_args+=("--test_env=CODEX_JS_REPL_NODE_PATH=${node_bin}")
 fi
 
 post_config_bazel_args=()
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; then
+  has_host_platform_override=0
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --host_platform=* ]]; then
+      has_host_platform_override=1
+      break
+    fi
+  done
+
+  if [[ $has_host_platform_override -eq 0 ]]; then
+    # Keep Windows Bazel targets on `windows-gnullvm` for cfg coverage, but opt
+    # specific jobs into an MSVC exec platform when they need helper binaries
+    # like Rust test wrappers and V8 generators to resolve a compatible host
+    # toolchain.
+    post_config_bazel_args+=("--host_platform=//:local_windows_msvc")
+  fi
+fi
+
 if [[ $remote_download_toplevel -eq 1 ]]; then
   # Override the CI config's remote_download_minimal setting when callers need
   # the built artifact to exist on disk after the command completes.
@@ -144,6 +170,12 @@ fi
 
 if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
   post_config_bazel_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
+fi
+
+if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
+  post_config_bazel_args+=(
+    "--execution_log_compact_file=${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR}/execution-log-${bazel_args[0]}-${GITHUB_JOB:-local}-$$.zst"
+  )
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then

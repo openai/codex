@@ -92,6 +92,12 @@
 ; Needed for python multiprocessing on MacOS for the SemLock
 (allow ipc-posix-sem)
 
+; Needed for PyTorch/libomp on macOS to register OpenMP runtimes.
+(allow ipc-posix-shm-read-data
+  ipc-posix-shm-write-create
+  ipc-posix-shm-write-unlink
+  (ipc-posix-name-regex #"^/__KMP_REGISTERED_LIB_[0-9]+$"))
+
 (allow mach-lookup
   (global-name "com.apple.PowerManagement.control")
 )

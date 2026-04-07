@@ -49,10 +49,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
-use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_core::OLLAMA_OSS_PROVIDER_ID;
-use codex_core::auth::AuthConfig;
-use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -67,6 +63,12 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
+use codex_login::AuthConfig;
+use codex_login::default_client::set_default_client_residency_requirement;
+use codex_login::default_client::set_default_originator;
+use codex_login::enforce_login_restrictions;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::config_types::SandboxMode;
@@ -105,8 +107,6 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use codex_core::default_client::set_default_client_residency_requirement;
-use codex_core::default_client::set_default_originator;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 
@@ -514,6 +514,66 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
 
+    let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
+        (Some(ExecCommand::Review(review_cli)), _, _) => {
+            let review_request = build_review_request(review_cli)?;
+            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
+            (InitialOperation::Review { review_request }, summary)
+        }
+        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
+            let prompt_arg = args
+                .prompt
+                .clone()
+                .or_else(|| {
+                    if args.last {
+                        args.session_id.clone()
+                    } else {
+                        None
+                    }
+                })
+                .or(root_prompt);
+            let prompt_text = resolve_prompt(prompt_arg);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .chain(args.images.iter().cloned())
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
+            });
+            let output_schema = load_output_schema(output_schema_path.clone());
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+        (None, root_prompt, imgs) => {
+            let prompt_text = resolve_root_prompt(root_prompt);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
+            });
+            let output_schema = load_output_schema(output_schema_path);
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+    };
+
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
     if !skip_git_repo_check
@@ -588,70 +648,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
-    let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
-        (Some(ExecCommand::Review(review_cli)), _, _) => {
-            let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary)
-        }
-        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
-            let prompt_arg = args
-                .prompt
-                .clone()
-                .or_else(|| {
-                    if args.last {
-                        args.session_id.clone()
-                    } else {
-                        None
-                    }
-                })
-                .or(root_prompt);
-            let prompt_text = resolve_prompt(prompt_arg);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .chain(args.images.iter().cloned())
-                .map(|path| UserInput::LocalImage { path })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path.clone());
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
-        }
-        (None, root_prompt, imgs) => {
-            let prompt_text = resolve_root_prompt(root_prompt);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .map(|path| UserInput::LocalImage { path })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path);
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
-        }
-    };
-
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
-    if !json_mode && let Some(message) = codex_core::config::system_bwrap_warning() {
+    if !json_mode
+        && let Some(message) =
+            codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    {
         event_processor.process_warning(message);
     }
 
@@ -787,8 +790,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     error_seen = true;
                 }
 
-                maybe_backfill_turn_completed_items(&client, &mut request_ids, &mut notification)
-                    .await;
+                maybe_backfill_turn_completed_items(
+                    config.ephemeral,
+                    &client,
+                    &mut request_ids,
+                    &mut notification,
+                )
+                .await;
 
                 if should_process_notification(
                     &notification,
@@ -1048,6 +1056,7 @@ fn should_process_notification(
 }
 
 async fn maybe_backfill_turn_completed_items(
+    thread_ephemeral: bool,
     client: &InProcessAppServerClient,
     request_ids: &mut RequestIdSequencer,
     notification: &mut ServerNotification,
@@ -1056,12 +1065,13 @@ async fn maybe_backfill_turn_completed_items(
     // guaranteeing `turn/completed`. Because app-server currently emits that completion with an
     // empty `turn.items`, exec does one last `thread/read` here so human/json output can recover
     // the final message and reconcile any still-running items before shutdown.
+    if !should_backfill_turn_completed_items(thread_ephemeral, notification) {
+        return;
+    }
+
     let ServerNotification::TurnCompleted(payload) = notification else {
         return;
     };
-    if !payload.turn.items.is_empty() {
-        return;
-    }
 
     let response = send_request_with_response::<ThreadReadResponse>(
         client,
@@ -1086,6 +1096,19 @@ async fn maybe_backfill_turn_completed_items(
             warn!("thread/read failed while backfilling turn items for turn completion: {err}");
         }
     }
+}
+
+/// Returns true only when `exec` can safely recover missing turn items from
+/// rollout-backed thread history.
+fn should_backfill_turn_completed_items(
+    thread_ephemeral: bool,
+    notification: &ServerNotification,
+) -> bool {
+    let ServerNotification::TurnCompleted(payload) = notification else {
+        return false;
+    };
+
+    !thread_ephemeral && payload.turn.items.is_empty()
 }
 
 fn turn_items_for_thread(
@@ -1657,407 +1680,5 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_otel::set_parent_from_w3c_trace_context;
-    use codex_protocol::config_types::ApprovalsReviewer;
-    use opentelemetry::trace::TraceContextExt;
-    use opentelemetry::trace::TraceId;
-    use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_sdk::trace::SdkTracerProvider;
-    use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
-    use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-    fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
-        let provider = SdkTracerProvider::builder().build();
-        let tracer = provider.tracer("codex-exec-tests");
-        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
-    }
-
-    #[test]
-    fn exec_defaults_analytics_to_enabled() {
-        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
-    }
-
-    #[test]
-    fn exec_root_span_can_be_parented_from_trace_context() {
-        let subscriber = test_tracing_subscriber();
-        let _guard = tracing::subscriber::set_default(subscriber);
-
-        let parent = codex_protocol::protocol::W3cTraceContext {
-            traceparent: Some("00-00000000000000000000000000000077-0000000000000088-01".into()),
-            tracestate: Some("vendor=value".into()),
-        };
-        let exec_span = exec_root_span();
-        assert!(set_parent_from_w3c_trace_context(&exec_span, &parent));
-
-        let trace_id = exec_span.context().span().span_context().trace_id();
-        assert_eq!(
-            trace_id,
-            TraceId::from_hex("00000000000000000000000000000077").expect("trace id")
-        );
-    }
-
-    #[test]
-    fn builds_uncommitted_review_request() {
-        let args = ReviewArgs {
-            uncommitted: true,
-            base: None,
-            commit: None,
-            commit_title: None,
-            prompt: None,
-        };
-        let request = build_review_request(&args).expect("builds uncommitted review request");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn builds_commit_review_request_with_title() {
-        let args = ReviewArgs {
-            uncommitted: false,
-            base: None,
-            commit: Some("123456789".to_string()),
-            commit_title: Some("Add review command".to_string()),
-            prompt: None,
-        };
-        let request = build_review_request(&args).expect("builds commit review request");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::Commit {
-                sha: "123456789".to_string(),
-                title: Some("Add review command".to_string()),
-            },
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn builds_custom_review_request_trims_prompt() {
-        let args = ReviewArgs {
-            uncommitted: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            prompt: Some("  custom review instructions  ".to_string()),
-        };
-        let request = build_review_request(&args).expect("builds custom review request");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::Custom {
-                instructions: "custom review instructions".to_string(),
-            },
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn decode_prompt_bytes_strips_utf8_bom() {
-        let input = [0xEF, 0xBB, 0xBF, b'h', b'i', b'\n'];
-
-        let out = decode_prompt_bytes(&input).expect("decode utf-8 with BOM");
-
-        assert_eq!(out, "hi\n");
-    }
-
-    #[test]
-    fn decode_prompt_bytes_decodes_utf16le_bom() {
-        // UTF-16LE BOM + "hi\n"
-        let input = [0xFF, 0xFE, b'h', 0x00, b'i', 0x00, b'\n', 0x00];
-
-        let out = decode_prompt_bytes(&input).expect("decode utf-16le with BOM");
-
-        assert_eq!(out, "hi\n");
-    }
-
-    #[test]
-    fn decode_prompt_bytes_decodes_utf16be_bom() {
-        // UTF-16BE BOM + "hi\n"
-        let input = [0xFE, 0xFF, 0x00, b'h', 0x00, b'i', 0x00, b'\n'];
-
-        let out = decode_prompt_bytes(&input).expect("decode utf-16be with BOM");
-
-        assert_eq!(out, "hi\n");
-    }
-
-    #[test]
-    fn decode_prompt_bytes_rejects_utf32le_bom() {
-        // UTF-32LE BOM + "hi\n"
-        let input = [
-            0xFF, 0xFE, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00, 0x00, b'\n', 0x00,
-            0x00, 0x00,
-        ];
-
-        let err = decode_prompt_bytes(&input).expect_err("utf-32le should be rejected");
-
-        assert_eq!(
-            err,
-            PromptDecodeError::UnsupportedBom {
-                encoding: "UTF-32LE"
-            }
-        );
-    }
-
-    #[test]
-    fn decode_prompt_bytes_rejects_utf32be_bom() {
-        // UTF-32BE BOM + "hi\n"
-        let input = [
-            0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00,
-            0x00, b'\n',
-        ];
-
-        let err = decode_prompt_bytes(&input).expect_err("utf-32be should be rejected");
-
-        assert_eq!(
-            err,
-            PromptDecodeError::UnsupportedBom {
-                encoding: "UTF-32BE"
-            }
-        );
-    }
-
-    #[test]
-    fn decode_prompt_bytes_rejects_invalid_utf8() {
-        // Invalid UTF-8 sequence: 0xC3 0x28
-        let input = [0xC3, 0x28];
-
-        let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
-
-        assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
-    }
-
-    #[test]
-    fn prompt_with_stdin_context_wraps_stdin_block() {
-        let combined = prompt_with_stdin_context("Summarize this concisely", "my output");
-
-        assert_eq!(
-            combined,
-            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
-        );
-    }
-
-    #[test]
-    fn prompt_with_stdin_context_preserves_trailing_newline() {
-        let combined = prompt_with_stdin_context("Summarize this concisely", "my output\n");
-
-        assert_eq!(
-            combined,
-            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
-        );
-    }
-
-    #[test]
-    fn lagged_event_warning_message_is_explicit() {
-        assert_eq!(
-            lagged_event_warning_message(/*skipped*/ 7),
-            "in-process app-server event stream lagged; dropped 7 events".to_string()
-        );
-    }
-
-    #[tokio::test]
-    async fn resume_lookup_model_providers_filters_only_last_lookup() {
-        let codex_home = tempdir().expect("create temp codex home");
-        let cwd = tempdir().expect("create temp cwd");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .fallback_cwd(Some(cwd.path().to_path_buf()))
-            .build()
-            .await
-            .expect("build default config");
-        config.model_provider_id = "test-provider".to_string();
-
-        let last_args = crate::cli::ResumeArgs {
-            session_id: None,
-            last: true,
-            all: false,
-            images: vec![],
-            prompt: None,
-        };
-        let named_args = crate::cli::ResumeArgs {
-            session_id: Some("named-session".to_string()),
-            last: false,
-            all: false,
-            images: vec![],
-            prompt: None,
-        };
-
-        assert_eq!(
-            resume_lookup_model_providers(&config, &last_args),
-            Some(vec!["test-provider".to_string()])
-        );
-        assert_eq!(resume_lookup_model_providers(&config, &named_args), None);
-    }
-
-    #[test]
-    fn turn_items_for_thread_returns_matching_turn_items() {
-        let thread = AppServerThread {
-            id: "thread-1".to_string(),
-            preview: String::new(),
-            ephemeral: false,
-            model_provider: "openai".to_string(),
-            created_at: 0,
-            updated_at: 0,
-            status: codex_app_server_protocol::ThreadStatus::Idle,
-            path: None,
-            cwd: PathBuf::from("/tmp/project"),
-            cli_version: "0.0.0-test".to_string(),
-            source: codex_app_server_protocol::SessionSource::Exec,
-            agent_nickname: None,
-            agent_role: None,
-            git_info: None,
-            name: None,
-            turns: vec![
-                codex_app_server_protocol::Turn {
-                    id: "turn-1".to_string(),
-                    items: vec![AppServerThreadItem::AgentMessage {
-                        id: "msg-1".to_string(),
-                        text: "hello".to_string(),
-                        phase: None,
-                        memory_citation: None,
-                    }],
-                    status: codex_app_server_protocol::TurnStatus::Completed,
-                    error: None,
-                },
-                codex_app_server_protocol::Turn {
-                    id: "turn-2".to_string(),
-                    items: vec![AppServerThreadItem::Plan {
-                        id: "plan-1".to_string(),
-                        text: "ship it".to_string(),
-                    }],
-                    status: codex_app_server_protocol::TurnStatus::Completed,
-                    error: None,
-                },
-            ],
-        };
-
-        assert_eq!(
-            turn_items_for_thread(&thread, "turn-1"),
-            Some(vec![AppServerThreadItem::AgentMessage {
-                id: "msg-1".to_string(),
-                text: "hello".to_string(),
-                phase: None,
-                memory_citation: None,
-            }])
-        );
-        assert_eq!(turn_items_for_thread(&thread, "missing-turn"), None);
-    }
-
-    #[test]
-    fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
-        let value = canceled_mcp_server_elicitation_response()
-            .expect("mcp elicitation cancel response should serialize");
-        let response: McpServerElicitationRequestResponse =
-            serde_json::from_value(value).expect("cancel response should deserialize");
-
-        assert_eq!(
-            response,
-            McpServerElicitationRequestResponse {
-                action: McpServerElicitationAction::Cancel,
-                content: None,
-                meta: None,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_start_params_include_review_policy_when_review_policy_is_manual_only() {
-        let codex_home = tempdir().expect("create temp codex home");
-        let cwd = tempdir().expect("create temp cwd");
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .harness_overrides(ConfigOverrides {
-                approvals_reviewer: Some(ApprovalsReviewer::User),
-                ..Default::default()
-            })
-            .fallback_cwd(Some(cwd.path().to_path_buf()))
-            .build()
-            .await
-            .expect("build config with manual-only review policy");
-
-        let params = thread_start_params_from_config(&config);
-
-        assert_eq!(
-            params.approvals_reviewer,
-            Some(codex_app_server_protocol::ApprovalsReviewer::User)
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_start_params_include_review_policy_when_auto_review_is_enabled() {
-        let codex_home = tempdir().expect("create temp codex home");
-        let cwd = tempdir().expect("create temp cwd");
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .harness_overrides(ConfigOverrides {
-                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
-                ..Default::default()
-            })
-            .fallback_cwd(Some(cwd.path().to_path_buf()))
-            .build()
-            .await
-            .expect("build config with guardian review policy");
-
-        let params = thread_start_params_from_config(&config);
-
-        assert_eq!(
-            params.approvals_reviewer,
-            Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
-        );
-    }
-
-    #[test]
-    fn session_configured_from_thread_response_uses_review_policy_from_response() {
-        let response = ThreadStartResponse {
-            thread: codex_app_server_protocol::Thread {
-                id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
-                preview: String::new(),
-                ephemeral: false,
-                model_provider: "openai".to_string(),
-                created_at: 0,
-                updated_at: 0,
-                status: codex_app_server_protocol::ThreadStatus::Idle,
-                path: Some(PathBuf::from("/tmp/rollout.jsonl")),
-                cwd: PathBuf::from("/tmp"),
-                cli_version: "0.0.0".to_string(),
-                source: codex_app_server_protocol::SessionSource::Cli,
-                agent_nickname: None,
-                agent_role: None,
-                git_info: None,
-                name: Some("thread".to_string()),
-                turns: vec![],
-            },
-            model: "gpt-5.4".to_string(),
-            model_provider: "openai".to_string(),
-            service_tier: None,
-            cwd: PathBuf::from("/tmp"),
-            approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
-            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
-            sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![],
-                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-            reasoning_effort: None,
-        };
-
-        let event = session_configured_from_thread_start_response(&response)
-            .expect("build bootstrap session configured event");
-
-        assert_eq!(
-            event.approvals_reviewer,
-            ApprovalsReviewer::GuardianSubagent
-        );
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;
