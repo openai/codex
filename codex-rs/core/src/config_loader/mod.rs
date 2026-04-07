@@ -5,11 +5,12 @@ mod macos;
 #[cfg(test)]
 mod tests;
 
-use crate::config::ConfigToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ProjectConfig;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
@@ -546,7 +547,7 @@ struct ProjectTrustContext {
 
 #[derive(Deserialize)]
 struct ProjectTrustConfigToml {
-    projects: Option<std::collections::HashMap<String, crate::config::ProjectConfig>>,
+    projects: Option<std::collections::HashMap<String, ProjectConfig>>,
 }
 
 struct ProjectTrustDecision {

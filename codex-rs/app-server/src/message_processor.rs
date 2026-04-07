@@ -193,7 +193,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
-    pub(crate) enable_codex_api_key_env: bool,
+    pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) rpc_transport: AppServerRpcTransport,
 }
 
@@ -213,17 +213,12 @@ impl MessageProcessor {
             log_db,
             config_warnings,
             session_source,
-            enable_codex_api_key_env,
+            auth_manager,
             rpc_transport,
         } = args;
-        let auth_manager = AuthManager::shared_with_external_auth(
-            config.codex_home.clone(),
-            enable_codex_api_key_env,
-            config.cli_auth_credentials_store_mode,
-            Arc::new(ExternalAuthRefreshBridge {
-                outgoing: outgoing.clone(),
-            }),
-        );
+        auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
+            outgoing: outgoing.clone(),
+        }));
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -235,7 +230,6 @@ impl MessageProcessor {
             },
             environment_manager,
         ));
-        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         let analytics_events_client = AnalyticsEventsClient::new(
             Arc::clone(&auth_manager),
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
@@ -871,16 +865,8 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ConfigValueWriteParams,
     ) {
-        match self.config_api.write_value(params).await {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+        let result = self.config_api.write_value(params).await;
+        self.handle_config_mutation_result(request_id, result).await
     }
 
     async fn handle_config_batch_write(
@@ -888,8 +874,8 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ConfigBatchWriteParams,
     ) {
-        self.handle_config_mutation_result(request_id, self.config_api.batch_write(params).await)
-            .await;
+        let result = self.config_api.batch_write(params).await;
+        self.handle_config_mutation_result(request_id, result).await;
     }
 
     async fn handle_experimental_feature_enablement_set(
@@ -898,23 +884,15 @@ impl MessageProcessor {
         params: ExperimentalFeatureEnablementSetParams,
     ) {
         let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
-        match self
+        let result = self
             .config_api
             .set_experimental_feature_enablement(params)
-            .await
-        {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
-                self.outgoing.send_response(request_id, response).await;
-                if should_refresh_apps_list {
-                    self.refresh_apps_list_after_experimental_feature_enablement_set()
-                        .await;
-                }
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
+            .await;
+        let is_ok = result.is_ok();
+        self.handle_config_mutation_result(request_id, result).await;
+        if should_refresh_apps_list && is_ok {
+            self.refresh_apps_list_after_experimental_feature_enablement_set()
+                .await;
         }
     }
 
@@ -933,7 +911,11 @@ impl MessageProcessor {
                 return;
             }
         };
-        if !config.features.apps_enabled(Some(&self.auth_manager)).await {
+        let auth = self.auth_manager.auth().await;
+        if !config.features.apps_enabled_for_auth(
+            auth.as_ref()
+                .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+        ) {
             return;
         }
 
@@ -987,10 +969,7 @@ impl MessageProcessor {
     ) {
         match result {
             Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
+                self.codex_message_processor.handle_config_mutation();
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,

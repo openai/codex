@@ -1,8 +1,11 @@
 use super::load_plugin_manifest;
+use super::manifest::PluginManifest;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -62,7 +65,7 @@ impl PluginStore {
                 entry.file_type().ok().filter(std::fs::FileType::is_dir)?;
                 entry.file_name().into_string().ok()
             })
-            .filter(|version| validate_plugin_segment(version, "plugin version").is_ok())
+            .filter(|version| validate_plugin_version_segment(version).is_ok())
             .collect::<Vec<_>>();
         discovered_versions.sort_unstable();
         if discovered_versions.is_empty() {
@@ -91,7 +94,8 @@ impl PluginStore {
         source_path: AbsolutePathBuf,
         plugin_id: PluginId,
     ) -> Result<PluginInstallResult, PluginStoreError> {
-        self.install_with_version(source_path, plugin_id, DEFAULT_PLUGIN_VERSION.to_string())
+        let plugin_version = plugin_version_for_source(source_path.as_path())?;
+        self.install_with_version(source_path, plugin_id, plugin_version)
     }
 
     pub fn install_with_version(
@@ -114,8 +118,7 @@ impl PluginStore {
                 plugin_id.plugin_name
             )));
         }
-        validate_plugin_segment(&plugin_version, "plugin version")
-            .map_err(PluginStoreError::Invalid)?;
+        validate_plugin_version_segment(&plugin_version).map_err(PluginStoreError::Invalid)?;
         let installed_path = self.plugin_root(&plugin_id, &plugin_version);
         replace_plugin_root_atomically(
             source_path.as_path(),
@@ -154,7 +157,33 @@ impl PluginStoreError {
     }
 }
 
-fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError> {
+pub(crate) fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginStoreError> {
+    let plugin_version = plugin_manifest_version_for_source(source_path)?
+        .unwrap_or_else(|| DEFAULT_PLUGIN_VERSION.to_string());
+    validate_plugin_version_segment(&plugin_version).map_err(PluginStoreError::Invalid)?;
+    Ok(plugin_version)
+}
+
+fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
+    if plugin_version.is_empty() {
+        return Err("invalid plugin version: must not be empty".to_string());
+    }
+    if matches!(plugin_version, "." | "..") {
+        return Err("invalid plugin version: path traversal is not allowed".to_string());
+    }
+    if !plugin_version
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '+'))
+    {
+        return Err(
+            "invalid plugin version: only ASCII letters, digits, `.`, `+`, `_`, and `-` are allowed"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn plugin_manifest_for_source(source_path: &Path) -> Result<PluginManifest, PluginStoreError> {
     let manifest_path = source_path.join(PLUGIN_MANIFEST_PATH);
     if !manifest_path.is_file() {
         return Err(PluginStoreError::Invalid(format!(
@@ -163,12 +192,61 @@ fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError
         )));
     }
 
-    let manifest = load_plugin_manifest(source_path).ok_or_else(|| {
+    load_plugin_manifest(source_path).ok_or_else(|| {
         PluginStoreError::Invalid(format!(
             "missing or invalid plugin manifest: {}",
             manifest_path.display()
         ))
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPluginManifestVersion {
+    #[serde(default)]
+    version: Option<JsonValue>,
+}
+
+fn plugin_manifest_version_for_source(
+    source_path: &Path,
+) -> Result<Option<String>, PluginStoreError> {
+    let manifest_path = source_path.join(PLUGIN_MANIFEST_PATH);
+    if !manifest_path.is_file() {
+        return Err(PluginStoreError::Invalid(format!(
+            "missing plugin manifest: {}",
+            manifest_path.display()
+        )));
+    }
+
+    let contents = fs::read_to_string(&manifest_path)
+        .map_err(|err| PluginStoreError::io("failed to read plugin manifest", err))?;
+    let manifest: RawPluginManifestVersion = serde_json::from_str(&contents).map_err(|err| {
+        PluginStoreError::Invalid(format!(
+            "failed to parse plugin manifest {}: {err}",
+            manifest_path.display()
+        ))
     })?;
+    let Some(version) = manifest.version else {
+        return Ok(None);
+    };
+    let Some(version) = version.as_str() else {
+        return Err(PluginStoreError::Invalid(format!(
+            "invalid plugin version in manifest {}: expected string",
+            manifest_path.display()
+        )));
+    };
+    let version = version.trim();
+    if version.is_empty() {
+        return Err(PluginStoreError::Invalid(format!(
+            "invalid plugin version in manifest {}: must not be blank",
+            manifest_path.display()
+        )));
+    }
+    Ok(Some(version.to_string()))
+}
+
+fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError> {
+    let manifest = plugin_manifest_for_source(source_path)?;
 
     let plugin_name = manifest.name;
     validate_plugin_segment(&plugin_name, "plugin name")

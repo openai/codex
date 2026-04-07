@@ -14,6 +14,8 @@ struct RawPluginManifest {
     #[serde(default)]
     name: String,
     #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
     description: Option<String>,
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
@@ -30,6 +32,7 @@ struct RawPluginManifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PluginManifest {
     pub(crate) name: String,
+    pub(crate) version: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) paths: PluginManifestPaths,
     pub(crate) interface: Option<PluginManifestInterface>,
@@ -121,6 +124,7 @@ pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest>
         Ok(manifest) => {
             let RawPluginManifest {
                 name: raw_name,
+                version,
                 description,
                 skills,
                 mcp_servers,
@@ -133,6 +137,10 @@ pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest>
                 .filter(|_| raw_name.trim().is_empty())
                 .unwrap_or(&raw_name)
                 .to_string();
+            let version = version.and_then(|version| {
+                let version = version.trim();
+                (!version.is_empty()).then(|| version.to_string())
+            });
             let interface = interface.and_then(|interface| {
                 let RawPluginManifestInterface {
                     display_name,
@@ -204,6 +212,7 @@ pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest>
             });
             Some(PluginManifest {
                 name,
+                version,
                 description,
                 paths: PluginManifestPaths {
                     skills: resolve_manifest_path(plugin_root, "skills", skills.as_deref()),
@@ -381,13 +390,17 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
-    fn write_manifest(plugin_root: &Path, interface: &str) {
+    fn write_manifest(plugin_root: &Path, version: Option<&str>, interface: &str) {
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        let version = version
+            .map(|version| format!("  \"version\": \"{version}\",\n"))
+            .unwrap_or_default();
         fs::write(
             plugin_root.join(".codex-plugin/plugin.json"),
             format!(
                 r#"{{
   "name": "demo-plugin",
+{version}
   "interface": {interface}
 }}"#
             ),
@@ -405,6 +418,7 @@ mod tests {
         let plugin_root = tmp.path().join("demo-plugin");
         write_manifest(
             &plugin_root,
+            /*version*/ None,
             r#"{
     "displayName": "Demo Plugin",
     "defaultPrompt": "  Summarize   my inbox  "
@@ -427,6 +441,7 @@ mod tests {
         let too_long = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
         write_manifest(
             &plugin_root,
+            /*version*/ None,
             &format!(
                 r#"{{
     "displayName": "Demo Plugin",
@@ -462,6 +477,7 @@ mod tests {
         let plugin_root = tmp.path().join("demo-plugin");
         write_manifest(
             &plugin_root,
+            /*version*/ None,
             r#"{
     "displayName": "Demo Plugin",
     "defaultPrompt": { "text": "Summarize my inbox" }
@@ -472,5 +488,22 @@ mod tests {
         let interface = manifest.interface.expect("plugin interface");
 
         assert_eq!(interface.default_prompt, None);
+    }
+
+    #[test]
+    fn plugin_manifest_reads_trimmed_version() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_manifest(
+            &plugin_root,
+            Some(" 1.2.3-beta+7 "),
+            r#"{
+    "displayName": "Demo Plugin"
+  }"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+
+        assert_eq!(manifest.version, Some("1.2.3-beta+7".to_string()));
     }
 }

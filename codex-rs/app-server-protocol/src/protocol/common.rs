@@ -459,6 +459,11 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
+    McpResourceRead => "mcpServer/resource/read" {
+        params: v2::McpResourceReadParams,
+        response: v2::McpResourceReadResponse,
+    },
+
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
         params: v2::WindowsSandboxSetupStartParams,
         response: v2::WindowsSandboxSetupStartResponse,
