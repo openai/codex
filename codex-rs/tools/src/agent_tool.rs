@@ -50,7 +50,11 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpec {
     let available_models_description = (!options.hide_agent_type_model_reasoning)
         .then(|| spawn_agent_models_description(options.available_models));
-    let return_value_description = "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available.";
+    let return_value_description = if options.hide_agent_type_model_reasoning {
+        "Returns the canonical task name for the spawned agent."
+    } else {
+        "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available."
+    };
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);
@@ -78,7 +82,9 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
             required: Some(vec!["task_name".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(spawn_agent_output_schema_v2()),
+        output_schema: Some(spawn_agent_output_schema_v2(
+            options.hide_agent_type_model_reasoning,
+        )),
     })
 }
 
@@ -371,7 +377,21 @@ fn spawn_agent_output_schema_v1() -> Value {
     })
 }
 
-fn spawn_agent_output_schema_v2() -> Value {
+fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
+    if hide_agent_metadata {
+        return json!({
+            "type": "object",
+            "properties": {
+                "task_name": {
+                    "type": "string",
+                    "description": "Canonical task name for the spawned agent."
+                }
+            },
+            "required": ["task_name"],
+            "additionalProperties": false
+        });
+    }
+
     json!({
         "type": "object",
         "properties": {
