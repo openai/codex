@@ -68,6 +68,19 @@ fn read_only_sandbox_policy(readable_root: std::path::PathBuf) -> SandboxPolicy 
     }
 }
 
+fn workspace_write_sandbox_policy(writable_root: std::path::PathBuf) -> SandboxPolicy {
+    SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![absolute_path(writable_root)],
+        read_only_access: ReadOnlyAccess::Restricted {
+            include_platform_defaults: false,
+            readable_roots: vec![],
+        },
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    }
+}
+
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -288,6 +301,89 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
         )
     );
     assert!(!blocked_path.exists());
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let outside_dir = tmp.path().join("outside");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::create_dir_all(&outside_dir)?;
+    std::fs::write(outside_dir.join("secret.txt"), "nope")?;
+    symlink(&outside_dir, allowed_dir.join("link"))?;
+
+    let requested_path = allowed_dir.join("link").join("secret.txt");
+    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let error = match file_system
+        .read_file_with_sandbox_policy(
+            &absolute_path(requested_path.clone()),
+            Some(&sandbox_policy),
+        )
+        .await
+    {
+        Ok(_) => anyhow::bail!("read should be blocked"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "fs/read is not permitted for path {}",
+            requested_path.display()
+        )
+    );
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let outside_dir = tmp.path().join("outside");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::create_dir_all(&outside_dir)?;
+    symlink(&outside_dir, allowed_dir.join("link"))?;
+
+    let requested_path = allowed_dir.join("link").join("blocked.txt");
+    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir);
+    let error = match file_system
+        .write_file_with_sandbox_policy(
+            &absolute_path(requested_path.clone()),
+            b"nope".to_vec(),
+            Some(&sandbox_policy),
+        )
+        .await
+    {
+        Ok(()) => anyhow::bail!("write should be blocked"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "fs/write is not permitted for path {}",
+            requested_path.display()
+        )
+    );
+    assert!(!outside_dir.join("blocked.txt").exists());
 
     Ok(())
 }

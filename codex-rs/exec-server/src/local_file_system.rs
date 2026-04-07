@@ -260,8 +260,9 @@ fn enforce_access(
     };
     let cwd = std::env::current_dir()
         .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
+    let resolved_path = resolve_path_for_access_check(path.as_path())?;
     let file_system_policy = FileSystemSandboxPolicy::from(sandbox_policy);
-    if is_allowed(&file_system_policy, path.as_path(), cwd.as_path()) {
+    if is_allowed(&file_system_policy, resolved_path.as_path(), cwd.as_path()) {
         Ok(())
     } else {
         Err(io::Error::new(
@@ -298,11 +299,11 @@ fn destination_is_same_or_descendant_of_source(
     destination: &Path,
 ) -> io::Result<bool> {
     let source = std::fs::canonicalize(source)?;
-    let destination = resolve_copy_destination_path(destination)?;
+    let destination = resolve_path_for_access_check(destination)?;
     Ok(destination.starts_with(&source))
 }
 
-fn resolve_copy_destination_path(path: &Path) -> io::Result<PathBuf> {
+fn resolve_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
