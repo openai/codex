@@ -865,13 +865,8 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ConfigValueWriteParams,
     ) {
-        match self.config_api.write_value(params).await {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+        let result = self.config_api.write_value(params).await;
+        self.handle_config_mutation_result(request_id, result).await
     }
 
     async fn handle_config_batch_write(
@@ -879,8 +874,8 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ConfigBatchWriteParams,
     ) {
-        self.handle_config_mutation_result(request_id, self.config_api.batch_write(params).await)
-            .await;
+        let result = self.config_api.batch_write(params).await;
+        self.handle_config_mutation_result(request_id, result).await;
     }
 
     async fn handle_experimental_feature_enablement_set(
@@ -889,20 +884,15 @@ impl MessageProcessor {
         params: ExperimentalFeatureEnablementSetParams,
     ) {
         let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
-        match self
+        let result = self
             .config_api
             .set_experimental_feature_enablement(params)
-            .await
-        {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.outgoing.send_response(request_id, response).await;
-                if should_refresh_apps_list {
-                    self.refresh_apps_list_after_experimental_feature_enablement_set()
-                        .await;
-                }
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
+            .await;
+        let is_ok = result.is_ok();
+        self.handle_config_mutation_result(request_id, result).await;
+        if should_refresh_apps_list && is_ok {
+            self.refresh_apps_list_after_experimental_feature_enablement_set()
+                .await;
         }
     }
 
@@ -979,7 +969,7 @@ impl MessageProcessor {
     ) {
         match result {
             Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
+                self.codex_message_processor.handle_config_mutation();
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
