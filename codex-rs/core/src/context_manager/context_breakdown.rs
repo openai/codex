@@ -205,11 +205,14 @@ impl BreakdownAccumulator {
         }
     }
 
-    fn add_detail(&mut self, section: ContextSectionKind, label: String, tokens: i64) {
+    fn add_detail(&mut self, section: ContextSectionKind, mut label: String, tokens: i64) {
         if tokens <= 0 {
             return;
         }
         let verbose = self.verbose;
+        if !verbose && label.starts_with("Tool call: ") {
+            label = "Tool calls".to_string();
+        }
         let section = self
             .section_accumulator(section)
             .section
@@ -755,6 +758,56 @@ mod tests {
                 .iter()
                 .map(|section| section.tokens)
                 .sum::<i64>()
+        );
+    }
+
+    #[test]
+    fn non_verbose_breakdown_merges_tool_calls_into_one_row() {
+        let breakdown = build_context_window_breakdown(
+            &[
+                ResponseItem::FunctionCall {
+                    id: None,
+                    call_id: "call-1".to_string(),
+                    name: "read_file".to_string(),
+                    namespace: None,
+                    arguments: "{}".to_string(),
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    call_id: "call-2".to_string(),
+                    name: "list_dir".to_string(),
+                    namespace: None,
+                    arguments: "{}".to_string(),
+                },
+            ],
+            &BaseInstructions {
+                text: String::new(),
+            },
+            /*model_context_window*/ None,
+            /*verbose*/ false,
+        );
+
+        let conversation = breakdown
+            .sections
+            .iter()
+            .find(|section| section.label == "Conversation")
+            .expect("conversation section");
+
+        assert_eq!(
+            conversation
+                .details
+                .iter()
+                .map(|detail| detail.label.clone())
+                .collect::<Vec<_>>(),
+            vec!["Tool calls".to_string()]
+        );
+        assert_eq!(
+            conversation
+                .details
+                .iter()
+                .map(|detail| detail.tokens)
+                .sum::<i64>(),
+            conversation.tokens
         );
     }
 }

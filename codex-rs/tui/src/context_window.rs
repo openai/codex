@@ -428,6 +428,24 @@ mod tests {
     }
 
     #[test]
+    fn renders_collapsed_tool_calls_row() {
+        let cell = new_context_window_output(&ThreadContextWindowBreakdown {
+            model_context_window: Some(200_000),
+            total_tokens: 8_000,
+            sections: vec![ThreadContextWindowSection {
+                label: "Conversation".to_string(),
+                tokens: 8_000,
+                details: vec![ThreadContextWindowDetail {
+                    label: "Tool calls".to_string(),
+                    tokens: 8_000,
+                }],
+            }],
+        });
+
+        assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 80)));
+    }
+
+    #[test]
     fn allocates_bar_width_by_largest_remainder() {
         assert_eq!(allocate_token_widths(&[5, 3, 2], 10, 7), vec![4, 2, 1]);
     }

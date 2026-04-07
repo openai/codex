@@ -1,0 +1,16 @@
+---
+source: tui/src/context_window.rs
+assertion_line: 427
+expression: render_lines(&cell.display_lines(80))
+---
+/context
+
+Context map
+  ~8,000 tokens used of ~200,000 tokens (4.0%), ~192,000 tokens remaining.
+  window▕█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏
+  used  ▕████████████████████████████████████████████▏
+
+  ■ Conversation 100.0%
+
+  ■ Conversation   ~8,000 tokens   100.0% of used
+    ██████████ Tool calls (~8,000 tokens)
