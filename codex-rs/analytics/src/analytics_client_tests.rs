@@ -30,6 +30,7 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
+use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
@@ -66,6 +67,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -181,6 +183,20 @@ fn sample_turn_started_notification(thread_id: &str, turn_id: &str) -> ServerNot
     })
 }
 
+fn sample_turn_token_usage_fact(thread_id: &str, turn_id: &str) -> TurnTokenUsageFact {
+    TurnTokenUsageFact {
+        thread_id: thread_id.to_string(),
+        turn_id: turn_id.to_string(),
+        token_usage: TokenUsage {
+            total_tokens: 321,
+            input_tokens: 123,
+            cached_input_tokens: 45,
+            output_tokens: 140,
+            reasoning_output_tokens: 13,
+        },
+    }
+}
+
 fn sample_turn_completed_notification(
     thread_id: &str,
     turn_id: &str,
@@ -232,6 +248,7 @@ async fn ingest_turn_prerequisites(
     include_initialize: bool,
     include_resolved_config: bool,
     include_started: bool,
+    include_token_usage: bool,
 ) {
     if include_initialize {
         reducer
@@ -296,6 +313,17 @@ async fn ingest_turn_prerequisites(
             .ingest(
                 AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
                     "thread-2", "turn-2",
+                ))),
+                out,
+            )
+            .await;
+    }
+
+    if include_token_usage {
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(Box::new(
+                    sample_turn_token_usage_fact("thread-2", "turn-2"),
                 ))),
                 out,
             )
@@ -1045,6 +1073,11 @@ fn turn_event_serializes_expected_shape() {
             subagent_tool_call_count: None,
             web_search_count: None,
             image_generation_count: None,
+            input_tokens: None,
+            cached_input_tokens: None,
+            output_tokens: None,
+            reasoning_output_tokens: None,
+            total_tokens: None,
             duration_ms: Some(1234),
             started_at: Some(455),
             completed_at: Some(456),
@@ -1086,6 +1119,11 @@ fn turn_event_serializes_expected_shape() {
                 "subagent_tool_call_count": null,
                 "web_search_count": null,
                 "image_generation_count": null,
+                "input_tokens": null,
+                "cached_input_tokens": null,
+                "output_tokens": null,
+                "reasoning_output_tokens": null,
+                "total_tokens": null,
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456
@@ -1105,6 +1143,7 @@ async fn turn_lifecycle_emits_turn_event() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ true,
         /*include_started*/ true,
+        /*include_token_usage*/ true,
     )
     .await;
     reducer
@@ -1133,6 +1172,14 @@ async fn turn_lifecycle_emits_turn_event() {
     assert_eq!(payload["event_params"]["started_at"], json!(455));
     assert_eq!(payload["event_params"]["completed_at"], json!(456));
     assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(payload["event_params"]["input_tokens"], json!(123));
+    assert_eq!(payload["event_params"]["cached_input_tokens"], json!(45));
+    assert_eq!(payload["event_params"]["output_tokens"], json!(140));
+    assert_eq!(
+        payload["event_params"]["reasoning_output_tokens"],
+        json!(13)
+    );
+    assert_eq!(payload["event_params"]["total_tokens"], json!(321));
 }
 
 #[tokio::test]
@@ -1146,6 +1193,7 @@ async fn turn_does_not_emit_without_required_prerequisites() {
         /*include_initialize*/ false,
         /*include_resolved_config*/ true,
         /*include_started*/ false,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1175,6 +1223,7 @@ async fn turn_does_not_emit_without_required_prerequisites() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ false,
         /*include_started*/ false,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1202,6 +1251,7 @@ async fn turn_lifecycle_emits_failed_turn_event() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ true,
         /*include_started*/ true,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1233,6 +1283,7 @@ async fn turn_lifecycle_emits_interrupted_turn_event_without_error() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ true,
         /*include_started*/ true,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1264,6 +1315,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ true,
         /*include_started*/ false,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1281,6 +1333,14 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["started_at"], json!(null));
     assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(payload["event_params"]["input_tokens"], json!(null));
+    assert_eq!(payload["event_params"]["cached_input_tokens"], json!(null));
+    assert_eq!(payload["event_params"]["output_tokens"], json!(null));
+    assert_eq!(
+        payload["event_params"]["reasoning_output_tokens"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["total_tokens"], json!(null));
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
