@@ -123,7 +123,11 @@ pub(crate) async fn execute_user_shell_command(
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
     let session_shell = session.user_shell();
-    let display_command = session_shell.derive_exec_args(&command, use_login_shell);
+    let display_command = session_shell.derive_exec_args_for_windows_sandbox(
+        &command,
+        use_login_shell,
+        turn_context.windows_sandbox_level,
+    );
     let exec_env_map = create_env(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),

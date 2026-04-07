@@ -25,6 +25,7 @@ use crate::unified_exec::WriteStdinRequest;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -113,6 +114,7 @@ impl ToolHandler for UnifiedExecHandler {
             invocation.session.user_shell(),
             &invocation.turn.tools_config.unified_exec_shell_mode,
             invocation.turn.tools_config.allow_login_shell,
+            invocation.turn.windows_sandbox_level,
         ) {
             Ok(command) => command,
             Err(_) => return true,
@@ -198,6 +200,7 @@ impl ToolHandler for UnifiedExecHandler {
                     session.user_shell(),
                     &turn.tools_config.unified_exec_shell_mode,
                     turn.tools_config.allow_login_shell,
+                    turn.windows_sandbox_level,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
                 let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
@@ -377,6 +380,7 @@ pub(crate) fn get_command(
     session_shell: Arc<Shell>,
     shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
+    windows_sandbox_level: WindowsSandboxLevel,
 ) -> Result<Vec<String>, String> {
     let use_login_shell = match args.login {
         Some(true) if !allow_login_shell => {
@@ -396,7 +400,11 @@ pub(crate) fn get_command(
                 shell
             });
             let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
-            Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
+            Ok(shell.derive_exec_args_for_windows_sandbox(
+                &args.cmd,
+                use_login_shell,
+                windows_sandbox_level,
+            ))
         }
         UnifiedExecShellMode::ZshFork(zsh_fork_config) => Ok(vec![
             zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),

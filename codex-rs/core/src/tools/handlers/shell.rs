@@ -146,7 +146,11 @@ impl ShellCommandHandler {
     ) -> Result<ExecParams, FunctionCallError> {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
-        let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
+        let command = shell.as_ref().derive_exec_args_for_windows_sandbox(
+            &params.command,
+            use_login_shell,
+            turn_context.windows_sandbox_level,
+        );
 
         Ok(ExecParams {
             command,

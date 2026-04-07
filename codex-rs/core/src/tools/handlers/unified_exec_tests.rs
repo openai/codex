@@ -18,6 +18,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use tokio::sync::Mutex;
 
 #[test]
@@ -33,6 +34,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -54,6 +56,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -80,6 +83,7 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -100,6 +104,7 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -117,6 +122,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ false,
+        WindowsSandboxLevel::Disabled,
     )
     .expect_err("explicit login should be rejected");
 
@@ -150,6 +156,7 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         Arc::new(default_user_shell()),
         &shell_mode,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 

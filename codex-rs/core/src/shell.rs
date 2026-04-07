@@ -1,5 +1,6 @@
 use crate::shell_detect::detect_shell_type;
 use crate::shell_snapshot::ShellSnapshot;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -67,6 +68,27 @@ impl Shell {
                 args
             }
         }
+    }
+
+    /// Like `derive_exec_args`, but disables the PowerShell profile when
+    /// Windows sandboxing is active. The sandbox account intentionally has a
+    /// narrower view of per-user tools and modules, so loading the normal user
+    /// profile can turn otherwise successful commands into profile failures.
+    pub(crate) fn derive_exec_args_for_windows_sandbox(
+        &self,
+        command: &str,
+        use_login_shell: bool,
+        windows_sandbox_level: WindowsSandboxLevel,
+    ) -> Vec<String> {
+        let use_login_shell = if cfg!(target_os = "windows")
+            && self.shell_type == ShellType::PowerShell
+            && windows_sandbox_level != WindowsSandboxLevel::Disabled
+        {
+            false
+        } else {
+            use_login_shell
+        };
+        self.derive_exec_args(command, use_login_shell)
     }
 
     /// Return the shell snapshot if existing.

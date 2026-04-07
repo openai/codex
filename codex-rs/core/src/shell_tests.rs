@@ -146,6 +146,30 @@ fn derive_exec_args() {
     );
 }
 
+#[test]
+fn powershell_windows_sandbox_exec_args_disable_profile() {
+    let test_powershell_shell = Shell {
+        shell_type: ShellType::PowerShell,
+        shell_path: PathBuf::from("pwsh.exe"),
+        shell_snapshot: empty_shell_snapshot_receiver(),
+    };
+
+    let args = test_powershell_shell.derive_exec_args_for_windows_sandbox(
+        "echo hello",
+        /*use_login_shell*/ true,
+        WindowsSandboxLevel::Elevated,
+    );
+
+    if cfg!(target_os = "windows") {
+        assert_eq!(
+            args,
+            vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
+        );
+    } else {
+        assert_eq!(args, vec!["pwsh.exe", "-Command", "echo hello"]);
+    }
+}
+
 #[tokio::test]
 async fn test_current_shell_detects_zsh() {
     let shell = Command::new("sh")

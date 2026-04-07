@@ -93,7 +93,11 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 let command = invocation
                     .session
                     .user_shell()
-                    .derive_exec_args(&params.command, use_login_shell);
+                    .derive_exec_args_for_windows_sandbox(
+                        &params.command,
+                        use_login_shell,
+                        invocation.turn.windows_sandbox_level,
+                    );
                 (command, invocation.turn.resolve_path(params.workdir))
             }),
         "exec_command" => serde_json::from_str::<ExecCommandArgs>(arguments)
@@ -104,6 +108,7 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     invocation.session.user_shell(),
                     &invocation.turn.tools_config.unified_exec_shell_mode,
                     invocation.turn.tools_config.allow_login_shell,
+                    invocation.turn.windows_sandbox_level,
                 )
                 .ok()?;
                 Some((command, invocation.turn.resolve_path(params.workdir)))
