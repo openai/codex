@@ -365,6 +365,11 @@ impl NetworkApprovalService {
                     host: request.host,
                     protocol,
                     port: key.port,
+                    method: request.method.clone(),
+                    command: request.command.clone(),
+                    exec_policy_hint: request.exec_policy_hint.clone(),
+                    block_reason: Some(REASON_NOT_ALLOWED.to_string()),
+                    policy_reason: Some(prompt_reason.clone()),
                 },
                 Some(policy_denial_message.clone()),
             )

@@ -27,6 +27,7 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use core_test_support::context_snapshot;
@@ -126,6 +127,104 @@ fn guardian_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
         .strip_capability_instructions()
         .strip_agents_md_user_context()
+}
+
+fn render_guardian_prompt_items_text(items: &[UserInput]) -> String {
+    let mut rendered = String::new();
+    for item in items {
+        if let UserInput::Text { text, .. } = item {
+            rendered.push_str(text);
+        }
+    }
+    rendered
+}
+
+fn compact_guardian_snapshot_text(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            const MAX_CHARS: usize = 240;
+            const PREFIX_CHARS: usize = 140;
+            const SUFFIX_CHARS: usize = 60;
+
+            if line.chars().count() <= MAX_CHARS {
+                return line.to_string();
+            }
+
+            let prefix = line.chars().take(PREFIX_CHARS).collect::<String>();
+            let suffix = line
+                .chars()
+                .rev()
+                .take(SUFFIX_CHARS)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>();
+            format!("{prefix}…<snapshot line truncated>…{suffix}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn oversized_guardian_user_text(index: usize) -> String {
+    format!("Large context chunk {index}: {}", "budget ".repeat(6_000))
+}
+
+async fn seed_oversized_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnContext>) {
+    let mut history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Initial request: check whether the outbound action matches what I asked for."
+                .to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+    history.extend((0..8).map(|index| ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: oversized_guardian_user_text(index),
+        }],
+        end_turn: None,
+        phase: None,
+    }));
+    history.extend([
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "gh_repo_view".to_string(),
+            namespace: None,
+            arguments: "{\"repo\":\"openai/codex\"}".to_string(),
+            call_id: "call-oversized".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-oversized".to_string(),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                "repo visibility: public".to_string(),
+            ),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "I need approval for the final outbound step.".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Final confirmation: only approve the exact scoped action we discussed."
+                    .to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ]);
+
+    session.record_into_history(&history, turn.as_ref()).await;
 }
 
 #[test]
@@ -353,6 +452,11 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         host: "example.com".to_string(),
         protocol: NetworkApprovalProtocol::Https,
         port: 443,
+        method: None,
+        command: None,
+        exec_policy_hint: None,
+        block_reason: None,
+        policy_reason: None,
     };
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
@@ -507,16 +611,153 @@ fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_
             && entry.contains("curl")
             && entry.contains("https://example.com/upload")
     }));
+    assert!(transcript.iter().any(|entry| {
+        entry.contains("tool shell result: sandbox blocked outbound network access")
+    }));
+    assert_eq!(
+        omission,
+        Some("Some conversation entries were omitted to preserve budget.".to_string())
+    );
+}
+
+#[test]
+fn build_guardian_transcript_keeps_pinned_entries_when_user_context_exceeds_budget() {
+    let mut entries = vec![GuardianTranscriptEntry {
+        kind: GuardianTranscriptEntryKind::User,
+        text: "Initial request: check the exact action before approving it.".to_string(),
+    }];
+    entries.extend((0..8).map(|index| GuardianTranscriptEntry {
+        kind: GuardianTranscriptEntryKind::User,
+        text: oversized_guardian_user_text(index),
+    }));
+    entries.extend([
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Tool("tool gh_repo_view call".to_string()),
+            text: "{\"repo\":\"openai/codex\"}".to_string(),
+        },
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Assistant,
+            text: "I need approval for the final outbound step.".to_string(),
+        },
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::User,
+            text: "Final confirmation: only approve the exact scoped action we discussed."
+                .to_string(),
+        },
+    ]);
+
+    let (transcript, omission) = render_guardian_transcript_entries(&entries);
+
+    assert_ne!(
+        transcript,
+        vec!["<transcript omitted to preserve budget for planned action>".to_string()]
+    );
+    assert!(transcript.iter().any(|entry| {
+        entry.contains("[1] user: Initial request: check the exact action before approving it.")
+    }));
+    assert!(transcript.iter().any(|entry| {
+        entry.contains(
+            "[12] user: Final confirmation: only approve the exact scoped action we discussed.",
+        )
+    }));
     assert!(
         transcript
             .iter()
-            .any(|entry| entry
-                .contains("tool shell result: sandbox blocked outbound network access"))
+            .any(|entry| { entry.starts_with("<truncated transcript_entries_omitted=\"") })
     );
     assert_eq!(
         omission,
-        Some("Some conversation entries were omitted.".to_string())
+        Some("Some conversation entries were omitted to preserve budget.".to_string())
     );
+}
+
+#[tokio::test]
+async fn guardian_oversized_transcript_prompt_snapshot() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_oversized_guardian_parent_history(&session, &turn).await;
+
+    let prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-oversized".to_string(),
+            command: vec![
+                "git".to_string(),
+                "push".to_string(),
+                "origin".to_string(),
+                "guardian-approval-mvp".to_string(),
+            ],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some(
+                "Need to push the reviewed docs fix to the repo remote.".to_string(),
+            ),
+        },
+    )
+    .await?;
+    let rendered = render_guardian_prompt_items_text(&prompt);
+
+    assert!(rendered.contains(
+        "[1] user: Initial request: check whether the outbound action matches what I asked for."
+    ));
+    assert!(rendered.contains(
+        "[13] user: Final confirmation: only approve the exact scoped action we discussed."
+    ));
+    assert!(rendered.contains("<truncated transcript_entries_omitted=\""));
+    assert!(rendered.contains(">>> APPROVAL REQUEST START"));
+    assert!(rendered.contains("Planned action JSON:"));
+
+    let mut settings = Settings::clone_current();
+    settings.set_snapshot_path("snapshots");
+    settings.set_prepend_module_to_snapshot(false);
+    settings.bind(|| {
+        assert_snapshot!(
+            "codex_core__guardian__tests__guardian_oversized_transcript_prompt",
+            compact_guardian_snapshot_text(&rendered)
+        );
+    });
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn guardian_network_review_prompt_preserves_intent_metadata_when_transcript_is_truncated()
+-> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_oversized_guardian_parent_history(&session, &turn).await;
+
+    let prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("Network access to \"https://example.com:443\" was blocked by policy.".to_string()),
+        GuardianApprovalRequest::NetworkAccess {
+            id: "network-1".to_string(),
+            turn_id: "turn-network".to_string(),
+            target: "https://example.com:443".to_string(),
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+            port: 443,
+            method: Some("POST".to_string()),
+            command: Some("curl https://example.com/upload".to_string()),
+            exec_policy_hint: Some("curl https://example.com/*".to_string()),
+            block_reason: Some("not_allowed".to_string()),
+            policy_reason: Some("example.com is not in the allowed_domains".to_string()),
+        },
+    )
+    .await?;
+    let rendered = render_guardian_prompt_items_text(&prompt);
+
+    assert!(rendered.contains("<truncated transcript_entries_omitted=\""));
+    assert!(rendered.contains("\"tool\": \"network_access\""));
+    assert!(rendered.contains("\"method\": \"POST\""));
+    assert!(rendered.contains("\"command\": \"curl https://example.com/upload\""));
+    assert!(rendered.contains("\"exec_policy_hint\": \"curl https://example.com/*\""));
+    assert!(rendered.contains("\"block_reason\": \"not_allowed\""));
+    assert!(rendered.contains("\"policy_reason\": \"example.com is not in the allowed_domains\""));
+
+    Ok(())
 }
 
 #[test]

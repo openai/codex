@@ -53,6 +53,11 @@ pub(crate) enum GuardianApprovalRequest {
         host: String,
         protocol: NetworkApprovalProtocol,
         port: u16,
+        method: Option<String>,
+        command: Option<String>,
+        exec_policy_hint: Option<String>,
+        block_reason: Option<String>,
+        policy_reason: Option<String>,
     },
     McpToolCall {
         id: String,
@@ -122,6 +127,25 @@ struct McpToolCallApprovalAction<'a> {
     tool_description: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     annotations: Option<&'a GuardianMcpAnnotations>,
+}
+
+#[derive(Serialize)]
+struct NetworkApprovalAction<'a> {
+    tool: &'static str,
+    target: &'a str,
+    host: &'a str,
+    protocol: NetworkApprovalProtocol,
+    port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    method: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exec_policy_hint: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_reason: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_reason: Option<&'a String>,
 }
 
 fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value> {
@@ -264,13 +288,23 @@ pub(crate) fn guardian_approval_request_to_json(
             host,
             protocol,
             port,
-        } => Ok(serde_json::json!({
-            "tool": "network_access",
-            "target": target,
-            "host": host,
-            "protocol": protocol,
-            "port": port,
-        })),
+            method,
+            command,
+            exec_policy_hint,
+            block_reason,
+            policy_reason,
+        } => serialize_guardian_action(NetworkApprovalAction {
+            tool: "network_access",
+            target,
+            host,
+            protocol: *protocol,
+            port: *port,
+            method: method.as_ref(),
+            command: command.as_ref(),
+            exec_policy_hint: exec_policy_hint.as_ref(),
+            block_reason: block_reason.as_ref(),
+            policy_reason: policy_reason.as_ref(),
+        }),
         GuardianApprovalRequest::McpToolCall {
             id: _,
             server,
@@ -336,6 +370,11 @@ pub(crate) fn guardian_assessment_action(
             host,
             protocol,
             port,
+            method: _,
+            command: _,
+            exec_policy_hint: _,
+            block_reason: _,
+            policy_reason: _,
         } => GuardianAssessmentAction::NetworkAccess {
             target: target.clone(),
             host: host.clone(),

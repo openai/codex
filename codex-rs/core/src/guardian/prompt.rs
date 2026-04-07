@@ -112,14 +112,13 @@ pub(crate) async fn build_guardian_prompt_items(
 ///
 /// Selection is intentionally simple and predictable:
 /// - each entry is truncated to its per-entry cap
-/// - user and assistant entries share the message budget
-/// - tool calls/results use a separate tool budget so tool evidence cannot
-///   crowd out the human conversation
-/// - if all user turns fit, keep them all
-/// - otherwise keep the first and latest user turns as anchors, then fill the
-///   remaining message budget with other user turns from newest to oldest
-/// - after user turns are selected, keep recent non-user entries from newest to
-///   oldest while the budgets and recent-entry limit allow
+/// - always retain the first and latest user messages because they carry
+///   authorization and current intent
+/// - walk recent non-user entries from newest to oldest
+/// - spend remaining message budget on additional recent user messages
+/// - keep entries only while the message/tool budgets allow unless pinned
+/// - reserve a separate tool budget so tool evidence cannot crowd out the human
+///   conversation
 ///
 /// Returns the rendered transcript plus an omission note when some entries were
 /// skipped.
@@ -149,38 +148,30 @@ pub(crate) fn render_guardian_transcript_entries(
     let mut included = vec![false; entries.len()];
     let mut message_tokens = 0usize;
     let mut tool_tokens = 0usize;
-    let user_indices = entries
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| entry.kind.is_user().then_some(index))
-        .collect::<Vec<_>>();
+    let first_user_index = entries.iter().position(|entry| entry.kind.is_user());
+    let latest_user_index = entries.iter().rposition(|entry| entry.kind.is_user());
 
-    if let Some(&first_user_index) = user_indices.first() {
-        included[first_user_index] = true;
-        message_tokens += rendered_entries[first_user_index].1;
+    if let Some(index) = first_user_index {
+        include_guardian_transcript_entry(
+            index,
+            entries,
+            rendered_entries.as_slice(),
+            &mut included,
+            &mut message_tokens,
+            &mut tool_tokens,
+            /*force*/ true,
+        );
     }
-
-    if let Some(&last_user_index) = user_indices.last()
-        && !included[last_user_index]
-        && message_tokens + rendered_entries[last_user_index].1
-            <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
-    {
-        included[last_user_index] = true;
-        message_tokens += rendered_entries[last_user_index].1;
-    }
-
-    for &index in user_indices.iter().rev() {
-        if included[index] {
-            continue;
-        }
-
-        let token_count = rendered_entries[index].1;
-        if message_tokens + token_count > GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS {
-            continue;
-        }
-
-        included[index] = true;
-        message_tokens += token_count;
+    if let Some(index) = latest_user_index {
+        include_guardian_transcript_entry(
+            index,
+            entries,
+            rendered_entries.as_slice(),
+            &mut included,
+            &mut message_tokens,
+            &mut tool_tokens,
+            /*force*/ true,
+        );
     }
 
     let mut retained_non_user_entries = 0usize;
@@ -190,34 +181,91 @@ pub(crate) fn render_guardian_transcript_entries(
             continue;
         }
 
-        let token_count = rendered_entries[index].1;
-        let within_budget = if entry.kind.is_tool() {
-            tool_tokens + token_count <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
-        } else {
-            message_tokens + token_count <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
-        };
-        if !within_budget {
-            continue;
-        }
-
-        included[index] = true;
-        retained_non_user_entries += 1;
-        if entry.kind.is_tool() {
-            tool_tokens += token_count;
-        } else {
-            message_tokens += token_count;
+        if include_guardian_transcript_entry(
+            index,
+            entries,
+            rendered_entries.as_slice(),
+            &mut included,
+            &mut message_tokens,
+            &mut tool_tokens,
+            /*force*/ false,
+        ) {
+            retained_non_user_entries += 1;
         }
     }
 
-    let transcript = entries
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| included[*index])
-        .map(|(index, _)| rendered_entries[index].0.clone())
-        .collect::<Vec<_>>();
+    for index in (0..entries.len()).rev() {
+        if !entries[index].kind.is_user() {
+            continue;
+        }
+        include_guardian_transcript_entry(
+            index,
+            entries,
+            rendered_entries.as_slice(),
+            &mut included,
+            &mut message_tokens,
+            &mut tool_tokens,
+            /*force*/ false,
+        );
+    }
+
+    let mut transcript = Vec::new();
+    let mut omitted_entries = 0usize;
+    for (index, is_included) in included.iter().copied().enumerate() {
+        if is_included {
+            if omitted_entries > 0 {
+                transcript.push(render_guardian_transcript_omission_marker(omitted_entries));
+                omitted_entries = 0;
+            }
+            transcript.push(rendered_entries[index].0.clone());
+        } else {
+            omitted_entries += 1;
+        }
+    }
+    if omitted_entries > 0 {
+        transcript.push(render_guardian_transcript_omission_marker(omitted_entries));
+    }
+
     let omitted_any = included.iter().any(|included_entry| !included_entry);
-    let omission_note = omitted_any.then(|| "Some conversation entries were omitted.".to_string());
+    let omission_note = omitted_any
+        .then(|| "Some conversation entries were omitted to preserve budget.".to_string());
     (transcript, omission_note)
+}
+
+fn include_guardian_transcript_entry(
+    index: usize,
+    entries: &[GuardianTranscriptEntry],
+    rendered_entries: &[(String, usize)],
+    included: &mut [bool],
+    message_tokens: &mut usize,
+    tool_tokens: &mut usize,
+    force: bool,
+) -> bool {
+    if included[index] {
+        return false;
+    }
+
+    let token_count = rendered_entries[index].1;
+    let within_budget = if entries[index].kind.is_tool() {
+        tool_tokens.saturating_add(token_count) <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
+    } else {
+        message_tokens.saturating_add(token_count) <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
+    };
+    if !force && !within_budget {
+        return false;
+    }
+
+    included[index] = true;
+    if entries[index].kind.is_tool() {
+        *tool_tokens += token_count;
+    } else {
+        *message_tokens += token_count;
+    }
+    true
+}
+
+fn render_guardian_transcript_omission_marker(omitted_entries: usize) -> String {
+    format!("<{TRUNCATION_TAG} transcript_entries_omitted=\"{omitted_entries}\" />")
 }
 
 /// Retains the human-readable conversation plus recent tool call / result
