@@ -69,6 +69,7 @@ pub use remote_control::RemoteControlEnrollmentRecord;
 // metadata, rather than the exact sum of all persisted SQLite column bytes.
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 const LOG_PARTITION_ROW_LIMIT: i64 = 1_000;
+const CHECKPOINT_WAL_BUSY_MAX_ATTEMPTS: usize = 10;
 
 #[derive(Clone)]
 pub struct StateRuntime {
@@ -149,18 +150,28 @@ impl StateRuntime {
 }
 
 async fn checkpoint_wal_pool(pool: &SqlitePool, name: &str) -> anyhow::Result<()> {
-    let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .fetch_one(pool)
-        .await?;
-    let busy: i64 = row.try_get(0)?;
-    let log_pages: i64 = row.try_get(1)?;
-    let checkpointed_pages: i64 = row.try_get(2)?;
-    if busy != 0 {
-        anyhow::bail!(
-            "{name} WAL checkpoint was busy: {checkpointed_pages}/{log_pages} pages checkpointed"
-        );
+    let mut last_busy_result = None;
+    for attempt in 1..=CHECKPOINT_WAL_BUSY_MAX_ATTEMPTS {
+        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(pool)
+            .await?;
+        let busy: i64 = row.try_get(0)?;
+        let log_pages: i64 = row.try_get(1)?;
+        let checkpointed_pages: i64 = row.try_get(2)?;
+        if busy == 0 {
+            return Ok(());
+        }
+
+        last_busy_result = Some((checkpointed_pages, log_pages));
+        if attempt < CHECKPOINT_WAL_BUSY_MAX_ATTEMPTS {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
-    Ok(())
+
+    let (checkpointed_pages, log_pages) = last_busy_result.unwrap_or((0, 0));
+    anyhow::bail!(
+        "{name} WAL checkpoint was busy: {checkpointed_pages}/{log_pages} pages checkpointed"
+    )
 }
 
 fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
