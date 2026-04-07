@@ -388,7 +388,9 @@ async fn slash_copy_preserves_surviving_response_after_local_prompt_rollback() {
     let _ = drain_insert_history(&mut rx);
     chat.handle_codex_event(Event {
         id: "turn-2".into(),
-        msg: EventMsg::TurnComplete(turn_complete_event("turn-2", None)),
+        msg: EventMsg::TurnComplete(turn_complete_event(
+            "turn-2", /*last_agent_message*/ None,
+        )),
     });
     let _ = drain_insert_history(&mut rx);
     assert_eq!(
@@ -415,7 +417,9 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 
     chat.handle_codex_event(Event {
         id: "turn-2".into(),
-        msg: EventMsg::TurnComplete(turn_complete_event("turn-2", None)),
+        msg: EventMsg::TurnComplete(turn_complete_event(
+            "turn-2", /*last_agent_message*/ None,
+        )),
     });
 
     assert_matches!(
