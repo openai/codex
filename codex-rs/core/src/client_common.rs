@@ -23,7 +23,7 @@ pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
 
 /// API request payload for a single model turn
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
@@ -35,26 +35,13 @@ pub struct Prompt {
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
 
-    pub base_instructions: Option<BaseInstructions>,
+    pub base_instructions: BaseInstructions,
 
     /// Optionally specify the personality of the model.
     pub personality: Option<Personality>,
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
-}
-
-impl Default for Prompt {
-    fn default() -> Self {
-        Self {
-            input: Vec::new(),
-            tools: Vec::new(),
-            parallel_tool_calls: false,
-            base_instructions: Some(BaseInstructions::default()),
-            personality: None,
-            output_schema: None,
-        }
-    }
 }
 
 impl Prompt {

@@ -579,15 +579,11 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let base_instructions = match config.base_instructions.clone() {
-            Some(base_instructions) => base_instructions,
-            None => conversation_history
-                .get_base_instructions()
-                .map(|base_instructions| {
-                    base_instructions.map(|base_instructions| base_instructions.text)
-                })
-                .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
-        };
+        let base_instructions = config
+            .base_instructions
+            .clone()
+            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -1103,7 +1099,7 @@ pub(crate) struct SessionConfiguration {
     personality: Option<Personality>,
 
     /// Base instructions for the session.
-    base_instructions: Option<String>,
+    base_instructions: String,
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
@@ -1542,10 +1538,9 @@ impl Session {
                         conversation_id,
                         forked_from_id,
                         session_source,
-                        session_configuration
-                            .base_instructions
-                            .clone()
-                            .map(|text| BaseInstructions { text }),
+                        BaseInstructions {
+                            text: session_configuration.base_instructions.clone(),
+                        },
                         session_configuration.dynamic_tools.clone(),
                         if session_configuration.persist_extended_history {
                             EventPersistenceMode::Extended
@@ -2109,9 +2104,8 @@ impl Session {
                 ));
             }
         }
-        if let Some(base_instructions) = session_configuration.base_instructions.clone() {
-            sess.schedule_startup_prewarm(base_instructions).await;
-        }
+        sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
+            .await;
         let session_start_source = match &initial_history {
             InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -2213,13 +2207,11 @@ impl Session {
         state.history.estimate_token_count(turn_context)
     }
 
-    pub(crate) async fn get_base_instructions(&self) -> Option<BaseInstructions> {
+    pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
-        state
-            .session_configuration
-            .base_instructions
-            .clone()
-            .map(|text| BaseInstructions { text })
+        BaseInstructions {
+            text: state.session_configuration.base_instructions.clone(),
+        }
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
@@ -3623,11 +3615,7 @@ impl Session {
                 state.reference_context_item(),
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
-                state
-                    .session_configuration
-                    .base_instructions
-                    .clone()
-                    .unwrap_or_default(),
+                state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
             )
         };
@@ -3868,13 +3856,7 @@ impl Session {
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let history = self.clone_history().await;
-        let empty_base_instructions = BaseInstructions {
-            text: String::new(),
-        };
-        let base_instructions = self
-            .get_base_instructions()
-            .await
-            .unwrap_or(empty_base_instructions);
+        let base_instructions = self.get_base_instructions().await;
         let Some(estimated_total_tokens) =
             history.estimate_token_count_with_base_instructions(&base_instructions)
         else {
@@ -6568,7 +6550,7 @@ pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
     turn_context: &TurnContext,
-    base_instructions: Option<BaseInstructions>,
+    base_instructions: BaseInstructions,
 ) -> Prompt {
     let deferred_dynamic_tools = turn_context
         .dynamic_tools

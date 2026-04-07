@@ -2473,8 +2473,8 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        base_instructions: Option<Option<String>>,
-        developer_instructions: Option<Option<String>>,
+        base_instructions: Option<String>,
+        developer_instructions: Option<String>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
         ConfigOverrides {
@@ -4363,13 +4363,6 @@ impl CodexMessageProcessor {
             developer_instructions,
             /*personality*/ None,
         );
-        if typesafe_overrides.base_instructions.is_none()
-            && let Ok(history) = RolloutRecorder::get_rollout_history(&rollout_path).await
-            && let Some(base_instructions) = history.get_base_instructions()
-        {
-            typesafe_overrides.base_instructions =
-                Some(base_instructions.map(|base_instructions| base_instructions.text));
-        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
