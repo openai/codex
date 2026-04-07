@@ -355,6 +355,7 @@ pub fn build_tool_registry_plan(
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -397,6 +398,7 @@ pub fn build_tool_registry_plan(
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,

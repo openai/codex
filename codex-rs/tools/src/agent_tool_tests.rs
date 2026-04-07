@@ -34,6 +34,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             model_preset("hidden", /*show_in_picker*/ false),
         ],
         agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
     });
 
     let ToolSpec::Function(ResponsesApiTool {
@@ -81,6 +82,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
     let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
         available_models: &[],
         agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
     });
 
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
