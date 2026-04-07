@@ -1315,19 +1315,15 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
-fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCapability> {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-        // indicates this should be an empty object.
-        Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: None,
-            }),
-            url: None,
-        })
-    } else {
-        None
-    }
+fn elicitation_capability_for_server(_server_name: &str) -> Option<ElicitationCapability> {
+    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+    // indicates this should be an empty object.
+    Some(ElicitationCapability {
+        form: Some(FormElicitationCapability {
+            schema_validation: None,
+        }),
+        url: None,
+    })
 }
 
 async fn start_server_task(
