@@ -492,6 +492,7 @@ mod windows_impl {
                 writable_roots: Vec::new(),
                 read_only_access: Default::default(),
                 network_access,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }

@@ -3039,6 +3039,10 @@
         },
         {
           "properties": {
+            "allowLimitedGitWrites": {
+              "default": false,
+              "type": "boolean"
+            },
             "excludeSlashTmp": {
               "default": false,
               "type": "boolean"

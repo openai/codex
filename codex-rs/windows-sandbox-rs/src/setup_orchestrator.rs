@@ -1374,6 +1374,7 @@ mod tests {
                 readable_roots: Vec::new(),
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };

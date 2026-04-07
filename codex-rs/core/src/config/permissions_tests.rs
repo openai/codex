@@ -56,6 +56,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
+                            allow_limited_git_writes: false,
                             entries: BTreeMap::new(),
                         }),
                         network: None,

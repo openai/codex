@@ -89,6 +89,7 @@ async fn run_cmd_result_with_writable_roots(
             .collect(),
         read_only_access: Default::default(),
         network_access,
+        allow_limited_git_writes: false,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
         // writing to in the sandbox.
@@ -563,6 +564,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
         writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
         read_only_access: Default::default(),
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -636,6 +638,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
         read_only_access: Default::default(),
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

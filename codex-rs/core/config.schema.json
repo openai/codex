@@ -751,6 +751,10 @@
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "allow_limited_git_writes": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1959,6 +1963,10 @@
     "SandboxWorkspaceWrite": {
       "additionalProperties": false,
       "properties": {
+        "allow_limited_git_writes": {
+          "default": false,
+          "type": "boolean"
+        },
         "exclude_slash_tmp": {
           "default": false,
           "type": "boolean"
