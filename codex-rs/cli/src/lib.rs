@@ -1,9 +1,19 @@
-pub mod debug_sandbox;
+pub(crate) mod debug_sandbox;
 mod exit_status;
-pub mod login;
+pub(crate) mod login;
 
 use clap::Parser;
 use codex_utils_cli::CliConfigOverrides;
+
+pub use debug_sandbox::run_command_under_landlock;
+pub use debug_sandbox::run_command_under_seatbelt;
+pub use debug_sandbox::run_command_under_windows;
+pub use login::read_api_key_from_stdin;
+pub use login::run_login_status;
+pub use login::run_login_with_api_key;
+pub use login::run_login_with_chatgpt;
+pub use login::run_login_with_device_code;
+pub use login::run_logout;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {

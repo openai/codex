@@ -1,23 +1,27 @@
-pub mod config;
+pub(crate) mod config;
 mod events;
-pub mod metrics;
-pub mod provider;
-pub mod trace_context;
+pub(crate) mod metrics;
+pub(crate) mod provider;
+pub(crate) mod trace_context;
 
 mod otlp;
 mod targets;
 
-use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
 use serde::Serialize;
 use strum_macros::Display;
 
+pub use crate::config::OtelExporter;
+pub use crate::config::OtelHttpProtocol;
+pub use crate::config::OtelSettings;
+pub use crate::config::OtelTlsConfig;
 pub use crate::events::session_telemetry::AuthEnvTelemetryMetadata;
 pub use crate::events::session_telemetry::SessionTelemetry;
 pub use crate::events::session_telemetry::SessionTelemetryMetadata;
 pub use crate::metrics::runtime_metrics::RuntimeMetricTotals;
 pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 pub use crate::metrics::timer::Timer;
+pub use crate::metrics::*;
 pub use crate::provider::OtelProvider;
 pub use crate::trace_context::context_from_w3c_trace_context;
 pub use crate::trace_context::current_span_trace_id;

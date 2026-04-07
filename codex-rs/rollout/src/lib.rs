@@ -4,12 +4,12 @@ use std::sync::LazyLock;
 
 use codex_protocol::protocol::SessionSource;
 
-pub mod config;
-pub mod list;
-pub mod metadata;
-pub mod policy;
-pub mod recorder;
-pub mod session_index;
+pub(crate) mod config;
+pub(crate) mod list;
+pub(crate) mod metadata;
+pub(crate) mod policy;
+pub(crate) mod recorder;
+pub(crate) mod session_index;
 pub mod state_db;
 
 pub(crate) mod default_client {
@@ -32,12 +32,25 @@ pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock:
 pub use codex_protocol::protocol::SessionMeta;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
+pub use list::Cursor;
+pub use list::ThreadItem;
+pub use list::ThreadListConfig;
+pub use list::ThreadListLayout;
+pub use list::ThreadSortKey;
+pub use list::ThreadsPage;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
+pub use list::get_threads;
+pub use list::get_threads_in_root;
+pub use list::parse_cursor;
+pub use list::read_head_for_summary;
+pub use list::read_session_meta_line;
 pub use list::rollout_date_parts;
+pub use metadata::builder_from_items;
 pub use policy::EventPersistenceMode;
+pub use policy::should_persist_response_item_for_memories;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use session_index::append_thread_name;

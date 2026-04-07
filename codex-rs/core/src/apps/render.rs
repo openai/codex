@@ -1,5 +1,5 @@
 use codex_app_server_protocol::AppInfo;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 

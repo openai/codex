@@ -14,8 +14,6 @@ use anyhow::anyhow;
 use codex_login::AuthEnvTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
-use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
-use feedback_diagnostics::FeedbackDiagnostics;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
@@ -24,7 +22,10 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 
-pub mod feedback_diagnostics;
+pub(crate) mod feedback_diagnostics;
+pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+pub use feedback_diagnostics::FeedbackDiagnostic;
+pub use feedback_diagnostics::FeedbackDiagnostics;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
@@ -609,7 +610,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use feedback_diagnostics::FeedbackDiagnostic;
+    use crate::FeedbackDiagnostic;
     use pretty_assertions::assert_eq;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;

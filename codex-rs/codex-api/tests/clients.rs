@@ -6,11 +6,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::AuthProvider;
+use codex_api::Compression;
 use codex_api::Provider;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
-use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
@@ -126,7 +126,7 @@ fn provider(name: &str) -> Provider {
         base_url: "https://example.com/v1".to_string(),
         query_params: None,
         headers: HeaderMap::new(),
-        retry: codex_api::provider::RetryConfig {
+        retry: codex_api::RetryConfig {
             max_attempts: 1,
             base_delay: Duration::from_millis(1),
             retry_429: false,

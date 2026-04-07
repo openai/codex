@@ -34,7 +34,7 @@ mod conpty;
 
 #[cfg(target_os = "windows")]
 #[path = "elevated/ipc_framed.rs"]
-pub mod ipc_framed;
+pub(crate) mod ipc_framed;
 
 #[cfg(target_os = "windows")]
 #[path = "setup_orchestrator.rs"]

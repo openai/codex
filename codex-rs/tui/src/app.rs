@@ -85,13 +85,14 @@ use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_core::append_message_history_entry;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::message_history;
+use codex_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
@@ -2159,8 +2160,7 @@ impl App {
                 let text = text.clone();
                 let config = self.chat_widget.config_ref().clone();
                 tokio::spawn(async move {
-                    if let Err(err) =
-                        message_history::append_entry(&text, &thread_id, &config).await
+                    if let Err(err) = append_message_history_entry(&text, &thread_id, &config).await
                     {
                         tracing::warn!(
                             thread_id = %thread_id,
@@ -2178,7 +2178,7 @@ impl App {
                 let app_event_tx = self.app_event_tx.clone();
                 tokio::spawn(async move {
                     let entry_opt = tokio::task::spawn_blocking(move || {
-                        message_history::lookup(log_id, offset, &config)
+                        lookup_message_history_entry(log_id, offset, &config)
                     })
                     .await
                     .unwrap_or_else(|err| {

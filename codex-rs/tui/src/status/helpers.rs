@@ -4,7 +4,7 @@ use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
 use codex_core::config::Config;
-use codex_core::project_doc::discover_project_doc_paths;
+use codex_core::discover_project_doc_paths;
 use codex_protocol::account::PlanType;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;

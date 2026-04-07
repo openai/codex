@@ -1,6 +1,7 @@
 //! Path normalization, symlink resolution, and atomic writes shared across Codex crates.
 
-pub mod env;
+pub(crate) mod env;
+pub use env::is_wsl;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
