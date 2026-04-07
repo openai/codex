@@ -267,7 +267,7 @@ fn append_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
         CodeModeToolKind::Function => definition
             .input_schema
             .as_ref()
-            .map(render_json_schema_to_typescript)
+            .map(render_json_schema_to_typescript_with_property_descriptions)
             .unwrap_or_else(|| "unknown".to_string()),
         CodeModeToolKind::Freeform => "string".to_string(),
     };
@@ -297,6 +297,33 @@ fn render_code_mode_tool_declaration(
 
 pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
     render_json_schema_to_typescript_inner(schema)
+}
+
+fn render_json_schema_to_typescript_with_property_descriptions(schema: &JsonValue) -> String {
+    let Some(map) = schema.as_object() else {
+        return render_json_schema_to_typescript(schema);
+    };
+
+    if !(map.contains_key("properties")
+        || map.contains_key("additionalProperties")
+        || map.contains_key("required"))
+    {
+        return render_json_schema_to_typescript(schema);
+    }
+
+    let Some(properties) = map.get("properties").and_then(JsonValue::as_object) else {
+        return render_json_schema_to_typescript(schema);
+    };
+    if properties.values().all(|value| {
+        value
+            .get("description")
+            .and_then(JsonValue::as_str)
+            .is_none_or(str::is_empty)
+    }) {
+        return render_json_schema_to_typescript(schema);
+    }
+
+    render_json_schema_object_with_property_descriptions(map)
 }
 
 fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
@@ -462,6 +489,67 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String
     format!("{{ {} }}", lines.join(" "))
 }
 
+fn render_json_schema_object_with_property_descriptions(
+    map: &serde_json::Map<String, JsonValue>,
+) -> String {
+    let required = map
+        .get("required")
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let properties = map
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut sorted_properties = properties.iter().collect::<Vec<_>>();
+    sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+    let mut lines = vec!["{".to_string()];
+    for (name, value) in sorted_properties {
+        if let Some(description) = value.get("description").and_then(JsonValue::as_str) {
+            for description_line in description
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                lines.push(format!("  // {description_line}"));
+            }
+        }
+
+        let optional = if required.iter().any(|required_name| required_name == name) {
+            ""
+        } else {
+            "?"
+        };
+        let property_name = render_json_schema_property_name(name);
+        let property_type = render_json_schema_to_typescript_inner(value);
+        lines.push(format!("  {property_name}{optional}: {property_type};"));
+    }
+
+    if let Some(additional_properties) = map.get("additionalProperties") {
+        let property_type = match additional_properties {
+            JsonValue::Bool(true) => Some("unknown".to_string()),
+            JsonValue::Bool(false) => None,
+            value => Some(render_json_schema_to_typescript_inner(value)),
+        };
+
+        if let Some(property_type) = property_type {
+            lines.push(format!("  [key: string]: {property_type};"));
+        }
+    } else if properties.is_empty() {
+        lines.push("  [key: string]: unknown;".to_string());
+    }
+
+    lines.push("}".to_string());
+    lines.join("\n")
+}
+
 fn render_json_schema_property_name(name: &str) -> String {
     if normalize_code_mode_identifier(name) == name {
         name.to_string()
@@ -548,6 +636,36 @@ mod tests {
                 "hidden_dynamic_tool(args: { city: string; }): Promise<{ ok: boolean; }>;"
             )
         );
+    }
+
+    #[test]
+    fn augment_tool_definition_includes_input_property_descriptions_as_comments() {
+        let definition = ToolDefinition {
+            name: "weather_tool".to_string(),
+            description: "Weather tool".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "weather": {
+                        "type": "array",
+                        "description": "look up weather for a given list of locations",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "location": { "type": "string" }
+                            },
+                            "required": ["location"]
+                        }
+                    }
+                }
+            })),
+            output_schema: None,
+        };
+
+        let description = augment_tool_definition(definition).description;
+        assert!(description.contains("// look up weather for a given list of locations"));
+        assert!(description.contains("weather?: Array<{ location: string; }>;"));
     }
 
     #[test]
