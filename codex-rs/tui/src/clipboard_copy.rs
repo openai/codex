@@ -293,7 +293,7 @@ impl SuppressStderr {
 
 /// Write text to the clipboard via the OSC 52 terminal escape sequence.
 fn osc52_copy(text: &str) -> Result<(), String> {
-    let sequence = osc52_sequence(text)?;
+    let sequence = osc52_sequence(text, std::env::var_os("TMUX").is_some())?;
     #[cfg(unix)]
     {
         match std::fs::OpenOptions::new().write(true).open("/dev/tty") {
@@ -321,7 +321,7 @@ fn write_osc52_to_writer(mut writer: impl Write, sequence: &str) -> Result<(), S
         .map_err(|e| format!("failed to flush OSC 52: {e}"))
 }
 
-fn osc52_sequence(text: &str) -> Result<String, String> {
+fn osc52_sequence(text: &str, tmux: bool) -> Result<String, String> {
     let raw_bytes = text.len();
     if raw_bytes > OSC52_MAX_RAW_BYTES {
         return Err(format!(
@@ -330,7 +330,11 @@ fn osc52_sequence(text: &str) -> Result<String, String> {
     }
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    Ok(format!("\x1b]52;c;{encoded}\x07"))
+    if tmux {
+        Ok(format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}\x07\x1b\\"))
+    } else {
+        Ok(format!("\x1b]52;c;{encoded}\x07"))
+    }
 }
 
 #[cfg(test)]
@@ -347,7 +351,7 @@ mod tests {
     fn osc52_encoding_roundtrips() {
         use base64::Engine;
         let text = "# Hello\n\n```rust\nfn main() {}\n```\n";
-        let sequence = osc52_sequence(text).expect("OSC 52 sequence");
+        let sequence = osc52_sequence(text, /*tmux*/ false).expect("OSC 52 sequence");
         let encoded = sequence
             .trim_start_matches("\u{1b}]52;c;")
             .trim_end_matches('\u{7}');
@@ -361,11 +365,19 @@ mod tests {
     fn osc52_rejects_payload_larger_than_limit() {
         let text = "x".repeat(OSC52_MAX_RAW_BYTES + 1);
         assert_eq!(
-            osc52_sequence(&text),
+            osc52_sequence(&text, /*tmux*/ false),
             Err(format!(
                 "OSC 52 payload too large ({} bytes; max {OSC52_MAX_RAW_BYTES})",
                 OSC52_MAX_RAW_BYTES + 1
             ))
+        );
+    }
+
+    #[test]
+    fn osc52_wraps_tmux_passthrough() {
+        assert_eq!(
+            osc52_sequence("hello", /*tmux*/ true),
+            Ok("\u{1b}Ptmux;\u{1b}\u{1b}]52;c;aGVsbG8=\u{7}\u{1b}\\".to_string())
         );
     }
 
