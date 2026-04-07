@@ -113,7 +113,8 @@ pub(crate) fn format_alarm_trigger(trigger: &AlarmTrigger) -> String {
                 }),
             (Some(dtstart), None) => format!("at {}", format_alarm_dtstart(dtstart)),
             (None, Some(rrule)) => {
-                format_alarm_rrule(rrule, None).unwrap_or_else(|| format!("schedule {rrule}"))
+                format_alarm_rrule(rrule, /*dtstart*/ None)
+                    .unwrap_or_else(|| format!("schedule {rrule}"))
             }
             (None, None) => "invalid schedule".to_string(),
         },
