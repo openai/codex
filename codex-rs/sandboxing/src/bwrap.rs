@@ -13,7 +13,7 @@ const MISSING_BWRAP_WARNING: &str = concat!(
     "Codex will use the vendored bubblewrap in the meantime.",
 );
 const USER_NAMESPACE_WARNING: &str =
-    concat!("Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.",);
+    "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.";
 const USER_NAMESPACE_FAILURES: [&str; 4] = [
     "loopback: Failed RTM_NEWADDR",
     "loopback: Failed RTM_NEWLINK",

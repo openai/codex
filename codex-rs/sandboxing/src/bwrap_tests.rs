@@ -7,7 +7,7 @@ use tempfile::tempdir;
 #[test]
 fn system_bwrap_warning_reports_missing_system_bwrap() {
     assert_eq!(
-        system_bwrap_warning_for_path(None),
+        system_bwrap_warning_for_path(/*system_bwrap_path*/ None),
         Some(MISSING_BWRAP_WARNING.to_string())
     );
 }
