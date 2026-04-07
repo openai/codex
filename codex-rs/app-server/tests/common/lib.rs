@@ -14,6 +14,7 @@ pub use auth_fixtures::encode_id_token;
 pub use auth_fixtures::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCResponse;
 pub use config::write_mock_responses_config_toml;
+pub use config::write_mock_responses_config_toml_with_chatgpt_base_url;
 pub use core_test_support::format_with_current_shell;
 pub use core_test_support::format_with_current_shell_display;
 pub use core_test_support::format_with_current_shell_display_non_login;

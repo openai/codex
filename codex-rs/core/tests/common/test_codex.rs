@@ -517,6 +517,7 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
+                /*analytics_events_client*/ None,
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
