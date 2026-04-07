@@ -56,7 +56,7 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
 }
 
 fn to_abs_path(cwd: &Path, path: &Path) -> Option<AbsolutePathBuf> {
-    AbsolutePathBuf::resolve_path_against_base(path, cwd).ok()
+    Some(AbsolutePathBuf::resolve_path_against_base(path, cwd))
 }
 
 fn write_permissions_for_paths(

@@ -152,7 +152,7 @@ args = ["--format=text"]
             args: vec!["--format=text".to_string()],
             timeout_ms: NonZeroU64::new(5_000).unwrap(),
             refresh_interval_ms: 300_000,
-            cwd: AbsolutePathBuf::resolve_path_against_base(".", base_dir.path()).unwrap(),
+            cwd: AbsolutePathBuf::resolve_path_against_base(".", base_dir.path()),
         })
     );
 }

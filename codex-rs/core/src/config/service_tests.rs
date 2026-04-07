@@ -232,6 +232,29 @@ async fn read_includes_origins_and_layers() {
     ));
 }
 
+#[tokio::test]
+async fn read_rejects_relative_cwd() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
+
+    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let error = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: Some("workspace".to_string()),
+        })
+        .await
+        .expect_err("relative cwd should be rejected");
+
+    match &error {
+        ConfigServiceError::Io { context, source } => {
+            assert_eq!(*context, "failed to resolve config cwd to an absolute path");
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidInput);
+        }
+        _ => panic!("unexpected error: {error}"),
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn write_value_succeeds_when_managed_preferences_expand_home_directory_paths() -> Result<()> {

@@ -380,6 +380,52 @@ model_reasoning_effort = "high"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_resolves_relative_cwd_from_app_server_current_dir() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, r#"model = "gpt-user""#)?;
+
+    let workspace = codex_home.path().join("workspace");
+    let project_config_dir = workspace.join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        r#"
+model_reasoning_effort = "high"
+"#,
+    )?;
+    set_project_trust_level(codex_home.path(), &workspace, TrustLevel::Trusted)?;
+    let project_config = AbsolutePathBuf::try_from(project_config_dir.canonicalize()?)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: Some("workspace".to_string()),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config, origins, ..
+    } = to_response(resp)?;
+
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        origins.get("model_reasoning_effort").expect("origin").name,
+        ConfigLayerSource::Project {
+            dot_codex_folder: project_config
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
     let codex_home = TempDir::new()?;
     let user_dir = test_path_buf_with_windows("/user", Some(r"C:\Users\user"));
@@ -546,7 +592,7 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
-    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home);
 
     assert_eq!(write.status, WriteStatus::Ok);
     assert_eq!(write.file_path, expected_file_path);
@@ -647,7 +693,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
-    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home);
     assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp

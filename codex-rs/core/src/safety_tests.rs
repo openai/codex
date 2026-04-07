@@ -243,7 +243,7 @@ fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().to_path_buf();
     let blocked_path = cwd.join("docs").join("blocked.txt");
-    let docs_absolute = AbsolutePathBuf::resolve_path_against_base("docs", &cwd).unwrap();
+    let docs_absolute = AbsolutePathBuf::resolve_path_against_base("docs", &cwd);
     let action = ApplyPatchAction::new_add_for_test(&blocked_path, "".to_string());
     let sandbox_policy = SandboxPolicy::ExternalSandbox {
         network_access: codex_protocol::protocol::NetworkAccess::Restricted,

@@ -77,15 +77,14 @@ fn resolve_workdir_base_path(
     default_cwd: &Path,
 ) -> Result<AbsolutePathBuf, FunctionCallError> {
     let arguments: Value = parse_arguments(arguments)?;
-    AbsolutePathBuf::resolve_path_against_base(
+    Ok(AbsolutePathBuf::resolve_path_against_base(
         arguments
             .get("workdir")
             .and_then(Value::as_str)
             .filter(|workdir| !workdir.is_empty())
             .unwrap_or_default(),
         default_cwd,
-    )
-    .map_err(|err| FunctionCallError::RespondToModel(format!("failed to resolve workdir: {err}")))
+    ))
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and

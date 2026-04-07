@@ -1027,16 +1027,10 @@ impl TurnContext {
     }
 
     pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
-        let Some(path) = path.as_ref() else {
-            return self.cwd.clone();
-        };
-        match AbsolutePathBuf::resolve_path_against_base(path, &self.cwd) {
-            Ok(path) => path,
-            Err(err) => {
-                warn!("failed to resolve path against cwd: {err}");
-                self.cwd.clone()
-            }
-        }
+        path.as_ref().map_or_else(
+            || self.cwd.clone(),
+            |path| AbsolutePathBuf::resolve_path_against_base(path, &self.cwd),
+        )
     }
 
     pub(crate) fn compact_prompt(&self) -> &str {
