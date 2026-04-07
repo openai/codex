@@ -2473,14 +2473,12 @@ async fn wait_agent_returns_final_status_without_timeout() {
         .await
         .expect("subscribe should succeed");
 
-    let _ = thread
+    thread
         .thread
-        .submit(Op::Shutdown {})
+        .shutdown_and_wait()
         .await
-        .expect("shutdown should submit");
-    let _ = timeout(Duration::from_secs(1), status_rx.changed())
-        .await
-        .expect("shutdown status should arrive");
+        .expect("shutdown should complete");
+    assert_eq!(status_rx.borrow_and_update().clone(), AgentStatus::Shutdown);
 
     let invocation = invocation(
         Arc::new(session),
