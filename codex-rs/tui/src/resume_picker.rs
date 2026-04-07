@@ -1917,7 +1917,7 @@ mod tests {
 
         assert_eq!(
             picker_filter_cwd(&config, /*show_all*/ false, /*is_remote*/ false),
-            Some(PathBuf::from("/tmp/config-cwd"))
+            Some(config.cwd.to_path_buf())
         );
     }
 
