@@ -1995,7 +1995,7 @@ mod tests {
             /*show_all*/ false,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
         let row = Row {
             path: None,
@@ -2027,7 +2027,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         let now = Utc::now();
@@ -2109,7 +2109,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
         state.inline_error = Some(String::from(
             "Failed to read session metadata from /tmp/missing.jsonl",
@@ -2345,7 +2345,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         let now = Utc::now();
@@ -2429,7 +2429,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         state.all_rows = vec![Row {
@@ -2600,7 +2600,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         state.reset_pagination();
@@ -2669,7 +2669,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -2750,7 +2750,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         state.start_initial_load();
@@ -2780,7 +2780,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         let mut items = Vec::new();
@@ -2828,7 +2828,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         let row = Row {
@@ -2869,7 +2869,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
         let thread_id = ThreadId::new();
         let row = Row {
@@ -2940,7 +2940,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
 
         let mut items = Vec::new();
@@ -2988,7 +2988,7 @@ mod tests {
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
-            None,
+            /*preferred_session*/ None,
         );
         state.reset_pagination();
         state.ingest_page(page(

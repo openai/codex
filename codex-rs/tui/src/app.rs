@@ -10997,16 +10997,19 @@ guardian_approval = true
             ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
         let summary =
             session_summary(usage, Some(thread_id), Some("my-session".to_string())).expect("line");
-        let rendered = session_transition_history_lines(Some(summary), /*include_hint*/ true)
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = session_transition_history_lines(
+            Some(summary),
+            /*include_resume_picker_hint*/ true,
+        )
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
         assert_snapshot!(
             "session_transition_history_lines_with_resume_picker_hint",
