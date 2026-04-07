@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn restore_context_meta_adds_elicitation_meta_and_removes_progress_token() {
         let request = restore_context_meta(
-            form_request(None),
+            form_request(/*meta*/ None),
             meta(json!({
                 "progressToken": "progress-token",
                 "persist": ["session", "always"],
