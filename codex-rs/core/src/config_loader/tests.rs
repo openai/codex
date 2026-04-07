@@ -904,7 +904,7 @@ model_instructions_file = "child.txt"
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_ref().and_then(Option::as_deref),
+        config.base_instructions.as_deref(),
         Some("child instructions")
     );
 
@@ -940,7 +940,7 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_ref().and_then(Option::as_deref),
+        config.base_instructions.as_deref(),
         Some("cli override instructions")
     );
 

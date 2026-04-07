@@ -2320,7 +2320,7 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_base_instructions(&self) -> Option<Option<BaseInstructions>> {
+    pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
         // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
             InitialHistory::New => None,
@@ -2548,13 +2548,7 @@ pub struct SessionMeta {
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_double_option",
-        serialize_with = "serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub base_instructions: Option<Option<BaseInstructions>>,
+    pub base_instructions: Option<BaseInstructions>,
     #[serde(
         default,
         deserialize_with = "deserialize_double_option",
