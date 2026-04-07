@@ -58,7 +58,7 @@ impl ApplyPatchRuntime {
     ) -> GuardianApprovalRequest {
         GuardianApprovalRequest::ApplyPatch {
             id: call_id.to_string(),
-            cwd: req.action.cwd.clone(),
+            cwd: req.action.cwd.to_path_buf(),
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         }
@@ -101,7 +101,7 @@ impl ApplyPatchRuntime {
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
                 req.action.patch.clone(),
             ],
-            cwd: req.action.cwd.clone(),
+            cwd: req.action.cwd.to_path_buf(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),

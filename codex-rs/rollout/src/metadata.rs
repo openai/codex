@@ -137,7 +137,7 @@ pub(crate) async fn backfill_sessions(
     runtime: &codex_state::StateRuntime,
     config: &impl RolloutConfigView,
 ) {
-    let metric_client = codex_otel::metrics::global();
+    let metric_client = codex_otel::global();
     let timer = metric_client
         .as_ref()
         .and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());

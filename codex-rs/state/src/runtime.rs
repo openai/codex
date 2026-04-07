@@ -54,9 +54,12 @@ mod agent_jobs;
 mod backfill;
 mod logs;
 mod memories;
+mod remote_control;
 #[cfg(test)]
 mod test_support;
 mod threads;
+
+pub use remote_control::RemoteControlEnrollmentRecord;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id

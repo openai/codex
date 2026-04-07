@@ -1,9 +1,9 @@
 mod client;
 mod config;
 mod error;
-pub mod names;
+pub(crate) mod names;
 pub(crate) mod runtime_metrics;
-pub mod tags;
+pub(crate) mod tags;
 pub(crate) mod timer;
 pub(crate) mod validation;
 
@@ -12,7 +12,9 @@ pub use crate::metrics::config::MetricsConfig;
 pub use crate::metrics::config::MetricsExporter;
 pub use crate::metrics::error::MetricsError;
 pub use crate::metrics::error::Result;
+pub use names::*;
 use std::sync::OnceLock;
+pub use tags::SessionMetricTagValues;
 
 static GLOBAL_METRICS: OnceLock<MetricsClient> = OnceLock::new();
 

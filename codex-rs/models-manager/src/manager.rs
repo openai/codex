@@ -7,7 +7,7 @@ use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::TransportError;
-use codex_api::api_bridge::map_api_error;
+use codex_api::map_api_error;
 use codex_app_server_protocol::AuthMode;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;

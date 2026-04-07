@@ -23,6 +23,7 @@ use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const NOT_FOUND_ERROR_CODE: i64 = -32004;
 
 #[derive(Clone)]
 pub(crate) struct RemoteFileSystem {
@@ -151,6 +152,9 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
 fn map_remote_error(error: ExecServerError) -> io::Error {
     match error {
+        ExecServerError::Server { code, message } if code == NOT_FOUND_ERROR_CODE => {
+            io::Error::new(io::ErrorKind::NotFound, message)
+        }
         ExecServerError::Server { code, message } if code == INVALID_REQUEST_ERROR_CODE => {
             io::Error::new(io::ErrorKind::InvalidInput, message)
         }

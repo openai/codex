@@ -1028,7 +1028,7 @@ async fn js_repl_waits_for_unawaited_tool_calls_before_completion() -> anyhow::R
 
     let marker = turn
         .cwd
-        .join(format!("js-repl-unawaited-marker-{}.txt", Uuid::new_v4()))?;
+        .join(format!("js-repl-unawaited-marker-{}.txt", Uuid::new_v4()));
     let marker_json = serde_json::to_string(&marker.to_string_lossy().to_string())?;
     let result = manager
             .execute(
@@ -1073,10 +1073,10 @@ async fn js_repl_persisted_tool_helpers_work_across_cells() -> anyhow::Result<()
 
     let global_marker = turn
         .cwd
-        .join(format!("js-repl-global-helper-{}.txt", Uuid::new_v4()))?;
+        .join(format!("js-repl-global-helper-{}.txt", Uuid::new_v4()));
     let lexical_marker = turn
         .cwd
-        .join(format!("js-repl-lexical-helper-{}.txt", Uuid::new_v4()))?;
+        .join(format!("js-repl-lexical-helper-{}.txt", Uuid::new_v4()));
     let global_marker_json = serde_json::to_string(&global_marker.to_string_lossy().to_string())?;
     let lexical_marker_json = serde_json::to_string(&lexical_marker.to_string_lossy().to_string())?;
 

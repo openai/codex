@@ -19,6 +19,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
+use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
@@ -170,6 +171,7 @@ pub(crate) struct MessageProcessor {
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
     rpc_transport: AppServerRpcTransport,
+    remote_control_handle: Option<RemoteControlHandle>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -195,6 +197,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) rpc_transport: AppServerRpcTransport,
+    pub(crate) remote_control_handle: Option<RemoteControlHandle>,
 }
 
 impl MessageProcessor {
@@ -215,6 +218,7 @@ impl MessageProcessor {
             session_source,
             auth_manager,
             rpc_transport,
+            remote_control_handle,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -285,6 +289,7 @@ impl MessageProcessor {
             config,
             config_warnings: Arc::new(config_warnings),
             rpc_transport,
+            remote_control_handle,
         }
     }
 
@@ -865,16 +870,8 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ConfigValueWriteParams,
     ) {
-        match self.config_api.write_value(params).await {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+        let result = self.config_api.write_value(params).await;
+        self.handle_config_mutation_result(request_id, result).await
     }
 
     async fn handle_config_batch_write(
@@ -882,8 +879,8 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ConfigBatchWriteParams,
     ) {
-        self.handle_config_mutation_result(request_id, self.config_api.batch_write(params).await)
-            .await;
+        let result = self.config_api.batch_write(params).await;
+        self.handle_config_mutation_result(request_id, result).await;
     }
 
     async fn handle_experimental_feature_enablement_set(
@@ -892,23 +889,15 @@ impl MessageProcessor {
         params: ExperimentalFeatureEnablementSetParams,
     ) {
         let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
-        match self
+        let result = self
             .config_api
             .set_experimental_feature_enablement(params)
-            .await
-        {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
-                self.outgoing.send_response(request_id, response).await;
-                if should_refresh_apps_list {
-                    self.refresh_apps_list_after_experimental_feature_enablement_set()
-                        .await;
-                }
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
+            .await;
+        let is_ok = result.is_ok();
+        self.handle_config_mutation_result(request_id, result).await;
+        if should_refresh_apps_list && is_ok {
+            self.refresh_apps_list_after_experimental_feature_enablement_set()
+                .await;
         }
     }
 
@@ -927,7 +916,11 @@ impl MessageProcessor {
                 return;
             }
         };
-        if !config.features.apps_enabled(Some(&self.auth_manager)).await {
+        let auth = self.auth_manager.auth().await;
+        if !config.features.apps_enabled_for_auth(
+            auth.as_ref()
+                .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+        ) {
             return;
         }
 
@@ -981,13 +974,33 @@ impl MessageProcessor {
     ) {
         match result {
             Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_plugin_startup_tasks_for_latest_config()
-                    .await;
+                self.handle_config_mutation().await;
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_config_mutation(&self) {
+        self.codex_message_processor.handle_config_mutation();
+        let Some(remote_control_handle) = &self.remote_control_handle else {
+            return;
+        };
+
+        match self
+            .config_api
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => {
+                remote_control_handle.set_enabled(config.features.enabled(Feature::RemoteControl));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "failed to load config for remote control enablement refresh after config mutation: {}",
+                    error.message
+                );
+            }
         }
     }
 

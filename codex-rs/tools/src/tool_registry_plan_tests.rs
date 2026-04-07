@@ -246,15 +246,18 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     let output_schema = output_schema
         .as_ref()
         .expect("spawn_agent should define output schema");
-    assert_eq!(
-        output_schema["required"],
-        json!(["agent_id", "task_name", "nickname"])
-    );
+    assert_eq!(output_schema["required"], json!(["task_name", "nickname"]));
 
     let send_message = find_tool(&tools, "send_message");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_message.spec else {
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &send_message.spec
+    else {
         panic!("send_message should be a function tool");
     };
+    assert_eq!(output_schema, &None);
     let JsonSchema::Object {
         properties,
         required,
@@ -273,9 +276,15 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     );
 
     let followup_task = find_tool(&tools, "followup_task");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &followup_task.spec else {
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &followup_task.spec
+    else {
         panic!("followup_task should be a function tool");
     };
+    assert_eq!(output_schema, &None);
     let JsonSchema::Object {
         properties,
         required,
@@ -460,6 +469,42 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
 }
 
 #[test]
+fn disabled_environment_omits_environment_backed_tools() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    features.enable(Feature::JsRepl);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_has_environment(/*has_environment*/ false);
+    tools_config
+        .experimental_supported_tools
+        .push("list_dir".to_string());
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, "exec_command");
+    assert_lacks_tool_name(&tools, "write_stdin");
+    assert_lacks_tool_name(&tools, "js_repl");
+    assert_lacks_tool_name(&tools, "js_repl_reset");
+    assert_lacks_tool_name(&tools, "apply_patch");
+    assert_lacks_tool_name(&tools, "list_dir");
+    assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
+}
+
+#[test]
 fn test_build_specs_agent_job_worker_tools_enabled() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -496,9 +541,9 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "close_agent",
             "spawn_agents_on_csv",
             "report_agent_job_result",
+            REQUEST_USER_INPUT_TOOL_NAME,
         ],
     );
-    assert_lacks_tool_name(&tools, "request_user_input");
 }
 
 #[test]
@@ -1859,6 +1904,7 @@ fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
     SpawnAgentToolOptions {
         available_models: &config.available_models,
         agent_type_description: agent_type_description(config, DEFAULT_AGENT_TYPE_DESCRIPTION),
+        hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
     }
 }
 

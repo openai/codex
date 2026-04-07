@@ -34,6 +34,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             model_preset("hidden", /*show_in_picker*/ false),
         ],
         agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
     });
 
     let ToolSpec::Function(ResponsesApiTool {
@@ -72,7 +73,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
-        json!(["agent_id", "task_name", "nickname"])
+        json!(["task_name", "nickname"])
     );
 }
 
@@ -81,6 +82,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
     let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
         available_models: &[],
         agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
     });
 
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
@@ -95,7 +97,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 }
 
 #[test]
-fn send_message_tool_requires_message_and_uses_submission_output() {
+fn send_message_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -120,14 +122,11 @@ fn send_message_tool_requires_message_and_uses_submission_output() {
         required,
         Some(vec!["target".to_string(), "message".to_string()])
     );
-    assert_eq!(
-        output_schema.expect("send_message output schema")["required"],
-        json!(["submission_id"])
-    );
+    assert_eq!(output_schema, None);
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_uses_submission_output() {
+fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -152,10 +151,7 @@ fn followup_task_tool_requires_message_and_uses_submission_output() {
         required,
         Some(vec!["target".to_string(), "message".to_string()])
     );
-    assert_eq!(
-        output_schema.expect("followup_task output schema")["required"],
-        json!(["submission_id"])
-    );
+    assert_eq!(output_schema, None);
 }
 
 #[test]
