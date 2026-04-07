@@ -1346,10 +1346,7 @@ mod tests {
         );
         assert!(
             policy.can_write_path_with_cwd(
-                explicit_dot_codex
-                    .join("config.toml")
-                    .expect("config.toml")
-                    .as_path(),
+                explicit_dot_codex.join("config.toml").as_path(),
                 cwd.path()
             )
         );
@@ -1619,16 +1616,12 @@ mod tests {
 
         let link_root =
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
-        let link_private = link_root
-            .join("linked-private")
-            .expect("symlinked linked-private path");
+        let link_private = link_root.join("linked-private");
         let expected_root = AbsolutePathBuf::from_absolute_path(
             real_root.canonicalize().expect("canonicalize real root"),
         )
         .expect("absolute canonical root");
-        let expected_linked_private = expected_root
-            .join("linked-private")
-            .expect("expected linked-private path");
+        let expected_linked_private = expected_root.join("linked-private");
         let unexpected_decoy =
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
@@ -1673,16 +1666,12 @@ mod tests {
 
         let link_root =
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
-        let link_private = link_root
-            .join("linked-private")
-            .expect("symlinked linked-private path");
+        let link_private = link_root.join("linked-private");
         let expected_root = AbsolutePathBuf::from_absolute_path(
             real_root.canonicalize().expect("canonicalize real root"),
         )
         .expect("absolute canonical root");
-        let expected_linked_private = expected_root
-            .join("linked-private")
-            .expect("expected linked-private path");
+        let expected_linked_private = expected_root.join("linked-private");
         let unexpected_decoy =
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
@@ -1727,9 +1716,7 @@ mod tests {
             root.as_path().canonicalize().expect("canonicalize root"),
         )
         .expect("absolute canonical root");
-        let expected_alias = expected_root
-            .join("alias-root")
-            .expect("expected alias path");
+        let expected_alias = expected_root.join("alias-root");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {

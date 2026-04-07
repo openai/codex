@@ -718,7 +718,7 @@ mod tests {
         let workdir = tmp.path().join("workspace");
         std::fs::create_dir(&workdir)?;
         let workdir = AbsolutePathBuf::try_from(workdir)?;
-        let expected_file = workdir.join("bin/tool")?;
+        let expected_file = workdir.join("bin/tool");
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
             Arc::new(AssertingEscalationPolicy {
