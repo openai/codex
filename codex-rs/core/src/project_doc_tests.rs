@@ -432,6 +432,31 @@ async fn agents_md_directory_is_ignored() {
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn agents_md_special_file_is_ignored() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("AGENTS.md");
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("path without nul");
+    // SAFETY: `c_path` is a valid, nul-terminated path and `mkfifo` does not
+    // retain the pointer after the call.
+    let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) };
+    assert_eq!(rc, 0);
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg).await;
+    assert_eq!(res, None);
+
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+}
+
 #[tokio::test]
 async fn override_directory_falls_back_to_agents_md_file() {
     let tmp = tempfile::tempdir().expect("tempdir");
