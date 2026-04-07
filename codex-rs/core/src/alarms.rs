@@ -715,7 +715,7 @@ mod tests {
             ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "Recurring scheduled alarm prompt:\nrun tests\n\ncurrentAlarmId: alarm-1\nConfigured delivery: steer-current-turn\nTrigger: delay 10s, repeat\n\nThis alarm should keep running on its schedule unless the user asked for a stopping condition and that condition is now satisfied.\nIf that stopping condition is satisfied, stop the alarm by calling AlarmDelete with {\"id\":\"alarm-1\"}.\nDo not expose scheduler internals unless they matter to the user.".to_string(),
+                    text: "Recurring scheduled alarm prompt:\nrun tests\n\ncurrentAlarmId: alarm-1\nConfigured delivery: steer-current-turn\nTrigger: delay 10s, repeat\n\nThis alarm should keep running on its schedule after this invocation.\nDo not call AlarmDelete just because you completed this invocation.\nCall AlarmDelete with {\"id\":\"alarm-1\"} only if the user's alarm prompt included an explicit stop condition, such as \"until\", \"stop when\", or \"while\", and that condition is now satisfied.\nDo not expose scheduler internals unless they matter to the user.".to_string(),
                 }],
             }
         );
