@@ -5635,6 +5635,7 @@ mod handlers {
 
         // Gracefully flush and shutdown rollout recorder on session end so tests
         // that inspect the rollout file do not race with the background writer.
+        let mut shutdown_failures = Vec::new();
         let recorder_opt = {
             let mut guard = sess.services.rollout.lock().await;
             guard.take()
@@ -5644,7 +5645,7 @@ mod handlers {
         {
             warn!("failed to shutdown rollout recorder: {e}");
             let message = "Failed to shutdown rollout recorder".to_string();
-            sess.shutdown_failure.send_replace(Some(message.clone()));
+            shutdown_failures.push(message.clone());
             let event = Event {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
@@ -5653,14 +5654,13 @@ mod handlers {
                 }),
             };
             sess.send_event_raw(event).await;
-            return true;
         }
         if let Some(state_db) = sess.services.state_db.as_deref()
             && let Err(e) = state_db.checkpoint_wal().await
         {
             warn!("failed to checkpoint state db WAL during shutdown: {e}");
             let message = "Failed to checkpoint state database WAL".to_string();
-            sess.shutdown_failure.send_replace(Some(message.clone()));
+            shutdown_failures.push(message.clone());
             let event = Event {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
@@ -5669,6 +5669,11 @@ mod handlers {
                 }),
             };
             sess.send_event_raw(event).await;
+        }
+
+        if !shutdown_failures.is_empty() {
+            sess.shutdown_failure
+                .send_replace(Some(shutdown_failures.join("; ")));
             return true;
         }
 
