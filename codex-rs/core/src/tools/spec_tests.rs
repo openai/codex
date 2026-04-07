@@ -68,6 +68,7 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }))
 }
 

@@ -130,6 +130,7 @@ mod tests {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         }];
 
         assert_eq!(

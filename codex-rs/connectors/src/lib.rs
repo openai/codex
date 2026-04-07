@@ -365,6 +365,7 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }
 }
 

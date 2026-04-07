@@ -28,6 +28,7 @@ fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }));
 
     let request = build_tool_suggestion_elicitation_request(
@@ -166,6 +167,7 @@ fn verified_connector_suggestion_completed_requires_accessible_connector() {
         is_accessible: true,
         is_enabled: false,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
 
     assert!(verified_connector_suggestion_completed(
@@ -194,6 +196,7 @@ fn all_suggested_connectors_picked_up_requires_every_expected_connector() {
         is_accessible: true,
         is_enabled: false,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
 
     assert!(all_suggested_connectors_picked_up(

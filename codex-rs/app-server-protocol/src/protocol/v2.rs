@@ -2073,6 +2073,19 @@ pub struct AppMetadata {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - app tool metadata returned by app-list APIs.
+///
+/// `input_schema` is the effective JSON Schema Codex will use for this
+/// tool's parameters, including any connector link parameter constraints.
+pub struct AppToolInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub input_schema: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppInfo {
     pub id: String,
@@ -2097,6 +2110,8 @@ pub struct AppInfo {
     pub is_enabled: bool,
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
+    #[serde(default)]
+    pub tools: Vec<AppToolInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

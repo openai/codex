@@ -4726,6 +4726,7 @@ mod tests {
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         }];
         composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
 
@@ -4768,6 +4769,7 @@ mod tests {
             is_accessible: true,
             is_enabled: false,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         }];
         composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
 
@@ -4868,6 +4870,7 @@ mod tests {
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: vec!["Google Calendar".to_string()],
+                tools: Vec::new(),
             }],
         }));
 
@@ -4964,6 +4967,7 @@ mod tests {
                         is_accessible: true,
                         is_enabled: true,
                         plugin_display_names: Vec::new(),
+                        tools: Vec::new(),
                     }],
                 }));
             },
@@ -4998,6 +5002,7 @@ mod tests {
             is_accessible: true,
             is_enabled: false,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         }];
         composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
 

@@ -14,6 +14,7 @@ use async_channel::unbounded;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
+pub use codex_app_server_protocol::AppToolInfo;
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
 use codex_login::token_data::TokenData;
@@ -524,6 +525,7 @@ pub(crate) fn accessible_connectors_from_mcp_tools(
             normalize_connector_value(tool.connector_name.as_deref()),
             normalize_connector_value(tool.connector_description.as_deref()),
             tool.plugin_display_names.clone(),
+            app_tool_info_from_mcp_tool(tool),
         ))
     });
     collect_accessible_connectors(tools)
@@ -545,6 +547,7 @@ pub fn merge_connectors(
         connector.is_accessible = true;
         let connector_id = connector.id.clone();
         if let Some(existing) = merged.get_mut(&connector_id) {
+            let connector_tools = std::mem::take(&mut connector.tools);
             existing.is_accessible = true;
             if existing.name == existing.id && connector.name != connector.id {
                 existing.name = connector.name;
@@ -561,6 +564,9 @@ pub fn merge_connectors(
             if existing.distribution_channel.is_none() && connector.distribution_channel.is_some() {
                 existing.distribution_channel = connector.distribution_channel;
             }
+            if !connector_tools.is_empty() {
+                existing.tools = connector_tools;
+            }
             existing
                 .plugin_display_names
                 .extend(connector.plugin_display_names);
@@ -576,6 +582,9 @@ pub fn merge_connectors(
         }
         connector.plugin_display_names.sort_unstable();
         connector.plugin_display_names.dedup();
+        connector
+            .tools
+            .sort_by(|left, right| left.name.cmp(&right.name));
     }
     merged.sort_by(|left, right| {
         right
@@ -861,10 +870,20 @@ fn app_tool_policy_from_apps_config(
 
 fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
 where
-    I: IntoIterator<Item = (String, Option<String>, Option<String>, Vec<String>)>,
+    I: IntoIterator<
+        Item = (
+            String,
+            Option<String>,
+            Option<String>,
+            Vec<String>,
+            AppToolInfo,
+        ),
+    >,
 {
     let mut connectors: HashMap<String, (AppInfo, BTreeSet<String>)> = HashMap::new();
-    for (connector_id, connector_name, connector_description, plugin_display_names) in tools {
+    for (connector_id, connector_name, connector_description, plugin_display_names, app_tool) in
+        tools
+    {
         let connector_name = connector_name.unwrap_or_else(|| connector_id.clone());
         if let Some((existing, existing_plugin_display_names)) = connectors.get_mut(&connector_id) {
             if existing.name == connector_id && connector_name != connector_id {
@@ -873,6 +892,7 @@ where
             if existing.description.is_none() && connector_description.is_some() {
                 existing.description = connector_description;
             }
+            existing.tools.push(app_tool);
             existing_plugin_display_names.extend(plugin_display_names);
         } else {
             connectors.insert(
@@ -892,6 +912,7 @@ where
                         is_accessible: true,
                         is_enabled: true,
                         plugin_display_names: Vec::new(),
+                        tools: vec![app_tool],
                     },
                     plugin_display_names
                         .into_iter()
@@ -906,6 +927,9 @@ where
             connector.plugin_display_names = plugin_display_names.into_iter().collect();
             connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
             connector
+                .tools
+                .sort_by(|left, right| left.name.cmp(&right.name));
+            connector
         })
         .collect();
     accessible.sort_by(|left, right| {
@@ -916,6 +940,14 @@ where
             .then_with(|| left.id.cmp(&right.id))
     });
     accessible
+}
+
+fn app_tool_info_from_mcp_tool(tool: &ToolInfo) -> AppToolInfo {
+    AppToolInfo {
+        name: tool.tool_name.clone(),
+        description: normalize_connector_value(tool.tool.description.as_deref()),
+        input_schema: serde_json::Value::Object(tool.tool.input_schema.as_ref().clone()),
+    }
 }
 
 fn plugin_app_to_app_info(connector_id: AppConnectorId) -> AppInfo {
@@ -938,6 +970,7 @@ fn plugin_app_to_app_info(connector_id: AppConnectorId) -> AppInfo {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }
 }
 

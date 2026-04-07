@@ -17,6 +17,7 @@ export type { AppReview } from "./AppReview";
 export type { AppScreenshot } from "./AppScreenshot";
 export type { AppSummary } from "./AppSummary";
 export type { AppToolApproval } from "./AppToolApproval";
+export type { AppToolInfo } from "./AppToolInfo";
 export type { AppToolsConfig } from "./AppToolsConfig";
 export type { ApprovalsReviewer } from "./ApprovalsReviewer";
 export type { AppsConfig } from "./AppsConfig";

@@ -1217,7 +1217,9 @@ To enable or disable a skill by name:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, whether it is enabled in config, and the app tools currently available to Codex.
+
+For accessible apps, `tools[].inputSchema` is the effective tool parameter JSON Schema Codex will use, including any connector link parameter constraints. Directory-only apps do not have link-specific tool schemas and return an empty `tools` list.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -1240,7 +1242,22 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "labels": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
             "isAccessible": true,
-            "isEnabled": true
+            "isEnabled": true,
+            "pluginDisplayNames": [],
+            "tools": [
+                {
+                    "name": "search",
+                    "description": "Search the demo app.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string" }
+                        },
+                        "required": ["query"],
+                        "additionalProperties": false
+                    }
+                }
+            ]
         }
     ],
     "nextCursor": null
@@ -1270,7 +1287,22 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "labels": null,
         "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
         "isAccessible": true,
-        "isEnabled": true
+        "isEnabled": true,
+        "pluginDisplayNames": [],
+        "tools": [
+          {
+            "name": "search",
+            "description": "Search the demo app.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "query": { "type": "string" }
+              },
+              "required": ["query"],
+              "additionalProperties": false
+            }
+          }
+        ]
       }
     ]
   }
