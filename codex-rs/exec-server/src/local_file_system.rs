@@ -23,7 +23,7 @@ pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem) });
 
 #[derive(Clone, Default)]
-pub(crate) struct LocalFileSystem;
+pub struct LocalFileSystem;
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {

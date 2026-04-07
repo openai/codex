@@ -579,7 +579,7 @@ async fn get_base_instructions_no_user_content() {
     ];
 
     let (session, _turn_context) = make_session_and_context().await;
-    let config = test_config();
+    let config = test_config().await;
 
     for test_case in test_cases {
         let model_info = model_info_for_slug(test_case.slug, &config);
@@ -748,8 +748,8 @@ fn collect_explicit_app_ids_from_skill_items_skips_plain_mentions_with_skill_con
     assert_eq!(connector_ids, HashSet::<String>::new());
 }
 
-#[test]
-fn non_app_mcp_tools_remain_visible_without_search_selection() {
+#[tokio::test]
+async fn non_app_mcp_tools_remain_visible_without_search_selection() {
     let mcp_tools = HashMap::from([
         (
             "mcp__codex_apps__calendar_create_event".to_string(),
@@ -782,7 +782,7 @@ fn non_app_mcp_tools_remain_visible_without_search_selection() {
         &explicitly_enabled_connectors,
         &HashMap::new(),
     );
-    let config = test_config();
+    let config = test_config().await;
     selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
         &mcp_tools,
         &connectors,
@@ -794,8 +794,8 @@ fn non_app_mcp_tools_remain_visible_without_search_selection() {
     assert_eq!(tool_names, vec!["mcp__rmcp__echo".to_string()]);
 }
 
-#[test]
-fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
+#[tokio::test]
+async fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
     let selected_tool_names = [
         "mcp__codex_apps__calendar_create_event".to_string(),
         "mcp__rmcp__echo".to_string(),
@@ -831,7 +831,7 @@ fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
         &explicitly_enabled_connectors,
         &HashMap::new(),
     );
-    let config = test_config();
+    let config = test_config().await;
     selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
         &mcp_tools,
         &connectors,
@@ -849,8 +849,8 @@ fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
     );
 }
 
-#[test]
-fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
+#[tokio::test]
+async fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
     let selected_tool_names = ["mcp__rmcp__echo".to_string()];
     let mcp_tools = HashMap::from([
         (
@@ -883,7 +883,7 @@ fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
         &explicitly_enabled_connectors,
         &HashMap::new(),
     );
-    let config = test_config();
+    let config = test_config().await;
     selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
         &mcp_tools,
         &connectors,

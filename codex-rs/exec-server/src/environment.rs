@@ -4,9 +4,9 @@ use tokio::sync::OnceCell;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::LOCAL_FS;
 use crate::RemoteExecServerConnectArgs;
 use crate::file_system::ExecutorFileSystem;
-use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::remote_file_system::RemoteFileSystem;
@@ -190,7 +190,7 @@ impl Environment {
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         match self.remote_exec_server_client.clone() {
             Some(client) => Arc::new(RemoteFileSystem::new(client)),
-            None => Arc::new(LocalFileSystem),
+            None => Arc::clone(&LOCAL_FS),
         }
     }
 }

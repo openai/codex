@@ -20,8 +20,8 @@ use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_exec_server::RemoveOptions;
 use std::io;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ pub(crate) struct FsApi {
 impl Default for FsApi {
     fn default() -> Self {
         Self {
-            file_system: Environment::default().get_filesystem(),
+            file_system: Arc::clone(&LOCAL_FS),
         }
     }
 }

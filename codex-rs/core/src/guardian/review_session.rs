@@ -743,9 +743,9 @@ async fn interrupt_and_drain_turn(codex: &Codex) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn guardian_review_session_config_change_invalidates_cached_session() {
-        let parent_config = crate::config::test_config();
+    #[tokio::test]
+    async fn guardian_review_session_config_change_invalidates_cached_session() {
+        let parent_config = crate::config::test_config().await;
         let cached_spawn_config = build_guardian_review_session_config(
             &parent_config,
             /*live_network_config*/ None,

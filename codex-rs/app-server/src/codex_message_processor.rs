@@ -2248,6 +2248,7 @@ impl CodexMessageProcessor {
                 ))
         {
             let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
+                .await
                 .unwrap_or_else(|| config.cwd.to_path_buf());
             if let Err(err) = codex_core::config::set_project_trust_level(
                 &listener_task_context.codex_home,
