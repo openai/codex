@@ -158,19 +158,7 @@ impl FsWatchManager {
                 let mut changed_paths = event
                     .paths
                     .into_iter()
-                    .filter_map(|path| {
-                        match AbsolutePathBuf::resolve_path_against_base(&path, &watch_root) {
-                            Ok(path) => Some(path),
-                            Err(err) => {
-                                warn!(
-                                    "failed to normalize watch event path ({}) for {}: {err}",
-                                    path.display(),
-                                    watch_root.display()
-                                );
-                                None
-                            }
-                        }
-                    })
+                    .map(|path| AbsolutePathBuf::resolve_path_against_base(&path, &watch_root))
                     .collect::<Vec<_>>();
                 changed_paths.sort_by(|left, right| left.as_path().cmp(right.as_path()));
                 if !changed_paths.is_empty() {

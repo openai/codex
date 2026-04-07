@@ -274,7 +274,7 @@ async fn handle_escalate_session_with_policy(
         _ = parent_cancellation_token.cancelled() => return Ok(()),
         _ = session_cancellation_token.cancelled() => return Ok(()),
     };
-    let program = AbsolutePathBuf::resolve_path_against_base(file, workdir.as_path())?;
+    let program = AbsolutePathBuf::resolve_path_against_base(file, workdir.as_path());
     let decision = tokio::select! {
         decision = policy.determine_action(&program, &argv, &workdir) => {
             decision.context("failed to determine escalation action")?
