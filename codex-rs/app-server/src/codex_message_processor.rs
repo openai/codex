@@ -5628,7 +5628,11 @@ impl CodexMessageProcessor {
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
         }
 
-        if !config.features.apps_enabled(Some(&self.auth_manager)).await {
+        let auth = self.auth_manager.auth().await;
+        if !config
+            .features
+            .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+        {
             self.outgoing
                 .send_response(
                     request_id,
@@ -6296,9 +6300,11 @@ impl CodexMessageProcessor {
                 }
 
                 let plugin_apps = load_plugin_apps(result.installed_path.as_path());
+                let auth = self.auth_manager.auth().await;
                 let apps_needing_auth = if plugin_apps.is_empty()
-                    || !config.features.apps_enabled(Some(&self.auth_manager)).await
-                {
+                    || !config.features.apps_enabled_for_auth(
+                        auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
+                    ) {
                     Vec::new()
                 } else {
                     let (all_connectors_result, accessible_connectors_result) = tokio::join!(

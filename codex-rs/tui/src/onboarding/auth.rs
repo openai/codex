@@ -960,8 +960,8 @@ mod tests {
     use codex_app_server_client::InProcessClientStartArgs;
     use codex_arg0::Arg0DispatchPaths;
     use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+    use codex_config::types::AuthCredentialsStoreMode;
     use codex_core::config::ConfigBuilder;
-    use codex_login::AuthCredentialsStoreMode;
 
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;

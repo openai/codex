@@ -4,7 +4,7 @@ use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
-use codex_login::AuthCredentialsStoreMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;

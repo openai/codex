@@ -921,7 +921,11 @@ impl MessageProcessor {
                 return;
             }
         };
-        if !config.features.apps_enabled(Some(&self.auth_manager)).await {
+        let auth = self.auth_manager.auth().await;
+        if !config.features.apps_enabled_for_auth(
+            auth.as_ref()
+                .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+        ) {
             return;
         }
 
