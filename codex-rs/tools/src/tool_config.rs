@@ -115,6 +115,7 @@ pub struct ToolsConfigParams<'a> {
     pub model_info: &'a ModelInfo,
     pub available_models: &'a [ModelPreset],
     pub features: &'a Features,
+    pub image_generation_tool_auth_allowed: bool,
     pub web_search_mode: Option<WebSearchMode>,
     pub session_source: SessionSource,
     pub sandbox_policy: &'a SandboxPolicy,
@@ -127,6 +128,7 @@ impl ToolsConfig {
             model_info,
             available_models,
             features,
+            image_generation_tool_auth_allowed,
             web_search_mode,
             session_source,
             sandbox_policy,
@@ -150,8 +152,11 @@ impl ToolsConfig {
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
-        let include_image_gen_tool =
-            features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
+        // API-key auth bypasses Codex backend entitlement/tool normalization, so
+        // callers must confirm ChatGPT auth before exposing the built-in tool.
+        let include_image_gen_tool = *image_generation_tool_auth_allowed
+            && features.enabled(Feature::ImageGeneration)
+            && supports_image_generation(model_info);
         let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
         let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
         let shell_command_backend =
