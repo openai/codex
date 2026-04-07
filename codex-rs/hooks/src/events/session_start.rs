@@ -394,7 +394,7 @@ mod tests {
             (
                 "cmd.exe".to_string(),
                 vec!["/D".to_string(), "/C".to_string()],
-                "echo {\"continue\":false,\"stopReason\":\"pause\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"trusted context\"}}".to_string(),
+                r#"echo {^"continue^":false,^"stopReason^":^"pause^",^"hookSpecificOutput^":{^"hookEventName^":^"SessionStart^",^"additionalContext^":^"trusted context^"}}"#.to_string(),
                 "type nul > project-ran && echo project context".to_string(),
             )
         } else {

@@ -453,7 +453,7 @@ mod tests {
             (
                 "cmd.exe".to_string(),
                 vec!["/D".to_string(), "/C".to_string()],
-                "echo {\"decision\":\"block\",\"reason\":\"slow down\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"trusted context\"}}".to_string(),
+                r#"echo {^"decision^":^"block^",^"reason^":^"slow down^",^"hookSpecificOutput^":{^"hookEventName^":^"UserPromptSubmit^",^"additionalContext^":^"trusted context^"}}"#.to_string(),
                 "type nul > project-ran && echo project context".to_string(),
             )
         } else {
