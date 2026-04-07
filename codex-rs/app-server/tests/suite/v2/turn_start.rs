@@ -1041,12 +1041,10 @@ async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() ->
     .await??;
 
     let request = response_mock.single_request();
-    let developer_texts = request.message_input_texts("developer");
+    let instructions_text = request.instructions_text();
     assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains(LOCAL_PRAGMATIC_TEMPLATE)),
-        "expected startup-migrated pragmatic personality in developer instructions, got: {developer_texts:?}"
+        instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        "expected startup-migrated pragmatic personality in model instructions, got: {instructions_text:?}"
     );
 
     Ok(())

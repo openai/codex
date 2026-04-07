@@ -1772,7 +1772,6 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
-            base_instructions: Some(Some(CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT.to_string())),
             ..Default::default()
         })
         .await?;
@@ -1811,7 +1810,6 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
             model: Some("gpt-5.2-codex".to_string()),
-            base_instructions: Some(Some(CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT.to_string())),
             personality: Some(Personality::Friendly),
             ..Default::default()
         })
