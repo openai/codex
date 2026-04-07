@@ -162,7 +162,7 @@ fn unwrap_markdown_fences<'a>(markdown_source: &'a str) -> Cow<'a, str> {
     }
 
     fn markdown_fence_contains_table(content: &str, is_blockquoted_fence: bool) -> bool {
-        let mut previous_non_empty: Option<&str> = None;
+        let mut previous_line: Option<&str> = None;
         for line in content.lines() {
             let text = if is_blockquoted_fence {
                 table_detect::strip_blockquote_prefix(line)
@@ -171,10 +171,11 @@ fn unwrap_markdown_fences<'a>(markdown_source: &'a str) -> Cow<'a, str> {
             };
             let trimmed = text.trim();
             if trimmed.is_empty() {
+                previous_line = None;
                 continue;
             }
 
-            if let Some(previous) = previous_non_empty
+            if let Some(previous) = previous_line
                 && table_detect::is_table_header_line(previous)
                 && !table_detect::is_table_delimiter_line(previous)
                 && table_detect::is_table_delimiter_line(trimmed)
@@ -182,7 +183,7 @@ fn unwrap_markdown_fences<'a>(markdown_source: &'a str) -> Cow<'a, str> {
                 return true;
             }
 
-            previous_non_empty = Some(trimmed);
+            previous_line = Some(trimmed);
         }
         false
     }
@@ -490,12 +491,9 @@ mod tests {
     }
 
     #[test]
-    fn append_markdown_agent_unwraps_markdown_fence_with_blank_line_between_header_and_delimiter() {
+    fn append_markdown_agent_keeps_markdown_fence_with_blank_line_between_header_and_delimiter() {
         let src = "```markdown\n| A | B |\n\n|---|---|\n| 1 | 2 |\n```\n";
         let rendered = unwrap_markdown_fences(src);
-        assert!(
-            !rendered.contains("```"),
-            "expected markdown fence markers to be removed with spacing: {rendered:?}"
-        );
+        assert_eq!(rendered, src);
     }
 }
