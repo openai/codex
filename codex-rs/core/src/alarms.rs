@@ -291,6 +291,12 @@ impl AlarmsState {
             .values()
             .filter(|runtime| runtime.pending_run)
             .filter_map(|runtime| {
+                if runtime.alarm.trigger.is_idle_recurring() {
+                    if can_after_turn {
+                        return Some((runtime, AlarmDelivery::AfterTurn));
+                    }
+                    return None;
+                }
                 let actual_delivery = match runtime.alarm.delivery {
                     AlarmDelivery::AfterTurn if can_after_turn => AlarmDelivery::AfterTurn,
                     AlarmDelivery::AfterTurn => return None,
@@ -326,11 +332,12 @@ impl AlarmsState {
             }
         } else {
             alarm.last_run_at = Some(now.timestamp());
+            let pending_run = alarm.trigger.is_idle_recurring();
             self.alarms.insert(
                 alarm.id.clone(),
                 AlarmRuntime {
                     alarm: alarm.clone(),
-                    pending_run: false,
+                    pending_run,
                     timer_cancel,
                 },
             );
@@ -486,6 +493,7 @@ mod tests {
     use super::CreateAlarm;
     use super::MAX_ACTIVE_ALARMS_PER_THREAD;
     use super::PersistedAlarm;
+    use super::ThreadAlarm;
     use super::alarm_prompt_input_item;
     use super::alarm_sidecar_path_for_rollout;
     use super::load_alarm_sidecar;
@@ -586,6 +594,73 @@ mod tests {
             )
             .expect("second alarm should be claimed");
         assert_eq!(second.context.current_alarm_id, "alarm-2");
+    }
+
+    #[test]
+    fn idle_recurring_alarm_remains_pending_after_claim() {
+        let now = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
+        let mut alarms = AlarmsState::default();
+        let (alarm, timer_spec) = alarms
+            .create_alarm(
+                CreateAlarm {
+                    id: "alarm-1".to_string(),
+                    trigger: delay(ZERO_SECONDS, Some(true)),
+                    prompt: "keep going".to_string(),
+                    delivery: AlarmDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("alarm should be created");
+        assert_eq!(timer_spec, None);
+
+        let claimed = alarms
+            .claim_next_alarm(
+                now, /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
+            )
+            .expect("alarm should be claimed");
+        assert!(!claimed.deleted_one_shot_alarm);
+        assert_eq!(
+            alarms.persisted_alarms(),
+            vec![PersistedAlarm {
+                alarm: ThreadAlarm {
+                    last_run_at: Some(100),
+                    ..alarm
+                },
+                pending_run: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn idle_recurring_alarm_waits_for_idle_even_if_delivery_requests_steer() {
+        let now = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
+        let mut alarms = AlarmsState::default();
+        alarms
+            .create_alarm(
+                CreateAlarm {
+                    id: "alarm-1".to_string(),
+                    trigger: delay(ZERO_SECONDS, Some(true)),
+                    prompt: "keep going".to_string(),
+                    delivery: AlarmDelivery::SteerCurrentTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("alarm should be created");
+
+        assert_eq!(
+            alarms.claim_next_alarm(
+                now, /*can_after_turn*/ false, /*can_steer_current_turn*/ true,
+            ),
+            None
+        );
+        let claimed = alarms
+            .claim_next_alarm(
+                now, /*can_after_turn*/ true, /*can_steer_current_turn*/ false,
+            )
+            .expect("alarm should be claimed when idle");
+        assert_eq!(claimed.context.delivery, AlarmDelivery::AfterTurn);
     }
 
     #[test]

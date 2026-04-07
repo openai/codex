@@ -48,6 +48,16 @@ impl AlarmTrigger {
         }
     }
 
+    pub(crate) fn is_idle_recurring(&self) -> bool {
+        matches!(
+            self,
+            Self::Delay {
+                seconds: 0,
+                repeat: Some(true),
+            }
+        )
+    }
+
     pub(crate) fn display(&self) -> String {
         match self {
             Self::Delay { seconds, repeat } => {
@@ -115,7 +125,7 @@ fn timing_for_new_trigger_with_timezone(
         AlarmTrigger::Delay { seconds, repeat } => {
             let repeat = repeat.unwrap_or(false);
             if repeat && *seconds == 0 {
-                return Err("delay.repeat requires seconds to be greater than 0".to_string());
+                return Ok(timing(normalized, /*pending_run*/ true, None, now));
             }
             let next_run_at = checked_add_seconds(created_at, *seconds)?;
             let pending_run = next_run_at <= now;
@@ -170,7 +180,7 @@ fn timing_for_restored_trigger_with_timezone(
         AlarmTrigger::Delay { seconds, repeat } => {
             let repeat = repeat.unwrap_or(false);
             if repeat && *seconds == 0 {
-                return Err("delay.repeat requires seconds to be greater than 0".to_string());
+                return Ok(timing(normalized, /*pending_run*/ true, None, now));
             }
             let next_run_at = persisted_next_run_at
                 .or_else(|| next_delay_run_at(created_at, *seconds))
@@ -221,6 +231,9 @@ fn next_run_after_due_with_timezone(
     match trigger {
         AlarmTrigger::Delay { seconds, repeat } => {
             if repeat.unwrap_or(false) {
+                if *seconds == 0 {
+                    return Ok(None);
+                }
                 next_delay_recurring_run_at_from_timestamp(created_at, *seconds, now)
             } else {
                 Ok(None)
@@ -239,12 +252,7 @@ fn normalize_trigger(
     timezone: Tz,
 ) -> Result<AlarmTrigger, String> {
     match trigger {
-        AlarmTrigger::Delay { seconds, repeat } => {
-            if repeat.unwrap_or(false) && seconds == 0 {
-                return Err("delay.repeat requires seconds to be greater than 0".to_string());
-            }
-            Ok(AlarmTrigger::Delay { seconds, repeat })
-        }
+        AlarmTrigger::Delay { seconds, repeat } => Ok(AlarmTrigger::Delay { seconds, repeat }),
         AlarmTrigger::Schedule { dtstart, rrule } => {
             let dtstart = normalize_optional_string(dtstart);
             let rrule = normalize_optional_string(rrule);
@@ -480,19 +488,41 @@ mod tests {
     }
 
     #[test]
-    fn delay_repeat_rejects_zero_seconds() {
+    fn delay_repeat_zero_is_idle_recurring() {
+        let timing = timing_for_new_trigger_with_timezone(
+            AlarmTrigger::Delay {
+                seconds: 0,
+                repeat: Some(true),
+            },
+            utc(TS_100),
+            utc(TS_100),
+            Tz::UTC,
+        )
+        .expect("zero repeat should be a valid idle-recurring trigger");
         assert_eq!(
-            timing_for_new_trigger_with_timezone(
-                AlarmTrigger::Delay {
+            timing,
+            TriggerTiming {
+                trigger: AlarmTrigger::Delay {
                     seconds: 0,
                     repeat: Some(true),
                 },
-                utc(TS_100),
+                pending_run: true,
+                next_run_at: None,
+                timer_delay: None,
+            }
+        );
+        assert_eq!(
+            next_run_after_due_with_timezone(
+                &AlarmTrigger::Delay {
+                    seconds: 0,
+                    repeat: Some(true),
+                },
+                /*created_at*/ 100,
                 utc(TS_100),
                 Tz::UTC,
             )
-            .expect_err("zero repeat should be invalid"),
-            "delay.repeat requires seconds to be greater than 0"
+            .expect("zero repeat should remain timer-free"),
+            None
         );
     }
 

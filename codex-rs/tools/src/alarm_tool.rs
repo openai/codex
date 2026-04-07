@@ -26,7 +26,10 @@ pub fn create_alarm_create_tool() -> ToolSpec {
         (
             "repeat".to_string(),
             JsonSchema::Boolean {
-                description: Some("Delay trigger recurrence flag.".to_string()),
+                description: Some(
+                    "Delay trigger recurrence flag. With seconds 0, repeat means run whenever the thread is idle."
+                        .to_string(),
+                ),
             },
         ),
         (

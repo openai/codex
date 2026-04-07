@@ -275,12 +275,13 @@ Return only the JSON object requested by the response schema.
 Rules:
 - Extract the alarm prompt by removing the scheduling phrase but preserving the user's requested task.
 - Use delivery "after-turn" unless the user clearly asks for same-turn/current-turn steering; then use "steer-current-turn".
-- For "now", "immediately", or specs with no explicit timing, use { "kind": "delay", "seconds": 0, "repeat": false }.
+- Treat `/loop` as recurring by default. Only create a one-shot alarm when the user clearly asks for a single run, one-time reminder, or other one-off action.
+- For "now", "immediately", or specs with no explicit timing, use { "kind": "delay", "seconds": 0, "repeat": true } unless the user clearly asked for one-shot behavior. This means the alarm fires whenever the thread is idle.
 - For delay triggers, set dtstart and rrule to null.
 - For schedule triggers, set seconds and repeat to null.
-- For relative one-shot timing like "in 30 seconds", use a delay trigger with seconds set to the relative delay and repeat false.
+- For relative timing like "in 30 seconds", use a delay trigger with seconds set to the relative delay and repeat true unless the user clearly asked for one-shot behavior.
 - For interval timing like "every 5 minutes", use a delay trigger with seconds set to the interval and repeat true.
-- For one-shot wall-clock timing like "at 9pm", use a schedule trigger with dtstart set to the next matching local datetime in YYYY-MM-DDTHH:MM:SS and rrule null.
+- For one-shot wall-clock timing like "at 9pm once" or "one time at 9pm", use a schedule trigger with dtstart set to the next matching local datetime in YYYY-MM-DDTHH:MM:SS and rrule null.
 - For recurring calendar timing, use a schedule trigger with rrule set to an RFC 5545 RRULE string and dtstart set when the user supplies a start datetime; otherwise null.
 - For schedule triggers, use floating local wall-clock datetimes without timezone suffixes.
 "#;
@@ -313,6 +314,18 @@ mod tests {
         assert_eq!(
             schema.pointer("/properties/trigger/properties/kind/enum"),
             Some(&json!(["delay", "schedule"]))
+        );
+    }
+
+    #[test]
+    fn parser_prompt_defaults_ambiguous_loop_to_idle_recurring() {
+        assert!(
+            PARSE_ALARM_SYSTEM_PROMPT
+                .contains(r#"{ "kind": "delay", "seconds": 0, "repeat": true }"#)
+        );
+        assert!(
+            PARSE_ALARM_SYSTEM_PROMPT
+                .contains("Only create a one-shot alarm when the user clearly asks")
         );
     }
 
