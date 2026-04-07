@@ -1,3 +1,4 @@
+use codex_exec_server::FileSystemOperationOptions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -8,6 +9,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
+use std::path::Path;
 
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
@@ -91,11 +93,13 @@ impl ToolHandler for ViewImageHandler {
             AbsolutePathBuf::try_from(turn.resolve_path(Some(args.path))).map_err(|error| {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
+        let file_system_options =
+            view_image_file_system_options(turn.cwd.as_path(), turn.sandbox_policy.get().clone());
 
         let metadata = turn
             .environment
             .get_filesystem()
-            .get_metadata(&abs_path)
+            .get_metadata_with_options(&abs_path, &file_system_options)
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -113,7 +117,7 @@ impl ToolHandler for ViewImageHandler {
         let file_bytes = turn
             .environment
             .get_filesystem()
-            .read_file(&abs_path)
+            .read_file_with_options(&abs_path, &file_system_options)
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -157,6 +161,16 @@ impl ToolHandler for ViewImageHandler {
             image_url,
             image_detail,
         })
+    }
+}
+
+fn view_image_file_system_options(
+    cwd: &Path,
+    sandbox_policy: codex_protocol::protocol::SandboxPolicy,
+) -> FileSystemOperationOptions {
+    FileSystemOperationOptions {
+        sandbox_policy: Some(sandbox_policy),
+        cwd: AbsolutePathBuf::from_absolute_path(cwd).ok(),
     }
 }
 
@@ -204,6 +218,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tempfile::tempdir;
 
     #[test]
     fn code_mode_result_returns_image_url_object() {
@@ -222,6 +237,20 @@ mod tests {
                 "image_url": "data:image/png;base64,AAA",
                 "detail": null,
             })
+        );
+    }
+
+    #[test]
+    fn view_image_file_system_options_include_sandbox_policy_and_cwd() {
+        let temp_dir = tempdir().expect("temp dir");
+        let sandbox_policy = codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy();
+
+        let options = view_image_file_system_options(temp_dir.path(), sandbox_policy.clone());
+
+        assert_eq!(options.sandbox_policy, Some(sandbox_policy));
+        assert_eq!(
+            options.cwd,
+            AbsolutePathBuf::from_absolute_path(temp_dir.path()).ok()
         );
     }
 }
