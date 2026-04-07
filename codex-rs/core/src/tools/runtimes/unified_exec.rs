@@ -86,12 +86,12 @@ pub struct UnifiedExecRuntime<'a> {
 fn build_remote_exec_sandbox_config(
     attempt: &SandboxAttempt<'_>,
     additional_permissions: Option<PermissionProfile>,
-) -> Option<SandboxLaunchConfig> {
+) -> SandboxLaunchConfig {
     if matches!(attempt.sandbox, codex_sandboxing::SandboxType::None) {
-        return None;
+        return SandboxLaunchConfig::no_sandbox(attempt.sandbox_cwd.to_path_buf());
     }
 
-    Some(SandboxLaunchConfig {
+    SandboxLaunchConfig {
         sandbox: attempt.sandbox,
         policy: attempt.policy.clone(),
         file_system_policy: attempt.file_system_policy.clone(),
@@ -102,7 +102,7 @@ fn build_remote_exec_sandbox_config(
         windows_sandbox_level: attempt.windows_sandbox_level,
         windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
         use_legacy_landlock: attempt.use_legacy_landlock,
-    })
+    }
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -246,12 +246,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             if let UnifiedExecShellMode::ZshFork(_) = &self.shell_mode {
                 return Err(ToolError::Rejected(
                     "unified_exec zsh-fork is not supported when exec_server_url is configured"
-                        .to_string(),
-                ));
-            }
-            if req.network.is_some() {
-                return Err(ToolError::Rejected(
-                    "unified_exec managed-network is not supported when exec_server_url is configured"
                         .to_string(),
                 ));
             }

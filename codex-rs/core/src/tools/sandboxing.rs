@@ -24,7 +24,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformError;
-use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use futures::Future;
@@ -339,22 +338,21 @@ impl<'a> SandboxAttempt<'a> {
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
-            .transform(SandboxTransformRequest {
+            .transform(
                 command,
-                policy: self.policy,
-                file_system_policy: self.file_system_policy,
-                network_policy: self.network_policy,
-                sandbox: self.sandbox,
-                enforce_managed_network: self.enforce_managed_network,
+                self.policy,
+                self.file_system_policy,
+                self.network_policy,
+                self.sandbox,
+                self.enforce_managed_network,
                 network,
-                sandbox_policy_cwd: self.sandbox_cwd,
-                codex_linux_sandbox_exe: self
-                    .codex_linux_sandbox_exe
+                self.sandbox_cwd,
+                self.codex_linux_sandbox_exe
                     .map(std::path::PathBuf::as_path),
-                use_legacy_landlock: self.use_legacy_landlock,
-                windows_sandbox_level: self.windows_sandbox_level,
-                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
-            })
+                self.use_legacy_landlock,
+                self.windows_sandbox_level,
+                self.windows_sandbox_private_desktop,
+            )
             .map(|request| {
                 crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })

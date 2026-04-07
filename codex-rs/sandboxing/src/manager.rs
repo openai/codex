@@ -66,26 +66,41 @@ pub struct SandboxLaunchConfig {
 }
 
 impl SandboxLaunchConfig {
+    pub fn no_sandbox(sandbox_policy_cwd: PathBuf) -> Self {
+        Self {
+            sandbox: SandboxType::None,
+            policy: SandboxPolicy::DangerFullAccess,
+            file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+            network_policy: NetworkSandboxPolicy::Enabled,
+            sandbox_policy_cwd,
+            additional_permissions: None,
+            enforce_managed_network: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            use_legacy_landlock: false,
+        }
+    }
+
     pub fn transform(
         &self,
         command: SandboxCommand,
         network: Option<&NetworkProxy>,
-        codex_linux_sandbox_exe: Option<&PathBuf>,
+        codex_linux_sandbox_exe: Option<&Path>,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        SandboxManager::new().transform(SandboxTransformRequest {
+        SandboxManager::new().transform(
             command,
-            policy: &self.policy,
-            file_system_policy: &self.file_system_policy,
-            network_policy: self.network_policy,
-            sandbox: self.sandbox,
-            enforce_managed_network: self.enforce_managed_network,
+            &self.policy,
+            &self.file_system_policy,
+            self.network_policy,
+            self.sandbox,
+            self.enforce_managed_network,
             network,
-            sandbox_policy_cwd: self.sandbox_policy_cwd.as_path(),
+            self.sandbox_policy_cwd.as_path(),
             codex_linux_sandbox_exe,
-            use_legacy_landlock: self.use_legacy_landlock,
-            windows_sandbox_level: self.windows_sandbox_level,
-            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
-        })
+            self.use_legacy_landlock,
+            self.windows_sandbox_level,
+            self.windows_sandbox_private_desktop,
+        )
     }
 }
 
@@ -127,26 +142,6 @@ pub struct SandboxExecRequest {
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub arg0: Option<String>,
-}
-
-/// Bundled arguments for sandbox transformation.
-///
-/// This keeps call sites self-documenting when several fields are optional.
-pub struct SandboxTransformRequest<'a> {
-    pub command: SandboxCommand,
-    pub policy: &'a SandboxPolicy,
-    pub file_system_policy: &'a FileSystemSandboxPolicy,
-    pub network_policy: NetworkSandboxPolicy,
-    pub sandbox: SandboxType,
-    pub enforce_managed_network: bool,
-    // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
-    // to make shared ownership explicit across runtime/sandbox plumbing.
-    pub network: Option<&'a NetworkProxy>,
-    pub sandbox_policy_cwd: &'a Path,
-    pub codex_linux_sandbox_exe: Option<&'a Path>,
-    pub use_legacy_landlock: bool,
-    pub windows_sandbox_level: WindowsSandboxLevel,
-    pub windows_sandbox_private_desktop: bool,
 }
 
 #[derive(Debug)]
@@ -209,22 +204,19 @@ impl SandboxManager {
 
     pub fn transform(
         &self,
-        request: SandboxTransformRequest<'_>,
+        mut command: SandboxCommand,
+        policy: &SandboxPolicy,
+        file_system_policy: &FileSystemSandboxPolicy,
+        network_policy: NetworkSandboxPolicy,
+        sandbox: SandboxType,
+        enforce_managed_network: bool,
+        network: Option<&NetworkProxy>,
+        sandbox_policy_cwd: &Path,
+        codex_linux_sandbox_exe: Option<&Path>,
+        use_legacy_landlock: bool,
+        windows_sandbox_level: WindowsSandboxLevel,
+        windows_sandbox_private_desktop: bool,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        let SandboxTransformRequest {
-            mut command,
-            policy,
-            file_system_policy,
-            network_policy,
-            sandbox,
-            enforce_managed_network,
-            network,
-            sandbox_policy_cwd,
-            codex_linux_sandbox_exe,
-            use_legacy_landlock,
-            windows_sandbox_level,
-            windows_sandbox_private_desktop,
-        } = request;
         let additional_permissions = command.additional_permissions.take();
         let EffectiveSandboxPermissions {
             sandbox_policy: effective_policy,

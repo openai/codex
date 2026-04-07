@@ -40,7 +40,6 @@ use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
-use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -284,20 +283,20 @@ pub fn build_exec_request(
         capture_policy,
     };
     let mut exec_req = manager
-        .transform(SandboxTransformRequest {
+        .transform(
             command,
-            policy: sandbox_policy,
-            file_system_policy: file_system_sandbox_policy,
-            network_policy: network_sandbox_policy,
-            sandbox: sandbox_type,
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            sandbox_type,
             enforce_managed_network,
-            network: network.as_ref(),
-            sandbox_policy_cwd: sandbox_cwd,
-            codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
+            network.as_ref(),
+            sandbox_cwd,
+            codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
-        })
+        )
         .map(|request| ExecRequest::from_sandbox_exec_request(request, options))
         .map_err(CodexErr::from)?;
     exec_req.windows_restricted_token_filesystem_overlay =

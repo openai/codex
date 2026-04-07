@@ -43,7 +43,6 @@ use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
-use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -1059,23 +1058,20 @@ impl JsReplManager {
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let exec_env = sandbox
-            .transform(SandboxTransformRequest {
+            .transform(
                 command,
-                policy: &turn.sandbox_policy,
-                file_system_policy: &turn.file_system_sandbox_policy,
-                network_policy: turn.network_sandbox_policy,
-                sandbox: sandbox_type,
-                enforce_managed_network: has_managed_network_requirements,
-                network: None,
-                sandbox_policy_cwd: &turn.cwd,
-                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_deref(),
-                use_legacy_landlock: turn.features.use_legacy_landlock(),
-                windows_sandbox_level: turn.windows_sandbox_level,
-                windows_sandbox_private_desktop: turn
-                    .config
-                    .permissions
-                    .windows_sandbox_private_desktop,
-            })
+                &turn.sandbox_policy,
+                &turn.file_system_sandbox_policy,
+                turn.network_sandbox_policy,
+                sandbox_type,
+                has_managed_network_requirements,
+                None,
+                &turn.cwd,
+                turn.codex_linux_sandbox_exe.as_deref(),
+                turn.features.use_legacy_landlock(),
+                turn.windows_sandbox_level,
+                turn.config.permissions.windows_sandbox_private_desktop,
+            )
             .map(|request| {
                 crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })

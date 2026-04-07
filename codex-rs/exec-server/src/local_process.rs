@@ -9,14 +9,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
-use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
@@ -110,14 +105,8 @@ struct ExecServerRuntimeConfig {
 impl ExecServerRuntimeConfig {
     fn detect() -> Self {
         let env_path = std::env::var_os("CODEX_LINUX_SANDBOX_EXE").map(PathBuf::from);
-        let sibling_path = std::env::current_exe().ok().and_then(|current_exe| {
-            current_exe
-                .parent()
-                .map(|parent| parent.join(CODEX_LINUX_SANDBOX_ARG0))
-                .filter(|candidate| candidate.exists())
-        });
         Self {
-            codex_linux_sandbox_exe: env_path.or(sibling_path),
+            codex_linux_sandbox_exe: env_path,
         }
     }
 }
@@ -523,29 +512,14 @@ fn prepare_exec_launch(
     params: &ExecParams,
     runtime: &ExecServerRuntimeConfig,
 ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
-    let Some(sandbox) = params.sandbox.as_ref() else {
-        return Ok(SandboxExecRequest {
-            command: params.argv.clone(),
-            cwd: params.cwd.clone(),
-            env: params.env.clone(),
-            arg0: params.arg0.clone(),
-            network: None,
-            sandbox: SandboxType::None,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            file_system_sandbox_policy: FileSystemSandboxPolicy::unrestricted(),
-            network_sandbox_policy: NetworkSandboxPolicy::Enabled,
-        });
-    };
-
     let command = build_sandbox_command(
         &params.argv,
         params.cwd.as_path(),
         &params.env,
-        sandbox.additional_permissions.clone(),
+        params.sandbox.additional_permissions.clone(),
     )?;
-    sandbox
+    params
+        .sandbox
         .transform(
             command,
             // TODO: Thread managed-network proxy state across exec-server so
