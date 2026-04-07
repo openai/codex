@@ -125,7 +125,9 @@ fn timing_for_new_trigger_with_timezone(
         AlarmTrigger::Delay { seconds, repeat } => {
             let repeat = repeat.unwrap_or(false);
             if repeat && *seconds == 0 {
-                return Ok(timing(normalized, /*pending_run*/ true, None, now));
+                return Ok(timing(
+                    normalized, /*pending_run*/ true, /*next_run_at*/ None, now,
+                ));
             }
             let next_run_at = checked_add_seconds(created_at, *seconds)?;
             let pending_run = next_run_at <= now;
@@ -180,7 +182,9 @@ fn timing_for_restored_trigger_with_timezone(
         AlarmTrigger::Delay { seconds, repeat } => {
             let repeat = repeat.unwrap_or(false);
             if repeat && *seconds == 0 {
-                return Ok(timing(normalized, /*pending_run*/ true, None, now));
+                return Ok(timing(
+                    normalized, /*pending_run*/ true, /*next_run_at*/ None, now,
+                ));
             }
             let next_run_at = persisted_next_run_at
                 .or_else(|| next_delay_run_at(created_at, *seconds))
@@ -467,10 +471,11 @@ mod tests {
             .expect("valid timestamp")
     }
 
-    fn utc_datetime(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(year, month, day, hour, 0, 0)
-            .single()
-            .expect("valid datetime")
+    fn utc_datetime(datetime: &str) -> DateTime<Utc> {
+        Utc.from_utc_datetime(
+            &NaiveDateTime::parse_from_str(datetime, LOCAL_DATE_TIME_FORMAT)
+                .expect("valid datetime"),
+        )
     }
 
     #[test]
@@ -602,15 +607,15 @@ mod tests {
                 dtstart: Some("2024-01-01T09:00:00".to_string()),
                 rrule: Some("FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0".to_string()),
             },
-            utc_datetime(2024, 1, 2, 8),
-            utc_datetime(2024, 1, 2, 8),
+            utc_datetime("2024-01-02T08:00:00"),
+            utc_datetime("2024-01-02T08:00:00"),
             Tz::UTC,
         )
         .expect("trigger should be valid");
         assert_eq!(timing.pending_run, false);
         assert_eq!(
             timing.next_run_at,
-            Some(utc_datetime(2024, 1, 2, 9).timestamp())
+            Some(utc_datetime("2024-01-02T09:00:00").timestamp())
         );
     }
 
@@ -621,15 +626,15 @@ mod tests {
                 dtstart: Some("2024-01-01T09:00:00".to_string()),
                 rrule: Some("FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0".to_string()),
             },
-            utc_datetime(2024, 1, 2, 9),
-            utc_datetime(2024, 1, 2, 9),
+            utc_datetime("2024-01-02T09:00:00"),
+            utc_datetime("2024-01-02T09:00:00"),
             Tz::UTC,
         )
         .expect("trigger should be valid");
         assert_eq!(timing.pending_run, true);
         assert_eq!(
             timing.next_run_at,
-            Some(utc_datetime(2024, 1, 3, 9).timestamp())
+            Some(utc_datetime("2024-01-03T09:00:00").timestamp())
         );
     }
 
