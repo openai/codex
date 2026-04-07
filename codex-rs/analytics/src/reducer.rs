@@ -7,6 +7,7 @@ use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CodexTurnSteerEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::ThreadInitializationMode;
@@ -16,20 +17,25 @@ use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
+use crate::events::codex_turn_steer_event_params;
 use crate::events::plugin_state_event_type;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexTurnSteerEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
+use crate::facts::TurnSteerInput;
+use crate::facts::TurnSteerResult;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo;
@@ -56,6 +62,7 @@ pub(crate) struct AnalyticsReducer {
     requests: HashMap<(u64, RequestId), RequestState>,
     turns: HashMap<String, TurnState>,
     connections: HashMap<u64, ConnectionState>,
+    thread_connections: HashMap<String, u64>,
 }
 
 struct ConnectionState {
@@ -88,6 +95,7 @@ struct TurnState {
     started_at: Option<u64>,
     token_usage: Option<TokenUsageBreakdown>,
     completed: Option<CompletedTurnState>,
+    steer_count: usize,
 }
 
 impl AnalyticsReducer {
@@ -130,6 +138,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
                     self.ingest_turn_resolved_config(*input, out);
+                }
+                CustomAnalyticsFact::TurnSteer(input) => {
+                    self.ingest_turn_steer(input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -194,6 +205,8 @@ impl AnalyticsReducer {
         let ClientRequest::TurnStart { params, .. } = request else {
             return;
         };
+        self.thread_connections
+            .insert(params.thread_id.clone(), connection_id);
         self.requests.insert(
             (connection_id, request_id),
             RequestState::TurnStart(PendingTurnStartState {
@@ -225,6 +238,7 @@ impl AnalyticsReducer {
             started_at: None,
             token_usage: None,
             completed: None,
+            steer_count: 0,
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
@@ -378,6 +392,7 @@ impl AnalyticsReducer {
                     started_at: None,
                     token_usage: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
@@ -403,6 +418,7 @@ impl AnalyticsReducer {
                     started_at: None,
                     token_usage: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.started_at = notification
                     .turn
@@ -418,6 +434,7 @@ impl AnalyticsReducer {
                     started_at: None,
                     token_usage: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.token_usage = Some(notification.token_usage.last);
             }
@@ -433,6 +450,7 @@ impl AnalyticsReducer {
                             started_at: None,
                             token_usage: None,
                             completed: None,
+                            steer_count: 0,
                         });
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
@@ -466,6 +484,8 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let thread_source: SessionSource = thread.source.into();
+        self.thread_connections
+            .insert(thread.id.clone(), connection_id);
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
@@ -486,6 +506,59 @@ impl AnalyticsReducer {
                 },
             },
         ));
+    }
+
+    fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {
+        let TurnSteerInput {
+            tracking,
+            turn_steer,
+        } = input;
+        if matches!(turn_steer.result, TurnSteerResult::Accepted)
+            && let Some(accepted_turn_id) = turn_steer.accepted_turn_id.as_ref()
+            && let Some(turn_state) = self.turns.get_mut(accepted_turn_id)
+        {
+            turn_state.steer_count += 1;
+        }
+        let Some((app_server_client, runtime)) =
+            self.connection_metadata_for_turn_steer(&tracking, &turn_steer)
+        else {
+            return;
+        };
+        out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+            event_type: "codex_turn_steer_event",
+            event_params: codex_turn_steer_event_params(
+                app_server_client,
+                runtime,
+                &tracking,
+                turn_steer,
+            ),
+        }));
+    }
+
+    fn connection_metadata_for_turn_steer(
+        &self,
+        tracking: &TrackEventsContext,
+        turn_steer: &CodexTurnSteerEvent,
+    ) -> Option<(CodexAppServerClientMetadata, CodexRuntimeMetadata)> {
+        let turn_connection_id = turn_steer
+            .accepted_turn_id
+            .as_ref()
+            .or(turn_steer.expected_turn_id.as_ref())
+            .or(Some(&tracking.turn_id))
+            .and_then(|turn_id| self.turns.get(turn_id))
+            .and_then(|turn_state| turn_state.connection_id);
+
+        let connection_id = turn_connection_id
+            .or_else(|| self.thread_connections.get(&tracking.thread_id).copied());
+
+        connection_id
+            .and_then(|connection_id| self.connections.get(&connection_id))
+            .map(|connection_state| {
+                (
+                    connection_state.app_server_client.clone(),
+                    connection_state.runtime.clone(),
+                )
+            })
     }
 
     fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
@@ -573,7 +646,7 @@ fn codex_turn_event_params(
         is_first_turn,
         status: completed.status,
         turn_error: completed.turn_error,
-        steer_count: None,
+        steer_count: Some(turn_state.steer_count),
         total_tool_call_count: None,
         shell_command_count: None,
         file_change_count: None,
