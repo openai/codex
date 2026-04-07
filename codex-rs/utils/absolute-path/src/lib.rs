@@ -63,7 +63,12 @@ impl AbsolutePathBuf {
     /// Construct an absolute path from `path`, resolving relative paths against
     /// the process current working directory.
     pub fn relative_to_current_dir<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        Self::resolve_path_against_base(path, std::env::current_dir()?)
+        let path = path.as_ref();
+        if path.is_absolute() {
+            Self::from_absolute_path(path)
+        } else {
+            Self::resolve_path_against_base(path, std::env::current_dir()?)
+        }
     }
 
     pub fn join<P: AsRef<Path>>(&self, path: P) -> std::io::Result<Self> {
