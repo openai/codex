@@ -17,7 +17,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxLaunchConfig;
-use codex_sandboxing::SandboxLaunchMode;
 use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -234,7 +233,7 @@ fn platform_sandbox_type() -> SandboxType {
 fn write_outside_workspace_sandbox(workspace_root: &std::path::Path) -> SandboxLaunchConfig {
     let policy = SandboxPolicy::new_workspace_write_policy();
     SandboxLaunchConfig {
-        mode: SandboxLaunchMode::Require,
+        sandbox: platform_sandbox_type(),
         policy: policy.clone(),
         file_system_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy(
             &policy,

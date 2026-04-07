@@ -39,7 +39,6 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxLaunchConfig;
-use codex_sandboxing::SandboxLaunchMode;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
@@ -93,7 +92,7 @@ fn build_remote_exec_sandbox_config(
     }
 
     Some(SandboxLaunchConfig {
-        mode: SandboxLaunchMode::Auto,
+        sandbox: attempt.sandbox,
         policy: attempt.policy.clone(),
         file_system_policy: attempt.file_system_policy.clone(),
         network_policy: attempt.network_policy,
@@ -249,33 +248,37 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                         .to_string(),
                 ));
             }
-            if req.network.is_none() {
-                let exec_params = codex_exec_server::ExecParams {
-                    process_id: req.process_id.to_string().into(),
-                    argv: command,
-                    cwd: req.cwd.clone(),
-                    env,
-                    tty: req.tty,
-                    arg0: None,
-                    sandbox: build_remote_exec_sandbox_config(
-                        attempt,
-                        req.additional_permissions.clone(),
-                    ),
-                };
-                return self
-                    .manager
-                    .open_session_with_remote_exec(exec_params, ctx.turn.environment.as_ref())
-                    .await
-                    .map_err(|err| match err {
-                        UnifiedExecError::SandboxDenied { output, .. } => {
-                            ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                                output: Box::new(output),
-                                network_policy_decision: None,
-                            }))
-                        }
-                        other => ToolError::Rejected(other.to_string()),
-                    });
+            if req.network.is_some() {
+                return Err(ToolError::Rejected(
+                    "unified_exec managed-network is not supported when exec_server_url is configured"
+                        .to_string(),
+                ));
             }
+            let exec_params = codex_exec_server::ExecParams {
+                process_id: req.process_id.to_string().into(),
+                argv: command,
+                cwd: req.cwd.clone(),
+                env,
+                tty: req.tty,
+                arg0: None,
+                sandbox: build_remote_exec_sandbox_config(
+                    attempt,
+                    req.additional_permissions.clone(),
+                ),
+            };
+            return self
+                .manager
+                .open_session_with_remote_exec(exec_params, ctx.turn.environment.as_ref())
+                .await
+                .map_err(|err| match err {
+                    UnifiedExecError::SandboxDenied { output, .. } => {
+                        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                            output: Box::new(output),
+                            network_policy_decision: None,
+                        }))
+                    }
+                    other => ToolError::Rejected(other.to_string()),
+                });
         }
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
