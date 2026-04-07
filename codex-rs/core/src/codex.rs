@@ -540,7 +540,7 @@ impl Codex {
             .current()
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
-        let user_instructions = get_user_instructions(&config, environment.as_ref()).await;
+        let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -1527,7 +1527,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
-        environment: Arc<Environment>,
+        environment: Option<Arc<Environment>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",

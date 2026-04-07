@@ -2617,11 +2617,11 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Arc::new(
+        Some(Arc::new(
             codex_exec_server::Environment::create(/*exec_server_url*/ None)
                 .await
                 .expect("create environment"),
-        ),
+        )),
     )
     .await;
 
