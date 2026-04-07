@@ -163,27 +163,13 @@ print_failed_bazel_test_logs() {
   done
 
   echo
-  echo "Bazel failed test targets:"
-  for target_log in "${failed_target_logs[@]}"; do
-    local target="${target_log%%$'\t'*}"
-    echo "  FAIL ${target}"
-  done
-
-  echo
   awk -F '\t' '
     BEGIN {
-      print "Rust test failures across failed Bazel targets:"
+      print "Rust test failures:"
     }
     $1 == "F" {
       saw_failure = 1
-      if ($2 != current_target) {
-        if (current_target != "") {
-          print ""
-        }
-        current_target = $2
-        print "  " current_target
-      }
-      print "    " $3
+      print "  FAIL " $2 " " $3
     }
     $1 == "T" {
       passed += $3
