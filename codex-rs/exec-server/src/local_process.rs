@@ -104,9 +104,14 @@ struct ExecServerRuntimeConfig {
 
 impl ExecServerRuntimeConfig {
     fn detect() -> Self {
-        let env_path = std::env::var_os("CODEX_LINUX_SANDBOX_EXE").map(PathBuf::from);
         Self {
-            codex_linux_sandbox_exe: env_path,
+            // The Codex CLI and codex-exec-server both dispatch the Linux
+            // sandbox helper from their own executable via argv[0].
+            codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
+                std::env::current_exe().ok()
+            } else {
+                None
+            },
         }
     }
 }

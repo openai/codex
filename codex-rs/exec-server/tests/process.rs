@@ -4,9 +4,11 @@ mod common;
 
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::ProcessId;
+use codex_sandboxing::SandboxLaunchConfig;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 
@@ -45,14 +47,15 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
     let process_start_id = server
         .send_request(
             "process/start",
-            serde_json::json!({
-                "processId": "proc-1",
-                "argv": ["true"],
-                "cwd": std::env::current_dir()?,
-                "env": {},
-                "tty": false,
-                "arg0": null
-            }),
+            serde_json::to_value(ExecParams {
+                process_id: ProcessId::from("proc-1"),
+                argv: vec!["true".to_string()],
+                cwd: std::env::current_dir()?,
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+                sandbox: SandboxLaunchConfig::no_sandbox(std::env::current_dir()?),
+            })?,
         )
         .await?;
     let response = server
