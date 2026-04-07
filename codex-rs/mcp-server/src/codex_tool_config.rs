@@ -179,8 +179,8 @@ impl CodexToolCallParam {
             codex_self_exe: arg0_paths.codex_self_exe.clone(),
             codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
-            base_instructions,
-            developer_instructions,
+            base_instructions: base_instructions.map(Some),
+            developer_instructions: developer_instructions.map(Some),
             compact_prompt,
             ..Default::default()
         };
