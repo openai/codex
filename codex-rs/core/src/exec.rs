@@ -39,6 +39,7 @@ use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxLaunchConfig;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -282,20 +283,24 @@ pub fn build_exec_request(
         expiration,
         capture_policy,
     };
+    let sandbox_launch_config = SandboxLaunchConfig {
+        sandbox: sandbox_type,
+        policy: sandbox_policy.clone(),
+        file_system_policy: file_system_sandbox_policy.clone(),
+        network_policy: network_sandbox_policy,
+        sandbox_policy_cwd: sandbox_cwd.to_path_buf(),
+        additional_permissions: None,
+        enforce_managed_network,
+        windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        use_legacy_landlock,
+    };
     let mut exec_req = manager
         .transform(
             command,
-            sandbox_policy,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
-            sandbox_type,
-            enforce_managed_network,
+            &sandbox_launch_config,
             network.as_ref(),
-            sandbox_cwd,
             codex_linux_sandbox_exe.as_ref(),
-            use_legacy_landlock,
-            windows_sandbox_level,
-            windows_sandbox_private_desktop,
         )
         .map(|request| ExecRequest::from_sandbox_exec_request(request, options))
         .map_err(CodexErr::from)?;

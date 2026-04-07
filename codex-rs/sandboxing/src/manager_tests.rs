@@ -1,4 +1,5 @@
 use super::SandboxCommand;
+use super::SandboxLaunchConfig;
 use super::SandboxManager;
 use super::SandboxType;
 use super::SandboxablePreference;
@@ -20,7 +21,29 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
+
+fn test_launch_config(
+    cwd: &Path,
+    policy: SandboxPolicy,
+    file_system_policy: FileSystemSandboxPolicy,
+    network_policy: NetworkSandboxPolicy,
+    sandbox: SandboxType,
+) -> SandboxLaunchConfig {
+    SandboxLaunchConfig {
+        sandbox,
+        policy,
+        file_system_policy,
+        network_policy,
+        sandbox_policy_cwd: cwd.to_path_buf(),
+        additional_permissions: None,
+        enforce_managed_network: false,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        use_legacy_landlock: false,
+    }
+}
 
 #[test]
 fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
@@ -83,19 +106,17 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
                 env: HashMap::new(),
                 additional_permissions: None,
             },
-            &SandboxPolicy::ExternalSandbox {
-                network_access: NetworkAccess::Restricted,
-            },
-            &FileSystemSandboxPolicy::unrestricted(),
-            NetworkSandboxPolicy::Restricted,
-            SandboxType::None,
-            false,
+            &test_launch_config(
+                cwd.as_path(),
+                SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                },
+                FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Restricted,
+                SandboxType::None,
+            ),
             None,
-            cwd.as_path(),
             None,
-            false,
-            WindowsSandboxLevel::Disabled,
-            false,
         )
         .expect("transform");
 
@@ -135,19 +156,17 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                     }),
                 }),
             },
-            &SandboxPolicy::ExternalSandbox {
-                network_access: NetworkAccess::Restricted,
-            },
-            &FileSystemSandboxPolicy::unrestricted(),
-            NetworkSandboxPolicy::Restricted,
-            SandboxType::None,
-            false,
+            &test_launch_config(
+                cwd.as_path(),
+                SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                },
+                FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Restricted,
+                SandboxType::None,
+            ),
             None,
-            cwd.as_path(),
             None,
-            false,
-            WindowsSandboxLevel::Disabled,
-            false,
         )
         .expect("transform");
 
@@ -189,33 +208,31 @@ fn transform_additional_permissions_preserves_denied_entries() {
                     ..Default::default()
                 }),
             },
-            &SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::FullAccess,
-                network_access: false,
-            },
-            &FileSystemSandboxPolicy::restricted(vec![
-                FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
-                    },
-                    access: FileSystemAccessMode::Read,
+            &test_launch_config(
+                cwd.as_path(),
+                SandboxPolicy::ReadOnly {
+                    access: ReadOnlyAccess::FullAccess,
+                    network_access: false,
                 },
-                FileSystemSandboxEntry {
-                    path: FileSystemPath::Path {
-                        path: denied_path.clone(),
+                FileSystemSandboxPolicy::restricted(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
                     },
-                    access: FileSystemAccessMode::None,
-                },
-            ]),
-            NetworkSandboxPolicy::Restricted,
-            SandboxType::None,
-            false,
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: denied_path.clone(),
+                        },
+                        access: FileSystemAccessMode::None,
+                    },
+                ]),
+                NetworkSandboxPolicy::Restricted,
+                SandboxType::None,
+            ),
             None,
-            cwd.as_path(),
             None,
-            false,
-            WindowsSandboxLevel::Disabled,
-            false,
         )
         .expect("transform");
 
@@ -259,17 +276,15 @@ fn transform_linux_seccomp_request(
                 env: HashMap::new(),
                 additional_permissions: None,
             },
-            &SandboxPolicy::DangerFullAccess,
-            &FileSystemSandboxPolicy::unrestricted(),
-            NetworkSandboxPolicy::Enabled,
-            SandboxType::LinuxSeccomp,
-            false,
+            &test_launch_config(
+                cwd.as_path(),
+                SandboxPolicy::DangerFullAccess,
+                FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Enabled,
+                SandboxType::LinuxSeccomp,
+            ),
             None,
-            cwd.as_path(),
             Some(codex_linux_sandbox_exe),
-            false,
-            WindowsSandboxLevel::Disabled,
-            false,
         )
         .expect("transform")
 }

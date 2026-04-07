@@ -52,18 +52,17 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
 
 async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let session = context
         .backend
         .start(ExecParams {
             process_id: ProcessId::from("proc-1"),
             argv: vec!["true".to_string()],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: false,
             arg0: None,
-            sandbox: SandboxLaunchConfig::no_sandbox(
-                std::env::current_dir().expect("read current dir"),
-            ),
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -126,6 +125,7 @@ async fn collect_process_output_from_reads(
 
 async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let process_id = "proc-stream".to_string();
     let session = context
         .backend
@@ -136,13 +136,11 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
                 "-c".to_string(),
                 "sleep 0.05; printf 'session output\\n'".to_string(),
             ],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: false,
             arg0: None,
-            sandbox: SandboxLaunchConfig::no_sandbox(
-                std::env::current_dir().expect("read current dir"),
-            ),
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -158,6 +156,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
 
 async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let process_id = "proc-stdin".to_string();
     let session = context
         .backend
@@ -168,11 +167,11 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
                 "-c".to_string(),
                 "import sys; line = sys.stdin.readline(); sys.stdout.write(f'from-stdin:{line}'); sys.stdout.flush()".to_string(),
             ],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: true,
             arg0: None,
-            sandbox: SandboxLaunchConfig::no_sandbox(std::env::current_dir().expect("read current dir")),
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -196,6 +195,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let session = context
         .backend
         .start(ExecParams {
@@ -205,13 +205,11 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
                 "-c".to_string(),
                 "printf 'queued output\\n'".to_string(),
             ],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: false,
             arg0: None,
-            sandbox: SandboxLaunchConfig::no_sandbox(
-                std::env::current_dir().expect("read current dir"),
-            ),
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
 
@@ -278,7 +276,7 @@ async fn assert_exec_process_sandbox_denies_write_outside_workspace(
             env: Default::default(),
             tty: false,
             arg0: None,
-            sandbox: Some(write_outside_workspace_sandbox(&workspace_root)),
+            sandbox: write_outside_workspace_sandbox(&workspace_root),
         })
         .await?;
 
