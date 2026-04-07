@@ -7,7 +7,7 @@ use super::PluginCapabilitySummary;
 use super::PluginReadRequest;
 use super::PluginsManager;
 use crate::config::Config;
-use crate::config::types::ToolSuggestDiscoverableType;
+use codex_config::types::ToolSuggestDiscoverableType;
 use codex_features::Feature;
 use codex_tools::DiscoverablePluginInfo;
 

@@ -8,6 +8,9 @@ version.workspace = true
 name = "codex-execve-wrapper"
 path = "src/bin/main_execve_wrapper.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }

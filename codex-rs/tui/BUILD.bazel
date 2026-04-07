@@ -12,10 +12,13 @@ codex_rust_crate(
         ],
         allow_empty = True,
     ) + [
-        "//codex-rs/core:templates/collaboration_mode/default.md",
-        "//codex-rs/core:templates/collaboration_mode/plan.md",
+        "//codex-rs/collaboration-mode-templates:templates/default.md",
+        "//codex-rs/collaboration-mode-templates:templates/plan.md",
     ],
-    test_data_extra = glob(["src/**/snapshots/**"]) + ["//codex-rs/core:model_availability_nux_fixtures"],
+    test_data_extra = glob([
+        "src/**/*.rs",
+        "src/**/snapshots/**",
+    ]) + ["//codex-rs/core:model_availability_nux_fixtures"],
     integration_compile_data_extra = ["src/test_backend.rs"],
     extra_binaries = [
         "//codex-rs/cli:codex",

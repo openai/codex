@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
 use codex_core::test_support::all_model_presets;
+use codex_models_manager::client_version_to_whole;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -27,7 +28,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         },
         supported_in_api: preset.supported_in_api,
         priority,
-        upgrade: preset.upgrade.as_ref().map(|u| u.into()),
+        upgrade: preset.upgrade.as_ref().map(Into::into),
         base_instructions: "base instructions".to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
@@ -84,7 +85,7 @@ pub fn write_models_cache_with_models(
     let cache_path = codex_home.join("models_cache.json");
     // DateTime<Utc> serializes to RFC3339 format by default with serde
     let fetched_at: DateTime<Utc> = Utc::now();
-    let client_version = codex_core::models_manager::client_version_to_whole();
+    let client_version = client_version_to_whole();
     let cache = json!({
         "fetched_at": fetched_at,
         "etag": null,

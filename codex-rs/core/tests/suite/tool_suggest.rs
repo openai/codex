@@ -2,12 +2,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::CodexAuth;
+use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core::config::Config;
-use codex_core::config::types::ToolSuggestDiscoverable;
-use codex_core::config::types::ToolSuggestDiscoverableType;
 use codex_features::Feature;
-use codex_protocol::openai_models::ModelsResponse;
+use codex_login::CodexAuth;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -78,8 +78,8 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
         id: DISCOVERABLE_GMAIL_ID.to_string(),
     }];
 
-    let mut model_catalog: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let mut model_catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models
         .iter_mut()

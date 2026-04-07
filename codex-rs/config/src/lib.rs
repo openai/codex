@@ -1,14 +1,21 @@
 mod cloud_requirements;
 mod config_requirements;
+pub mod config_toml;
 mod constraint;
 mod diagnostics;
 mod fingerprint;
+mod mcp_edit;
+mod mcp_types;
 mod merge;
 mod overrides;
+pub mod permissions_toml;
+pub mod profile_toml;
 mod project_root_markers;
 mod requirements_exec_policy;
+pub mod schema;
 mod skills_config;
 mod state;
+pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -50,6 +57,14 @@ pub use diagnostics::format_config_error;
 pub use diagnostics::format_config_error_with_source;
 pub use diagnostics::io_error_from_config_error;
 pub use fingerprint::version_for_toml;
+pub use mcp_edit::ConfigEditsBuilder;
+pub use mcp_edit::load_global_mcp_servers;
+pub use mcp_types::AppToolApproval;
+pub use mcp_types::McpServerConfig;
+pub use mcp_types::McpServerDisabledReason;
+pub use mcp_types::McpServerToolConfig;
+pub use mcp_types::McpServerTransportConfig;
+pub use mcp_types::RawMcpServerConfig;
 pub use merge::merge_toml_values;
 pub use overrides::build_cli_overrides_layer;
 pub use project_root_markers::default_project_root_markers;

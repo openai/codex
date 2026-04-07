@@ -25,18 +25,15 @@ use super::startup_sync::start_startup_remote_plugin_sync_once;
 use super::store::PluginInstallResult as StorePluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
+use super::store::plugin_version_for_source;
 use super::sync_openai_plugins_repo;
-use crate::AuthManager;
 use crate::SkillMetadata;
-use crate::auth::CodexAuth;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::ConfigService;
 use crate::config::ConfigServiceError;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::types::McpServerConfig;
-use crate::config::types::PluginConfig;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
@@ -46,7 +43,11 @@ use crate::loader::load_skills_from_roots;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
+use codex_config::types::McpServerConfig;
+use codex_config::types::PluginConfig;
 use codex_features::Feature;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -97,6 +98,13 @@ struct CachedFeaturedPluginIds {
     key: FeaturedPluginIdsCacheKey,
     expires_at: Instant,
     featured_plugin_ids: Vec<String>,
+}
+
+#[derive(Default)]
+struct NonCuratedCacheRefreshState {
+    requested_roots: Option<Vec<AbsolutePathBuf>>,
+    last_refreshed_roots: Option<Vec<AbsolutePathBuf>>,
+    in_flight: bool,
 }
 
 fn featured_plugin_ids_cache_key(
@@ -312,6 +320,7 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
+    non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
     remote_sync_lock: Mutex<()>,
     restriction_product: Option<Product>,
@@ -338,6 +347,7 @@ impl PluginsManager {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             featured_plugin_ids_cache: RwLock::new(None),
+            non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
             remote_sync_lock: Mutex::new(()),
             restriction_product,
@@ -719,6 +729,7 @@ impl PluginsManager {
             ));
         }
 
+        let mut missing_remote_plugins = Vec::<String>::new();
         let mut remote_installed_plugin_names = HashSet::<String>::new();
         for plugin in remote_plugins {
             if plugin.marketplace_name != marketplace_name {
@@ -727,11 +738,7 @@ impl PluginsManager {
                 });
             }
             if !local_plugin_names.contains(&plugin.name) {
-                warn!(
-                    plugin = plugin.name,
-                    marketplace = %marketplace_name,
-                    "ignoring remote plugin missing from local marketplace during sync"
-                );
+                missing_remote_plugins.push(plugin.name);
                 continue;
             }
             // For now, sync treats remote `enabled = false` as uninstall rather than a distinct
@@ -753,6 +760,19 @@ impl PluginsManager {
         let mut result = RemotePluginSyncResult::default();
         let remote_plugin_count = remote_installed_plugin_names.len();
         let local_plugin_count = local_plugins.len();
+        if !missing_remote_plugins.is_empty() {
+            let sample_missing_plugins = missing_remote_plugins
+                .iter()
+                .take(10)
+                .cloned()
+                .collect::<Vec<_>>();
+            warn!(
+                marketplace = %marketplace_name,
+                missing_remote_plugin_count = missing_remote_plugins.len(),
+                missing_remote_plugin_examples = ?sample_missing_plugins,
+                "ignoring remote plugins missing from local marketplace during sync"
+            );
+        }
 
         for (
             plugin_name,
@@ -1034,6 +1054,56 @@ impl PluginsManager {
         }
     }
 
+    pub fn maybe_start_non_curated_plugin_cache_refresh_for_roots(
+        self: &Arc<Self>,
+        roots: &[AbsolutePathBuf],
+    ) {
+        let mut roots = roots.to_vec();
+        roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+        roots.dedup();
+        if roots.is_empty() {
+            return;
+        }
+
+        let should_spawn = {
+            let mut state = match self.non_curated_cache_refresh_state.write() {
+                Ok(state) => state,
+                Err(err) => err.into_inner(),
+            };
+            // Collapse repeated plugin/list requests onto one worker and only queue another pass
+            // when the requested roots set actually changes.
+            if state.requested_roots.as_ref() == Some(&roots)
+                || (!state.in_flight && state.last_refreshed_roots.as_ref() == Some(&roots))
+            {
+                return;
+            }
+            state.requested_roots = Some(roots);
+            if state.in_flight {
+                false
+            } else {
+                state.in_flight = true;
+                true
+            }
+        };
+        if !should_spawn {
+            return;
+        }
+
+        let manager = Arc::clone(self);
+        if let Err(err) = std::thread::Builder::new()
+            .name("plugins-non-curated-cache-refresh".to_string())
+            .spawn(move || manager.run_non_curated_plugin_cache_refresh_loop())
+        {
+            let mut state = match self.non_curated_cache_refresh_state.write() {
+                Ok(state) => state,
+                Err(err) => err.into_inner(),
+            };
+            state.in_flight = false;
+            state.requested_roots = None;
+            warn!("failed to start non-curated plugin cache refresh task: {err}");
+        }
+    }
+
     fn start_curated_repo_sync(self: &Arc<Self>) {
         if CURATED_REPO_SYNC_STARTED.swap(true, Ordering::SeqCst) {
             return;
@@ -1045,8 +1115,13 @@ impl PluginsManager {
             .spawn(
                 move || match sync_openai_plugins_repo(codex_home.as_path()) {
                     Ok(curated_plugin_version) => {
-                        let configured_curated_plugin_ids =
-                            configured_curated_plugin_ids_from_codex_home(codex_home.as_path());
+                        let configured_curated_plugin_ids = curated_plugin_ids_from_config_keys(
+                            configured_plugins_from_codex_home(
+                                codex_home.as_path(),
+                                "failed to read user config while refreshing curated plugin cache",
+                                "failed to parse user config while refreshing curated plugin cache",
+                            ),
+                        );
                         match refresh_curated_plugin_cache(
                             codex_home.as_path(),
                             &curated_plugin_version,
@@ -1073,6 +1148,55 @@ impl PluginsManager {
         {
             CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
             warn!("failed to start curated plugins repo sync task: {err}");
+        }
+    }
+
+    fn run_non_curated_plugin_cache_refresh_loop(self: Arc<Self>) {
+        loop {
+            let roots = {
+                let state = match self.non_curated_cache_refresh_state.read() {
+                    Ok(state) => state,
+                    Err(err) => err.into_inner(),
+                };
+                state.requested_roots.clone()
+            };
+
+            let Some(roots) = roots else {
+                let mut state = match self.non_curated_cache_refresh_state.write() {
+                    Ok(state) => state,
+                    Err(err) => err.into_inner(),
+                };
+                state.in_flight = false;
+                return;
+            };
+
+            let refreshed =
+                match refresh_non_curated_plugin_cache(self.codex_home.as_path(), &roots) {
+                    Ok(cache_refreshed) => {
+                        if cache_refreshed {
+                            self.clear_cache();
+                        }
+                        true
+                    }
+                    Err(err) => {
+                        self.clear_cache();
+                        warn!("failed to refresh non-curated plugin cache: {err}");
+                        false
+                    }
+                };
+
+            let mut state = match self.non_curated_cache_refresh_state.write() {
+                Ok(state) => state,
+                Err(err) => err.into_inner(),
+            };
+            if refreshed {
+                state.last_refreshed_roots = Some(roots.clone());
+            }
+            if state.requested_roots.as_ref() == Some(&roots) {
+                state.requested_roots = None;
+                state.in_flight = false;
+                return;
+            }
         }
     }
 
@@ -1308,6 +1432,90 @@ fn refresh_curated_plugin_cache(
     Ok(cache_refreshed)
 }
 
+fn refresh_non_curated_plugin_cache(
+    codex_home: &Path,
+    additional_roots: &[AbsolutePathBuf],
+) -> Result<bool, String> {
+    let configured_non_curated_plugin_ids =
+        non_curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
+            codex_home,
+            "failed to read user config while refreshing non-curated plugin cache",
+            "failed to parse user config while refreshing non-curated plugin cache",
+        ));
+    if configured_non_curated_plugin_ids.is_empty() {
+        return Ok(false);
+    }
+    let configured_non_curated_plugin_keys = configured_non_curated_plugin_ids
+        .iter()
+        .map(PluginId::as_key)
+        .collect::<HashSet<_>>();
+
+    let store = PluginStore::new(codex_home.to_path_buf());
+    let marketplace_outcome = list_marketplaces(additional_roots)
+        .map_err(|err| format!("failed to discover marketplaces for cache refresh: {err}"))?;
+    let mut plugin_sources = HashMap::<String, (AbsolutePathBuf, String)>::new();
+
+    for marketplace in marketplace_outcome.marketplaces {
+        if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
+            continue;
+        }
+
+        for plugin in marketplace.plugins {
+            let plugin_id =
+                PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(|err| {
+                    match err {
+                        PluginIdError::Invalid(message) => {
+                            format!("failed to prepare non-curated plugin cache refresh: {message}")
+                        }
+                    }
+                })?;
+            let plugin_key = plugin_id.as_key();
+            if !configured_non_curated_plugin_keys.contains(&plugin_key) {
+                continue;
+            }
+            if plugin_sources.contains_key(&plugin_key) {
+                warn!(
+                    plugin = plugin.name,
+                    marketplace = marketplace.name,
+                    "ignoring duplicate non-curated plugin entry during cache refresh"
+                );
+                continue;
+            }
+
+            let source_path = match plugin.source {
+                MarketplacePluginSource::Local { path } => path,
+            };
+            let plugin_version = plugin_version_for_source(source_path.as_path())
+                .map_err(|err| format!("failed to read plugin version for {plugin_key}: {err}"))?;
+            plugin_sources.insert(plugin_key, (source_path, plugin_version));
+        }
+    }
+
+    let mut cache_refreshed = false;
+    for plugin_id in configured_non_curated_plugin_ids {
+        let plugin_key = plugin_id.as_key();
+        let Some((source_path, plugin_version)) = plugin_sources.get(&plugin_key).cloned() else {
+            warn!(
+                plugin = plugin_id.plugin_name,
+                marketplace = plugin_id.marketplace_name,
+                "configured non-curated plugin no longer exists in discovered marketplaces during cache refresh"
+            );
+            continue;
+        };
+
+        if store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str()) {
+            continue;
+        }
+
+        store
+            .install_with_version(source_path, plugin_id.clone(), plugin_version)
+            .map_err(|err| format!("failed to refresh plugin cache for {plugin_key}: {err}"))?;
+        cache_refreshed = true;
+    }
+
+    Ok(cache_refreshed)
+}
+
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
@@ -1333,42 +1541,22 @@ fn configured_plugins_from_user_config_value(
     }
 }
 
-fn configured_curated_plugin_ids(
-    configured_plugins: HashMap<String, PluginConfig>,
-) -> Vec<PluginId> {
-    let mut configured_curated_plugin_ids = configured_plugins
-        .into_keys()
-        .filter_map(|plugin_key| match PluginId::parse(&plugin_key) {
-            Ok(plugin_id) if plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME => {
-                Some(plugin_id)
-            }
-            Ok(_) => None,
-            Err(err) => {
-                warn!(
-                    plugin_key,
-                    error = %err,
-                    "ignoring invalid configured plugin key during curated sync setup"
-                );
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    configured_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
-    configured_curated_plugin_ids
-}
-
-fn configured_curated_plugin_ids_from_codex_home(codex_home: &Path) -> Vec<PluginId> {
+fn configured_plugins_from_codex_home(
+    codex_home: &Path,
+    read_error_message: &str,
+    parse_error_message: &str,
+) -> HashMap<String, PluginConfig> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     let user_config = match fs::read_to_string(&config_path) {
         Ok(user_config) => user_config,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
         Err(err) => {
             warn!(
                 path = %config_path.display(),
                 error = %err,
-                "failed to read user config while refreshing curated plugin cache"
+                "{read_error_message}"
             );
-            return Vec::new();
+            return HashMap::new();
         }
     };
 
@@ -1378,13 +1566,61 @@ fn configured_curated_plugin_ids_from_codex_home(codex_home: &Path) -> Vec<Plugi
             warn!(
                 path = %config_path.display(),
                 error = %err,
-                "failed to parse user config while refreshing curated plugin cache"
+                "{parse_error_message}"
             );
-            return Vec::new();
+            return HashMap::new();
         }
     };
 
-    configured_curated_plugin_ids(configured_plugins_from_user_config_value(&user_config))
+    configured_plugins_from_user_config_value(&user_config)
+}
+
+fn configured_plugin_ids(
+    configured_plugins: HashMap<String, PluginConfig>,
+    invalid_plugin_key_message: &str,
+) -> Vec<PluginId> {
+    configured_plugins
+        .into_keys()
+        .filter_map(|plugin_key| match PluginId::parse(&plugin_key) {
+            Ok(plugin_id) => Some(plugin_id),
+            Err(err) => {
+                warn!(
+                    plugin_key,
+                    error = %err,
+                    "{invalid_plugin_key_message}"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+fn curated_plugin_ids_from_config_keys(
+    configured_plugins: HashMap<String, PluginConfig>,
+) -> Vec<PluginId> {
+    let mut configured_curated_plugin_ids = configured_plugin_ids(
+        configured_plugins,
+        "ignoring invalid configured plugin key during curated sync setup",
+    )
+    .into_iter()
+    .filter(|plugin_id| plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME)
+    .collect::<Vec<_>>();
+    configured_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
+    configured_curated_plugin_ids
+}
+
+fn non_curated_plugin_ids_from_config_keys(
+    configured_plugins: HashMap<String, PluginConfig>,
+) -> Vec<PluginId> {
+    let mut configured_non_curated_plugin_ids = configured_plugin_ids(
+        configured_plugins,
+        "ignoring invalid plugin key during non-curated cache refresh setup",
+    )
+    .into_iter()
+    .filter(|plugin_id| plugin_id.marketplace_name != OPENAI_CURATED_MARKETPLACE_NAME)
+    .collect::<Vec<_>>();
+    configured_non_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
+    configured_non_curated_plugin_ids
 }
 
 fn load_plugin(

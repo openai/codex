@@ -3,6 +3,7 @@ use crate::response::FunctionCallOutputContentItem;
 use super::EXIT_SENTINEL;
 use super::RuntimeEvent;
 use super::RuntimeState;
+use super::timers;
 use super::value::json_to_v8;
 use super::value::normalize_output_image;
 use super::value::serialize_output_text;
@@ -182,6 +183,35 @@ pub(super) fn notify_callback(
             text,
         });
     }
+    retval.set(v8::undefined(scope).into());
+}
+
+pub(super) fn set_timeout_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue<v8::Value>,
+) {
+    let timeout_id = match timers::schedule_timeout(scope, args) {
+        Ok(timeout_id) => timeout_id,
+        Err(error_text) => {
+            throw_type_error(scope, &error_text);
+            return;
+        }
+    };
+
+    retval.set(v8::Number::new(scope, timeout_id as f64).into());
+}
+
+pub(super) fn clear_timeout_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue<v8::Value>,
+) {
+    if let Err(error_text) = timers::clear_timeout(scope, args) {
+        throw_type_error(scope, &error_text);
+        return;
+    }
+
     retval.set(v8::undefined(scope).into());
 }
 

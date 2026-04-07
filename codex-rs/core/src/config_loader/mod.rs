@@ -5,12 +5,14 @@ mod macos;
 #[cfg(test)]
 mod tests;
 
-use crate::config::ConfigToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ProjectConfig;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -543,7 +545,7 @@ struct ProjectTrustContext {
 
 #[derive(Deserialize)]
 struct ProjectTrustConfigToml {
-    projects: Option<std::collections::HashMap<String, crate::config::ProjectConfig>>,
+    projects: Option<std::collections::HashMap<String, ProjectConfig>>,
 }
 
 struct ProjectTrustDecision {
@@ -559,7 +561,7 @@ impl ProjectTrustDecision {
 
 impl ProjectTrustContext {
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
-        let dir_key = dir.as_path().to_string_lossy().to_string();
+        let dir_key = project_trust_key(dir.as_path());
         if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
             return ProjectTrustDecision {
                 trust_level: Some(trust_level),
@@ -647,15 +649,17 @@ async fn project_trust_context(
     let project_root = find_project_root(cwd, project_root_markers).await?;
     let projects = project_trust_config.projects.unwrap_or_default();
 
-    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let project_root_key = project_trust_key(project_root.as_path());
     let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
-    let repo_root_key = repo_root
-        .as_ref()
-        .map(|root| root.to_string_lossy().to_string());
+    let repo_root_key = repo_root.as_ref().map(|root| project_trust_key(root));
 
     let projects_trust = projects
         .into_iter()
-        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
+        .filter_map(|(key, project)| {
+            project
+                .trust_level
+                .map(|trust_level| (project_trust_key(Path::new(&key)), trust_level))
+        })
         .collect();
 
     Ok(ProjectTrustContext {
@@ -665,6 +669,16 @@ async fn project_trust_context(
         projects_trust,
         user_config_file: user_config_file.clone(),
     })
+}
+
+/// Canonicalize the path and convert it to a string to be used as a key in the
+/// projects trust map. On Windows, strips UNC, when possible, to try to ensure
+/// that different paths that point to the same location have the same key.
+pub fn project_trust_key(project_path: &Path) -> String {
+    normalize_path(project_path)
+        .unwrap_or_else(|_| project_path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
@@ -868,6 +882,7 @@ async fn load_project_layers(
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<ApprovalsReviewer>,
     sandbox_mode: Option<SandboxMode>,
 }
 
@@ -877,10 +892,14 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
 
         let LegacyManagedConfigToml {
             approval_policy,
+            approvals_reviewer,
             sandbox_mode,
         } = legacy;
         if let Some(approval_policy) = approval_policy {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
+        }
+        if let Some(approvals_reviewer) = approvals_reviewer {
+            config_requirements_toml.allowed_approvals_reviewers = Some(vec![approvals_reviewer]);
         }
         if let Some(sandbox_mode) = sandbox_mode {
             let required_mode: SandboxModeRequirement = sandbox_mode.into();
@@ -945,6 +964,7 @@ foo = "xyzzy"
     fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
         };
 
@@ -956,6 +976,22 @@ foo = "xyzzy"
                 SandboxModeRequirement::ReadOnly,
                 SandboxModeRequirement::WorkspaceWrite
             ])
+        );
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_includes_approvals_reviewer() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            sandbox_mode: None,
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_approvals_reviewers,
+            Some(vec![ApprovalsReviewer::GuardianSubagent])
         );
     }
 

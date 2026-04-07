@@ -5,8 +5,8 @@ use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -42,6 +42,8 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -59,6 +61,38 @@ pub(crate) struct StatusTokenUsageData {
 }
 
 #[derive(Debug)]
+struct StatusRateLimitState {
+    rate_limits: StatusRateLimitData,
+    refreshing_rate_limits: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StatusHistoryHandle {
+    rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
+}
+
+impl StatusHistoryHandle {
+    pub(crate) fn finish_rate_limit_refresh(
+        &self,
+        rate_limits: &[RateLimitSnapshotDisplay],
+        now: DateTime<Local>,
+    ) {
+        let rate_limits = if rate_limits.len() <= 1 {
+            compose_rate_limit_data(rate_limits.first(), now)
+        } else {
+            compose_rate_limit_data_many(rate_limits, now)
+        };
+        #[expect(clippy::expect_used)]
+        let mut state = self
+            .rate_limit_state
+            .write()
+            .expect("status history rate-limit state poisoned");
+        state.rate_limits = rate_limits;
+        state.refreshing_rate_limits = false;
+    }
+}
+
+#[derive(Debug)]
 struct StatusHistoryCell {
     model_name: String,
     model_details: Vec<String>,
@@ -72,7 +106,7 @@ struct StatusHistoryCell {
     session_id: Option<String>,
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
-    rate_limits: StatusRateLimitData,
+    rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
 }
 
 #[cfg(test)]
@@ -107,9 +141,11 @@ pub(crate) fn new_status_output(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        /*refreshing_rate_limits*/ false,
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits(
     config: &Config,
@@ -125,9 +161,9 @@ pub(crate) fn new_status_output_with_rate_limits(
     model_name: &str,
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    refreshing_rate_limits: bool,
 ) -> CompositeHistoryCell {
-    let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
-    let card = StatusHistoryCell::new(
+    new_status_output_with_rate_limits_handle(
         config,
         account_display,
         token_info,
@@ -141,9 +177,50 @@ pub(crate) fn new_status_output_with_rate_limits(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        refreshing_rate_limits,
+    )
+    .0
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_rate_limits_handle(
+    config: &Config,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    _plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    refreshing_rate_limits: bool,
+) -> (CompositeHistoryCell, StatusHistoryHandle) {
+    let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
+    let (card, handle) = StatusHistoryCell::new(
+        config,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        rate_limits,
+        _plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        refreshing_rate_limits,
     );
 
-    CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
+    (
+        CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)]),
+        handle,
+    )
 }
 
 impl StatusHistoryCell {
@@ -162,7 +239,8 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
-    ) -> Self {
+        refreshing_rate_limits: bool,
+    ) -> (Self, StatusHistoryHandle) {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
@@ -251,22 +329,29 @@ impl StatusHistoryCell {
         } else {
             compose_rate_limit_data_many(rate_limits, now)
         };
-
-        Self {
-            model_name,
-            model_details,
-            directory: config.cwd.to_path_buf(),
-            permissions,
-            agents_summary,
-            collaboration_mode: collaboration_mode.map(ToString::to_string),
-            model_provider,
-            account,
-            thread_name,
-            session_id,
-            forked_from,
-            token_usage,
+        let rate_limit_state = Arc::new(RwLock::new(StatusRateLimitState {
             rate_limits,
-        }
+            refreshing_rate_limits,
+        }));
+
+        (
+            Self {
+                model_name,
+                model_details,
+                directory: config.cwd.to_path_buf(),
+                permissions,
+                agents_summary,
+                collaboration_mode: collaboration_mode.map(ToString::to_string),
+                model_provider,
+                account,
+                thread_name,
+                session_id,
+                forked_from,
+                token_usage,
+                rate_limit_state: rate_limit_state.clone(),
+            },
+            StatusHistoryHandle { rate_limit_state },
+        )
     }
 
     fn token_usage_spans(&self) -> Vec<Span<'static>> {
@@ -305,30 +390,57 @@ impl StatusHistoryCell {
 
     fn rate_limit_lines(
         &self,
+        state: &StatusRateLimitState,
         available_inner_width: usize,
         formatter: &FieldFormatter,
     ) -> Vec<Line<'static>> {
-        match &self.rate_limits {
+        match &state.rate_limits {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
-                    return vec![
-                        formatter.line("Limits", vec![Span::from("data not available yet").dim()]),
-                    ];
+                    return vec![formatter.line(
+                        "Limits",
+                        vec![if state.refreshing_rate_limits {
+                            Span::from("refreshing cached limits...").dim()
+                        } else {
+                            Span::from("data not available yet").dim()
+                        }],
+                    )];
                 }
 
-                self.rate_limit_row_lines(rows_data, available_inner_width, formatter)
+                let mut lines =
+                    self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
+                if state.refreshing_rate_limits {
+                    lines.push(formatter.line(
+                        "Notice",
+                        vec![Span::from("refreshing limits in background...").dim()],
+                    ));
+                }
+                lines
             }
             StatusRateLimitData::Stale(rows_data) => {
                 let mut lines =
                     self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
                 lines.push(formatter.line(
                     "Warning",
-                    vec![Span::from("limits may be stale - start new turn to refresh.").dim()],
+                    vec![Span::from(if state.refreshing_rate_limits {
+                        "limits may be stale - refreshing in background..."
+                    } else {
+                        "limits may be stale - start new turn to refresh."
+                    })
+                    .dim()],
                 ));
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
+                vec![formatter.line(
+                    "Limits",
+                    vec![Span::from(if state.refreshing_rate_limits {
+                        "refreshing limits..."
+                    } else {
+                        "data not available yet"
+                    })
+                    .dim()],
+                )]
             }
         }
     }
@@ -386,8 +498,13 @@ impl StatusHistoryCell {
         lines
     }
 
-    fn collect_rate_limit_labels(&self, seen: &mut BTreeSet<String>, labels: &mut Vec<String>) {
-        match &self.rate_limits {
+    fn collect_rate_limit_labels(
+        &self,
+        state: &StatusRateLimitState,
+        seen: &mut BTreeSet<String>,
+        labels: &mut Vec<String>,
+    ) {
+        match &state.rate_limits {
             StatusRateLimitData::Available(rows) => {
                 if rows.is_empty() {
                     push_label(labels, seen, "Limits");
@@ -442,6 +559,11 @@ impl HistoryCell for StatusHistoryCell {
             .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
+        #[expect(clippy::expect_used)]
+        let rate_limit_state = self
+            .rate_limit_state
+            .read()
+            .expect("status history rate-limit state poisoned");
 
         if self.model_provider.is_some() {
             push_label(&mut labels, &mut seen, "Model provider");
@@ -466,7 +588,7 @@ impl HistoryCell for StatusHistoryCell {
             push_label(&mut labels, &mut seen, "Context window");
         }
 
-        self.collect_rate_limit_labels(&mut seen, &mut labels);
+        self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
@@ -534,7 +656,7 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Context window", spans));
         }
 
-        lines.extend(self.rate_limit_lines(available_inner_width, &formatter));
+        lines.extend(self.rate_limit_lines(&rate_limit_state, available_inner_width, &formatter));
 
         let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
         let inner_width = content_width.min(available_inner_width);

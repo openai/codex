@@ -3,6 +3,7 @@ pub mod error;
 mod storage;
 mod util;
 
+mod external_bearer;
 mod manager;
 
 pub use error::RefreshTokenFailedError;

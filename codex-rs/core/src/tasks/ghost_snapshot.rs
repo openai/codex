@@ -1,15 +1,14 @@
 use crate::codex::TurnContext;
-use crate::protocol::EventMsg;
-use crate::protocol::WarningEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
-use async_trait::async_trait;
 use codex_git_utils::CreateGhostCommitOptions;
 use codex_git_utils::GhostSnapshotReport;
 use codex_git_utils::GitToolingError;
 use codex_git_utils::create_ghost_commit_with_report;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;
@@ -26,7 +25,6 @@ pub(crate) struct GhostSnapshotTask {
 
 const SNAPSHOT_WARNING_THRESHOLD: Duration = Duration::from_secs(240);
 
-#[async_trait]
 impl SessionTask for GhostSnapshotTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular

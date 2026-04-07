@@ -26,7 +26,6 @@ fn persists_rollout_file_by_default() -> anyhow::Result<()> {
 
     test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("default persistence behavior")
         .assert()
@@ -43,7 +42,6 @@ fn does_not_persist_rollout_file_in_ephemeral_mode() -> anyhow::Result<()> {
 
     test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("--ephemeral")
         .arg("ephemeral behavior")
