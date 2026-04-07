@@ -6309,7 +6309,8 @@ mod tests {
     use tokio::time;
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+        AbsolutePathBuf::from_absolute_path(crate::test_support::test_path_buf(path))
+            .expect("absolute test path")
     }
 
     #[test]

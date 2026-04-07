@@ -369,12 +369,14 @@ model_reasoning_effort = "high"
     } = to_response(resp)?;
 
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
-    assert_eq!(
-        origins.get("model_reasoning_effort").expect("origin").name,
-        ConfigLayerSource::Project {
-            dot_codex_folder: project_config
-        }
-    );
+    let ConfigLayerSource::Project { dot_codex_folder } =
+        &origins.get("model_reasoning_effort").expect("origin").name
+    else {
+        panic!("expected project config origin");
+    };
+    let dot_codex_folder =
+        AbsolutePathBuf::from_absolute_path(dot_codex_folder.as_path().canonicalize()?)?;
+    assert_eq!(dot_codex_folder, project_config);
 
     Ok(())
 }
