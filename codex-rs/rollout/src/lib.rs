@@ -30,6 +30,7 @@ pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock:
 });
 
 pub use codex_protocol::protocol::SessionMeta;
+pub use config::Config;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
 pub use list::Cursor;
