@@ -8,6 +8,7 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::config_loader::project_trust_key;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
@@ -335,7 +336,7 @@ async fn write_project_trust_config(
                     .iter()
                     .map(|(project, trust_level)| {
                         (
-                            project.to_string_lossy().to_string(),
+                            project_trust_key(project),
                             ProjectConfig {
                                 trust_level: Some(*trust_level),
                             },
