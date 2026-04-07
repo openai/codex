@@ -781,11 +781,12 @@ pub(crate) struct ChatWidget {
     agent_turn_markdowns: Vec<AgentTurnMarkdown>,
     /// Number of completed turns observed in this session timeline.
     completed_turn_count: usize,
-    /// Whether this turn already emitted a full `AgentMessage`.
+    /// Whether this turn already produced a copyable response.
     ///
-    /// Some models only provide `TurnComplete.last_agent_message`. This flag lets us use
-    /// `TurnComplete` as a fallback source without duplicating entries when `AgentMessage` was
-    /// already received in the same turn.
+    /// `TurnComplete.last_agent_message` is a fallback source: use it only when no earlier
+    /// agent/plan/review item recorded copyable markdown for the turn. This gives item-level
+    /// sources precedence and avoids duplicating the same final answer when both event shapes are
+    /// emitted.
     saw_copy_source_this_turn: bool,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
@@ -1020,9 +1021,17 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+/// A snapshot of the raw markdown for one completed agent turn.
+///
+/// Entries are keyed by `ordinal` — the number of completed user turns at the
+/// time the agent response was recorded. This allows rollbacks to truncate the
+/// history by comparing ordinals against the remaining turn count without
+/// maintaining a parallel index structure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AgentTurnMarkdown {
+    /// Monotonically increasing turn number derived from `completed_turn_count`.
     ordinal: usize,
+    /// The full raw markdown of the agent's response for this turn.
     markdown: String,
 }
 
@@ -1943,6 +1952,12 @@ impl ChatWidget {
         }
     }
 
+    /// Record or update the raw markdown for the current agent turn.
+    ///
+    /// If the current turn already has an entry (same ordinal), it is overwritten
+    /// rather than appended — a turn's markdown is the *last* agent message seen,
+    /// not a concatenation. The history is bounded by `MAX_AGENT_COPY_HISTORY`;
+    /// overflow drains the oldest entries.
     fn record_agent_markdown(&mut self, message: &str) {
         if message.is_empty() {
             return;
@@ -5102,6 +5117,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Trim the markdown history to match a rollback.
+    ///
+    /// Called by `app_backtrack` after transcript cells have been trimmed. Pops
+    /// entries whose ordinal exceeds `remaining_turn_count`, then uses
+    /// `transcript_fallback` (reconstructed from surviving `AgentMessageCell`s) if
+    /// the ordinal history is now empty but the transcript still has agent output.
     pub(crate) fn truncate_agent_turn_markdowns_to_turn_count(
         &mut self,
         remaining_turn_count: usize,
@@ -6659,8 +6680,6 @@ impl ChatWidget {
     pub(crate) fn handle_skills_list_response(&mut self, response: ListSkillsResponseEvent) {
         self.on_list_skills(response);
     }
-
-    pub(crate) fn handle_thread_rolled_back(&mut self) {}
 
     fn on_mcp_server_elicitation_request(
         &mut self,

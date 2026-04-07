@@ -5695,7 +5695,6 @@ impl App {
             }
         }
         self.handle_backtrack_rollback_succeeded(num_turns);
-        self.chat_widget.handle_thread_rolled_back();
     }
 
     fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {

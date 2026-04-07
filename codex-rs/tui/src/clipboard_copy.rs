@@ -1,6 +1,26 @@
+//! Clipboard copy backend for the TUI's `/copy` command and `Alt+C` hotkey.
+//!
+//! This module decides *how* to get text onto the user's clipboard based on the
+//! current environment. The selection order is:
+//!
+//! 1. **SSH session** (`SSH_TTY` / `SSH_CONNECTION` set): use OSC 52 exclusively,
+//!    because the native clipboard belongs to the remote machine.
+//! 2. **Local session**: try `arboard` (native clipboard) first; fall back to
+//!    OSC 52 if `arboard` fails (e.g. headless Linux, broken Wayland socket).
+//!
+//! On Linux, X11 and some Wayland compositors require the process that wrote the
+//! clipboard to keep its handle open. `ClipboardLease` wraps the `arboard::Clipboard`
+//! so callers can store it for the lifetime of the TUI. On other platforms the lease
+//! is always `None`.
+//!
+//! The module is intentionally narrow: text copy only, user-facing error strings,
+//! no reusable clipboard abstraction. Image paste lives in `clipboard_paste`.
+
 use base64::Engine;
 use std::io::Write;
 
+/// Maximum raw bytes we will base64-encode into an OSC 52 sequence.
+/// Large payloads are rejected before encoding to avoid overwhelming the terminal.
 const OSC52_MAX_RAW_BYTES: usize = 100_000;
 #[cfg(target_os = "macos")]
 static STDERR_SUPPRESSION_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> =
@@ -19,6 +39,12 @@ pub(crate) fn copy_to_clipboard(text: &str) -> Result<Option<ClipboardLease>, St
 }
 
 /// Keeps a platform clipboard owner alive when the backend requires one.
+///
+/// On Linux/X11 and some Wayland compositors, clipboard contents are served by the
+/// owning process. Dropping the `arboard::Clipboard` before the user pastes causes
+/// the content to vanish. Store this lease on the widget that triggered the copy so
+/// the handle lives as long as the TUI does. On macOS, Android, and OSC 52 paths
+/// the lease is `None` — those backends do not require process-lifetime ownership.
 pub(crate) struct ClipboardLease {
     #[cfg(target_os = "linux")]
     _clipboard: Option<arboard::Clipboard>,
@@ -41,6 +67,8 @@ impl ClipboardLease {
     }
 }
 
+/// Core copy logic with injected backends, enabling deterministic unit tests
+/// without touching real clipboards or terminal I/O.
 fn copy_to_clipboard_with(
     text: &str,
     ssh_session: bool,

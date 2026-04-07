@@ -645,6 +645,17 @@ fn user_positions_iter(
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
 }
 
+/// Reconstruct the plain text of the last agent response group from transcript cells.
+///
+/// Used as a fallback when the ordinal-indexed markdown history has been fully
+/// truncated by a rollback but the transcript still contains visible agent output.
+/// Walks backward from the end of the visible portion (after the last session-start
+/// marker) to find the final contiguous block of `AgentMessageCell`s, then joins
+/// their display text.
+///
+/// Because this uses `AgentMessageCell::plain_text()` (which joins rendered spans),
+/// the result is display-level text rather than the original raw markdown. For most
+/// responses these are identical.
 fn last_agent_markdown_from_transcript(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> Option<String> {
