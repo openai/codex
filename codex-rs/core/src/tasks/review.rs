@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -48,7 +47,6 @@ impl ReviewTask {
     }
 }
 
-#[async_trait]
 impl SessionTask for ReviewTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Review
@@ -65,7 +63,7 @@ impl SessionTask for ReviewTask {
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
-        let _ = session.session.services.session_telemetry.counter(
+        session.session.services.session_telemetry.counter(
             "codex.task.review",
             /*inc*/ 1,
             &[],

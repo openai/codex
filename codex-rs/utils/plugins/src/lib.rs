@@ -1,5 +1,7 @@
-//! Plugin path resolution and plaintext mention sigils shared across Codex crates.
+//! Plugin path resolution, plaintext mention sigils, and MCP connector helpers shared across Codex
+//! crates.
 
+pub mod mcp_connector;
 pub mod mention_syntax;
 pub mod plugin_namespace;
 

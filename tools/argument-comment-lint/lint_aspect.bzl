@@ -16,6 +16,7 @@ load(
 )
 
 _STRICT_LINT_FLAGS = [
+    "-Dargument-comment-mismatch",
     "-Duncommented-anonymous-literal-argument",
     "-Aunknown-lints",
 ]

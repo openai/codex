@@ -1,4 +1,7 @@
+pub mod api_bridge;
 pub mod auth;
+pub mod auth_env_telemetry;
+pub mod provider_auth;
 pub mod token_data;
 
 mod device_code_auth;
@@ -15,13 +18,20 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
+pub use api_bridge::auth_provider_from_auth;
 pub use auth::AuthConfig;
 pub use auth::AuthCredentialsStoreMode;
 pub use auth::AuthDotJson;
 pub use auth::AuthManager;
+pub use auth::AuthManagerConfig;
 pub use auth::CLIENT_ID;
 pub use auth::CODEX_API_KEY_ENV_VAR;
 pub use auth::CodexAuth;
+pub use auth::ExternalAuth;
+pub use auth::ExternalAuthChatgptMetadata;
+pub use auth::ExternalAuthRefreshContext;
+pub use auth::ExternalAuthRefreshReason;
+pub use auth::ExternalAuthTokens;
 pub use auth::OPENAI_API_KEY_ENV_VAR;
 pub use auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 pub use auth::RefreshTokenError;
@@ -33,5 +43,8 @@ pub use auth::login_with_api_key;
 pub use auth::logout;
 pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
-pub use codex_app_server_protocol::AuthMode;
+pub use auth_env_telemetry::AuthEnvTelemetry;
+pub use auth_env_telemetry::collect_auth_env_telemetry;
+pub use provider_auth::auth_manager_for_provider;
+pub use provider_auth::required_auth_manager_for_provider;
 pub use token_data::TokenData;

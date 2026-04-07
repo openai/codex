@@ -103,6 +103,19 @@ class WrapperCommonTest(unittest.TestCase):
             ],
         )
 
+    def test_default_lint_env_promotes_both_strict_lints(self) -> None:
+        env: dict[str, str] = {}
+
+        wrapper_common.set_default_lint_env(env)
+
+        self.assertEqual(
+            env["DYLINT_RUSTFLAGS"],
+            "-D argument-comment-mismatch "
+            "-D uncommented-anonymous-literal-argument "
+            "-A unknown_lints",
+        )
+        self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+
 
 if __name__ == "__main__":
     unittest.main()

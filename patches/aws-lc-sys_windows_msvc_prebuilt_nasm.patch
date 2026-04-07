@@ -1,0 +1,137 @@
+diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
+index 95cacb0..d5d814b 100644
+--- a/builder/cc_builder.rs
++++ b/builder/cc_builder.rs
+@@ -20,9 +20,10 @@ mod win_x86_64;
+ use crate::nasm_builder::NasmBuilder;
+ use crate::{
+     cargo_env, disable_jitter_entropy, emit_warning, env_name_for_target, env_var_to_bool,
+-    execute_command, get_crate_cc, get_crate_cflags, get_crate_cxx, is_no_asm, out_dir,
+-    requested_c_std, set_env_for_target, target, target_arch, target_env, target_os, target_vendor,
+-    test_clang_cl_command, CStdRequested, EnvGuard, OutputLibType,
++    execute_command, get_crate_cc, get_crate_cflags, get_crate_cxx,
++    is_bazel_windows_msvc_build_script, is_no_asm, out_dir, requested_c_std, set_env_for_target,
++    target, target_arch, target_env, target_os, target_vendor, test_clang_cl_command,
++    CStdRequested, EnvGuard, OutputLibType,
+ };
+ use std::cell::Cell;
+ use std::collections::HashMap;
+@@ -769,6 +770,30 @@ impl CcBuilder {
+     }
+ }
+ 
++fn configure_windows_msvc_clang_cl() {
++    let should_use_clang_cl = target_os() == "windows"
++        && target_env() == "msvc"
++        && (target_arch() == "aarch64" || is_bazel_windows_msvc_build_script());
++    if !should_use_clang_cl {
++        return;
++    }
++
++    let clang_cl = if test_clang_cl_command() {
++        Some(String::from("clang-cl"))
++    } else {
++        let system_clang_cl = PathBuf::from(r"C:\Program Files\LLVM\bin\clang-cl.exe");
++        system_clang_cl.is_file().then(|| system_clang_cl.display().to_string())
++    };
++    if let Some(clang_cl) = clang_cl {
++        if get_crate_cc().is_none() {
++            set_env_for_target("CC", &clang_cl);
++        }
++        if get_crate_cxx().is_none() {
++            set_env_for_target("CXX", &clang_cl);
++        }
++    }
++}
++
+ impl crate::Builder for CcBuilder {
+     fn check_dependencies(&self) -> Result<(), String> {
+         if OutputLibType::Dynamic == self.output_lib_type {
+@@ -784,18 +809,12 @@ impl crate::Builder for CcBuilder {
+             return Err("cc_builder for libssl not supported".to_string());
+         }
+ 
++        configure_windows_msvc_clang_cl();
+         Ok(())
+     }
+ 
+     fn build(&self) -> Result<(), String> {
+-        if target_os() == "windows"
+-            && target_arch() == "aarch64"
+-            && target_env() == "msvc"
+-            && get_crate_cc().is_none()
+-            && test_clang_cl_command()
+-        {
+-            set_env_for_target("CC", "clang-cl");
+-        }
++        configure_windows_msvc_clang_cl();
+ 
+         println!("cargo:root={}", self.out_dir.display());
+         let sources = crate::cc_builder::identify_sources();
+
+diff --git a/builder/main.rs b/builder/main.rs
+index 51a9bc1..e714ba4 100644
+--- a/builder/main.rs
++++ b/builder/main.rs
+@@ -723,14 +723,31 @@ fn get_crate_cflags() -> Option<String> {
+         .or(optional_env_optional_crate_target("CFLAGS"))
+ }
+ 
++pub(crate) fn is_bazel_windows_msvc_build_script() -> bool {
++    if !target().ends_with("windows-msvc") {
++        return false;
++    }
++
++    if optional_env("RULES_RUST_BAZEL_BUILD_SCRIPT_RUNNER").is_some() {
++        return true;
++    }
++
++    let cargo_manifest_dir = cargo_env("CARGO_MANIFEST_DIR");
++    let manifest_dir = Path::new(&cargo_manifest_dir);
++    manifest_dir
++        .components()
++        .any(|component| component.as_os_str() == "bazel-out")
++}
++
+ fn use_prebuilt_nasm() -> bool {
++    let use_prebuilt_for_bazel_windows_msvc = is_bazel_windows_msvc_build_script();
+     target_os() == "windows"
+         && target_arch() == "x86_64"
+         && !is_no_asm()
+-        && !test_nasm_command() // NASM not found in environment
+         && Some(false) != allow_prebuilt_nasm() // not prevented by environment
+         && !is_disable_prebuilt_nasm() // not prevented by feature
+         // permitted by environment or by feature
++        && (use_prebuilt_for_bazel_windows_msvc || !test_nasm_command())
+         && (Some(true) == allow_prebuilt_nasm() || is_prebuilt_nasm())
+ }
+ 
+@@ -817,8 +834,12 @@ fn main() {
+     initialize();
+     prepare_cargo_cfg();
+ 
+-    let manifest_dir = current_dir();
+-    let manifest_dir = dunce::canonicalize(Path::new(&manifest_dir)).unwrap();
++    let manifest_dir = if is_bazel_windows_msvc_build_script() {
++        PathBuf::from(cargo_env("CARGO_MANIFEST_DIR"))
++    } else {
++        let manifest_dir = current_dir();
++        dunce::canonicalize(Path::new(&manifest_dir)).unwrap()
++    };
+     let prefix_str = prefix_string();
+     let prefix = if is_no_prefix() {
+         None
+
+diff --git a/builder/nasm_builder.rs b/builder/nasm_builder.rs
+index cf1f5c8..f683274 100644
+--- a/builder/nasm_builder.rs
++++ b/builder/nasm_builder.rs
+@@ -57,7 +57,7 @@ impl NasmBuilder {
+             return vec![];
+         }
+ 
+-        if test_nasm_command() {
++        if test_nasm_command() && !use_prebuilt_nasm() {
+             for src in &self.files {
+                 let obj_name = src
+                     .file_name()

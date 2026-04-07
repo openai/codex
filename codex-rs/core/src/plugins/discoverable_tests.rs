@@ -5,7 +5,7 @@ use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
-use crate::tools::discoverable::DiscoverablePluginInfo;
+use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -18,11 +18,7 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
-        .unwrap()
-        .into_iter()
-        .map(DiscoverablePluginInfo::from)
-        .collect::<Vec<_>>();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -52,11 +48,7 @@ plugins = false
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
-        .unwrap()
-        .into_iter()
-        .map(DiscoverablePluginInfo::from)
-        .collect::<Vec<_>>();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -76,11 +68,7 @@ async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
-        .unwrap()
-        .into_iter()
-        .map(DiscoverablePluginInfo::from)
-        .collect::<Vec<_>>();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -115,11 +103,7 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
         .expect("plugin should install");
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config)
-        .unwrap()
-        .into_iter()
-        .map(DiscoverablePluginInfo::from)
-        .collect::<Vec<_>>();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config).unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -140,11 +124,7 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
-        .unwrap()
-        .into_iter()
-        .map(DiscoverablePluginInfo::from)
-        .collect::<Vec<_>>();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
 
     assert_eq!(
         discoverable_plugins,

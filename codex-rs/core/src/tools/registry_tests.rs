@@ -1,10 +1,8 @@
 use super::*;
-use async_trait::async_trait;
 use pretty_assertions::assert_eq;
 
 struct TestHandler;
 
-#[async_trait]
 impl ToolHandler for TestHandler {
     type Output = crate::tools::context::FunctionToolOutput;
 

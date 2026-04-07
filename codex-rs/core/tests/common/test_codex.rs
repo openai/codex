@@ -12,18 +12,19 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_core::CodexAuth;
 use codex_core::CodexThread;
-use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
-use codex_core::built_in_model_providers;
 use codex_core::config::Config;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -279,7 +280,7 @@ fn docker_command_success<const N: usize>(args: [&str; N]) -> Result<()> {
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -295,7 +296,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -352,7 +353,7 @@ impl TestCodexBuilder {
     pub fn with_model(self, model: &str) -> Self {
         let new_model = model.to_string();
         self.with_config(move |config| {
-            config.model = Some(new_model.clone());
+            config.model = Some(new_model);
         })
     }
 
@@ -639,17 +640,8 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models_path = codex_utils_cargo_bin::find_resource!("../../models.json")
-        .context("bundled models.json")?;
-    let bundled_models_contents =
-        std::fs::read_to_string(&bundled_models_path).with_context(|| {
-            format!(
-                "read bundled models.json from {}",
-                bundled_models_path.display()
-            )
-        })?;
-    let bundled_models: ModelsResponse =
-        serde_json::from_str(&bundled_models_contents).context("parse bundled models.json")?;
+    let bundled_models = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let mut model = bundled_models
         .models
         .iter()
