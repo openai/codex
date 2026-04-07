@@ -16,10 +16,24 @@ use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
 
-pub(crate) async fn run_connection(
-    connection: JsonRpcConnection,
+#[derive(Clone)]
+pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
-) {
+}
+
+impl ConnectionProcessor {
+    pub(crate) fn new() -> Self {
+        Self {
+            session_registry: SessionRegistry::new(),
+        }
+    }
+
+    pub(crate) async fn run_connection(&self, connection: JsonRpcConnection) {
+        run_connection(connection, Arc::clone(&self.session_registry)).await;
+    }
+}
+
+async fn run_connection(connection: JsonRpcConnection, session_registry: Arc<SessionRegistry>) {
     let router = Arc::new(build_router());
     let (json_outgoing_tx, mut incoming_rx, connection_tasks) = connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =

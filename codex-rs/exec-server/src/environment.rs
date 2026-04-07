@@ -141,24 +141,12 @@ impl Environment {
             None
         };
 
-        let exec_backend: Arc<dyn ExecBackend> = match remote_exec_server_client.clone() {
-            Some(client) => Arc::new(RemoteProcess::new(client)),
-            None if exec_server_url.is_some() => {
-                return Err(ExecServerError::Protocol(
-                    "remote mode should have an exec-server client".to_string(),
-                ));
-            }
-            None => {
-                let local_process = LocalProcess::default();
-                local_process
-                    .initialize()
-                    .map_err(|err| ExecServerError::Protocol(err.message))?;
-                local_process
-                    .initialized()
-                    .map_err(ExecServerError::Protocol)?;
-                Arc::new(local_process)
-            }
-        };
+        let exec_backend: Arc<dyn ExecBackend> =
+            if let Some(client) = remote_exec_server_client.clone() {
+                Arc::new(RemoteProcess::new(client))
+            } else {
+                Arc::new(LocalProcess::default())
+            };
 
         Ok(Self {
             exec_server_url,

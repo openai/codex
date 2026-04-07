@@ -60,59 +60,53 @@ impl SessionRegistry {
         resume_session_id: Option<String>,
         notifications: RpcNotificationSender,
     ) -> Result<SessionHandle, JSONRPCErrorError> {
+        enum AttachOutcome {
+            Attached(Arc<SessionEntry>),
+            Expired {
+                session_id: String,
+                entry: Arc<SessionEntry>,
+            },
+        }
+
         let connection_id = ConnectionId(Uuid::new_v4());
-        let mut expired_entry = None;
-        let mut expired_error = None;
-        let entry = {
+        let outcome = {
             let mut sessions = self.sessions.lock().await;
-            let entry = if let Some(session_id) = resume_session_id {
+            if let Some(session_id) = resume_session_id {
                 let entry = sessions
                     .get(&session_id)
                     .cloned()
                     .ok_or_else(|| invalid_request(format!("unknown session id {session_id}")))?;
                 if entry.is_expired(tokio::time::Instant::now()) {
-                    expired_error =
-                        Some(invalid_request(format!("unknown session id {session_id}")));
-                    expired_entry = sessions.remove(&session_id);
-                    None
+                    let entry = sessions.remove(&session_id).ok_or_else(|| {
+                        invalid_request(format!("unknown session id {session_id}"))
+                    })?;
+                    Ok(AttachOutcome::Expired { session_id, entry })
                 } else if entry.has_active_connection() {
-                    return Err(invalid_request(format!(
+                    Err(invalid_request(format!(
                         "session {session_id} is already attached to another connection"
-                    )));
+                    )))
                 } else {
-                    Some(entry)
+                    entry.process.set_notification_sender(Some(notifications));
+                    entry.attach(connection_id);
+                    Ok(AttachOutcome::Attached(entry))
                 }
             } else {
                 let session_id = Uuid::new_v4().to_string();
-                let entry = Arc::new(SessionEntry {
-                    session_id: session_id.clone(),
-                    process: ProcessHandler::new(notifications.clone()),
-                    attachment: StdMutex::new(AttachmentState {
-                        current_connection_id: Some(connection_id),
-                        detached_connection_id: None,
-                        detached_expires_at: None,
-                    }),
-                });
+                let entry = Arc::new(SessionEntry::new(
+                    session_id.clone(),
+                    ProcessHandler::new(notifications),
+                    connection_id,
+                ));
                 sessions.insert(session_id, Arc::clone(&entry));
-                Some(entry)
-            };
-
-            if let Some(entry) = entry.as_ref() {
-                entry.process.set_notification_sender(Some(notifications));
-                entry.attach(connection_id);
+                Ok(AttachOutcome::Attached(entry))
             }
-
-            entry
         };
-
-        if let Some(entry) = expired_entry {
-            entry.process.shutdown().await;
-            return Err(
-                expired_error.unwrap_or_else(|| invalid_request("unknown session id".to_string()))
-            );
-        }
-        let Some(entry) = entry else {
-            return Err(invalid_request("unknown session id".to_string()));
+        let entry = match outcome? {
+            AttachOutcome::Attached(entry) => entry,
+            AttachOutcome::Expired { session_id, entry } => {
+                entry.process.shutdown().await;
+                return Err(invalid_request(format!("unknown session id {session_id}")));
+            }
         };
 
         Ok(SessionHandle {
@@ -151,6 +145,18 @@ impl Default for SessionRegistry {
 }
 
 impl SessionEntry {
+    fn new(session_id: String, process: ProcessHandler, connection_id: ConnectionId) -> Self {
+        Self {
+            session_id,
+            process,
+            attachment: StdMutex::new(AttachmentState {
+                current_connection_id: Some(connection_id),
+                detached_connection_id: None,
+                detached_expires_at: None,
+            }),
+        }
+    }
+
     fn attach(&self, connection_id: ConnectionId) {
         let mut attachment = self
             .attachment
