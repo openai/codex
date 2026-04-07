@@ -4693,7 +4693,7 @@ impl App {
 
                     tokio::task::spawn_blocking(move || {
                         let requested_path = PathBuf::from(path);
-                        let event = match codex_core::windows_sandbox_read_grants::grant_read_root_non_elevated(
+                        let event = match codex_core::grant_read_root_non_elevated(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),

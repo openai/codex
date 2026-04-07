@@ -406,8 +406,6 @@ pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
-    #[deprecated(note = "use thread_id")]
-    pub conversation_id: ThreadId,
 }
 
 pub(crate) struct CodexSpawnArgs {
@@ -700,12 +698,7 @@ impl Codex {
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
         };
 
-        #[allow(deprecated)]
-        Ok(CodexSpawnOk {
-            codex,
-            thread_id,
-            conversation_id: thread_id,
-        })
+        Ok(CodexSpawnOk { codex, thread_id })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
