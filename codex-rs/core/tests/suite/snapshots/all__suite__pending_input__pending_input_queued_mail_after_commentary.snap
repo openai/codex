@@ -14,6 +14,4 @@ Scenario: /responses POST bodies (input only, redacted like other suite snapshot
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first prompt
 03:message/assistant:first answer
-04:function_call/shell
-05:message/assistant:stale final
-06:function_call_output:failed to parse function arguments: invalid type: string "echo stale tool call", expected a sequence at line 1 column 33
+04:message/assistant:{"author":"/root/worker","recipient":"/root","other_recipients":[],"content":"queued child update","trigger_turn":false}
