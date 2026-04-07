@@ -396,6 +396,13 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
+        let Some(environment) = turn.environment.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "shell is unavailable in this session".to_string(),
+            ));
+        };
+        let fs = environment.get_filesystem();
+
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
             exec_params.env.extend(dependency_env.clone());
@@ -459,29 +466,26 @@ impl ShellHandler {
         }
 
         // Intercept apply_patch if present.
-        if let Some(environment) = turn.environment.as_ref() {
-            let apply_patch_cwd =
-                AbsolutePathBuf::from_absolute_path(&exec_params.cwd).map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "apply_patch verification failed: failed to resolve cwd: {err}"
-                    ))
-                })?;
-            let fs = environment.get_filesystem();
-            if let Some(output) = intercept_apply_patch(
-                &exec_params.command,
-                &apply_patch_cwd,
-                fs.as_ref(),
-                exec_params.expiration.timeout_ms(),
-                session.clone(),
-                turn.clone(),
-                Some(&tracker),
-                &call_id,
-                tool_name.as_str(),
-            )
-            .await?
-            {
-                return Ok(output);
-            }
+        let apply_patch_cwd =
+            AbsolutePathBuf::from_absolute_path(&exec_params.cwd).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "apply_patch verification failed: failed to resolve cwd: {err}"
+                ))
+            })?;
+        if let Some(output) = intercept_apply_patch(
+            &exec_params.command,
+            &apply_patch_cwd,
+            fs.as_ref(),
+            exec_params.expiration.timeout_ms(),
+            session.clone(),
+            turn.clone(),
+            Some(&tracker),
+            &call_id,
+            tool_name.as_str(),
+        )
+        .await?
+        {
+            return Ok(output);
         }
 
         let source = ExecCommandSource::Agent;

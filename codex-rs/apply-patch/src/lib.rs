@@ -154,11 +154,7 @@ impl ApplyPatchAction {
 
     /// Should be used exclusively for testing. (Not worth the overhead of
     /// creating a feature flag for this.)
-    pub fn new_add_for_test(path: &Path, content: String) -> Self {
-        if !path.is_absolute() {
-            panic!("path must be absolute");
-        }
-
+    pub fn new_add_for_test(path: &AbsolutePathBuf, content: String) -> Self {
         #[expect(clippy::expect_used)]
         let filename = path
             .file_name()
@@ -175,10 +171,7 @@ impl ApplyPatchAction {
         #[expect(clippy::expect_used)]
         Self {
             changes,
-            cwd: AbsolutePathBuf::from_absolute_path(
-                path.parent().expect("path should have parent"),
-            )
-            .expect("path parent should be absolute"),
+            cwd: path.parent().expect("path should have parent"),
             patch,
         }
     }
@@ -272,26 +265,25 @@ async fn apply_hunks_to_files(
     let mut modified: Vec<PathBuf> = Vec::new();
     let mut deleted: Vec<PathBuf> = Vec::new();
     for hunk in hunks {
+        let path_abs = hunk.resolve_path(cwd);
         match hunk {
-            Hunk::AddFile { path, contents } => {
-                if let Some(parent) = path.parent()
-                    && !parent.as_os_str().is_empty()
-                {
-                    let parent_abs = AbsolutePathBuf::resolve_path_against_base(parent, cwd);
+            Hunk::AddFile { contents, .. } => {
+                if let Some(parent_abs) = path_abs.parent() {
                     fs.create_directory(&parent_abs, CreateDirectoryOptions { recursive: true })
                         .await
                         .with_context(|| {
-                            format!("Failed to create parent directories for {}", path.display())
+                            format!(
+                                "Failed to create parent directories for {}",
+                                path_abs.display()
+                            )
                         })?;
                 }
-                let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
                 fs.write_file(&path_abs, contents.clone().into_bytes())
                     .await
-                    .with_context(|| format!("Failed to write file {}", path.display()))?;
-                added.push(path.clone());
+                    .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                added.push(path_abs.into_path_buf());
             }
-            Hunk::DeleteFile { path } => {
-                let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
+            Hunk::DeleteFile { .. } => {
                 let result: io::Result<()> = async {
                     let metadata = fs.get_metadata(&path_abs).await?;
                     if metadata.is_directory {
@@ -310,35 +302,32 @@ async fn apply_hunks_to_files(
                     .await
                 }
                 .await;
-                result.with_context(|| format!("Failed to delete file {}", path.display()))?;
-                deleted.push(path.clone());
+                result.with_context(|| format!("Failed to delete file {}", path_abs.display()))?;
+                deleted.push(path_abs.into_path_buf());
             }
             Hunk::UpdateFile {
-                path,
-                move_path,
-                chunks,
+                move_path, chunks, ..
             } => {
                 let AppliedPatch { new_contents, .. } =
-                    derive_new_contents_from_chunks(path, cwd, chunks, fs).await?;
+                    derive_new_contents_from_chunks(&path_abs, chunks, fs).await?;
                 if let Some(dest) = move_path {
-                    if let Some(parent) = dest.parent()
-                        && !parent.as_os_str().is_empty()
-                    {
-                        let parent_abs = AbsolutePathBuf::resolve_path_against_base(parent, cwd);
+                    let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
+                    if let Some(parent_abs) = dest_abs.parent() {
                         fs.create_directory(
                             &parent_abs,
                             CreateDirectoryOptions { recursive: true },
                         )
                         .await
                         .with_context(|| {
-                            format!("Failed to create parent directories for {}", dest.display())
+                            format!(
+                                "Failed to create parent directories for {}",
+                                dest_abs.display()
+                            )
                         })?;
                     }
-                    let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
                     fs.write_file(&dest_abs, new_contents.into_bytes())
                         .await
-                        .with_context(|| format!("Failed to write file {}", dest.display()))?;
-                    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
+                        .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
                     let result: io::Result<()> = async {
                         let metadata = fs.get_metadata(&path_abs).await?;
                         if metadata.is_directory {
@@ -357,15 +346,15 @@ async fn apply_hunks_to_files(
                         .await
                     }
                     .await;
-                    result
-                        .with_context(|| format!("Failed to remove original {}", path.display()))?;
-                    modified.push(dest.clone());
+                    result.with_context(|| {
+                        format!("Failed to remove original {}", path_abs.display())
+                    })?;
+                    modified.push(dest_abs.into_path_buf());
                 } else {
-                    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
                     fs.write_file(&path_abs, new_contents.into_bytes())
                         .await
-                        .with_context(|| format!("Failed to write file {}", path.display()))?;
-                    modified.push(path.clone());
+                        .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                    modified.push(path_abs.into_path_buf());
                 }
             }
         }
@@ -385,15 +374,13 @@ struct AppliedPatch {
 /// Return *only* the new file contents (joined into a single `String`) after
 /// applying the chunks to the file at `path`.
 async fn derive_new_contents_from_chunks(
-    path: &Path,
-    cwd: &AbsolutePathBuf,
+    path_abs: &AbsolutePathBuf,
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
-    let original_contents = fs.read_file_text(&path_abs).await.map_err(|err| {
+    let original_contents = fs.read_file_text(path_abs).await.map_err(|err| {
         ApplyPatchError::IoError(IoError {
-            context: format!("Failed to read file to update {}", path.display()),
+            context: format!("Failed to read file to update {}", path_abs.display()),
             source: err,
         })
     })?;
@@ -406,7 +393,7 @@ async fn derive_new_contents_from_chunks(
         original_lines.pop();
     }
 
-    let replacements = compute_replacements(&original_lines, path, chunks)?;
+    let replacements = compute_replacements(&original_lines, path_abs.as_path(), chunks)?;
     let new_lines = apply_replacements(original_lines, &replacements);
     let mut new_lines = new_lines;
     if !new_lines.last().is_some_and(String::is_empty) {
@@ -566,7 +553,10 @@ pub async fn unified_diff_from_chunks_with_context(
     let AppliedPatch {
         original_contents,
         new_contents,
-    } = derive_new_contents_from_chunks(path, cwd, chunks, fs).await?;
+    } = {
+        let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
+        derive_new_contents_from_chunks(&path_abs, chunks, fs).await?
+    };
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {
@@ -598,6 +588,7 @@ pub fn print_summary(
 mod tests {
     use super::*;
     use codex_exec_server::LOCAL_FS;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::string::ToString;
@@ -640,6 +631,74 @@ mod tests {
         assert_eq!(stderr_str, "");
         let contents = fs::read_to_string(path).unwrap();
         assert_eq!(contents, "ab\ncd\n");
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_hunks_accept_relative_and_absolute_paths() {
+        let dir = tempdir().unwrap();
+        let cwd = dir.path().abs();
+        let relative_add = dir.path().join("relative-add.txt");
+        let absolute_add = dir.path().join("absolute-add.txt");
+        let relative_delete = dir.path().join("relative-delete.txt");
+        let absolute_delete = dir.path().join("absolute-delete.txt");
+        let relative_update = dir.path().join("relative-update.txt");
+        let absolute_update = dir.path().join("absolute-update.txt");
+        fs::write(&relative_delete, "delete relative\n").unwrap();
+        fs::write(&absolute_delete, "delete absolute\n").unwrap();
+        fs::write(&relative_update, "relative old\n").unwrap();
+        fs::write(&absolute_update, "absolute old\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Add File: relative-add.txt
++relative add
+*** Add File: {}
++absolute add
+*** Delete File: relative-delete.txt
+*** Delete File: {}
+*** Update File: relative-update.txt
+@@
+-relative old
++relative new
+*** Update File: {}
+@@
+-absolute old
++absolute new"#,
+            absolute_add.display(),
+            absolute_delete.display(),
+            absolute_update.display(),
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        apply_patch(&patch, &cwd, &mut stdout, &mut stderr, LOCAL_FS.as_ref())
+            .await
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(&relative_add).unwrap(), "relative add\n");
+        assert_eq!(fs::read_to_string(&absolute_add).unwrap(), "absolute add\n");
+        assert!(!relative_delete.exists());
+        assert!(!absolute_delete.exists());
+        assert_eq!(
+            fs::read_to_string(&relative_update).unwrap(),
+            "relative new\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&absolute_update).unwrap(),
+            "absolute new\n"
+        );
+        assert_eq!(String::from_utf8(stderr).unwrap(), "");
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "Success. Updated the following files:\nA {}\nA {}\nM {}\nM {}\nD {}\nD {}\n",
+                relative_add.display(),
+                absolute_add.display(),
+                relative_update.display(),
+                absolute_update.display(),
+                relative_delete.display(),
+                absolute_delete.display(),
+            )
+        );
     }
 
     #[tokio::test]

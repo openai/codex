@@ -126,6 +126,38 @@ impl From<AbsolutePathBuf> for PathBuf {
     }
 }
 
+/// Helpers for constructing absolute paths in tests.
+pub mod test_support {
+    use super::AbsolutePathBuf;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    /// Extension methods for converting paths into [`AbsolutePathBuf`] values in tests.
+    pub trait PathExt {
+        /// Converts an already absolute path into an [`AbsolutePathBuf`].
+        fn abs(&self) -> AbsolutePathBuf;
+    }
+
+    impl PathExt for Path {
+        #[expect(clippy::expect_used)]
+        fn abs(&self) -> AbsolutePathBuf {
+            AbsolutePathBuf::try_from(self).expect("path should already be absolute")
+        }
+    }
+
+    /// Extension methods for converting path buffers into [`AbsolutePathBuf`] values in tests.
+    pub trait PathBufExt {
+        /// Converts an already absolute path buffer into an [`AbsolutePathBuf`].
+        fn abs(&self) -> AbsolutePathBuf;
+    }
+
+    impl PathBufExt for PathBuf {
+        fn abs(&self) -> AbsolutePathBuf {
+            self.as_path().abs()
+        }
+    }
+}
+
 impl TryFrom<&Path> for AbsolutePathBuf {
     type Error = std::io::Error;
 
