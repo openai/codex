@@ -164,8 +164,19 @@ impl ConfigApi {
 
     pub(crate) async fn read(
         &self,
-        params: ConfigReadParams,
+        mut params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, JSONRPCErrorError> {
+        if let Some(cwd) = &mut params.cwd {
+            let absolute_cwd =
+                AbsolutePathBuf::relative_to_current_dir(cwd.as_str()).map_err(|err| {
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("invalid config cwd: {err}"),
+                        data: None,
+                    }
+                })?;
+            *cwd = absolute_cwd.to_string_lossy().into_owned();
+        }
         let fallback_cwd = params.cwd.as_ref().map(PathBuf::from);
         let mut response = self
             .config_service()

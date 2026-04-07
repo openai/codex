@@ -156,7 +156,7 @@ impl ConfigService {
     ) -> Result<ConfigReadResponse, ConfigServiceError> {
         let layers = match params.cwd.as_deref() {
             Some(cwd) => {
-                let cwd = AbsolutePathBuf::relative_to_current_dir(cwd).map_err(|err| {
+                let cwd = AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
                     ConfigServiceError::io("failed to resolve config cwd to an absolute path", err)
                 })?;
                 crate::config::ConfigBuilder::default()

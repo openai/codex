@@ -232,20 +232,6 @@ async fn read_includes_origins_and_layers() {
     ));
 }
 
-#[tokio::test]
-async fn read_accepts_relative_cwd() {
-    let tmp = tempdir().expect("tempdir");
-    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
-
-    service
-        .read(ConfigReadParams {
-            include_layers: false,
-            cwd: Some(".".to_string()),
-        })
-        .await
-        .expect("relative cwd should resolve");
-}
-
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn write_value_succeeds_when_managed_preferences_expand_home_directory_paths() -> Result<()> {
