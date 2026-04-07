@@ -515,7 +515,7 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
 
-    remote_handle.set_enabled(false);
+    remote_handle.set_enabled(/*enabled*/ false);
     timeout(Duration::from_secs(1), first_websocket.next())
         .await
         .expect("disabling remote control should close the websocket");
@@ -523,7 +523,7 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         .await
         .expect_err("disabled remote control should not reconnect");
 
-    remote_handle.set_enabled(true);
+    remote_handle.set_enabled(/*enabled*/ true);
     let mut second_websocket = accept_remote_control_connection(&listener).await;
     second_websocket
         .close(None)
