@@ -50,6 +50,12 @@ use wiremock::matchers::path;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 
+#[derive(Debug, Clone, Copy)]
+enum StartupContextConfig<'a> {
+    Generated,
+    Override(&'a str),
+}
+
 #[derive(Debug, Clone)]
 struct RealtimeCallRequestCapture {
     requests: Arc<Mutex<Vec<WiremockRequest>>>,
@@ -142,6 +148,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         &responses_server.uri(),
         realtime_server.uri(),
         /*realtime_enabled*/ true,
+        StartupContextConfig::Generated,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -352,6 +359,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         &responses_server.uri(),
         realtime_server.uri(),
         /*realtime_enabled*/ true,
+        StartupContextConfig::Generated,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -432,6 +440,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         &responses_server.uri(),
         realtime_server.uri(),
         /*realtime_enabled*/ true,
+        StartupContextConfig::Override("startup context"),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -521,6 +530,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
         &responses_server.uri(),
         realtime_server.uri(),
         /*realtime_enabled*/ true,
+        StartupContextConfig::Override("startup context"),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -576,6 +586,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         &responses_server.uri(),
         realtime_server.uri(),
         /*realtime_enabled*/ false,
+        StartupContextConfig::Generated,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -646,12 +657,19 @@ fn create_config_toml(
     responses_server_uri: &str,
     realtime_server_uri: &str,
     realtime_enabled: bool,
+    startup_context: StartupContextConfig<'_>,
 ) -> std::io::Result<()> {
     let realtime_feature_key = FEATURES
         .iter()
         .find(|spec| spec.id == Feature::RealtimeConversation)
         .map(|spec| spec.key)
         .unwrap_or("realtime_conversation");
+    let startup_context = match startup_context {
+        StartupContextConfig::Generated => String::new(),
+        StartupContextConfig::Override(context) => {
+            format!("experimental_realtime_ws_startup_context = {context:?}\n")
+        }
+    };
 
     std::fs::write(
         codex_home.join("config.toml"),
@@ -663,7 +681,7 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
 experimental_realtime_ws_backend_prompt = "backend prompt"
-experimental_realtime_ws_startup_context = "startup context"
+{startup_context}
 
 [realtime]
 version = "v2"
