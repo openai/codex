@@ -757,7 +757,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         agent_role: None,
     });
 
-    let err = FollowupTaskHandlerV2
+    let Err(err) = FollowupTaskHandlerV2
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -769,7 +769,9 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
             })),
         ))
         .await
-        .expect_err("followup_task should reject the root target");
+    else {
+        panic!("followup_task should reject the root target");
+    };
 
     assert_eq!(
         err,
