@@ -7,6 +7,7 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::GuardianReviewEventParams;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -149,6 +150,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::SubAgentThreadStarted(input),
         ));
+    }
+
+    pub fn track_guardian_review(&self, input: GuardianReviewEventParams) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(
+            Box::new(input),
+        )));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
