@@ -43,7 +43,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
-pub struct ShellRequest {
+pub(crate) struct ShellRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
@@ -86,7 +86,7 @@ pub(crate) enum ShellRuntimeBackend {
 }
 
 #[derive(Default)]
-pub struct ShellRuntime {
+pub(crate) struct ShellRuntime {
     backend: ShellRuntimeBackend,
 }
 
@@ -99,7 +99,7 @@ pub(crate) struct ApprovalKey {
 }
 
 impl ShellRuntime {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             backend: ShellRuntimeBackend::Generic,
         }

@@ -63,7 +63,7 @@ pub(crate) use send_input::Handler as SendInputHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
 
-pub mod close_agent;
+pub(crate) mod close_agent;
 mod resume_agent;
 mod send_input;
 mod spawn;

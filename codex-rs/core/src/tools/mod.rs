@@ -1,22 +1,22 @@
-pub mod code_mode;
-pub mod context;
-pub mod events;
+pub(crate) mod code_mode;
+pub(crate) mod context;
+pub(crate) mod events;
 pub(crate) mod handlers;
-pub mod js_repl;
+pub(crate) mod js_repl;
 pub(crate) mod network_approval;
-pub mod orchestrator;
-pub mod parallel;
-pub mod registry;
-pub mod router;
-pub mod runtimes;
-pub mod sandboxing;
-pub mod spec;
+pub(crate) mod orchestrator;
+pub(crate) mod parallel;
+pub(crate) mod registry;
+pub(crate) mod router;
+pub(crate) mod runtimes;
+pub(crate) mod sandboxing;
+pub(crate) mod spec;
 
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_text;
-pub use router::ToolRouter;
+pub(crate) use router::ToolRouter;
 use serde::Serialize;
 
 // Telemetry preview limits: keep log events smaller than model budgets.
@@ -27,7 +27,7 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
-pub fn format_exec_output_for_model_structured(
+pub(crate) fn format_exec_output_for_model_structured(
     exec_output: &ExecToolCallOutput,
     truncation_policy: TruncationPolicy,
 ) -> String {
@@ -66,7 +66,7 @@ pub fn format_exec_output_for_model_structured(
     serde_json::to_string(&payload).expect("serialize ExecOutput")
 }
 
-pub fn format_exec_output_for_model_freeform(
+pub(crate) fn format_exec_output_for_model_freeform(
     exec_output: &ExecToolCallOutput,
     truncation_policy: TruncationPolicy,
 ) -> String {
@@ -93,7 +93,7 @@ pub fn format_exec_output_for_model_freeform(
     sections.join("\n")
 }
 
-pub fn format_exec_output_str(
+pub(crate) fn format_exec_output_str(
     exec_output: &ExecToolCallOutput,
     truncation_policy: TruncationPolicy,
 ) -> String {

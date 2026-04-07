@@ -39,7 +39,7 @@ pub(crate) struct PluginManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginManifestPaths {
+pub(crate) struct PluginManifestPaths {
     pub skills: Option<AbsolutePathBuf>,
     pub mcp_servers: Option<AbsolutePathBuf>,
     pub apps: Option<AbsolutePathBuf>,

@@ -182,7 +182,7 @@ struct FileWatcherInner {
 }
 
 /// Coalesces bursts of watch notifications and emits at most once per interval.
-pub struct ThrottledWatchReceiver {
+pub(crate) struct ThrottledWatchReceiver {
     rx: Receiver,
     interval: Duration,
     next_allowed: Option<Instant>,
@@ -190,7 +190,7 @@ pub struct ThrottledWatchReceiver {
 
 impl ThrottledWatchReceiver {
     /// Creates a throttling wrapper around a raw watcher [`Receiver`].
-    pub fn new(rx: Receiver, interval: Duration) -> Self {
+    pub(crate) fn new(rx: Receiver, interval: Duration) -> Self {
         Self {
             rx,
             interval,
@@ -200,7 +200,7 @@ impl ThrottledWatchReceiver {
 
     /// Receives the next event, enforcing the configured minimum delay after
     /// the previous emission.
-    pub async fn recv(&mut self) -> Option<FileWatcherEvent> {
+    pub(crate) async fn recv(&mut self) -> Option<FileWatcherEvent> {
         if let Some(next_allowed) = self.next_allowed {
             sleep_until(next_allowed).await;
         }

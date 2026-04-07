@@ -103,14 +103,14 @@ impl JsReplHandle {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct JsReplArgs {
+pub(crate) struct JsReplArgs {
     pub code: String,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
-pub struct JsExecResult {
+pub(crate) struct JsExecResult {
     pub output: String,
     pub content_items: Vec<FunctionCallOutputContentItem>,
 }
@@ -359,7 +359,7 @@ fn with_model_kernel_failure_message(
     )
 }
 
-pub struct JsReplManager {
+pub(crate) struct JsReplManager {
     node_path: Option<PathBuf>,
     node_module_dirs: Vec<PathBuf>,
     tmp_dir: tempfile::TempDir,
@@ -801,7 +801,7 @@ impl JsReplManager {
         )
     }
 
-    pub async fn reset(&self) -> Result<(), FunctionCallError> {
+    pub(crate) async fn reset(&self) -> Result<(), FunctionCallError> {
         let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
             FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
         })?;
@@ -810,7 +810,10 @@ impl JsReplManager {
         Ok(())
     }
 
-    pub async fn interrupt_turn_exec(&self, turn_id: &str) -> Result<bool, FunctionCallError> {
+    pub(crate) async fn interrupt_turn_exec(
+        &self,
+        turn_id: &str,
+    ) -> Result<bool, FunctionCallError> {
         let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
             FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
         })?;
@@ -833,7 +836,7 @@ impl JsReplManager {
         }
     }
 
-    pub async fn execute(
+    pub(crate) async fn execute(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,

@@ -13,9 +13,9 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
 use serde_json::Value as JsonValue;
 
-pub struct PlanHandler;
+pub(crate) struct PlanHandler;
 
-pub struct PlanToolOutput;
+pub(crate) struct PlanToolOutput;
 
 const PLAN_UPDATED_MESSAGE: &str = "Plan updated";
 

@@ -144,7 +144,7 @@ pub async fn execute_env(
     execute_exec_request(exec_request, stdout_stream, /*after_spawn*/ None).await
 }
 
-pub async fn execute_exec_request_with_after_spawn(
+pub(crate) async fn execute_exec_request_with_after_spawn(
     exec_request: ExecRequest,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,

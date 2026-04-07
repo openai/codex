@@ -25,7 +25,7 @@ use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
 /// The role name used when a caller omits `agent_type`.
-pub const DEFAULT_ROLE_NAME: &str = "default";
+pub(crate) const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
 /// Applies a named role layer to `config` while preserving caller-owned model selection.

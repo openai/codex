@@ -8,7 +8,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::mcp::CallToolResult;
 
-pub struct McpHandler;
+pub(crate) struct McpHandler;
 impl ToolHandler for McpHandler {
     type Output = CallToolResult;
 

@@ -16,7 +16,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-pub struct TestSyncHandler;
+pub(crate) struct TestSyncHandler;
 
 const DEFAULT_TIMEOUT_MS: u64 = 1_000;
 

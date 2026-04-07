@@ -613,7 +613,7 @@ pub fn merge_plugin_apps(
     merged
 }
 
-pub fn merge_plugin_apps_with_accessible(
+pub(crate) fn merge_plugin_apps_with_accessible(
     plugin_apps: Vec<AppConnectorId>,
     accessible_connectors: Vec<AppInfo>,
 ) -> Vec<AppInfo> {
@@ -655,7 +655,7 @@ pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> 
     connectors
 }
 
-pub fn with_app_plugin_sources(
+fn with_app_plugin_sources(
     mut connectors: Vec<AppInfo>,
     tool_plugin_provenance: &ToolPluginProvenance,
 ) -> Vec<AppInfo> {
@@ -953,7 +953,8 @@ pub fn connector_install_url(name: &str, connector_id: &str) -> String {
     format!("https://chatgpt.com/apps/{slug}/{connector_id}")
 }
 
-pub fn sanitize_name(name: &str) -> String {
+#[cfg(test)]
+pub(crate) fn sanitize_name(name: &str) -> String {
     sanitize_slug(name).replace("-", "_")
 }
 

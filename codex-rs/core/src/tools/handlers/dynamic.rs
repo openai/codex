@@ -17,7 +17,7 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-pub struct DynamicToolHandler;
+pub(crate) struct DynamicToolHandler;
 
 impl ToolHandler for DynamicToolHandler {
     type Output = FunctionToolOutput;

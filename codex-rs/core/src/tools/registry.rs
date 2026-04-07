@@ -30,12 +30,12 @@ use serde_json::Value;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ToolKind {
+pub(crate) enum ToolKind {
     Function,
     Mcp,
 }
 
-pub trait ToolHandler: Send + Sync {
+pub(crate) trait ToolHandler: Send + Sync {
     type Output: ToolOutput + 'static;
 
     fn kind(&self) -> ToolKind;
@@ -187,7 +187,7 @@ pub(crate) fn tool_handler_key(tool_name: &str, namespace: Option<&str>) -> Stri
     }
 }
 
-pub struct ToolRegistry {
+pub(crate) struct ToolRegistry {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
 }
 
@@ -442,24 +442,24 @@ impl ToolRegistry {
     }
 }
 
-pub struct ToolRegistryBuilder {
+pub(crate) struct ToolRegistryBuilder {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
     specs: Vec<ConfiguredToolSpec>,
 }
 
 impl ToolRegistryBuilder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             handlers: HashMap::new(),
             specs: Vec::new(),
         }
     }
 
-    pub fn push_spec(&mut self, spec: ToolSpec) {
+    pub(crate) fn push_spec(&mut self, spec: ToolSpec) {
         self.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ false);
     }
 
-    pub fn push_spec_with_parallel_support(
+    pub(crate) fn push_spec_with_parallel_support(
         &mut self,
         spec: ToolSpec,
         supports_parallel_tool_calls: bool,
@@ -468,7 +468,7 @@ impl ToolRegistryBuilder {
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
 
-    pub fn register_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
+    pub(crate) fn register_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
     where
         H: ToolHandler + 'static,
     {
@@ -501,7 +501,7 @@ impl ToolRegistryBuilder {
     //     }
     // }
 
-    pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
+    pub(crate) fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);
         (self.specs, registry)
     }

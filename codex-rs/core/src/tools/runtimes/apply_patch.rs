@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug)]
-pub struct ApplyPatchRequest {
+pub(crate) struct ApplyPatchRequest {
     pub action: ApplyPatchAction,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
@@ -45,10 +45,10 @@ pub struct ApplyPatchRequest {
 }
 
 #[derive(Default)]
-pub struct ApplyPatchRuntime;
+pub(crate) struct ApplyPatchRuntime;
 
 impl ApplyPatchRuntime {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 

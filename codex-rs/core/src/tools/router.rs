@@ -23,17 +23,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
 
-pub use crate::tools::context::ToolCallSource;
+pub(crate) use crate::tools::context::ToolCallSource;
 
 #[derive(Clone, Debug)]
-pub struct ToolCall {
+pub(crate) struct ToolCall {
     pub tool_name: String,
     pub tool_namespace: Option<String>,
     pub call_id: String,
     pub payload: ToolPayload,
 }
 
-pub struct ToolRouter {
+pub(crate) struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
@@ -47,7 +47,7 @@ pub(crate) struct ToolRouterParams<'a> {
 }
 
 impl ToolRouter {
-    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
+    pub(crate) fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
         let ToolRouterParams {
             mcp_tools,
             app_tools,
@@ -87,25 +87,25 @@ impl ToolRouter {
         }
     }
 
-    pub fn specs(&self) -> Vec<ToolSpec> {
+    pub(crate) fn specs(&self) -> Vec<ToolSpec> {
         self.specs
             .iter()
             .map(|config| config.spec.clone())
             .collect()
     }
 
-    pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
+    pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
     }
 
-    pub fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
+    pub(crate) fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
         self.specs
             .iter()
             .find(|config| config.name() == tool_name)
             .map(|config| config.spec.clone())
     }
 
-    pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {
+    pub(crate) fn tool_supports_parallel(&self, tool_name: &str) -> bool {
         self.specs
             .iter()
             .filter(|config| config.supports_parallel_tool_calls)
@@ -113,7 +113,7 @@ impl ToolRouter {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn build_tool_call(
+    pub(crate) async fn build_tool_call(
         session: &Session,
         item: ResponseItem,
     ) -> Result<Option<ToolCall>, FunctionCallError> {
@@ -211,7 +211,7 @@ impl ToolRouter {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn dispatch_tool_call_with_code_mode_result(
+    pub(crate) async fn dispatch_tool_call_with_code_mode_result(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,

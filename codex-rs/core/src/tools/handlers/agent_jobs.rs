@@ -34,7 +34,7 @@ use tokio::time::Instant;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-pub struct BatchJobHandler;
+pub(crate) struct BatchJobHandler;
 
 const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 16;
 const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
@@ -224,7 +224,7 @@ mod spawn_agents_on_csv {
     /// Each CSV row becomes a job item. The instruction string is a template where `{column}`
     /// placeholders are filled with values from that row. Results are reported by workers via
     /// `report_agent_job_result`, then exported to CSV on completion.
-    pub async fn handle(
+    pub(super) async fn handle(
         session: Arc<Session>,
         turn: Arc<TurnContext>,
         arguments: String,
@@ -468,7 +468,7 @@ mod spawn_agents_on_csv {
 mod report_agent_job_result {
     use super::*;
 
-    pub async fn handle(
+    pub(super) async fn handle(
         session: Arc<Session>,
         arguments: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {

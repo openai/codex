@@ -282,7 +282,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
         .iter()
         .filter_map(|item| match item {
             ResponseItem::Message { role, content, .. } if role == "developer" => {
-                crate::content_items_to_text(content)
+                crate::compact::content_items_to_text(content)
             }
             _ => None,
         })

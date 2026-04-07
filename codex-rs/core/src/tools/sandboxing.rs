@@ -43,7 +43,7 @@ pub(crate) struct ApprovalStore {
 }
 
 impl ApprovalStore {
-    pub fn get<K>(&self, key: &K) -> Option<ReviewDecision>
+    pub(crate) fn get<K>(&self, key: &K) -> Option<ReviewDecision>
     where
         K: Serialize,
     {
@@ -51,7 +51,7 @@ impl ApprovalStore {
         self.map.get(&s).cloned()
     }
 
-    pub fn put<K>(&mut self, key: K, value: ReviewDecision)
+    pub(crate) fn put<K>(&mut self, key: K, value: ReviewDecision)
     where
         K: Serialize,
     {
@@ -148,7 +148,7 @@ pub(crate) enum ExecApprovalRequirement {
 }
 
 impl ExecApprovalRequirement {
-    pub fn proposed_execpolicy_amendment(&self) -> Option<&ExecPolicyAmendment> {
+    pub(crate) fn proposed_execpolicy_amendment(&self) -> Option<&ExecPolicyAmendment> {
         match self {
             Self::NeedsApproval {
                 proposed_execpolicy_amendment: Some(prefix),
@@ -332,7 +332,7 @@ pub(crate) struct SandboxAttempt<'a> {
 }
 
 impl<'a> SandboxAttempt<'a> {
-    pub fn env_for(
+    pub(crate) fn env_for(
         &self,
         command: SandboxCommand,
         options: ExecOptions,

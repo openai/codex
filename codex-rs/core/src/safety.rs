@@ -13,7 +13,7 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 
 #[derive(Debug, PartialEq)]
-pub enum SafetyCheck {
+pub(crate) enum SafetyCheck {
     AutoApprove {
         sandbox_type: SandboxType,
         user_explicitly_approved: bool,
@@ -24,7 +24,7 @@ pub enum SafetyCheck {
     },
 }
 
-pub fn assess_patch_safety(
+pub(crate) fn assess_patch_safety(
     action: &ApplyPatchAction,
     policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,

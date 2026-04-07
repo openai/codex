@@ -34,7 +34,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub struct UnifiedExecHandler;
+pub(crate) struct UnifiedExecHandler;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {

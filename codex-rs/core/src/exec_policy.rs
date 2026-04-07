@@ -174,7 +174,7 @@ pub enum ExecPolicyError {
 }
 
 #[derive(Debug, Error)]
-pub enum ExecPolicyUpdateError {
+pub(crate) enum ExecPolicyUpdateError {
     #[error("failed to update rules file {path}: {source}")]
     AppendRule { path: PathBuf, source: AmendError },
 
@@ -535,7 +535,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
-pub fn render_decision_for_unmatched_command(
+pub(crate) fn render_decision_for_unmatched_command(
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,

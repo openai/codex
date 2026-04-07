@@ -25,7 +25,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-pub struct ToolSuggestHandler;
+pub(crate) struct ToolSuggestHandler;
 
 impl ToolHandler for ToolSuggestHandler {
     type Output = FunctionToolOutput;

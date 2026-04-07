@@ -25,7 +25,7 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(10);
 const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SkillsWatcherEvent {
+pub(crate) enum SkillsWatcherEvent {
     SkillsChanged { paths: Vec<PathBuf> },
 }
 

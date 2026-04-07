@@ -48,7 +48,7 @@ use std::path::PathBuf;
 /// Request payload used by the unified-exec runtime after approvals and
 /// sandbox preferences have been resolved for the current turn.
 #[derive(Clone, Debug)]
-pub struct UnifiedExecRequest {
+pub(crate) struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub process_id: i32,
     pub cwd: PathBuf,
@@ -67,7 +67,7 @@ pub struct UnifiedExecRequest {
 /// Cache key for approval decisions that can be reused across equivalent
 /// unified-exec launches.
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct UnifiedExecApprovalKey {
+pub(crate) struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub tty: bool,
@@ -77,14 +77,17 @@ pub struct UnifiedExecApprovalKey {
 
 /// Runtime adapter that keeps policy and sandbox orchestration on the
 /// unified-exec side while delegating process startup to the manager.
-pub struct UnifiedExecRuntime<'a> {
+pub(crate) struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
     /// Creates a runtime bound to the shared unified-exec process manager.
-    pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
+    pub(crate) fn new(
+        manager: &'a UnifiedExecProcessManager,
+        shell_mode: UnifiedExecShellMode,
+    ) -> Self {
         Self {
             manager,
             shell_mode,

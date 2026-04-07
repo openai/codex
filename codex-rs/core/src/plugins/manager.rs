@@ -80,7 +80,7 @@ const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
-pub const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
+pub(super) const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const FEATURED_PLUGIN_IDS_CACHE_TTL: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 3);
@@ -1882,7 +1882,7 @@ fn load_apps_from_paths(
     connector_ids
 }
 
-pub fn plugin_telemetry_metadata_from_root(
+pub(crate) fn plugin_telemetry_metadata_from_root(
     plugin_id: &PluginId,
     plugin_root: &Path,
 ) -> PluginTelemetryMetadata {

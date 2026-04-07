@@ -9,7 +9,7 @@ use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-pub struct RequestPermissionsHandler;
+pub(crate) struct RequestPermissionsHandler;
 
 impl ToolHandler for RequestPermissionsHandler {
     type Output = FunctionToolOutput;

@@ -40,7 +40,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
 
-pub struct ShellHandler;
+pub(crate) struct ShellHandler;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellCommandBackend {
@@ -48,7 +48,7 @@ enum ShellCommandBackend {
     ZshFork,
 }
 
-pub struct ShellCommandHandler {
+pub(crate) struct ShellCommandHandler {
     backend: ShellCommandBackend,
 }
 

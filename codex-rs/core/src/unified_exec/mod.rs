@@ -76,7 +76,7 @@ pub(crate) struct UnifiedExecContext {
 }
 
 impl UnifiedExecContext {
-    pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
+    pub(crate) fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
         Self {
             session,
             turn,

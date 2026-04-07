@@ -117,12 +117,12 @@ use codex_response_debug_context::extract_response_debug_context_from_api_error;
 use codex_response_debug_context::telemetry_api_error_message;
 use codex_response_debug_context::telemetry_transport_error_message;
 
-pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
-pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+pub(crate) const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+pub(crate) const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
-pub const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
-pub const X_CODEX_WINDOW_ID_HEADER: &str = "x-codex-window-id";
-pub const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
+pub(crate) const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
+pub(crate) const X_CODEX_WINDOW_ID_HEADER: &str = "x-codex-window-id";
+pub(crate) const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";

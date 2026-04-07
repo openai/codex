@@ -34,7 +34,7 @@ impl McpManager {
         effective_mcp_servers(&mcp_config, auth)
     }
 
-    pub fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
+    pub(crate) fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
         let mcp_config = config.to_mcp_config(self.plugins_manager.as_ref());
         collect_tool_plugin_provenance(&mcp_config)
     }

@@ -100,7 +100,7 @@ pub(crate) fn error_or_panic(message: impl std::string::ToString) {
     }
 }
 
-pub fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {
+pub(crate) fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {
     if path.is_absolute() {
         path.clone()
     } else {

@@ -149,7 +149,6 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
-use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -388,7 +387,7 @@ use codex_utils_readiness::ReadinessFlag;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
-pub struct Codex {
+pub(crate) struct Codex {
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
@@ -404,11 +403,9 @@ pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
 /// the submission id for the initial `ConfigureSession` request and the
 /// unique session id.
-pub struct CodexSpawnOk {
-    pub codex: Codex,
-    pub thread_id: ThreadId,
-    #[deprecated(note = "use thread_id")]
-    pub conversation_id: ThreadId,
+pub(crate) struct CodexSpawnOk {
+    pub(crate) codex: Codex,
+    pub(crate) thread_id: ThreadId,
 }
 
 pub(crate) struct CodexSpawnArgs {
@@ -693,20 +690,15 @@ impl Codex {
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
         };
 
-        #[allow(deprecated)]
-        Ok(CodexSpawnOk {
-            codex,
-            thread_id,
-            conversation_id: thread_id,
-        })
+        Ok(CodexSpawnOk { codex, thread_id })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
-    pub async fn submit(&self, op: Op) -> CodexResult<String> {
+    pub(crate) async fn submit(&self, op: Op) -> CodexResult<String> {
         self.submit_with_trace(op, /*trace*/ None).await
     }
 
-    pub async fn submit_with_trace(
+    pub(crate) async fn submit_with_trace(
         &self,
         op: Op,
         trace: Option<W3cTraceContext>,
@@ -723,7 +715,7 @@ impl Codex {
 
     /// Use sparingly: prefer `submit()` so Codex is responsible for generating
     /// unique IDs for each submission.
-    pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
+    pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
         }
@@ -734,7 +726,7 @@ impl Codex {
         Ok(())
     }
 
-    pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
+    pub(crate) async fn shutdown_and_wait(&self) -> CodexResult<()> {
         let session_loop_termination = self.session_loop_termination.clone();
         match self.submit(Op::Shutdown).await {
             Ok(_) => {}
@@ -745,7 +737,7 @@ impl Codex {
         Ok(())
     }
 
-    pub async fn next_event(&self) -> CodexResult<Event> {
+    pub(crate) async fn next_event(&self) -> CodexResult<Event> {
         let event = self
             .rx_event
             .recv()
@@ -754,7 +746,7 @@ impl Codex {
         Ok(event)
     }
 
-    pub async fn steer_input(
+    pub(crate) async fn steer_input(
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
@@ -867,8 +859,8 @@ pub(crate) struct TurnContext {
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: AbsolutePathBuf,
-    pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
+    pub(crate) current_date: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
@@ -3034,7 +3026,7 @@ impl Session {
     /// be used to derive the available decisions via
     /// [ExecApprovalRequestEvent::default_available_decisions].
     #[allow(clippy::too_many_arguments)]
-    pub async fn request_command_approval(
+    pub(crate) async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
         call_id: String,
@@ -3105,7 +3097,7 @@ impl Session {
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
-    pub async fn request_patch_approval(
+    pub(crate) async fn request_patch_approval(
         &self,
         turn_context: &TurnContext,
         call_id: String,
@@ -3141,7 +3133,7 @@ impl Session {
         rx_approve
     }
 
-    pub async fn request_permissions(
+    pub(crate) async fn request_permissions(
         &self,
         turn_context: &TurnContext,
         call_id: String,
@@ -3196,7 +3188,7 @@ impl Session {
         rx_response.await.ok()
     }
 
-    pub async fn request_user_input(
+    pub(crate) async fn request_user_input(
         &self,
         turn_context: &TurnContext,
         call_id: String,
@@ -3228,7 +3220,7 @@ impl Session {
         rx_response.await.ok()
     }
 
-    pub async fn request_mcp_server_elicitation(
+    pub(crate) async fn request_mcp_server_elicitation(
         &self,
         turn_context: &TurnContext,
         request_id: RequestId,
@@ -3307,7 +3299,7 @@ impl Session {
         rx_response.await.ok()
     }
 
-    pub async fn notify_user_input_response(
+    pub(crate) async fn notify_user_input_response(
         &self,
         sub_id: &str,
         response: RequestUserInputResponse,
@@ -3332,7 +3324,7 @@ impl Session {
         }
     }
 
-    pub async fn notify_request_permissions_response(
+    pub(crate) async fn notify_request_permissions_response(
         &self,
         call_id: &str,
         response: RequestPermissionsResponse,
@@ -3385,7 +3377,11 @@ impl Session {
         state.granted_permissions()
     }
 
-    pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
+    pub(crate) async fn notify_dynamic_tool_response(
+        &self,
+        call_id: &str,
+        response: DynamicToolResponse,
+    ) {
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3406,7 +3402,7 @@ impl Session {
         }
     }
 
-    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
+    pub(crate) async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3427,7 +3423,7 @@ impl Session {
         }
     }
 
-    pub async fn resolve_elicitation(
+    pub(crate) async fn resolve_elicitation(
         &self,
         server_name: String,
         id: RequestId,
@@ -3574,7 +3570,7 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
-    pub fn enabled(&self, feature: Feature) -> bool {
+    pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.features.enabled(feature)
     }
 
@@ -3913,12 +3909,12 @@ impl Session {
         state.record_mcp_dependency_prompted(names);
     }
 
-    pub async fn dependency_env(&self) -> HashMap<String, String> {
+    pub(crate) async fn dependency_env(&self) -> HashMap<String, String> {
         let state = self.state.lock().await;
         state.dependency_env()
     }
 
-    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+    pub(crate) async fn set_dependency_env(&self, values: HashMap<String, String>) {
         let mut state = self.state.lock().await;
         state.set_dependency_env(values);
     }
@@ -4038,7 +4034,7 @@ impl Session {
     /// Inject additional user input into the currently active turn.
     ///
     /// Returns the active turn id when accepted.
-    pub async fn steer_input(
+    pub(crate) async fn steer_input(
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
@@ -4087,7 +4083,7 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into.
-    pub async fn inject_response_items(
+    pub(crate) async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
     ) -> Result<(), Vec<ResponseInputItem>> {
@@ -4152,7 +4148,10 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
-    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
+    pub(crate) async fn prepend_pending_input(
+        &self,
+        input: Vec<ResponseInputItem>,
+    ) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -4164,7 +4163,7 @@ impl Session {
         }
     }
 
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+    pub(crate) async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -4219,7 +4218,7 @@ impl Session {
         !self.idle_pending_input.lock().await.is_empty()
     }
 
-    pub async fn has_pending_input(&self) -> bool {
+    pub(crate) async fn has_pending_input(&self) -> bool {
         let (has_turn_pending_input, accepts_mailbox_delivery) = {
             let active = self.active_turn.lock().await;
             match active.as_ref() {
@@ -4242,7 +4241,7 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending()
     }
 
-    pub async fn list_resources(
+    pub(crate) async fn list_resources(
         &self,
         server: &str,
         params: Option<PaginatedRequestParams>,
@@ -4255,7 +4254,7 @@ impl Session {
             .await
     }
 
-    pub async fn list_resource_templates(
+    pub(crate) async fn list_resource_templates(
         &self,
         server: &str,
         params: Option<PaginatedRequestParams>,
@@ -4268,7 +4267,7 @@ impl Session {
             .await
     }
 
-    pub async fn read_resource(
+    pub(crate) async fn read_resource(
         &self,
         server: &str,
         params: ReadResourceRequestParams,
@@ -4281,7 +4280,7 @@ impl Session {
             .await
     }
 
-    pub async fn call_tool(
+    pub(crate) async fn call_tool(
         &self,
         server: &str,
         tool: &str,
@@ -4318,7 +4317,7 @@ impl Session {
             .await
     }
 
-    pub async fn interrupt_task(self: &Arc<Self>) {
+    pub(crate) async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
         let has_active_turn = { self.active_turn.lock().await.is_some() };
         if has_active_turn {
@@ -4805,15 +4804,15 @@ mod handlers {
     use tracing::info;
     use tracing::warn;
 
-    pub async fn interrupt(sess: &Arc<Session>) {
+    pub(super) async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
     }
 
-    pub async fn clean_background_terminals(sess: &Arc<Session>) {
+    pub(super) async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
     }
 
-    pub async fn override_turn_context(
+    pub(super) async fn override_turn_context(
         sess: &Session,
         sub_id: String,
         updates: SessionSettingsUpdate,
@@ -4830,7 +4829,7 @@ mod handlers {
         }
     }
 
-    pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
+    pub(super) async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -4921,7 +4920,7 @@ mod handlers {
 
     /// Records an inter-agent assistant envelope, then lets the shared pending-work scheduler
     /// decide whether an idle session should start a regular turn.
-    pub async fn inter_agent_communication(
+    pub(super) async fn inter_agent_communication(
         sess: &Arc<Session>,
         sub_id: String,
         communication: InterAgentCommunication,
@@ -4934,7 +4933,11 @@ mod handlers {
         }
     }
 
-    pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
+    pub(super) async fn run_user_shell_command(
+        sess: &Arc<Session>,
+        sub_id: String,
+        command: String,
+    ) {
         if let Some((turn_context, cancellation_token)) =
             sess.active_turn_context_and_cancellation_token().await
         {
@@ -4961,7 +4964,7 @@ mod handlers {
         .await;
     }
 
-    pub async fn resolve_elicitation(
+    pub(super) async fn resolve_elicitation(
         sess: &Arc<Session>,
         server_name: String,
         request_id: ProtocolRequestId,
@@ -5003,7 +5006,7 @@ mod handlers {
 
     /// Propagate a user's exec approval decision to the session.
     /// Also optionally applies an execpolicy amendment.
-    pub async fn exec_approval(
+    pub(super) async fn exec_approval(
         sess: &Arc<Session>,
         approval_id: String,
         turn_id: Option<String>,
@@ -5045,7 +5048,7 @@ mod handlers {
         }
     }
 
-    pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    pub(super) async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
         match decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
@@ -5054,7 +5057,7 @@ mod handlers {
         }
     }
 
-    pub async fn request_user_input_response(
+    pub(super) async fn request_user_input_response(
         sess: &Arc<Session>,
         id: String,
         response: RequestUserInputResponse,
@@ -5062,7 +5065,7 @@ mod handlers {
         sess.notify_user_input_response(&id, response).await;
     }
 
-    pub async fn request_permissions_response(
+    pub(super) async fn request_permissions_response(
         sess: &Arc<Session>,
         id: String,
         response: RequestPermissionsResponse,
@@ -5071,7 +5074,7 @@ mod handlers {
             .await;
     }
 
-    pub async fn dynamic_tool_response(
+    pub(super) async fn dynamic_tool_response(
         sess: &Arc<Session>,
         id: String,
         response: DynamicToolResponse,
@@ -5079,7 +5082,7 @@ mod handlers {
         sess.notify_dynamic_tool_response(&id, response).await;
     }
 
-    pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
+    pub(super) async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
         let id = sess.conversation_id;
         let config = Arc::clone(config);
         tokio::spawn(async move {
@@ -5089,7 +5092,7 @@ mod handlers {
         });
     }
 
-    pub async fn get_history_entry_request(
+    pub(super) async fn get_history_entry_request(
         sess: &Arc<Session>,
         config: &Arc<Config>,
         sub_id: String,
@@ -5126,16 +5129,19 @@ mod handlers {
         });
     }
 
-    pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
+    pub(super) async fn refresh_mcp_servers(
+        sess: &Arc<Session>,
+        refresh_config: McpServerRefreshConfig,
+    ) {
         let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
         *guard = Some(refresh_config);
     }
 
-    pub async fn reload_user_config(sess: &Arc<Session>) {
+    pub(super) async fn reload_user_config(sess: &Arc<Session>) {
         sess.reload_user_config_layer().await;
     }
 
-    pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
+    pub(super) async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let auth = sess.services.auth_manager.auth().await;
         let mcp_servers = sess
@@ -5155,7 +5161,7 @@ mod handlers {
         sess.send_event_raw(event).await;
     }
 
-    pub async fn list_skills(
+    pub(super) async fn list_skills(
         sess: &Session,
         sub_id: String,
         cwds: Vec<PathBuf>,
@@ -5244,13 +5250,13 @@ mod handlers {
         sess.send_event_raw(event).await;
     }
 
-    pub async fn undo(sess: &Arc<Session>, sub_id: String) {
+    pub(super) async fn undo(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
             .await;
     }
 
-    pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+    pub(super) async fn compact(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
         sess.spawn_task(
@@ -5265,7 +5271,7 @@ mod handlers {
         .await;
     }
 
-    pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+    pub(super) async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
         let mut errors = Vec::new();
 
         if let Some(state_db) = sess.services.state_db.as_deref() {
@@ -5308,7 +5314,7 @@ mod handlers {
         .await;
     }
 
-    pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+    pub(super) async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
         let session_source = {
             let state = sess.state.lock().await;
             state.session_configuration.session_source.clone()
@@ -5325,7 +5331,7 @@ mod handlers {
         .await;
     }
 
-    pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
+    pub(super) async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
         if num_turns == 0 {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -5436,7 +5442,7 @@ mod handlers {
     /// current `thread_id`, then updates `SessionConfiguration::thread_name`.
     ///
     /// Returns an error event if the name is empty or session persistence is disabled.
-    pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
+    pub(super) async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
         let Some(name) = crate::util::normalize_thread_name(&name) else {
             let event = Event {
                 id: sub_id,
@@ -5495,7 +5501,7 @@ mod handlers {
         .await;
     }
 
-    pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
+    pub(super) async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         let _ = sess.conversation.shutdown().await;
         sess.services
@@ -5544,7 +5550,7 @@ mod handlers {
         true
     }
 
-    pub async fn review(
+    pub(super) async fn review(
         sess: &Arc<Session>,
         config: &Arc<Config>,
         sub_id: String,

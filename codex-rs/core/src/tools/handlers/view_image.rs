@@ -20,7 +20,7 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ViewImageToolCallEvent;
 
-pub struct ViewImageHandler;
+pub(crate) struct ViewImageHandler;
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
@@ -163,7 +163,7 @@ impl ToolHandler for ViewImageHandler {
     }
 }
 
-pub struct ViewImageOutput {
+pub(crate) struct ViewImageOutput {
     image_url: String,
     image_detail: Option<ImageDetail>,
 }

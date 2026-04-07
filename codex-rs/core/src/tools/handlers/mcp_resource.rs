@@ -30,7 +30,7 @@ use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 
-pub struct McpResourceHandler;
+pub(crate) struct McpResourceHandler;
 
 #[derive(Debug, Deserialize, Default)]
 struct ListResourcesArgs {

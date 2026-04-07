@@ -12,7 +12,7 @@ use super::ExecContext;
 use super::WAIT_TOOL_NAME;
 use super::handle_runtime_response;
 
-pub struct CodeModeWaitHandler;
+pub(crate) struct CodeModeWaitHandler;
 
 #[derive(Debug, Deserialize)]
 struct ExecWaitArgs {

@@ -147,7 +147,7 @@ pub(in crate::memories) async fn prune(session: &Arc<Session>, config: &Config) 
 }
 
 /// JSON schema used to constrain phase-1 model output.
-pub fn output_schema() -> Value {
+pub(super) fn output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {

@@ -30,7 +30,7 @@ struct BaselineFileInfo {
 /// 3. To compute the aggregated unified diff, compare each baseline snapshot to the current file on disk entirely in-memory
 ///    using the `similar` crate and emit unified diffs with rewritten external paths.
 #[derive(Default)]
-pub struct TurnDiffTracker {
+pub(crate) struct TurnDiffTracker {
     /// Map external path -> internal filename (uuid).
     external_to_temp_name: HashMap<PathBuf, String>,
     /// Internal filename -> baseline file info.
@@ -43,7 +43,7 @@ pub struct TurnDiffTracker {
 }
 
 impl TurnDiffTracker {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -51,7 +51,7 @@ impl TurnDiffTracker {
     /// - Creates an in-memory baseline snapshot for files that already exist on disk when first seen.
     /// - For additions, we intentionally do not create a baseline snapshot so that diffs are proper additions.
     /// - Also updates internal mappings for move/rename events.
-    pub fn on_patch_begin(&mut self, changes: &HashMap<PathBuf, FileChange>) {
+    pub(crate) fn on_patch_begin(&mut self, changes: &HashMap<PathBuf, FileChange>) {
         for (path, change) in changes.iter() {
             // Ensure a stable internal filename exists for this external path.
             if !self.external_to_temp_name.contains_key(path) {
@@ -222,7 +222,7 @@ impl TurnDiffTracker {
     /// Recompute the aggregated unified diff by comparing all of the in-memory snapshots that were
     /// collected before the first time they were touched by apply_patch during this turn with
     /// the current repo state.
-    pub fn get_unified_diff(&mut self) -> Result<Option<String>> {
+    pub(crate) fn get_unified_diff(&mut self) -> Result<Option<String>> {
         let mut aggregated = String::new();
 
         // Compute diffs per tracked internal file in a stable order by external path.

@@ -36,7 +36,7 @@ impl codex_rollout::RolloutConfigView for Config {
     }
 }
 
-pub mod list {
+pub(crate) mod list {
     pub use codex_rollout::list::*;
 }
 
@@ -44,15 +44,15 @@ pub(crate) mod metadata {
     pub(crate) use codex_rollout::metadata::builder_from_items;
 }
 
-pub mod policy {
+pub(crate) mod policy {
     pub use codex_rollout::policy::*;
 }
 
-pub mod recorder {
-    pub use codex_rollout::recorder::*;
+pub(crate) mod recorder {
+    pub(crate) use codex_rollout::recorder::*;
 }
 
-pub mod session_index {
+pub(crate) mod session_index {
     pub use codex_rollout::session_index::*;
 }
 

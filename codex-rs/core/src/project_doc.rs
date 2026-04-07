@@ -34,7 +34,7 @@ pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for project-level docs.
-pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
+pub(crate) const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -125,7 +125,7 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 /// concatenation of all discovered docs. If no documentation file is found the
 /// function returns `Ok(None)`. Unexpected I/O failures bubble up as `Err` so
 /// callers can decide how to handle them.
-pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String>> {
+pub(crate) async fn read_project_docs(config: &Config) -> std::io::Result<Option<String>> {
     let max_total = config.project_doc_max_bytes;
 
     if max_total == 0 {

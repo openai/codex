@@ -489,7 +489,10 @@ $envVars | ForEach-Object {
 /// Removes shell snapshots that either lack a matching session rollout file or
 /// whose rollouts have not been updated within the retention window.
 /// The active session id is exempt from cleanup.
-pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: ThreadId) -> Result<()> {
+pub(crate) async fn cleanup_stale_snapshots(
+    codex_home: &Path,
+    active_session_id: ThreadId,
+) -> Result<()> {
     let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
 
     let mut entries = match fs::read_dir(&snapshot_dir).await {

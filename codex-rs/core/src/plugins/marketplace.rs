@@ -19,14 +19,14 @@ use tracing::warn;
 const MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedMarketplacePlugin {
+pub(super) struct ResolvedMarketplacePlugin {
     pub plugin_id: PluginId,
     pub source_path: AbsolutePathBuf,
     pub auth_policy: MarketplacePluginAuthPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Marketplace {
+pub(super) struct Marketplace {
     pub name: String,
     pub path: AbsolutePathBuf,
     pub interface: Option<MarketplaceInterface>,
@@ -40,7 +40,7 @@ pub struct MarketplaceListError {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MarketplaceListOutcome {
+pub(super) struct MarketplaceListOutcome {
     pub marketplaces: Vec<Marketplace>,
     pub errors: Vec<MarketplaceListError>,
 }
@@ -51,7 +51,7 @@ pub struct MarketplaceInterface {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MarketplacePlugin {
+pub(super) struct MarketplacePlugin {
     pub name: String,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
@@ -155,7 +155,7 @@ impl MarketplaceError {
 
 // Always read the specified marketplace file from disk so installs see the
 // latest marketplace.json contents without any in-memory cache invalidation.
-pub fn resolve_marketplace_plugin(
+pub(super) fn resolve_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
     restriction_product: Option<Product>,
@@ -205,7 +205,7 @@ pub fn resolve_marketplace_plugin(
     })
 }
 
-pub fn list_marketplaces(
+pub(super) fn list_marketplaces(
     additional_roots: &[AbsolutePathBuf],
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())

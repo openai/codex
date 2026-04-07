@@ -14,12 +14,12 @@ use codex_tools::ToolSearchResultSource;
 use codex_tools::collect_tool_search_output_tools;
 use std::collections::HashMap;
 
-pub struct ToolSearchHandler {
+pub(crate) struct ToolSearchHandler {
     tools: HashMap<String, ToolInfo>,
 }
 
 impl ToolSearchHandler {
-    pub fn new(tools: HashMap<String, ToolInfo>) -> Self {
+    pub(crate) fn new(tools: HashMap<String, ToolInfo>) -> Self {
         Self { tools }
     }
 }

@@ -42,7 +42,7 @@ pub(crate) struct OrchestratorRunResult<Out> {
 }
 
 impl ToolOrchestrator {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             sandbox: SandboxManager::new(),
         }
@@ -98,7 +98,7 @@ impl ToolOrchestrator {
         }
     }
 
-    pub async fn run<Rq, Out, T>(
+    pub(crate) async fn run<Rq, Out, T>(
         &mut self,
         tool: &mut T,
         req: &Rq,

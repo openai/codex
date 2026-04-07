@@ -34,7 +34,7 @@ pub(crate) struct ToolEventCtx<'a> {
 }
 
 impl<'a> ToolEventCtx<'a> {
-    pub fn new(
+    pub(crate) fn new(
         session: &'a Session,
         turn: &'a TurnContext,
         call_id: &'a str,
@@ -109,7 +109,7 @@ pub(crate) enum ToolEmitter {
 }
 
 impl ToolEmitter {
-    pub fn shell(
+    pub(crate) fn shell(
         command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
@@ -125,14 +125,14 @@ impl ToolEmitter {
         }
     }
 
-    pub fn apply_patch(changes: HashMap<PathBuf, FileChange>, auto_approved: bool) -> Self {
+    pub(crate) fn apply_patch(changes: HashMap<PathBuf, FileChange>, auto_approved: bool) -> Self {
         Self::ApplyPatch {
             changes,
             auto_approved,
         }
     }
 
-    pub fn unified_exec(
+    pub(crate) fn unified_exec(
         command: &[String],
         cwd: PathBuf,
         source: ExecCommandSource,
@@ -148,7 +148,7 @@ impl ToolEmitter {
         }
     }
 
-    pub async fn emit(&self, ctx: ToolEventCtx<'_>, stage: ToolEventStage) {
+    pub(crate) async fn emit(&self, ctx: ToolEventCtx<'_>, stage: ToolEventStage) {
         match (self, stage) {
             (
                 Self::Shell {
@@ -286,7 +286,7 @@ impl ToolEmitter {
         }
     }
 
-    pub async fn begin(&self, ctx: ToolEventCtx<'_>) {
+    pub(crate) async fn begin(&self, ctx: ToolEventCtx<'_>) {
         self.emit(ctx, ToolEventStage::Begin).await;
     }
 
@@ -303,7 +303,7 @@ impl ToolEmitter {
         }
     }
 
-    pub async fn finish(
+    pub(crate) async fn finish(
         &self,
         ctx: ToolEventCtx<'_>,
         out: Result<ExecToolCallOutput, ToolError>,

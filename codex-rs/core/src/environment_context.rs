@@ -26,7 +26,7 @@ pub(crate) struct NetworkContext {
 }
 
 impl EnvironmentContext {
-    pub fn new(
+    pub(crate) fn new(
         cwd: Option<PathBuf>,
         shell: Shell,
         current_date: Option<String>,
@@ -47,7 +47,7 @@ impl EnvironmentContext {
     /// Compares two environment contexts, ignoring the shell. Useful when
     /// comparing turn to turn, since the initial environment_context will
     /// include the shell, and then it is not configurable from turn to turn.
-    pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
+    pub(crate) fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
         let EnvironmentContext {
             cwd,
             current_date,
@@ -63,7 +63,7 @@ impl EnvironmentContext {
             && self.subagents == *subagents
     }
 
-    pub fn diff_from_turn_context_item(
+    pub(crate) fn diff_from_turn_context_item(
         before: &TurnContextItem,
         after: &TurnContext,
         shell: &Shell,
@@ -92,7 +92,7 @@ impl EnvironmentContext {
         )
     }
 
-    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             Some(turn_context.cwd.to_path_buf()),
             shell.clone(),
@@ -103,7 +103,10 @@ impl EnvironmentContext {
         )
     }
 
-    pub fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Self {
+    pub(crate) fn from_turn_context_item(
+        turn_context_item: &TurnContextItem,
+        shell: &Shell,
+    ) -> Self {
         Self::new(
             Some(turn_context_item.cwd.clone()),
             shell.clone(),
@@ -114,7 +117,7 @@ impl EnvironmentContext {
         )
     }
 
-    pub fn with_subagents(mut self, subagents: String) -> Self {
+    pub(crate) fn with_subagents(mut self, subagents: String) -> Self {
         if !subagents.is_empty() {
             self.subagents = Some(subagents);
         }
@@ -168,7 +171,7 @@ impl EnvironmentContext {
     ///   <shell>...</shell>
     /// </environment_context>
     /// ```
-    pub fn serialize_to_xml(self) -> String {
+    pub(crate) fn serialize_to_xml(self) -> String {
         let mut lines = Vec::new();
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));

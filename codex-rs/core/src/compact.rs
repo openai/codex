@@ -233,7 +233,7 @@ async fn run_compact_task_inner(
     Ok(())
 }
 
-pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
+pub(crate) fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     let mut pieces = Vec::new();
     for item in content {
         match item {

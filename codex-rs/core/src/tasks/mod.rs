@@ -224,7 +224,7 @@ where
 }
 
 impl Session {
-    pub async fn spawn_task<T: SessionTask>(
+    pub(crate) async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
@@ -370,7 +370,7 @@ impl Session {
             .await;
     }
 
-    pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+    pub(crate) async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         if let Some(mut active_turn) = self.take_active_turn().await {
             for task in active_turn.drain_tasks() {
                 self.handle_task_abort(task, reason.clone()).await;
@@ -384,7 +384,7 @@ impl Session {
         }
     }
 
-    pub async fn on_task_finished(
+    pub(crate) async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,

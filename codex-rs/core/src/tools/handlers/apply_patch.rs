@@ -33,7 +33,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-pub struct ApplyPatchHandler;
+pub(crate) struct ApplyPatchHandler;
 
 fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     let mut keys = Vec::new();

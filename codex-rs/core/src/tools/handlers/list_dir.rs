@@ -16,7 +16,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-pub struct ListDirHandler;
+pub(crate) struct ListDirHandler;
 
 const MAX_ENTRY_LENGTH: usize = 500;
 const INDENTATION_SPACES: usize = 2;

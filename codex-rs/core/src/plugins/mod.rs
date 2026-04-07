@@ -43,7 +43,6 @@ pub use manager::RemotePluginSyncResult;
 pub use manager::installed_plugin_telemetry_metadata;
 pub use manager::load_plugin_apps;
 pub use manager::load_plugin_mcp_servers;
-pub use manager::plugin_telemetry_metadata_from_root;
 pub use manifest::PluginManifestInterface;
 pub(crate) use manifest::PluginManifestPaths;
 pub(crate) use manifest::load_plugin_manifest;

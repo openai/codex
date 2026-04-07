@@ -15,30 +15,30 @@ pub(crate) const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub(crate) const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginInstallResult {
+pub(super) struct PluginInstallResult {
     pub plugin_id: PluginId,
     pub plugin_version: String,
     pub installed_path: AbsolutePathBuf,
 }
 
 #[derive(Debug, Clone)]
-pub struct PluginStore {
+pub(super) struct PluginStore {
     root: AbsolutePathBuf,
 }
 
 impl PluginStore {
-    pub fn new(codex_home: PathBuf) -> Self {
+    pub(super) fn new(codex_home: PathBuf) -> Self {
         Self {
             root: AbsolutePathBuf::try_from(codex_home.join(PLUGINS_CACHE_DIR))
                 .unwrap_or_else(|err| panic!("plugin cache root should be absolute: {err}")),
         }
     }
 
-    pub fn root(&self) -> &AbsolutePathBuf {
+    pub(super) fn root(&self) -> &AbsolutePathBuf {
         &self.root
     }
 
-    pub fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
+    pub(super) fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(
             self.root
                 .as_path()
@@ -48,7 +48,11 @@ impl PluginStore {
         .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
     }
 
-    pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
+    pub(super) fn plugin_root(
+        &self,
+        plugin_id: &PluginId,
+        plugin_version: &str,
+    ) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(
             self.plugin_base_root(plugin_id)
                 .as_path()
@@ -57,7 +61,7 @@ impl PluginStore {
         .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
     }
 
-    pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
+    pub(super) fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
         let mut discovered_versions = fs::read_dir(self.plugin_base_root(plugin_id).as_path())
             .ok()?
             .filter_map(Result::ok)
@@ -80,16 +84,16 @@ impl PluginStore {
         }
     }
 
-    pub fn active_plugin_root(&self, plugin_id: &PluginId) -> Option<AbsolutePathBuf> {
+    pub(super) fn active_plugin_root(&self, plugin_id: &PluginId) -> Option<AbsolutePathBuf> {
         self.active_plugin_version(plugin_id)
             .map(|plugin_version| self.plugin_root(plugin_id, &plugin_version))
     }
 
-    pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
+    pub(super) fn is_installed(&self, plugin_id: &PluginId) -> bool {
         self.active_plugin_version(plugin_id).is_some()
     }
 
-    pub fn install(
+    pub(super) fn install(
         &self,
         source_path: AbsolutePathBuf,
         plugin_id: PluginId,
@@ -98,7 +102,7 @@ impl PluginStore {
         self.install_with_version(source_path, plugin_id, plugin_version)
     }
 
-    pub fn install_with_version(
+    pub(super) fn install_with_version(
         &self,
         source_path: AbsolutePathBuf,
         plugin_id: PluginId,
@@ -133,7 +137,7 @@ impl PluginStore {
         })
     }
 
-    pub fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
+    pub(super) fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
         remove_existing_target(self.plugin_base_root(plugin_id).as_path())
     }
 }

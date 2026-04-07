@@ -6,10 +6,10 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ResolvedReviewRequest {
-    pub target: ReviewTarget,
-    pub prompt: String,
-    pub user_facing_hint: String,
+pub(crate) struct ResolvedReviewRequest {
+    pub(crate) target: ReviewTarget,
+    pub(crate) prompt: String,
+    pub(crate) user_facing_hint: String,
 }
 
 const UNCOMMITTED_PROMPT: &str = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
@@ -36,7 +36,7 @@ static COMMIT_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
         .unwrap_or_else(|err| panic!("commit review prompt must parse: {err}"))
 });
 
-pub fn resolve_review_request(
+pub(crate) fn resolve_review_request(
     request: ReviewRequest,
     cwd: &Path,
 ) -> anyhow::Result<ResolvedReviewRequest> {
@@ -53,7 +53,7 @@ pub fn resolve_review_request(
     })
 }
 
-pub fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String> {
+pub(crate) fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String> {
     match target {
         ReviewTarget::UncommittedChanges => Ok(UNCOMMITTED_PROMPT.to_string()),
         ReviewTarget::BaseBranch { branch } => {

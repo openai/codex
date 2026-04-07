@@ -22,8 +22,8 @@ use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::ExecCommandSource;
 
-pub struct JsReplHandler;
-pub struct JsReplResetHandler;
+pub(crate) struct JsReplHandler;
+pub(crate) struct JsReplResetHandler;
 
 fn join_outputs(stdout: &str, stderr: &str) -> String {
     if stdout.is_empty() {

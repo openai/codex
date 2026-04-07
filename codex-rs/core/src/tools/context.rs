@@ -24,17 +24,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
+pub(crate) type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ToolCallSource {
+pub(crate) enum ToolCallSource {
     Direct,
     JsRepl,
     CodeMode,
 }
 
 #[derive(Clone)]
-pub struct ToolInvocation {
+pub(crate) struct ToolInvocation {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub tracker: SharedTurnDiffTracker,
@@ -77,7 +77,7 @@ impl ToolPayload {
     }
 }
 
-pub trait ToolOutput: Send {
+pub(crate) trait ToolOutput: Send {
     fn log_preview(&self) -> String;
 
     fn success_for_logging(&self) -> bool;
@@ -119,7 +119,7 @@ impl ToolOutput for CallToolResult {
 }
 
 #[derive(Clone)]
-pub struct ToolSearchOutput {
+pub(crate) struct ToolSearchOutput {
     pub tools: Vec<ToolSearchOutputTool>,
 }
 
@@ -159,14 +159,14 @@ impl ToolOutput for ToolSearchOutput {
     }
 }
 
-pub struct FunctionToolOutput {
+pub(crate) struct FunctionToolOutput {
     pub body: Vec<FunctionCallOutputContentItem>,
     pub success: Option<bool>,
     pub post_tool_use_response: Option<JsonValue>,
 }
 
 impl FunctionToolOutput {
-    pub fn from_text(text: String, success: Option<bool>) -> Self {
+    pub(crate) fn from_text(text: String, success: Option<bool>) -> Self {
         Self {
             body: vec![FunctionCallOutputContentItem::InputText { text }],
             success,
@@ -174,7 +174,7 @@ impl FunctionToolOutput {
         }
     }
 
-    pub fn from_content(
+    pub(crate) fn from_content(
         content: Vec<FunctionCallOutputContentItem>,
         success: Option<bool>,
     ) -> Self {
@@ -185,7 +185,7 @@ impl FunctionToolOutput {
         }
     }
 
-    pub fn into_text(self) -> String {
+    pub(crate) fn into_text(self) -> String {
         function_call_output_content_items_to_text(&self.body).unwrap_or_default()
     }
 }
@@ -210,12 +210,12 @@ impl ToolOutput for FunctionToolOutput {
     }
 }
 
-pub struct ApplyPatchToolOutput {
+pub(crate) struct ApplyPatchToolOutput {
     pub text: String,
 }
 
 impl ApplyPatchToolOutput {
-    pub fn from_text(text: String) -> Self {
+    pub(crate) fn from_text(text: String) -> Self {
         Self { text }
     }
 }
@@ -245,7 +245,7 @@ impl ToolOutput for ApplyPatchToolOutput {
     }
 }
 
-pub struct AbortedToolOutput {
+pub(crate) struct AbortedToolOutput {
     pub message: String,
 }
 
@@ -283,7 +283,7 @@ impl ToolOutput for AbortedToolOutput {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ExecCommandToolOutput {
+pub(crate) struct ExecCommandToolOutput {
     pub event_call_id: String,
     pub chunk_id: String,
     pub wall_time: Duration,

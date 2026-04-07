@@ -10,7 +10,7 @@ use super::PUBLIC_TOOL_NAME;
 use super::build_enabled_tools;
 use super::handle_runtime_response;
 
-pub struct CodeModeExecuteHandler;
+pub(crate) struct CodeModeExecuteHandler;
 
 impl CodeModeExecuteHandler {
     async fn execute(

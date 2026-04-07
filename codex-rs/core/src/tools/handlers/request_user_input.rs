@@ -10,7 +10,7 @@ use codex_tools::REQUEST_USER_INPUT_TOOL_NAME;
 use codex_tools::normalize_request_user_input_args;
 use codex_tools::request_user_input_unavailable_message;
 
-pub struct RequestUserInputHandler {
+pub(crate) struct RequestUserInputHandler {
     pub default_mode_request_user_input: bool,
 }
 

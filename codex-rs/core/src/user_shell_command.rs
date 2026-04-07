@@ -33,7 +33,7 @@ fn format_user_shell_command_body(
     sections.join("\n")
 }
 
-pub fn format_user_shell_command_record(
+pub(crate) fn format_user_shell_command_record(
     command: &str,
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
@@ -42,7 +42,7 @@ pub fn format_user_shell_command_record(
     USER_SHELL_COMMAND_FRAGMENT.wrap(body)
 }
 
-pub fn user_shell_command_record_item(
+pub(crate) fn user_shell_command_record_item(
     command: &str,
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,

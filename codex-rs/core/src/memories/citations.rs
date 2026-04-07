@@ -3,7 +3,7 @@ use codex_protocol::memory_citation::MemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry;
 use std::collections::HashSet;
 
-pub fn parse_memory_citation(citations: Vec<String>) -> Option<MemoryCitation> {
+pub(crate) fn parse_memory_citation(citations: Vec<String>) -> Option<MemoryCitation> {
     let mut entries = Vec::new();
     let mut rollout_ids = Vec::new();
     let mut seen_rollout_ids = HashSet::new();
@@ -42,7 +42,7 @@ pub fn parse_memory_citation(citations: Vec<String>) -> Option<MemoryCitation> {
     }
 }
 
-pub fn get_thread_id_from_citations(citations: Vec<String>) -> Vec<ThreadId> {
+pub(crate) fn get_thread_id_from_citations(citations: Vec<String>) -> Vec<ThreadId> {
     let mut result = Vec::new();
     if let Some(memory_citation) = parse_memory_citation(citations) {
         for rollout_id in memory_citation.rollout_ids {
