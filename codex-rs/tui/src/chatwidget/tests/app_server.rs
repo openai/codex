@@ -573,8 +573,8 @@ async fn live_app_server_server_overloaded_error_renders_warning() {
 async fn live_app_server_usage_limit_error_shows_notify_owner_hint() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.update_account_state(
-        None,
-        None,
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
         Some(false),
         Some(PlanType::SelfServeBusinessUsageBased),
         /*has_chatgpt_account*/ true,
@@ -633,8 +633,8 @@ async fn live_app_server_usage_limit_error_shows_notify_owner_hint() {
 async fn live_app_server_usage_limit_error_shows_spend_cap_hint() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.update_account_state(
-        None,
-        None,
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
         Some(false),
         Some(PlanType::SelfServeBusinessUsageBased),
         /*has_chatgpt_account*/ true,

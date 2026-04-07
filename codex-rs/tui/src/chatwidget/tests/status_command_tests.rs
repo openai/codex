@@ -130,8 +130,8 @@ async fn usage_limit_error_requests_background_rate_limit_refresh() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.update_account_state(
-        None,
-        None,
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
         Some(false),
         Some(PlanType::SelfServeBusinessUsageBased),
         /*has_chatgpt_account*/ true,
@@ -159,8 +159,8 @@ async fn usage_limit_error_opens_workspace_owner_prompt_after_rate_limits_refres
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.update_account_state(
-        None,
-        None,
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
         Some(false),
         Some(PlanType::SelfServeBusinessUsageBased),
         /*has_chatgpt_account*/ true,

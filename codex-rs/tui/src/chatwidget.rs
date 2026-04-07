@@ -2780,7 +2780,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
-        self.on_error_with_hint(message, None);
+        self.on_error_with_hint(message, /*hint*/ None);
     }
 
     fn on_error_with_hint(&mut self, message: String, hint: Option<String>) {
@@ -9777,12 +9777,12 @@ impl ChatWidget {
         self.pending_workspace_owner_notification_prompt = false;
         match result {
             Ok(AddCreditsNudgeEmailStatus::Sent) => {
-                self.add_info_message("Workspace owner notified.".to_string(), None);
+                self.add_info_message("Workspace owner notified.".to_string(), /*hint*/ None);
             }
             Ok(AddCreditsNudgeEmailStatus::CooldownActive) => {
                 self.add_info_message(
                     "Workspace owner was already notified recently.".to_string(),
-                    None,
+                    /*hint*/ None,
                 );
             }
             Err(_) => {

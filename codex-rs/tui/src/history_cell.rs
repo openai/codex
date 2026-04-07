@@ -2160,7 +2160,7 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
-    new_error_event_with_hint(message, None)
+    new_error_event_with_hint(message, /*hint*/ None)
 }
 
 pub(crate) fn new_error_event_with_hint(message: String, hint: Option<String>) -> PlainHistoryCell {

@@ -1605,7 +1605,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
         ChatGptAuthFixture::new("access-chatgpt")
             .email("user@example.com")
             .plan_type("pro")
-            .is_org_owner(true),
+            .is_org_owner(/*is_org_owner*/ true),
         AuthCredentialsStoreMode::File,
     )?;
 
@@ -1796,7 +1796,7 @@ async fn send_add_credits_nudge_email_returns_sent() -> Result<()> {
             ..Default::default()
         },
     )?;
-    mock_send_add_credits_nudge_email(&mock_server, 200).await;
+    mock_send_add_credits_nudge_email(&mock_server, /*status*/ 200).await;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt").chatgpt_account_id("org-current"),
@@ -1835,7 +1835,7 @@ async fn send_add_credits_nudge_email_returns_cooldown_active_for_429() -> Resul
             ..Default::default()
         },
     )?;
-    mock_send_add_credits_nudge_email(&mock_server, 429).await;
+    mock_send_add_credits_nudge_email(&mock_server, /*status*/ 429).await;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt").chatgpt_account_id("org-current"),
@@ -1874,7 +1874,7 @@ async fn send_add_credits_nudge_email_returns_jsonrpc_error_for_backend_failures
             ..Default::default()
         },
     )?;
-    mock_send_add_credits_nudge_email(&mock_server, 500).await;
+    mock_send_add_credits_nudge_email(&mock_server, /*status*/ 500).await;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt").chatgpt_account_id("org-current"),

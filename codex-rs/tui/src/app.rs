@@ -6134,7 +6134,7 @@ async fn fetch_account_rate_limits(
         additional_limit_count = response
             .rate_limits_by_limit_id
             .as_ref()
-            .map(|by_limit_id| by_limit_id.len())
+            .map(std::collections::HashMap::len)
             .unwrap_or(0),
         "received raw account/rateLimits/read payload shape"
     );

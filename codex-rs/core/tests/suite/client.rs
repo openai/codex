@@ -2393,6 +2393,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "resets_at": 1704074400
                 },
                 "credits": null,
+                "spend_control": null,
                 "plan_type": null
             }
         })
@@ -2444,6 +2445,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "resets_at": 1704074400
                 },
                 "credits": null,
+                "spend_control": null,
                 "plan_type": null
             }
         })
@@ -2518,6 +2520,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "resets_at": null
         },
         "credits": null,
+        "spend_control": null,
         "plan_type": null
     });
 

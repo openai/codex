@@ -400,8 +400,8 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
 async fn core_usage_limit_error_shows_notify_owner_hint() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.update_account_state(
-        None,
-        None,
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
         Some(false),
         Some(PlanType::SelfServeBusinessUsageBased),
         /*has_chatgpt_account*/ true,
@@ -450,8 +450,8 @@ async fn core_usage_limit_error_shows_notify_owner_hint() {
 async fn core_usage_limit_error_shows_spend_cap_hint_when_reached() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.update_account_state(
-        None,
-        None,
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
         Some(false),
         Some(PlanType::SelfServeBusinessUsageBased),
         /*has_chatgpt_account*/ true,
