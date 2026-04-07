@@ -1,5 +1,5 @@
 pub(crate) mod agent_jobs;
-pub mod apply_patch;
+pub(crate) mod apply_patch;
 mod dynamic;
 mod js_repl;
 mod list_dir;

@@ -31,6 +31,8 @@ fn normalize_git_remote_url(url: &str) -> String {
         .to_string()
 }
 
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
 #[tokio::test]
 async fn responses_stream_includes_subagent_header_on_review() {
     core_test_support::skip_if_no_network!();
@@ -98,6 +100,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let client = ModelClient::new(
         /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,
@@ -147,6 +150,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
         Some(expected_window_id.as_str())
     );
     assert_eq!(request.header("x-codex-parent-thread-id"), None);
+    assert_eq!(
+        request.body_json()["client_metadata"]["x-codex-installation-id"].as_str(),
+        Some(TEST_INSTALLATION_ID)
+    );
     assert_eq!(request.header("x-codex-sandbox"), None);
 }
 
@@ -218,6 +225,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let client = ModelClient::new(
         /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,
@@ -331,6 +339,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     let client = ModelClient::new(
         /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,

@@ -1,5 +1,15 @@
-pub mod auth;
+pub(crate) mod auth;
 mod skill_dependencies;
+pub use auth::McpAuthStatusEntry;
+pub use auth::McpOAuthLoginConfig;
+pub use auth::McpOAuthLoginSupport;
+pub use auth::McpOAuthScopesSource;
+pub use auth::ResolvedMcpOAuthScopes;
+pub use auth::compute_auth_statuses;
+pub use auth::discover_supported_scopes;
+pub use auth::oauth_login_support;
+pub use auth::resolve_oauth_scopes;
+pub use auth::should_retry_without_scopes;
 pub use skill_dependencies::canonical_mcp_server_key;
 pub use skill_dependencies::collect_missing_mcp_dependencies;
 
@@ -23,7 +33,6 @@ use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use serde_json::Value;
 
-use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
@@ -388,7 +397,7 @@ pub fn group_tools_by_server(
 
 pub async fn collect_mcp_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
-    auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    auth_status_entries: HashMap<String, McpAuthStatusEntry>,
 ) -> McpListToolsResponseEvent {
     collect_mcp_snapshot_from_manager_with_detail(
         mcp_connection_manager,
@@ -400,7 +409,7 @@ pub async fn collect_mcp_snapshot_from_manager(
 
 pub async fn collect_mcp_snapshot_from_manager_with_detail(
     mcp_connection_manager: &McpConnectionManager,
-    auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    auth_status_entries: HashMap<String, McpAuthStatusEntry>,
     detail: McpSnapshotDetail,
 ) -> McpListToolsResponseEvent {
     let (tools, resources, resource_templates) = tokio::join!(

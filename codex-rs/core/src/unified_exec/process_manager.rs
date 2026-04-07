@@ -582,12 +582,12 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn open_session_with_exec_env(
         &self,
         process_id: i32,
-        env: &ExecRequest,
+        request: &ExecRequest,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let (program, args) = env
+        let (program, args) = request
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
@@ -604,24 +604,24 @@ impl UnifiedExecProcessManager {
                 .get_exec_backend()
                 .start(codex_exec_server::ExecParams {
                     process_id: exec_server_process_id(process_id).into(),
-                    argv: env.command.clone(),
-                    cwd: env.cwd.to_path_buf(),
-                    env: env.env.clone(),
+                    argv: request.command.clone(),
+                    cwd: request.cwd.to_path_buf(),
+                    env: request.env.clone(),
                     tty,
-                    arg0: env.arg0.clone(),
+                    arg0: request.arg0.clone(),
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            return UnifiedExecProcess::from_remote_started(started, env.sandbox).await;
+            return UnifiedExecProcess::from_remote_started(started, request.sandbox).await;
         }
 
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,
                 args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
+                request.cwd.as_path(),
+                &request.env,
+                &request.arg0,
                 codex_utils_pty::TerminalSize::default(),
                 &inherited_fds,
             )
@@ -630,9 +630,9 @@ impl UnifiedExecProcessManager {
             codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
                 program,
                 args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
+                request.cwd.as_path(),
+                &request.env,
+                &request.arg0,
                 &inherited_fds,
             )
             .await
@@ -640,7 +640,7 @@ impl UnifiedExecProcessManager {
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
         spawn_lifecycle.after_spawn();
-        UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
+        UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
     }
 
     pub(super) async fn open_session_with_sandbox(

@@ -19,10 +19,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::McpAuthStatusEntry;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpConfig;
 use crate::mcp::ToolPluginProvenance;
-use crate::mcp::auth::McpAuthStatusEntry;
 use crate::mcp::configured_mcp_servers;
 use crate::mcp::effective_mcp_servers;
 use crate::mcp::sanitize_responses_api_tool_name;
@@ -1568,7 +1568,7 @@ fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
 }
 
 fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
-    if let Some(metrics) = codex_otel::metrics::global() {
+    if let Some(metrics) = codex_otel::global() {
         let _ = metrics.record_duration(metric, duration, tags);
     }
 }

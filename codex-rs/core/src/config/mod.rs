@@ -54,7 +54,7 @@ use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_login::AuthManagerConfig;
-use codex_mcp::mcp::McpConfig;
+use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -100,7 +100,7 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub mod service;
+pub(crate) mod service;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -247,6 +247,10 @@ pub struct Config {
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
+
+    /// Explicit developer instructions override, preserving `null` as distinct
+    /// from a missing override.
+    pub developer_instructions_override: Option<Option<String>>,
 
     /// Guardian-specific developer instructions override from requirements.toml.
     pub guardian_developer_instructions: Option<String>,
@@ -1750,6 +1754,7 @@ impl Config {
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
         let base_instructions = base_instructions.or_else(|| file_base_instructions.map(Some));
+        let developer_instructions_override = developer_instructions.clone();
         let developer_instructions =
             developer_instructions.unwrap_or_else(|| cfg.developer_instructions.clone());
         let include_permissions_instructions = config_profile
@@ -1934,6 +1939,7 @@ impl Config {
             base_instructions,
             personality,
             developer_instructions,
+            developer_instructions_override,
             compact_prompt,
             commit_attribution,
             include_permissions_instructions,
