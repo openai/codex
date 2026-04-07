@@ -267,7 +267,7 @@ fn append_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
         CodeModeToolKind::Function => definition
             .input_schema
             .as_ref()
-            .map(render_json_schema_to_typescript_with_property_descriptions)
+            .map(render_json_schema_to_typescript)
             .unwrap_or_else(|| "unknown".to_string()),
         CodeModeToolKind::Freeform => "string".to_string(),
     };
@@ -297,33 +297,6 @@ fn render_code_mode_tool_declaration(
 
 pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
     render_json_schema_to_typescript_inner(schema)
-}
-
-fn render_json_schema_to_typescript_with_property_descriptions(schema: &JsonValue) -> String {
-    let Some(map) = schema.as_object() else {
-        return render_json_schema_to_typescript(schema);
-    };
-
-    if !(map.contains_key("properties")
-        || map.contains_key("additionalProperties")
-        || map.contains_key("required"))
-    {
-        return render_json_schema_to_typescript(schema);
-    }
-
-    let Some(properties) = map.get("properties").and_then(JsonValue::as_object) else {
-        return render_json_schema_to_typescript(schema);
-    };
-    if properties.values().all(|value| {
-        value
-            .get("description")
-            .and_then(JsonValue::as_str)
-            .is_none_or(str::is_empty)
-    }) {
-        return render_json_schema_to_typescript(schema);
-    }
-
-    render_json_schema_object_with_property_descriptions(map)
 }
 
 fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
@@ -435,6 +408,45 @@ fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>) -> String 
     "unknown[]".to_string()
 }
 
+fn append_additional_properties_line(
+    lines: &mut Vec<String>,
+    map: &serde_json::Map<String, JsonValue>,
+    properties: &serde_json::Map<String, JsonValue>,
+    line_prefix: &str,
+) {
+    if let Some(additional_properties) = map.get("additionalProperties") {
+        let property_type = match additional_properties {
+            JsonValue::Bool(true) => Some("unknown".to_string()),
+            JsonValue::Bool(false) => None,
+            value => Some(render_json_schema_to_typescript_inner(value)),
+        };
+
+        if let Some(property_type) = property_type {
+            lines.push(format!("{line_prefix}[key: string]: {property_type};"));
+        }
+    } else if properties.is_empty() {
+        lines.push(format!("{line_prefix}[key: string]: unknown;"));
+    }
+}
+
+fn has_property_description(value: &JsonValue) -> bool {
+    value
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .is_some_and(|description| !description.is_empty())
+}
+
+fn render_json_schema_object_property(name: &str, value: &JsonValue, required: &[&str]) -> String {
+    let optional = if required.iter().any(|required_name| required_name == &name) {
+        ""
+    } else {
+        "?"
+    };
+    let property_name = render_json_schema_property_name(name);
+    let property_type = render_json_schema_to_typescript_inner(value);
+    format!("{property_name}{optional}: {property_type};")
+}
+
 fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String {
     let required = map
         .get("required")
@@ -454,100 +466,45 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String
 
     let mut sorted_properties = properties.iter().collect::<Vec<_>>();
     sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+    if sorted_properties
+        .iter()
+        .any(|(_, value)| has_property_description(value))
+    {
+        let mut lines = vec!["{".to_string()];
+        for (name, value) in sorted_properties {
+            if let Some(description) = value.get("description").and_then(JsonValue::as_str) {
+                for description_line in description
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                {
+                    lines.push(format!("  // {description_line}"));
+                }
+            }
+
+            lines.push(format!(
+                "  {}",
+                render_json_schema_object_property(name, value, &required)
+            ));
+        }
+
+        append_additional_properties_line(&mut lines, map, &properties, "  ");
+        lines.push("}".to_string());
+        return lines.join("\n");
+    }
+
     let mut lines = sorted_properties
         .into_iter()
-        .map(|(name, value)| {
-            let optional = if required.iter().any(|required_name| required_name == name) {
-                ""
-            } else {
-                "?"
-            };
-            let property_name = render_json_schema_property_name(name);
-            let property_type = render_json_schema_to_typescript_inner(value);
-            format!("{property_name}{optional}: {property_type};")
-        })
+        .map(|(name, value)| render_json_schema_object_property(name, value, &required))
         .collect::<Vec<_>>();
 
-    if let Some(additional_properties) = map.get("additionalProperties") {
-        let property_type = match additional_properties {
-            JsonValue::Bool(true) => Some("unknown".to_string()),
-            JsonValue::Bool(false) => None,
-            value => Some(render_json_schema_to_typescript_inner(value)),
-        };
-
-        if let Some(property_type) = property_type {
-            lines.push(format!("[key: string]: {property_type};"));
-        }
-    } else if properties.is_empty() {
-        lines.push("[key: string]: unknown;".to_string());
-    }
+    append_additional_properties_line(&mut lines, map, &properties, "");
 
     if lines.is_empty() {
         return "{}".to_string();
     }
 
     format!("{{ {} }}", lines.join(" "))
-}
-
-fn render_json_schema_object_with_property_descriptions(
-    map: &serde_json::Map<String, JsonValue>,
-) -> String {
-    let required = map
-        .get("required")
-        .and_then(JsonValue::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let properties = map
-        .get("properties")
-        .and_then(JsonValue::as_object)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut sorted_properties = properties.iter().collect::<Vec<_>>();
-    sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
-    let mut lines = vec!["{".to_string()];
-    for (name, value) in sorted_properties {
-        if let Some(description) = value.get("description").and_then(JsonValue::as_str) {
-            for description_line in description
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
-                lines.push(format!("  // {description_line}"));
-            }
-        }
-
-        let optional = if required.iter().any(|required_name| required_name == name) {
-            ""
-        } else {
-            "?"
-        };
-        let property_name = render_json_schema_property_name(name);
-        let property_type = render_json_schema_to_typescript_inner(value);
-        lines.push(format!("  {property_name}{optional}: {property_type};"));
-    }
-
-    if let Some(additional_properties) = map.get("additionalProperties") {
-        let property_type = match additional_properties {
-            JsonValue::Bool(true) => Some("unknown".to_string()),
-            JsonValue::Bool(false) => None,
-            value => Some(render_json_schema_to_typescript_inner(value)),
-        };
-
-        if let Some(property_type) = property_type {
-            lines.push(format!("  [key: string]: {property_type};"));
-        }
-    } else if properties.is_empty() {
-        lines.push("  [key: string]: unknown;".to_string());
-    }
-
-    lines.push("}".to_string());
-    lines.join("\n")
 }
 
 fn render_json_schema_property_name(name: &str) -> String {
@@ -639,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn augment_tool_definition_includes_input_property_descriptions_as_comments() {
+    fn augment_tool_definition_includes_property_descriptions_as_comments() {
         let definition = ToolDefinition {
             name: "weather_tool".to_string(),
             description: "Weather tool".to_string(),
@@ -658,14 +615,31 @@ mod tests {
                             "required": ["location"]
                         }
                     }
-                }
+                },
+                "required": ["weather"]
             })),
-            output_schema: None,
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "forecast": {
+                        "type": "string",
+                        "description": "human readable weather forecast"
+                    }
+                },
+                "required": ["forecast"]
+            })),
         };
 
         let description = augment_tool_definition(definition).description;
-        assert!(description.contains("// look up weather for a given list of locations"));
-        assert!(description.contains("weather?: Array<{ location: string; }>;"));
+        assert!(description.contains(
+            r#"weather_tool(args: {
+  // look up weather for a given list of locations
+  weather: Array<{ location: string; }>;
+}): Promise<{
+  // human readable weather forecast
+  forecast: string;
+}>;"#
+        ));
     }
 
     #[test]
