@@ -3,8 +3,10 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -21,6 +23,9 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use tempfile::TempDir;
 use tokio::time::timeout;
+
+use super::analytics::enable_analytics_capture;
+use super::analytics::wait_for_analytics_event;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -43,14 +48,20 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     std::fs::create_dir(&working_directory)?;
 
     // Mock server: long-running shell command then (after abort) nothing else needed.
-    let server = create_mock_responses_server_sequence(vec![create_shell_command_sse_response(
-        shell_command.clone(),
-        Some(&working_directory),
-        Some(10_000),
-        "call_sleep",
-    )?])
-    .await;
-    create_config_toml(&codex_home, &server.uri(), "never", "danger-full-access")?;
+    let server =
+        create_mock_responses_server_sequence_unchecked(vec![create_shell_command_sse_response(
+            shell_command.clone(),
+            Some(&working_directory),
+            Some(10_000),
+            "call_sleep",
+        )?])
+        .await;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        &codex_home,
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -87,6 +98,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     )
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let turn_id = turn.id.clone();
 
     // Give the command a brief moment to start.
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -96,7 +108,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     let interrupt_id = mcp
         .send_turn_interrupt_request(TurnInterruptParams {
             thread_id: thread_id.clone(),
-            turn_id: turn.id,
+            turn_id: turn_id.clone(),
         })
         .await?;
     let interrupt_resp: JSONRPCResponse = timeout(
@@ -118,6 +130,12 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     )?;
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    assert_eq!(event["event_params"]["thread_id"], thread_id);
+    assert_eq!(event["event_params"]["turn_id"], turn_id);
+    assert_eq!(event["event_params"]["status"], "interrupted");
+    assert_eq!(event["event_params"]["turn_error"], serde_json::Value::Null);
 
     Ok(())
 }
