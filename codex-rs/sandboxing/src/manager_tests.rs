@@ -115,8 +115,8 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
                 NetworkSandboxPolicy::Restricted,
                 SandboxType::None,
             ),
-            None,
-            None,
+            /*network*/ None,
+            /*codex_linux_sandbox_exe*/ None,
         )
         .expect("transform");
 
@@ -165,8 +165,8 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                 NetworkSandboxPolicy::Restricted,
                 SandboxType::None,
             ),
-            None,
-            None,
+            /*network*/ None,
+            /*codex_linux_sandbox_exe*/ None,
         )
         .expect("transform");
 
@@ -231,8 +231,8 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 NetworkSandboxPolicy::Restricted,
                 SandboxType::None,
             ),
-            None,
-            None,
+            /*network*/ None,
+            /*codex_linux_sandbox_exe*/ None,
         )
         .expect("transform");
 
@@ -283,7 +283,7 @@ fn transform_linux_seccomp_request(
                 NetworkSandboxPolicy::Enabled,
                 SandboxType::LinuxSeccomp,
             ),
-            None,
+            /*network*/ None,
             Some(codex_linux_sandbox_exe),
         )
         .expect("transform")
