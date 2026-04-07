@@ -39,6 +39,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub struct ShellHandler;
 
@@ -458,9 +459,15 @@ impl ShellHandler {
         }
 
         // Intercept apply_patch if present.
+        let apply_patch_cwd =
+            AbsolutePathBuf::from_absolute_path(&exec_params.cwd).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "apply_patch verification failed: failed to resolve cwd: {err}"
+                ))
+            })?;
         if let Some(output) = intercept_apply_patch(
             &exec_params.command,
-            &exec_params.cwd,
+            &apply_patch_cwd,
             exec_params.expiration.timeout_ms(),
             session.clone(),
             turn.clone(),

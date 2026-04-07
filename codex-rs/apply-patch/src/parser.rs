@@ -23,7 +23,7 @@
 //! The parser below is a little more lenient than the explicit spec and allows for
 //! leading/trailing whitespace around patch markers.
 use crate::ApplyPatchArgs;
-use std::path::Path;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -76,11 +76,11 @@ pub enum Hunk {
 }
 
 impl Hunk {
-    pub fn resolve_path(&self, cwd: &Path) -> PathBuf {
+    pub fn resolve_path(&self, cwd: &AbsolutePathBuf) -> PathBuf {
         match self {
-            Hunk::AddFile { path, .. } => cwd.join(path),
-            Hunk::DeleteFile { path } => cwd.join(path),
-            Hunk::UpdateFile { path, .. } => cwd.join(path),
+            Hunk::AddFile { path, .. } => cwd.as_path().join(path),
+            Hunk::DeleteFile { path } => cwd.as_path().join(path),
+            Hunk::UpdateFile { path, .. } => cwd.as_path().join(path),
         }
     }
 }

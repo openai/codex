@@ -30,6 +30,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::UnifiedExecShellMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -274,9 +275,18 @@ impl ToolHandler for UnifiedExecHandler {
                     }
                 };
 
+                let apply_patch_cwd = match AbsolutePathBuf::from_absolute_path(&cwd) {
+                    Ok(cwd) => cwd,
+                    Err(err) => {
+                        manager.release_process_id(process_id).await;
+                        return Err(FunctionCallError::RespondToModel(format!(
+                            "apply_patch verification failed: failed to resolve cwd: {err}"
+                        )));
+                    }
+                };
                 if let Some(output) = intercept_apply_patch(
                     &command,
-                    &cwd,
+                    &apply_patch_cwd,
                     Some(yield_time_ms),
                     context.session.clone(),
                     context.turn.clone(),
