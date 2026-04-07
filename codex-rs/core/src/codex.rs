@@ -748,7 +748,7 @@ impl Codex {
         }
         session_loop_termination.await;
         match self.session.shutdown_failure.borrow().clone() {
-            Some(message) => Err(CodexErr::Fatal(message)),
+            Some(message) => Err(CodexErr::ShutdownFailed(message)),
             _ => Ok(()),
         }
     }

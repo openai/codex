@@ -402,6 +402,7 @@ enum AppListLoadResult {
 
 enum ThreadShutdownResult {
     Complete,
+    ShutdownFailed(String),
     SubmitFailed,
     TimedOut,
 }
@@ -2170,6 +2171,9 @@ impl CodexMessageProcessor {
             .await;
         for thread_id in report.submit_failed {
             warn!("failed to submit Shutdown to thread {thread_id}");
+        }
+        for (thread_id, error) in report.shutdown_failed {
+            warn!("thread {thread_id} shutdown completed with error: {error}");
         }
         for thread_id in report.timed_out {
             warn!("timed out waiting for thread {thread_id} to shut down");
@@ -5433,6 +5437,9 @@ impl CodexMessageProcessor {
     async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
         match tokio::time::timeout(Duration::from_secs(10), thread.shutdown_and_wait()).await {
             Ok(Ok(())) => ThreadShutdownResult::Complete,
+            Ok(Err(CodexErr::ShutdownFailed(message))) => {
+                ThreadShutdownResult::ShutdownFailed(message)
+            }
             Ok(Err(_)) => ThreadShutdownResult::SubmitFailed,
             Err(_) => ThreadShutdownResult::TimedOut,
         }
@@ -5515,40 +5522,41 @@ impl CodexMessageProcessor {
             let thread_manager = self.thread_manager.clone();
             let thread_watch_manager = self.thread_watch_manager.clone();
             tokio::spawn(async move {
-                match Self::wait_for_thread_shutdown(&thread).await {
-                    ThreadShutdownResult::Complete => {
-                        if thread_manager.remove_thread(&thread_id).await.is_none() {
-                            info!(
-                                "thread {thread_id} was already removed before unsubscribe finalized"
-                            );
-                            thread_watch_manager
-                                .remove_thread(&thread_id.to_string())
-                                .await;
-                            pending_thread_unloads.lock().await.remove(&thread_id);
-                            return;
-                        }
-                        thread_watch_manager
-                            .remove_thread(&thread_id.to_string())
-                            .await;
-                        let notification = ThreadClosedNotification {
-                            thread_id: thread_id.to_string(),
-                        };
-                        outgoing
-                            .send_server_notification(ServerNotification::ThreadClosed(
-                                notification,
-                            ))
-                            .await;
-                        pending_thread_unloads.lock().await.remove(&thread_id);
-                    }
+                let shutdown_error = match Self::wait_for_thread_shutdown(&thread).await {
+                    ThreadShutdownResult::Complete => None,
+                    ThreadShutdownResult::ShutdownFailed(error) => Some(error),
                     ThreadShutdownResult::SubmitFailed => {
                         pending_thread_unloads.lock().await.remove(&thread_id);
                         warn!("failed to submit Shutdown to thread {thread_id}");
+                        return;
                     }
                     ThreadShutdownResult::TimedOut => {
                         pending_thread_unloads.lock().await.remove(&thread_id);
                         warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
+                        return;
                     }
+                };
+                if let Some(error) = shutdown_error {
+                    error!("thread {thread_id} shutdown completed with error: {error}");
                 }
+                if thread_manager.remove_thread(&thread_id).await.is_none() {
+                    info!("thread {thread_id} was already removed before unsubscribe finalized");
+                    thread_watch_manager
+                        .remove_thread(&thread_id.to_string())
+                        .await;
+                    pending_thread_unloads.lock().await.remove(&thread_id);
+                    return;
+                }
+                thread_watch_manager
+                    .remove_thread(&thread_id.to_string())
+                    .await;
+                let notification = ThreadClosedNotification {
+                    thread_id: thread_id.to_string(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadClosed(notification))
+                    .await;
+                pending_thread_unloads.lock().await.remove(&thread_id);
             });
         }
 
@@ -5635,6 +5643,9 @@ impl CodexMessageProcessor {
             info!("thread {thread_id} was active; shutting down");
             match Self::wait_for_thread_shutdown(&conversation).await {
                 ThreadShutdownResult::Complete => {}
+                ThreadShutdownResult::ShutdownFailed(error) => {
+                    error!("thread {thread_id} shutdown completed with error: {error}");
+                }
                 ThreadShutdownResult::SubmitFailed => {
                     error!(
                         "failed to submit Shutdown to thread {thread_id}; proceeding with archive"

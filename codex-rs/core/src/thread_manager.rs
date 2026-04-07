@@ -179,12 +179,14 @@ impl From<usize> for ForkSnapshot {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ThreadShutdownReport {
     pub completed: Vec<ThreadId>,
+    pub shutdown_failed: Vec<(ThreadId, String)>,
     pub submit_failed: Vec<ThreadId>,
     pub timed_out: Vec<ThreadId>,
 }
 
 enum ShutdownOutcome {
     Complete,
+    ShutdownFailed(String),
     SubmitFailed,
     TimedOut,
 }
@@ -605,6 +607,9 @@ impl ThreadManager {
                 let outcome = match tokio::time::timeout(timeout, thread.shutdown_and_wait()).await
                 {
                     Ok(Ok(())) => ShutdownOutcome::Complete,
+                    Ok(Err(CodexErr::ShutdownFailed(message))) => {
+                        ShutdownOutcome::ShutdownFailed(message)
+                    }
                     Ok(Err(_)) => ShutdownOutcome::SubmitFailed,
                     Err(_) => ShutdownOutcome::TimedOut,
                 };
@@ -616,6 +621,9 @@ impl ThreadManager {
         while let Some((thread_id, outcome)) = shutdowns.next().await {
             match outcome {
                 ShutdownOutcome::Complete => report.completed.push(thread_id),
+                ShutdownOutcome::ShutdownFailed(message) => {
+                    report.shutdown_failed.push((thread_id, message));
+                }
                 ShutdownOutcome::SubmitFailed => report.submit_failed.push(thread_id),
                 ShutdownOutcome::TimedOut => report.timed_out.push(thread_id),
             }
@@ -625,10 +633,16 @@ impl ThreadManager {
         for thread_id in &report.completed {
             tracked_threads.remove(thread_id);
         }
+        for (thread_id, _) in &report.shutdown_failed {
+            tracked_threads.remove(thread_id);
+        }
 
         report
             .completed
             .sort_by_key(std::string::ToString::to_string);
+        report
+            .shutdown_failed
+            .sort_by_key(|(thread_id, _)| thread_id.to_string());
         report
             .submit_failed
             .sort_by_key(std::string::ToString::to_string);

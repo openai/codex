@@ -137,6 +137,8 @@ pub enum CodexErr {
     UnsupportedOperation(String),
     #[error("{0}")]
     RefreshTokenFailed(RefreshTokenFailedError),
+    #[error("shutdown failed: {0}")]
+    ShutdownFailed(String),
     #[error("Fatal error: {0}")]
     Fatal(String),
     // -----------------------------------------------------------------
@@ -171,6 +173,7 @@ impl CodexErr {
             | CodexErr::Interrupted
             | CodexErr::EnvVar(_)
             | CodexErr::Fatal(_)
+            | CodexErr::ShutdownFailed(_)
             | CodexErr::UsageNotIncluded
             | CodexErr::QuotaExceeded
             | CodexErr::InvalidImageRequest()

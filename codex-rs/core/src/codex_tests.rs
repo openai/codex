@@ -3526,7 +3526,7 @@ async fn shutdown_and_wait_returns_shutdown_error_status() {
         .expect_err("shutdown error status should propagate");
 
     match err {
-        CodexErr::Fatal(message) => assert_eq!(message, error_message),
+        CodexErr::ShutdownFailed(message) => assert_eq!(message, error_message),
         other => panic!("unexpected error: {other:?}"),
     }
 }
