@@ -51,7 +51,11 @@ impl AbsolutePathBuf {
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
-        let absolute_path = expanded.absolutize()?;
+        let absolute_path = if expanded.is_absolute() {
+            expanded.absolutize_from(&expanded)?
+        } else {
+            expanded.absolutize()?
+        };
         Ok(Self(absolute_path.into_owned()))
     }
 
