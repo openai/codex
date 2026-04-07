@@ -55,6 +55,7 @@ export type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSumm
 export type { ReasoningSummary } from "./ReasoningSummary";
 export type { RequestId } from "./RequestId";
 export type { Resource } from "./Resource";
+export type { ResourceContent } from "./ResourceContent";
 export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
 export type { ReviewDecision } from "./ReviewDecision";

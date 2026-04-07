@@ -3,7 +3,7 @@ use crate::ModelsManagerConfig;
 use base64::Engine as _;
 use chrono::Utc;
 use codex_api::TransportError;
-use codex_login::AuthCredentialsStoreMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::WireApi;

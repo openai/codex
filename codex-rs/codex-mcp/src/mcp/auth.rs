@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_protocol::protocol::McpAuthStatus;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::OAuthProviderError;
 use codex_rmcp_client::determine_streamable_http_auth_status;
 use codex_rmcp_client::discover_streamable_http_oauth;
