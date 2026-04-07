@@ -86,10 +86,11 @@ async fn build_consolidation_prompt_points_to_extensions_without_inlining_them()
     .unwrap();
 
     let prompt = build_consolidation_prompt(&memories_dir, &Phase2InputSelection::default());
+    let memory_extensions_dir = temp.path().join("memories_extensions");
 
     assert!(prompt.contains(&format!(
-        "Memory extensions (under {}/memories_extensions/)",
-        temp.path().display()
+        "Memory extensions (under {}/)",
+        memory_extensions_dir.display()
     )));
     assert!(prompt.contains("<extension_name>/instructions.md"));
     assert!(!prompt.contains("source-specific instructions"));
