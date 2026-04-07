@@ -424,6 +424,11 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert!(event["event_params"]["started_at"].as_u64().is_some());
     assert!(event["event_params"]["completed_at"].as_u64().is_some());
     assert!(event["event_params"]["duration_ms"].as_u64().is_some());
+    assert_eq!(event["event_params"]["input_tokens"], 0);
+    assert_eq!(event["event_params"]["cached_input_tokens"], 0);
+    assert_eq!(event["event_params"]["output_tokens"], 0);
+    assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
+    assert_eq!(event["event_params"]["total_tokens"], 0);
 
     Ok(())
 }
