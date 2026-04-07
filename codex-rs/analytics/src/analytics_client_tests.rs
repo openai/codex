@@ -7,6 +7,7 @@ use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CodexTurnSteerEventRequest;
 use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
@@ -14,11 +15,13 @@ use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
+use crate::events::codex_turn_steer_event_params;
 use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexTurnSteerEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
@@ -30,6 +33,9 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
+use crate::facts::TurnSteerInput;
+use crate::facts::TurnSteerRejectionReason;
+use crate::facts::TurnSteerResult;
 use crate::facts::TurnSubmissionType;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
@@ -1079,7 +1085,7 @@ fn turn_event_serializes_expected_shape() {
             is_first_turn: true,
             status: Some(TurnStatus::Completed),
             turn_error: None,
-            steer_count: None,
+            steer_count: Some(0),
             total_tool_call_count: None,
             shell_command_count: None,
             file_change_count: None,
@@ -1125,7 +1131,7 @@ fn turn_event_serializes_expected_shape() {
                 "is_first_turn": true,
                 "status": "completed",
                 "turn_error": null,
-                "steer_count": null,
+                "steer_count": 0,
                 "total_tool_call_count": null,
                 "shell_command_count": null,
                 "file_change_count": null,
@@ -1142,6 +1148,90 @@ fn turn_event_serializes_expected_shape() {
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456
+            }
+        })
+    );
+}
+
+#[test]
+fn turn_steer_event_serializes_expected_shape() {
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-2".to_string(),
+        turn_id: "turn-2".to_string(),
+    };
+    let event = TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+        event_type: "codex_turn_steer_event",
+        event_params: codex_turn_steer_event_params(
+            &tracking,
+            CodexTurnSteerEvent {
+                expected_turn_id: Some("turn-2".to_string()),
+                accepted_turn_id: Some("turn-2".to_string()),
+                num_input_images: 2,
+                result: TurnSteerResult::Accepted,
+                rejection_reason: None,
+                created_at: 1_716_000_123,
+            },
+        ),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize turn steer event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_turn_steer_event",
+            "event_params": {
+                "thread_id": "thread-2",
+                "expected_turn_id": "turn-2",
+                "accepted_turn_id": "turn-2",
+                "product_client_id": originator().value,
+                "num_input_images": 2,
+                "result": "accepted",
+                "rejection_reason": null,
+                "created_at": 1_716_000_123
+            }
+        })
+    );
+}
+
+#[test]
+fn rejected_turn_steer_event_serializes_expected_shape() {
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-3".to_string(),
+        turn_id: "turn-3".to_string(),
+    };
+    let event = TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+        event_type: "codex_turn_steer_event",
+        event_params: codex_turn_steer_event_params(
+            &tracking,
+            CodexTurnSteerEvent {
+                expected_turn_id: Some("turn-expected".to_string()),
+                accepted_turn_id: None,
+                num_input_images: 1,
+                result: TurnSteerResult::Rejected,
+                rejection_reason: Some(TurnSteerRejectionReason::ExpectedTurnMismatch),
+                created_at: 1_716_000_124,
+            },
+        ),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize rejected turn steer event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_turn_steer_event",
+            "event_params": {
+                "thread_id": "thread-3",
+                "expected_turn_id": "turn-expected",
+                "accepted_turn_id": null,
+                "product_client_id": originator().value,
+                "num_input_images": 1,
+                "result": "rejected",
+                "rejection_reason": "expected_turn_mismatch",
+                "created_at": 1_716_000_124
             }
         })
     );
@@ -1184,6 +1274,7 @@ async fn turn_lifecycle_emits_turn_event() {
     );
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
     assert_eq!(payload["event_params"]["status"], json!("completed"));
+    assert_eq!(payload["event_params"]["steer_count"], json!(0));
     assert_eq!(payload["event_params"]["started_at"], json!(455));
     assert_eq!(payload["event_params"]["completed_at"], json!(456));
     assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
@@ -1195,6 +1286,104 @@ async fn turn_lifecycle_emits_turn_event() {
         json!(13)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(321));
+}
+
+#[tokio::test]
+async fn accepted_steers_increment_turn_steer_count() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnSteer(TurnSteerInput {
+                tracking: TrackEventsContext {
+                    model_slug: "gpt-5".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                },
+                turn_steer: CodexTurnSteerEvent {
+                    expected_turn_id: Some("turn-2".to_string()),
+                    accepted_turn_id: Some("turn-2".to_string()),
+                    num_input_images: 0,
+                    result: TurnSteerResult::Accepted,
+                    rejection_reason: None,
+                    created_at: 1,
+                },
+            })),
+            &mut out,
+        )
+        .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnSteer(TurnSteerInput {
+                tracking: TrackEventsContext {
+                    model_slug: "gpt-5".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                },
+                turn_steer: CodexTurnSteerEvent {
+                    expected_turn_id: None,
+                    accepted_turn_id: None,
+                    num_input_images: 0,
+                    result: TurnSteerResult::Rejected,
+                    rejection_reason: Some(TurnSteerRejectionReason::NoActiveTurn),
+                    created_at: 2,
+                },
+            })),
+            &mut out,
+        )
+        .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnSteer(TurnSteerInput {
+                tracking: TrackEventsContext {
+                    model_slug: "gpt-5".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                },
+                turn_steer: CodexTurnSteerEvent {
+                    expected_turn_id: Some("turn-2".to_string()),
+                    accepted_turn_id: Some("turn-2".to_string()),
+                    num_input_images: 1,
+                    result: TurnSteerResult::Accepted,
+                    rejection_reason: None,
+                    created_at: 3,
+                },
+            })),
+            &mut out,
+        )
+        .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    let turn_event = out
+        .iter()
+        .find(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
+        .expect("turn event should be emitted");
+    let payload = serde_json::to_value(turn_event).expect("serialize turn event");
+    assert_eq!(payload["event_params"]["steer_count"], json!(2));
 }
 
 #[tokio::test]
