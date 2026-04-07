@@ -375,10 +375,6 @@ fn spawn_agent_output_schema_v2() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "agent_id": {
-                "type": ["string", "null"],
-                "description": "Legacy thread identifier for the spawned agent."
-            },
             "task_name": {
                 "type": "string",
                 "description": "Canonical task name for the spawned agent."
@@ -388,7 +384,7 @@ fn spawn_agent_output_schema_v2() -> Value {
                 "description": "User-facing nickname for the spawned agent when available."
             }
         },
-        "required": ["agent_id", "task_name", "nickname"],
+        "required": ["task_name", "nickname"],
         "additionalProperties": false
     })
 }

@@ -73,7 +73,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
-        json!(["agent_id", "task_name", "nickname"])
+        json!(["task_name", "nickname"])
     );
 }
 

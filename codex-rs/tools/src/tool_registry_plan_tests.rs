@@ -243,10 +243,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     let output_schema = output_schema
         .as_ref()
         .expect("spawn_agent should define output schema");
-    assert_eq!(
-        output_schema["required"],
-        json!(["agent_id", "task_name", "nickname"])
-    );
+    assert_eq!(output_schema["required"], json!(["task_name", "nickname"]));
 
     let send_message = find_tool(&tools, "send_message");
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_message.spec else {
