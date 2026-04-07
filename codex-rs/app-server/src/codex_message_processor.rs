@@ -2473,8 +2473,8 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        base_instructions: Option<String>,
-        developer_instructions: Option<String>,
+        base_instructions: Option<Option<String>>,
+        developer_instructions: Option<Option<String>>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
         ConfigOverrides {
@@ -2489,8 +2489,8 @@ impl CodexMessageProcessor {
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-            base_instructions,
-            developer_instructions,
+            base_instructions: thread_instruction_override(base_instructions),
+            developer_instructions: thread_instruction_override(developer_instructions),
             personality,
             ..Default::default()
         }
@@ -7841,6 +7841,14 @@ fn normalize_thread_list_cwd_filter(
             message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
             data: None,
         })
+}
+
+fn thread_instruction_override(instructions: Option<Option<String>>) -> Option<String> {
+    match instructions {
+        None => None,
+        Some(None) => Some(String::new()),
+        Some(Some(instructions)) => Some(instructions),
+    }
 }
 
 #[cfg(test)]
