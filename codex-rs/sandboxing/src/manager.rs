@@ -50,19 +50,10 @@ pub enum SandboxablePreference {
     Forbid,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxLaunchMode {
-    /// Choose the platform sandbox only when the policy requires it.
-    Auto,
-    /// Always launch with the platform sandbox when one is available.
-    Require,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxLaunchConfig {
-    pub mode: SandboxLaunchMode,
+    pub sandbox: SandboxType,
     pub policy: SandboxPolicy,
     pub file_system_policy: FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
@@ -75,21 +66,6 @@ pub struct SandboxLaunchConfig {
 }
 
 impl SandboxLaunchConfig {
-    pub fn sandbox_type(&self) -> SandboxType {
-        let preference = match self.mode {
-            SandboxLaunchMode::Auto => SandboxablePreference::Auto,
-            SandboxLaunchMode::Require => SandboxablePreference::Require,
-        };
-
-        SandboxManager::new().select_initial(
-            &self.file_system_policy,
-            self.network_policy,
-            preference,
-            self.windows_sandbox_level,
-            self.enforce_managed_network,
-        )
-    }
-
     pub fn transform(
         &self,
         command: SandboxCommand,
@@ -101,7 +77,7 @@ impl SandboxLaunchConfig {
             policy: &self.policy,
             file_system_policy: &self.file_system_policy,
             network_policy: self.network_policy,
-            sandbox: self.sandbox_type(),
+            sandbox: self.sandbox,
             enforce_managed_network: self.enforce_managed_network,
             network,
             sandbox_policy_cwd: self.sandbox_policy_cwd.as_path(),

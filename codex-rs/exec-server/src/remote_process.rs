@@ -38,7 +38,7 @@ impl ExecBackend for RemoteProcess {
         let sandbox_type = params
             .sandbox
             .as_ref()
-            .map_or(SandboxType::None, |sandbox| sandbox.sandbox_type());
+            .map_or(SandboxType::None, |sandbox| sandbox.sandbox);
         let session = self.client.register_session(&process_id).await?;
         match self.client.exec(params).await {
             Ok(_) => {}

@@ -1,6 +1,4 @@
 use clap::Parser;
-use codex_arg0::Arg0DispatchPaths;
-use codex_arg0::arg0_dispatch_or_else;
 
 #[derive(Debug, Parser)]
 struct ExecServerArgs {
@@ -13,11 +11,11 @@ struct ExecServerArgs {
     listen: String,
 }
 
-fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
-        let args = ExecServerArgs::parse();
-        codex_exec_server::configure_arg0_paths(arg0_paths);
-        codex_exec_server::run_main_with_listen_url(&args.listen).await?;
-        Ok(())
-    })
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = ExecServerArgs::parse();
+    codex_exec_server::run_main_with_listen_url(&args.listen)
+        .await
+        .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+    Ok(())
 }
