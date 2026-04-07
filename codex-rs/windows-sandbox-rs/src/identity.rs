@@ -136,7 +136,7 @@ pub fn require_logon_sandbox_creds(
     proxy_enforced: bool,
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
-    let needed_read = gather_read_roots(command_cwd, policy, codex_home);
+    let needed_read = gather_read_roots(command_cwd, policy, codex_home, env_map);
     let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
     let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
     let desired_offline_proxy_settings =
