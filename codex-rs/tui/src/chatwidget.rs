@@ -5404,8 +5404,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
-                    let request_id = self.request_rate_limit_refresh();
+                    let request_id = self.next_rate_limit_refresh_request_id();
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
+                    self.send_rate_limit_refresh_request(request_id);
                 } else {
                     self.add_status_output(
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
@@ -9734,11 +9735,20 @@ impl ChatWidget {
         }
     }
 
-    fn request_rate_limit_refresh(&mut self) -> u64 {
+    fn next_rate_limit_refresh_request_id(&mut self) -> u64 {
         let request_id = self.next_status_refresh_request_id;
         self.next_status_refresh_request_id = self.next_status_refresh_request_id.wrapping_add(1);
+        request_id
+    }
+
+    fn send_rate_limit_refresh_request(&self, request_id: u64) {
         self.app_event_tx
             .send(AppEvent::RefreshRateLimits { request_id });
+    }
+
+    fn request_rate_limit_refresh(&mut self) -> u64 {
+        let request_id = self.next_rate_limit_refresh_request_id();
+        self.send_rate_limit_refresh_request(request_id);
         request_id
     }
 

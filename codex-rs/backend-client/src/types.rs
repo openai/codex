@@ -331,7 +331,7 @@ impl Turn {
 }
 
 #[cfg(test)]
-mod tests {
+mod accounts_check_tests {
     use super::AccountsCheckV4Account;
     use super::AccountsCheckV4AccountItem;
     use super::AccountsCheckV4Response;

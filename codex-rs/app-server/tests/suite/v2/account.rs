@@ -1653,6 +1653,7 @@ async fn get_account_with_chatgpt_fetches_workspace_role_from_accounts_check() -
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt")
+            .account_id("org-embedded")
             .email("user@example.com")
             .plan_type("pro")
             .chatgpt_account_id("org-embedded"),
@@ -1704,6 +1705,7 @@ async fn get_account_with_chatgpt_does_not_guess_workspace_role_from_other_accou
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt")
+            .account_id("org-current")
             .email("user@example.com")
             .plan_type("pro")
             .chatgpt_account_id("org-current"),
