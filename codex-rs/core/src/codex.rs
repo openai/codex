@@ -4214,6 +4214,18 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) async fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
+        let active = self.active_turn.lock().await;
+        match active.as_ref() {
+            Some(at) => {
+                let ts = at.turn_state.lock().await;
+                ts.pending_input_snapshot()
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Queue response items to be injected into the next active turn created for this session.
     #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
@@ -4227,6 +4239,13 @@ impl Session {
 
     pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn queued_response_items_for_next_turn_snapshot(
+        &self,
+    ) -> Vec<ResponseInputItem> {
+        self.idle_pending_input.lock().await.clone()
     }
 
     pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
