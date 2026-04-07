@@ -10,6 +10,11 @@ import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 
+/**
+ * Parameters for `thread/turnContext/update`. Each field is optional; only
+ * supplied fields override the thread's defaults for subsequent turns and
+ * thread-scoped operations (e.g. shell commands).
+ */
 export type ThreadTurnContextUpdateParams = {threadId: string, /**
  * Override the working directory for subsequent turns and thread-scoped
  * operations.

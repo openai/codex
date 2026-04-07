@@ -2896,6 +2896,9 @@ pub struct ThreadSetNameResponse {}
 )]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// Parameters for `thread/turnContext/update`. Each field is optional; only
+/// supplied fields override the thread's defaults for subsequent turns and
+/// thread-scoped operations (e.g. shell commands).
 pub struct ThreadTurnContextUpdateParams {
     pub thread_id: String,
     /// Override the working directory for subsequent turns and thread-scoped

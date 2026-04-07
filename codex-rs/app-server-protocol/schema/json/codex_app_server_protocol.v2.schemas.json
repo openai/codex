@@ -12046,6 +12046,7 @@
     },
     "ThreadTurnContextUpdateParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for `thread/turnContext/update`. Each field is optional; only supplied fields override the thread's defaults for subsequent turns and thread-scoped operations (e.g. shell commands).",
       "properties": {
         "approvalPolicy": {
           "anyOf": [
