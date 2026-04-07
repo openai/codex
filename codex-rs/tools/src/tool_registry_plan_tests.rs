@@ -479,6 +479,7 @@ fn disabled_environment_omits_environment_backed_tools() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
