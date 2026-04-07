@@ -104,14 +104,9 @@ impl InstallContext {
         match self {
             Self::Standalone {
                 resources_dir: Some(resources_dir),
-                platform,
                 ..
             } => {
-                let rg_name = match platform {
-                    StandalonePlatform::Unix => "rg",
-                    StandalonePlatform::Windows => "rg.exe",
-                };
-                let bundled_rg = resources_dir.join(rg_name);
+                let bundled_rg = resources_dir.join(default_rg_command());
                 if bundled_rg.exists() {
                     bundled_rg
                 } else {
@@ -192,7 +187,7 @@ mod tests {
         fs::create_dir_all(&resources_dir)?;
         let exe_path = release_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
         fs::write(&exe_path, "")?;
-        fs::write(resources_dir.join("rg"), "")?;
+        fs::write(resources_dir.join(default_rg_command()), "")?;
         let canonical_release_dir = release_dir.canonicalize()?;
         let canonical_resources_dir = resources_dir.canonicalize()?;
 
@@ -208,7 +203,7 @@ mod tests {
             InstallContext::Standalone {
                 release_dir: canonical_release_dir,
                 resources_dir: Some(canonical_resources_dir),
-                platform: StandalonePlatform::Unix,
+                platform: standalone_platform(),
             }
         );
         Ok(())
@@ -231,7 +226,7 @@ mod tests {
             /*managed_by_bun*/ false,
             /*codex_home*/ Some(codex_home.path()),
         );
-        assert_eq!(context.rg_command(), PathBuf::from("rg"));
+        assert_eq!(context.rg_command(), default_rg_command());
         Ok(())
     }
 

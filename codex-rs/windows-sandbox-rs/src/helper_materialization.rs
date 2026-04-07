@@ -394,8 +394,28 @@ mod tests {
         fs::write(&exe, b"codex").expect("write exe");
         fs::write(&helper, b"runner").expect("write helper");
 
-        let resolved = source_path_for_exe(&exe, "codex-command-runner.exe").expect("helper path");
+        let resolved =
+            source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe").expect("helper path");
 
         assert_eq!(resolved, helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_prefers_direct_sibling_over_resource_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let release_dir = tmp.path().join("release");
+        let resources_dir = release_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = release_dir.join("codex.exe");
+        let sibling_helper = release_dir.join("codex-command-runner.exe");
+        let resource_helper = resources_dir.join("codex-command-runner.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&sibling_helper, b"sibling runner").expect("write sibling helper");
+        fs::write(&resource_helper, b"resource runner").expect("write resource helper");
+
+        let resolved =
+            source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe").expect("helper path");
+
+        assert_eq!(resolved, sibling_helper);
     }
 }
