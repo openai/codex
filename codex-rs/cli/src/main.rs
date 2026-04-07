@@ -490,10 +490,24 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     let status = {
         #[cfg(windows)]
         {
-            // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
-            std::process::Command::new("cmd")
-                .args(["/C", &cmd_str])
-                .status()?
+            match action {
+                UpdateAction::StandaloneWindows => {
+                    let (cmd, args) = action.command_args();
+                    // Run PowerShell directly. If this goes through `cmd.exe`,
+                    // the `|iex` in the installer script is parsed as a cmd
+                    // pipeline instead of as part of the PowerShell command.
+                    std::process::Command::new(cmd).args(args).status()?
+                }
+                UpdateAction::NpmGlobalLatest
+                | UpdateAction::BunGlobalLatest
+                | UpdateAction::BrewUpgrade
+                | UpdateAction::StandaloneUnix => {
+                    // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
+                    std::process::Command::new("cmd")
+                        .args(["/C", &cmd_str])
+                        .status()?
+                }
+            }
         }
         #[cfg(not(windows))]
         {
