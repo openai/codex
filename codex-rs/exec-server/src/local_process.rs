@@ -587,14 +587,22 @@ impl LocalProcess {
         self.require_initialized_for("exec")?;
         let _process_id = params.process_id.clone();
         let running = {
-            let process_map = self.inner.processes.lock().await;
-            match process_map.get(&params.process_id) {
+            let mut process_map = self.inner.processes.lock().await;
+            match process_map.get_mut(&params.process_id) {
                 Some(ProcessEntry::Running(process)) => {
-                    if process.exit_code.is_some() {
+                    if process.exit_code.is_some() || process.closed {
                         return Ok(TerminateResponse { running: false });
                     }
                     if let Some(session) = process.session.as_ref() {
                         session.terminate();
+                    } else {
+                        process.pending_exec_approval = None;
+                        process.pending_start = None;
+                        process.failure = Some("terminated before process start".to_string());
+                        process.exit_code = Some(1);
+                        process.closed = true;
+                        process.output_notify.notify_waiters();
+                        let _ = process.wake_tx.send(process.next_seq);
                     }
                     true
                 }

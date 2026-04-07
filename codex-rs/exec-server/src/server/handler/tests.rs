@@ -232,3 +232,95 @@ async fn startup_exec_approval_decline_returns_failure_without_spawning() {
 
     handler.shutdown().await;
 }
+
+#[tokio::test]
+async fn startup_exec_approval_terminate_cancels_pending_start() {
+    let handler = initialized_handler().await;
+    let mut params = exec_params("proc-terminated");
+    params.argv = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "printf should-not-run".to_string(),
+    ];
+    params.startup_exec_approval = Some(crate::protocol::ExecApprovalRequest {
+        call_id: "call-terminate".to_string(),
+        approval_id: None,
+        turn_id: "turn-terminate".to_string(),
+        command: vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "printf should-not-run".to_string(),
+        ],
+        cwd: std::env::current_dir().expect("cwd"),
+        reason: Some("approval required".to_string()),
+        additional_permissions: None,
+        proposed_execpolicy_amendment: None,
+        available_decisions: Some(vec![CommandExecutionApprovalDecision::Accept]),
+    });
+    handler.exec(params).await.expect("start process");
+
+    let pending = handler
+        .exec_read(ReadParams {
+            process_id: ProcessId::from("proc-terminated"),
+            after_seq: None,
+            max_bytes: None,
+            wait_ms: Some(0),
+        })
+        .await
+        .expect("read pending approval");
+    assert!(pending.exec_approval.is_some());
+
+    assert_eq!(
+        handler
+            .terminate(TerminateParams {
+                process_id: ProcessId::from("proc-terminated"),
+            })
+            .await
+            .expect("terminate response"),
+        TerminateResponse { running: true }
+    );
+
+    let cancelled = handler
+        .exec_read(ReadParams {
+            process_id: ProcessId::from("proc-terminated"),
+            after_seq: None,
+            max_bytes: None,
+            wait_ms: Some(0),
+        })
+        .await
+        .expect("read cancelled process");
+    assert_eq!(cancelled.chunks, Vec::new());
+    assert_eq!(
+        cancelled.failure.as_deref(),
+        Some("terminated before process start")
+    );
+    assert!(cancelled.exec_approval.is_none());
+    assert!(cancelled.closed);
+    assert_eq!(cancelled.exit_code, Some(1));
+
+    let error = handler
+        .resolve_exec_approval(ResolveExecApprovalParams {
+            process_id: ProcessId::from("proc-terminated"),
+            approval_id: "call-terminate".to_string(),
+            decision: CommandExecutionApprovalDecision::Accept,
+        })
+        .await
+        .expect_err("terminated process should not accept approval");
+    assert_eq!(error.code, -32600);
+    assert_eq!(
+        error.message,
+        "process id proc-terminated has no pending exec approval"
+    );
+
+    assert_eq!(
+        handler
+            .terminate(TerminateParams {
+                process_id: ProcessId::from("proc-terminated"),
+            })
+            .await
+            .expect("second terminate response"),
+        TerminateResponse { running: false }
+    );
+
+    handler.shutdown().await;
+}
