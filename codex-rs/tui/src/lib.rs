@@ -1886,7 +1886,9 @@ mod tests {
     -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut stale_config = build_config(&temp_dir).await?;
-        stale_config.startup_warnings.push("stale warning".to_string());
+        stale_config
+            .startup_warnings
+            .push("stale warning".to_string());
         let stale_app_server =
             AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
                 start_test_embedded_app_server(stale_config).await?,
@@ -1907,10 +1909,11 @@ mod tests {
         )
         .await?;
 
-        let event = tokio::time::timeout(std::time::Duration::from_secs(2), app_server.next_event())
-            .await
-            .expect("config warning notification should arrive")
-            .expect("config warning notification should be emitted");
+        let event =
+            tokio::time::timeout(std::time::Duration::from_secs(2), app_server.next_event())
+                .await
+                .expect("config warning notification should arrive")
+                .expect("config warning notification should be emitted");
         let codex_app_server_client::AppServerEvent::ServerNotification(
             codex_app_server_protocol::ServerNotification::ConfigWarning(notification),
         ) = event
