@@ -634,7 +634,7 @@ impl ConfigBuilder {
         let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
-            Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
+            Some(path) => AbsolutePathBuf::from_absolute_path(normalize_for_native_workdir(path))?,
             None => AbsolutePathBuf::current_dir()?,
         };
         harness_overrides.cwd = Some(cwd.clone());
@@ -1429,7 +1429,7 @@ impl Config {
                 tracing::info!("cwd not set, using current dir");
                 AbsolutePathBuf::current_dir()?
             }
-            Some(p) => AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(p))?,
+            Some(p) => AbsolutePathBuf::from_absolute_path(normalize_for_native_workdir(p))?,
         };
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
