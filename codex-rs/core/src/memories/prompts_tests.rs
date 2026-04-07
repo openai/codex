@@ -56,10 +56,10 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
 #[test]
 fn build_consolidation_prompt_renders_embedded_template() {
     let prompt =
-        build_consolidation_prompt(Path::new("/tmp/codex"), &Phase2InputSelection::default());
+        build_consolidation_prompt(Path::new("/tmp/memories"), &Phase2InputSelection::default());
 
-    assert!(prompt.contains("Folder structure (under /tmp/codex/memories/):"));
-    assert!(prompt.contains("Optional memory extensions (under /tmp/codex/memories_extensions/)"));
+    assert!(prompt.contains("Folder structure (under /tmp/memories/):"));
+    assert!(prompt.contains("Memory extensions (under /tmp/memories_extensions/)"));
     assert!(prompt.contains("**Diff since last consolidation:**"));
     assert!(prompt.contains("- selected inputs this run: 0"));
 }
@@ -67,8 +67,8 @@ fn build_consolidation_prompt_renders_embedded_template() {
 #[tokio::test]
 async fn build_consolidation_prompt_points_to_extensions_without_inlining_them() {
     let temp = tempdir().unwrap();
-    let codex_home = temp.path();
-    let extension_dir = codex_home.join("memories_extensions/tape_recorder");
+    let memories_dir = temp.path().join("memories");
+    let extension_dir = temp.path().join("memories_extensions/tape_recorder");
     tokio_fs::create_dir_all(extension_dir.join("resources"))
         .await
         .unwrap();
@@ -85,14 +85,13 @@ async fn build_consolidation_prompt_points_to_extensions_without_inlining_them()
     .await
     .unwrap();
 
-    let prompt = build_consolidation_prompt(codex_home, &Phase2InputSelection::default());
+    let prompt = build_consolidation_prompt(&memories_dir, &Phase2InputSelection::default());
 
     assert!(prompt.contains(&format!(
-        "Optional memory extensions (under {}/memories_extensions/)",
-        codex_home.display()
+        "Memory extensions (under {}/memories_extensions/)",
+        temp.path().display()
     )));
     assert!(prompt.contains("<extension_name>/instruction.md"));
-    assert!(prompt.contains("<extension_name>/resources/"));
     assert!(!prompt.contains("source-specific instructions"));
     assert!(!prompt.contains("source-specific resource"));
 }

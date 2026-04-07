@@ -103,12 +103,12 @@ pub fn memory_root(codex_home: &Path) -> PathBuf {
     codex_home.join("memories")
 }
 
-fn memory_extensions_root(codex_home: &Path) -> PathBuf {
-    codex_home.join(artifacts::EXTENSIONS_SUBDIR)
-}
-
 fn rollout_summaries_dir(root: &Path) -> PathBuf {
     root.join(artifacts::ROLLOUT_SUMMARIES_SUBDIR)
+}
+
+fn memory_extensions_root(root: &Path) -> PathBuf {
+    root.with_file_name(artifacts::EXTENSIONS_SUBDIR)
 }
 
 fn raw_memories_file(root: &Path) -> PathBuf {

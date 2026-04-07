@@ -40,13 +40,12 @@ fn parse_embedded_template(source: &'static str, template_name: &str) -> Templat
     }
 }
 
-/// Builds the consolidation subagent prompt for a specific Codex home.
+/// Builds the consolidation subagent prompt for a specific memory root.
 pub(super) fn build_consolidation_prompt(
-    codex_home: &Path,
+    memory_root: &Path,
     selection: &Phase2InputSelection,
 ) -> String {
-    let memory_root = memory_root(codex_home);
-    let memory_extensions_root = memory_extensions_root(codex_home);
+    let memory_extensions_root = memory_extensions_root(memory_root);
     let memory_root = memory_root.display().to_string();
     let memory_extensions_root = memory_extensions_root.display().to_string();
     let phase2_input_selection = render_phase2_input_selection(selection);
