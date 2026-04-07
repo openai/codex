@@ -157,7 +157,7 @@ impl ExecutorFileSystem for LocalFileSystem {
         remove_options: RemoveOptions,
         sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<()> {
-        enforce_write_access(path, sandbox_policy)?;
+        enforce_write_access_preserving_leaf(path, sandbox_policy)?;
         self.remove(path, remove_options).await
     }
 
@@ -219,7 +219,7 @@ impl ExecutorFileSystem for LocalFileSystem {
         copy_options: CopyOptions,
         sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<()> {
-        enforce_read_access(source_path, sandbox_policy)?;
+        enforce_copy_source_read_access(source_path, sandbox_policy)?;
         enforce_write_access(destination_path, sandbox_policy)?;
         self.copy(source_path, destination_path, copy_options).await
     }
@@ -234,6 +234,7 @@ fn enforce_read_access(
         sandbox_policy,
         FileSystemSandboxPolicy::can_read_path_with_cwd,
         "read",
+        AccessPathMode::ResolveAll,
     )
 }
 
@@ -246,6 +247,37 @@ fn enforce_write_access(
         sandbox_policy,
         FileSystemSandboxPolicy::can_write_path_with_cwd,
         "write",
+        AccessPathMode::ResolveAll,
+    )
+}
+
+fn enforce_write_access_preserving_leaf(
+    path: &AbsolutePathBuf,
+    sandbox_policy: Option<&SandboxPolicy>,
+) -> FileSystemResult<()> {
+    enforce_access(
+        path,
+        sandbox_policy,
+        FileSystemSandboxPolicy::can_write_path_with_cwd,
+        "write",
+        AccessPathMode::PreserveLeaf,
+    )
+}
+
+fn enforce_copy_source_read_access(
+    path: &AbsolutePathBuf,
+    sandbox_policy: Option<&SandboxPolicy>,
+) -> FileSystemResult<()> {
+    let path_mode = match std::fs::symlink_metadata(path.as_path()) {
+        Ok(metadata) if metadata.file_type().is_symlink() => AccessPathMode::PreserveLeaf,
+        _ => AccessPathMode::ResolveAll,
+    };
+    enforce_access(
+        path,
+        sandbox_policy,
+        FileSystemSandboxPolicy::can_read_path_with_cwd,
+        "read",
+        path_mode,
     )
 }
 
@@ -254,13 +286,14 @@ fn enforce_access(
     sandbox_policy: Option<&SandboxPolicy>,
     is_allowed: fn(&FileSystemSandboxPolicy, &Path, &Path) -> bool,
     access_kind: &str,
+    path_mode: AccessPathMode,
 ) -> FileSystemResult<()> {
     let Some(sandbox_policy) = sandbox_policy else {
         return Ok(());
     };
     let cwd = std::env::current_dir()
         .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
-    let resolved_path = resolve_path_for_access_check(path.as_path())?;
+    let resolved_path = resolve_path_for_access_check(path.as_path(), path_mode)?;
     let file_system_policy = FileSystemSandboxPolicy::from(sandbox_policy);
     if is_allowed(&file_system_policy, resolved_path.as_path(), cwd.as_path()) {
         Ok(())
@@ -273,6 +306,12 @@ fn enforce_access(
             ),
         ))
     }
+}
+
+#[derive(Clone, Copy)]
+enum AccessPathMode {
+    ResolveAll,
+    PreserveLeaf,
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
@@ -299,11 +338,19 @@ fn destination_is_same_or_descendant_of_source(
     destination: &Path,
 ) -> io::Result<bool> {
     let source = std::fs::canonicalize(source)?;
-    let destination = resolve_path_for_access_check(destination)?;
+    let destination = resolve_path_for_access_check(destination, AccessPathMode::ResolveAll)?;
     Ok(destination.starts_with(&source))
 }
 
-fn resolve_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
+fn resolve_path_for_access_check(path: &Path, path_mode: AccessPathMode) -> io::Result<PathBuf> {
+    let normalized = normalize_path(path);
+    match path_mode {
+        AccessPathMode::ResolveAll => resolve_existing_path(normalized.as_path()),
+        AccessPathMode::PreserveLeaf => preserve_leaf_path_for_access_check(normalized.as_path()),
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -316,9 +363,22 @@ fn resolve_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
             Component::Normal(part) => normalized.push(part),
         }
     }
+    normalized
+}
 
+fn preserve_leaf_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
+    let Some(file_name) = path.file_name() else {
+        return resolve_existing_path(path);
+    };
+    let parent = path.parent().unwrap_or_else(|| Path::new("/"));
+    let mut resolved_parent = resolve_existing_path(parent)?;
+    resolved_parent.push(file_name);
+    Ok(resolved_parent)
+}
+
+fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
     let mut unresolved_suffix = Vec::new();
-    let mut existing_path = normalized.as_path();
+    let mut existing_path = path;
     while !existing_path.exists() {
         let Some(file_name) = existing_path.file_name() else {
             break;
