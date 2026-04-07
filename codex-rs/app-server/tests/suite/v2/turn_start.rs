@@ -43,7 +43,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::config::ConfigToml;
+use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -147,6 +147,103 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .get("originator")
             .expect("originator header missing");
         assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_sequence(&server, vec![body.clone(), body]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never", &BTreeMap::new())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let disabled_instruction_config = json!({
+        "include_permissions_instructions": false,
+        "include_apps_instructions": false,
+        "include_environment_context": false,
+        "features.apps": false,
+        "features.plugins": false,
+        "features.codex_hooks": false,
+        "skills.bundled.enabled": false,
+    });
+
+    let thread_start_params = [
+        (
+            json!({
+                "model": "mock-model",
+                "config": disabled_instruction_config.clone(),
+            }),
+            /*expect_instructions*/ true,
+        ),
+        (
+            json!({
+                "model": "mock-model",
+                "config": disabled_instruction_config.clone(),
+                "baseInstructions": null,
+                "developerInstructions": null,
+            }),
+            /*expect_instructions*/ false,
+        ),
+    ];
+
+    for (params, _expect_instructions) in thread_start_params {
+        let thread_req = mcp.send_raw_request("thread/start", Some(params)).await?;
+        let thread_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+        )
+        .await??;
+        let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+        let turn_req = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id,
+                input: vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+    }
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    for (request, expect_instructions) in requests.into_iter().zip([true, false]) {
+        let payload = request.body_json();
+        assert_eq!(
+            payload.get("instructions").is_some(),
+            expect_instructions,
+            "unexpected instructions field in payload: {payload:?}"
+        );
+        let developer_texts = request.message_input_texts("developer");
+        assert!(
+            developer_texts.iter().all(|text| !text.is_empty()),
+            "did not expect empty developer instruction messages: {developer_texts:?}"
+        );
     }
 
     Ok(())
@@ -2519,6 +2616,67 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let workspace = TempDir::new()?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_request = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_request)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_response)?;
+
+    let turn_request = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            cwd: Some(workspace.path().to_path_buf()),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(!config_toml.contains("trust_level = \"trusted\""));
+    assert!(!config_toml.contains(&workspace.path().display().to_string()));
 
     Ok(())
 }

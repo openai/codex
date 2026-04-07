@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
@@ -25,7 +24,6 @@ impl RegularTask {
     }
 }
 
-#[async_trait]
 impl SessionTask for RegularTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular
@@ -48,6 +46,7 @@ impl SessionTask for RegularTask {
         // not wait on startup prewarm resolution.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: ctx.sub_id.clone(),
+            started_at: ctx.turn_timing_state.started_at_unix_secs().await,
             model_context_window: ctx.model_context_window(),
             collaboration_mode_kind: ctx.collaboration_mode.mode,
         });

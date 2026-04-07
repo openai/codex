@@ -86,6 +86,7 @@ pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
+    pub has_environment: bool,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -103,6 +104,7 @@ pub struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
+    pub hide_spawn_agent_metadata: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -140,6 +142,7 @@ impl ToolsConfig {
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
+        let hide_spawn_agent_metadata = features.enabled(Feature::DebugHideSpawnAgentMetadata);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
@@ -200,6 +203,7 @@ impl ToolsConfig {
             shell_type,
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
+            has_environment: true,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -217,6 +221,7 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
+            hide_spawn_agent_metadata,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -233,6 +238,11 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
+        self
+    }
+
+    pub fn with_has_environment(mut self, has_environment: bool) -> Self {
+        self.has_environment = has_environment;
         self
     }
 

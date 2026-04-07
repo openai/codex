@@ -4,12 +4,12 @@ use std::sync::Arc;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
@@ -56,10 +56,9 @@ impl MessageProcessor {
         environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
+        let auth_manager = AuthManager::shared_from_config(
+            config.as_ref(),
             /*enable_codex_api_key_env*/ false,
-            config.cli_auth_credentials_store_mode,
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),

@@ -7,9 +7,9 @@
 //! into a one-shot CLI command while still producing a durable `codex-login.log` artifact that
 //! support can request from users.
 
+use codex_app_server_protocol::AuthMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
-use codex_login::AuthCredentialsStoreMode;
-use codex_login::AuthMode;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;

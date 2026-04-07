@@ -64,6 +64,7 @@ use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -84,19 +85,20 @@ use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_core::append_message_history_entry;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::message_history;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
@@ -470,8 +472,10 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
-fn emit_system_bwrap_warning(app_event_tx: &AppEventSender) {
-    let Some(message) = codex_core::config::system_bwrap_warning() else {
+fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
+    let Some(message) =
+        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    else {
         return;
     };
 
@@ -1038,11 +1042,35 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
     .then_some(turn_error)
 }
 
-fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
-    let TypedRequestError::Server { source, .. } = error else {
-        return false;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActiveTurnSteerRace {
+    Missing,
+    ExpectedTurnMismatch { actual_turn_id: String },
+}
+
+fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRace> {
+    let TypedRequestError::Server { method, source } = error else {
+        return None;
     };
-    source.message == "no active turn to steer"
+    if method != "turn/steer" {
+        return None;
+    }
+    if source.message == "no active turn to steer" {
+        return Some(ActiveTurnSteerRace::Missing);
+    }
+
+    // App-server steer mismatches mean our cached active turn id is stale, but the response
+    // includes the server's current active turn so we can resynchronize and retry once.
+    let mismatch_prefix = "expected active turn id `";
+    let mismatch_separator = "` but found `";
+    let actual_turn_id = source
+        .message
+        .strip_prefix(mismatch_prefix)?
+        .split_once(mismatch_separator)?
+        .1
+        .strip_suffix('`')?
+        .to_string();
+    Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
 impl App {
@@ -1845,8 +1873,8 @@ impl App {
         Ok(())
     }
 
-    /// Spawn a background task that fetches the full MCP server inventory from the
-    /// app-server via paginated RPCs, then delivers the result back through
+    /// Spawn a background task that fetches MCP server status from the app-server
+    /// via paginated RPCs, then delivers the result back through
     /// `AppEvent::McpInventoryLoaded`.
     ///
     /// The spawned task is fire-and-forget: no `JoinHandle` is stored, so a stale
@@ -2099,7 +2127,9 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config, &statuses,
+                &config,
+                &statuses,
+                McpServerStatusDetail::ToolsAndAuthOnly,
             ));
     }
 
@@ -2130,8 +2160,7 @@ impl App {
                 let text = text.clone();
                 let config = self.chat_widget.config_ref().clone();
                 tokio::spawn(async move {
-                    if let Err(err) =
-                        message_history::append_entry(&text, &thread_id, &config).await
+                    if let Err(err) = append_message_history_entry(&text, &thread_id, &config).await
                     {
                         tracing::warn!(
                             thread_id = %thread_id,
@@ -2149,7 +2178,7 @@ impl App {
                 let app_event_tx = self.app_event_tx.clone();
                 tokio::spawn(async move {
                     let entry_opt = tokio::task::spawn_blocking(move || {
-                        message_history::lookup(log_id, offset, &config)
+                        lookup_message_history_entry(log_id, offset, &config)
                     })
                     .await
                     .unwrap_or_else(|err| {
@@ -2208,25 +2237,65 @@ impl App {
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                    match app_server
-                        .turn_steer(thread_id, turn_id, items.to_vec())
-                        .await
-                    {
-                        Ok(_) => return Ok(true),
-                        Err(error) => {
-                            if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
-                                if !self.chat_widget.enqueue_rejected_steer() {
-                                    self.chat_widget.add_error_message(turn_error.message);
+                    let mut steer_turn_id = turn_id;
+                    let mut retried_after_turn_mismatch = false;
+                    loop {
+                        match app_server
+                            .turn_steer(thread_id, steer_turn_id.clone(), items.to_vec())
+                            .await
+                        {
+                            Ok(_) => return Ok(true),
+                            Err(error) => {
+                                if let Some(turn_error) =
+                                    active_turn_not_steerable_turn_error(&error)
+                                {
+                                    if !self.chat_widget.enqueue_rejected_steer() {
+                                        self.chat_widget.add_error_message(turn_error.message);
+                                    }
+                                    return Ok(true);
                                 }
-                                return Ok(true);
-                            } else if active_turn_missing_steer_error(&error) {
-                                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-                                    let mut store = channel.store.lock().await;
-                                    store.clear_active_turn_id();
+                                match active_turn_steer_race(&error) {
+                                    Some(ActiveTurnSteerRace::Missing) => {
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.clear_active_turn_id();
+                                        }
+                                        should_start_turn = true;
+                                        break;
+                                    }
+                                    Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                                        actual_turn_id,
+                                    }) if !retried_after_turn_mismatch
+                                        && actual_turn_id != steer_turn_id =>
+                                    {
+                                        // Review flows can swap the active turn before the TUI
+                                        // processes the corresponding notification. Retry once with
+                                        // the server-reported turn id so non-steerable review turns
+                                        // still fall through to the existing queueing behavior.
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.active_turn_id = Some(actual_turn_id.clone());
+                                        }
+                                        steer_turn_id = actual_turn_id;
+                                        retried_after_turn_mismatch = true;
+                                    }
+                                    Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                                        actual_turn_id,
+                                    }) => {
+                                        if let Some(channel) =
+                                            self.thread_event_channels.get(&thread_id)
+                                        {
+                                            let mut store = channel.store.lock().await;
+                                            store.active_turn_id = Some(actual_turn_id);
+                                        }
+                                        return Err(error.into());
+                                    }
+                                    None => return Err(error.into()),
                                 }
-                                should_start_turn = true;
-                            } else {
-                                return Err(error.into());
                             }
                         }
                     }
@@ -3500,7 +3569,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
-        emit_system_bwrap_warning(&app_event_tx);
+        emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -4624,7 +4693,7 @@ impl App {
 
                     tokio::task::spawn_blocking(move || {
                         let requested_path = PathBuf::from(path);
-                        let event = match codex_core::windows_sandbox_read_grants::grant_read_root_non_elevated(
+                        let event = match codex_core::grant_read_root_non_elevated(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -5936,8 +6005,9 @@ impl App {
     }
 }
 
-/// Collect every MCP server status from the app-server by walking the paginated
-/// `mcpServerStatus/list` RPC until no `next_cursor` is returned.
+/// Collect every MCP server status needed for `/mcp` from the app-server by
+/// walking the paginated `mcpServerStatus/list` RPC until no `next_cursor` is
+/// returned.
 ///
 /// All pages are eagerly gathered into a single `Vec` so the caller can render
 /// the inventory atomically. Each page requests up to 100 entries.
@@ -5955,6 +6025,7 @@ async fn fetch_all_mcp_server_statuses(
                 params: ListMcpServerStatusParams {
                     cursor: cursor.clone(),
                     limit: Some(100),
+                    detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
                 },
             })
             .await
@@ -8575,6 +8646,7 @@ guardian_approval = true
             ServerNotification::ThreadStarted(ThreadStartedNotification {
                 thread: Thread {
                     id: agent_thread_id.to_string(),
+                    forked_from_id: None,
                     preview: "agent thread".to_string(),
                     ephemeral: false,
                     model_provider: "agent-provider".to_string(),
@@ -8655,6 +8727,7 @@ guardian_approval = true
             ServerNotification::ThreadStarted(ThreadStartedNotification {
                 thread: Thread {
                     id: agent_thread_id.to_string(),
+                    forked_from_id: None,
                     preview: "agent thread".to_string(),
                     ephemeral: false,
                     model_provider: "agent-provider".to_string(),
@@ -9118,13 +9191,19 @@ guardian_approval = true
             items,
             status,
             error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         }
     }
 
     fn turn_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
         ServerNotification::TurnStarted(TurnStartedNotification {
             thread_id: thread_id.to_string(),
-            turn: test_turn(turn_id, TurnStatus::InProgress, Vec::new()),
+            turn: Turn {
+                started_at: Some(0),
+                ..test_turn(turn_id, TurnStatus::InProgress, Vec::new())
+            },
         })
     }
 
@@ -9135,7 +9214,11 @@ guardian_approval = true
     ) -> ServerNotification {
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: thread_id.to_string(),
-            turn: test_turn(turn_id, status, Vec::new()),
+            turn: Turn {
+                completed_at: Some(0),
+                duration_ms: Some(1),
+                ..test_turn(turn_id, status, Vec::new())
+            },
         })
     }
 
@@ -9707,7 +9790,7 @@ guardian_approval = true
     }
 
     #[test]
-    fn active_turn_missing_steer_error_detects_stale_turn_race() {
+    fn active_turn_steer_race_detects_missing_active_turn() {
         let error = TypedRequestError::Server {
             method: "turn/steer".to_string(),
             source: JSONRPCErrorError {
@@ -9717,8 +9800,31 @@ guardian_approval = true
             },
         };
 
-        assert!(active_turn_missing_steer_error(&error));
+        assert_eq!(
+            active_turn_steer_race(&error),
+            Some(ActiveTurnSteerRace::Missing)
+        );
         assert_eq!(active_turn_not_steerable_turn_error(&error), None);
+    }
+
+    #[test]
+    fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: "expected active turn id `turn-expected` but found `turn-actual`"
+                    .to_string(),
+                data: None,
+            },
+        };
+
+        assert_eq!(
+            active_turn_steer_race(&error),
+            Some(ActiveTurnSteerRace::ExpectedTurnMismatch {
+                actual_turn_id: "turn-actual".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -10333,6 +10439,9 @@ guardian_approval = true
                         }],
                         status: TurnStatus::Completed,
                         error: None,
+                        started_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                     Turn {
                         id: "turn-2".to_string(),
@@ -10353,6 +10462,9 @@ guardian_approval = true
                         ],
                         status: TurnStatus::Completed,
                         error: None,
+                        started_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                 ],
                 events: Vec::new(),
@@ -10593,6 +10705,7 @@ guardian_approval = true
             &ThreadRollbackResponse {
                 thread: Thread {
                     id: thread_id.to_string(),
+                    forked_from_id: None,
                     preview: String::new(),
                     ephemeral: false,
                     model_provider: "openai".to_string(),

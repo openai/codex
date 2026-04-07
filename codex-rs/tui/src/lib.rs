@@ -50,7 +50,6 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnContextItem;
 use codex_rollout::state_db::get_state_db;
 use codex_state::log_db;
-use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -104,7 +103,8 @@ mod clipboard_paste;
 mod clipboard_text;
 mod collaboration_modes;
 mod color;
-pub mod custom_terminal;
+pub(crate) mod custom_terminal;
+pub use custom_terminal::Terminal;
 mod cwd_prompt;
 mod debug_config;
 mod diff_render;
@@ -115,10 +115,12 @@ mod file_search;
 mod frames;
 mod get_git_diff;
 mod history_cell;
-pub mod insert_history;
+pub(crate) mod insert_history;
+pub use insert_history::insert_history_lines;
 mod key_hint;
 mod line_truncation;
-pub mod live_wrap;
+pub(crate) mod live_wrap;
+pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
 mod markdown;
 mod markdown_render;
@@ -128,10 +130,10 @@ mod model_catalog;
 mod model_migration;
 mod multi_agents;
 mod notifications;
-pub mod onboarding;
+pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
-pub mod public_widgets;
+pub(crate) mod public_widgets;
 mod render;
 mod resume_picker;
 mod selection_list;
@@ -150,7 +152,8 @@ mod theme_picker;
 mod tooltips;
 mod tui;
 mod ui_consts;
-pub mod update_action;
+pub(crate) mod update_action;
+pub use update_action::UpdateAction;
 mod update_prompt;
 mod updates;
 mod version;
@@ -214,7 +217,7 @@ mod voice {
 mod wrapping;
 
 #[cfg(test)]
-pub mod test_backend;
+pub(crate) mod test_backend;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -579,12 +582,39 @@ fn latest_session_lookup_params(
         source_kinds: (!include_non_interactive)
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
-        cwd: if is_remote {
-            None
-        } else {
-            cwd_filter.map(|cwd| cwd.to_string_lossy().to_string())
-        },
+        cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
         search_term: None,
+    }
+}
+
+fn config_cwd_for_app_server_target(
+    cwd: Option<&Path>,
+    app_server_target: &AppServerTarget,
+) -> std::io::Result<AbsolutePathBuf> {
+    if matches!(app_server_target, AppServerTarget::Remote { .. }) {
+        return AbsolutePathBuf::current_dir();
+    }
+
+    match cwd {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?),
+        None => AbsolutePathBuf::current_dir(),
+    }
+}
+
+fn latest_session_cwd_filter<'a>(
+    remote_mode: bool,
+    remote_cwd_override: Option<&'a Path>,
+    config: &'a Config,
+    show_all: bool,
+) -> Option<&'a Path> {
+    if show_all {
+        return None;
+    }
+
+    if remote_mode {
+        remote_cwd_override
+    } else {
+        Some(config.cwd.as_path())
     }
 }
 
@@ -606,6 +636,10 @@ pub async fn run_main(
             auth_token: remote_auth_token.clone(),
         })
         .unwrap_or(AppServerTarget::Embedded);
+    let remote_cwd_override = cli
+        .cwd
+        .clone()
+        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -656,10 +690,7 @@ pub async fn run_main(
     };
 
     let cwd = cli.cwd.clone();
-    let config_cwd = match cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
-        None => AbsolutePathBuf::current_dir()?,
-    };
+    let config_cwd = config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target)?;
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
@@ -747,7 +778,11 @@ pub async fn run_main(
         model,
         approval_policy,
         sandbox_mode,
-        cwd,
+        cwd: if matches!(app_server_target, AppServerTarget::Remote { .. }) {
+            None
+        } else {
+            cwd
+        },
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
@@ -909,6 +944,7 @@ pub async fn run_main(
         arg0_paths,
         loader_overrides,
         app_server_target,
+        remote_cwd_override,
         config,
         overrides,
         cli_kv_overrides,
@@ -927,6 +963,7 @@ async fn run_ratatui_app(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
+    remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -992,7 +1029,8 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(app_server) => AppServerSession::new(app_server),
+            Ok(app_server) => AppServerSession::new(app_server)
+                .with_remote_cwd_override(remote_cwd_override.clone()),
             Err(err) => {
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
@@ -1108,12 +1146,21 @@ async fn run_ratatui_app(
                 }
             }
         } else if cli.fork_last {
+            let filter_cwd = if remote_mode {
+                latest_session_cwd_filter(
+                    remote_mode,
+                    remote_cwd_override.as_deref(),
+                    &config,
+                    cli.fork_show_all,
+                )
+            } else {
+                None
+            };
             let Some(app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork --last");
             };
             match lookup_latest_session_target_with_app_server(
-                app_server, &config, /*cwd_filter*/ None,
-                /*include_non_interactive*/ false,
+                app_server, &config, filter_cwd, /*include_non_interactive*/ false,
             )
             .await?
             {
@@ -1160,11 +1207,12 @@ async fn run_ratatui_app(
             }
         }
     } else if cli.resume_last {
-        let filter_cwd = if cli.resume_show_all {
-            None
-        } else {
-            Some(config.cwd.as_path())
-        };
+        let filter_cwd = latest_session_cwd_filter(
+            remote_mode,
+            remote_cwd_override.as_deref(),
+            &config,
+            cli.resume_show_all,
+        );
         let Some(app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume --last");
         };
@@ -1306,7 +1354,8 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(app_server) => AppServerSession::new(app_server),
+            Ok(app_server) => AppServerSession::new(app_server)
+                .with_remote_cwd_override(remote_cwd_override.clone()),
             Err(err) => {
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
@@ -1532,7 +1581,10 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
             AltScreenMode::Never => false,
             AltScreenMode::Auto => {
                 let terminal_info = terminal_info();
-                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
+                !matches!(
+                    terminal_info.multiplexer,
+                    Some(codex_terminal_detection::Multiplexer::Zellij {})
+                )
             }
         }
     }
@@ -1631,9 +1683,9 @@ mod tests {
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_config::config_toml::ProjectConfig;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::config::ProjectConfig;
     use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
@@ -1779,17 +1831,66 @@ mod tests {
     -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
-        let cwd = temp_dir.path().join("project");
 
         let params = latest_session_lookup_params(
-            /*is_remote*/ true,
-            &config,
-            Some(cwd.as_path()),
+            /*is_remote*/ true, &config, /*cwd_filter*/ None,
             /*include_non_interactive*/ false,
         );
 
         assert_eq!(params.model_providers, None);
         assert_eq!(params.cwd, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn latest_session_lookup_params_keep_explicit_cwd_filter_for_remote_sessions()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let cwd = Path::new("repo/on/server");
+
+        let params = latest_session_lookup_params(
+            /*is_remote*/ true,
+            &config,
+            Some(cwd),
+            /*include_non_interactive*/ false,
+        );
+
+        assert_eq!(params.model_providers, None);
+        assert_eq!(params.cwd.as_deref(), Some("repo/on/server"));
+        Ok(())
+    }
+
+    #[test]
+    fn config_cwd_for_app_server_target_uses_current_dir_for_remote_sessions() -> std::io::Result<()>
+    {
+        let remote_only_cwd = if cfg!(windows) {
+            Path::new(r"C:\definitely\not\local\to\this\test")
+        } else {
+            Path::new("/definitely/not/local/to/this/test")
+        };
+        let target = AppServerTarget::Remote {
+            websocket_url: "ws://127.0.0.1:1234/".to_string(),
+            auth_token: None,
+        };
+
+        let config_cwd = config_cwd_for_app_server_target(Some(remote_only_cwd), &target)?;
+
+        assert_eq!(config_cwd, AbsolutePathBuf::current_dir()?);
+        Ok(())
+    }
+
+    #[test]
+    fn config_cwd_for_app_server_target_canonicalizes_embedded_cli_cwd() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target = AppServerTarget::Embedded;
+
+        let config_cwd = config_cwd_for_app_server_target(Some(temp_dir.path()), &target)?;
+
+        assert_eq!(
+            config_cwd,
+            AbsolutePathBuf::from_absolute_path(temp_dir.path().canonicalize()?)?
+        );
         Ok(())
     }
 

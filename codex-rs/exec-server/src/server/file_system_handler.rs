@@ -26,6 +26,7 @@ use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
+use crate::rpc::not_found;
 
 #[derive(Clone, Default)]
 pub(crate) struct FileSystemHandler {
@@ -153,7 +154,9 @@ impl FileSystemHandler {
 }
 
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
-    if err.kind() == io::ErrorKind::InvalidInput {
+    if err.kind() == io::ErrorKind::NotFound {
+        not_found(err.to_string())
+    } else if err.kind() == io::ErrorKind::InvalidInput {
         invalid_request(err.to_string())
     } else {
         internal_error(err.to_string())

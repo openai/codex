@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use rmcp::model::ListResourceTemplatesResult;
@@ -178,7 +177,6 @@ struct ReadResourcePayload {
     result: ReadResourceResult,
 }
 
-#[async_trait]
 impl ToolHandler for McpResourceHandler {
     type Output = FunctionToolOutput;
 

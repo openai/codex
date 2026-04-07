@@ -6,7 +6,9 @@ license.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 codex-client = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }

@@ -8,6 +8,10 @@ import type { Turn } from "./Turn";
 
 export type Thread = { id: string, 
 /**
+ * Source thread id when this thread was created by forking another thread.
+ */
+forkedFromId: string | null, 
+/**
  * Usually the first user message in the thread, if available.
  */
 preview: string, 

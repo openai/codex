@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
@@ -178,7 +177,6 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for ShellHandler {
     type Output = FunctionToolOutput;
 
@@ -279,7 +277,6 @@ impl ToolHandler for ShellHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for ShellCommandHandler {
     type Output = FunctionToolOutput;
 

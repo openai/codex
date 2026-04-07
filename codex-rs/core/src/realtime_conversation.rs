@@ -1,9 +1,4 @@
-use crate::api_bridge::map_api_error;
 use crate::codex::Session;
-use crate::config::RealtimeWsMode;
-use crate::config::RealtimeWsVersion;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -17,12 +12,18 @@ use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
-use codex_login::AuthMode;
+use codex_api::RealtimeWebsocketEvents;
+use codex_api::RealtimeWebsocketWriter;
+use codex_api::map_api_error;
+use codex_app_server_protocol::AuthMode;
+use codex_config::config_toml::RealtimeWsMode;
+use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -631,10 +632,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
 }
 
-fn realtime_api_key(
-    auth: Option<&CodexAuth>,
-    provider: &crate::ModelProviderInfo,
-) -> CodexResult<String> {
+fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
     if let Some(api_key) = provider.api_key()? {
         return Ok(api_key);
     }

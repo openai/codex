@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -37,7 +36,6 @@ enum ViewImageDetail {
     Original,
 }
 
-#[async_trait]
 impl ToolHandler for ViewImageHandler {
     type Output = ViewImageOutput;
 
@@ -93,9 +91,13 @@ impl ToolHandler for ViewImageHandler {
             AbsolutePathBuf::try_from(turn.resolve_path(Some(args.path))).map_err(|error| {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
+        let Some(environment) = turn.environment.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "view_image is unavailable in this session".to_string(),
+            ));
+        };
 
-        let metadata = turn
-            .environment
+        let metadata = environment
             .get_filesystem()
             .get_metadata(&abs_path)
             .await
@@ -112,8 +114,7 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
-        let file_bytes = turn
-            .environment
+        let file_bytes = environment
             .get_filesystem()
             .read_file(&abs_path)
             .await

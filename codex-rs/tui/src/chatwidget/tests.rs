@@ -93,12 +93,12 @@ pub(super) use codex_core::config_loader::ConfigLayerStack;
 pub(super) use codex_core::config_loader::ConfigRequirements;
 pub(super) use codex_core::config_loader::ConfigRequirementsToml;
 pub(super) use codex_core::config_loader::RequirementSource;
-pub(super) use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 pub(super) use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 pub(super) use codex_core::skills::model::SkillMetadata;
 pub(super) use codex_features::FEATURES;
 pub(super) use codex_features::Feature;
 pub(super) use codex_git_utils::CommitLogEntry;
+pub(super) use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 pub(super) use codex_otel::RuntimeMetricsSummary;
 pub(super) use codex_otel::SessionTelemetry;
 pub(super) use codex_protocol::ThreadId;
@@ -210,7 +210,14 @@ pub(super) use tokio::sync::mpsc::unbounded_channel;
 pub(super) use toml::Value as TomlValue;
 
 pub(super) fn chatwidget_snapshot_dir() -> PathBuf {
-    codex_utils_cargo_bin::find_resource!("src/chatwidget/snapshots").expect("snapshot dir")
+    let snapshot_file = codex_utils_cargo_bin::find_resource!(
+        "src/chatwidget/snapshots/codex_tui__chatwidget__tests__chatwidget_tall.snap"
+    )
+    .expect("snapshot file");
+    snapshot_file
+        .parent()
+        .unwrap_or_else(|| panic!("snapshot file has no parent: {}", snapshot_file.display()))
+        .to_path_buf()
 }
 
 macro_rules! assert_chatwidget_snapshot {

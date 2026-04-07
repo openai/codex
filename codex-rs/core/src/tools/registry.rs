@@ -13,7 +13,6 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -26,6 +25,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolSpec;
 use codex_utils_readiness::Readiness;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
 
@@ -35,7 +35,6 @@ pub enum ToolKind {
     Mcp,
 }
 
-#[async_trait]
 pub trait ToolHandler: Send + Sync {
     type Output: ToolOutput + 'static;
 
@@ -54,8 +53,11 @@ pub trait ToolHandler: Send + Sync {
     /// user (through file system, OS operations, ...).
     /// This function must remains defensive and return `true` if a doubt exist on the
     /// exact effect of a ToolInvocation.
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        false
+    fn is_mutating(
+        &self,
+        _invocation: &ToolInvocation,
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async { false }
     }
 
     fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -73,7 +75,10 @@ pub trait ToolHandler: Send + Sync {
 
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError>;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send;
 }
 
 pub(crate) struct AnyToolResult {
@@ -112,11 +117,10 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-#[async_trait]
 trait AnyToolHandler: Send + Sync {
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool;
+    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool>;
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
 
@@ -127,13 +131,12 @@ trait AnyToolHandler: Send + Sync {
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload>;
 
-    async fn handle_any(
-        &self,
+    fn handle_any<'a>(
+        &'a self,
         invocation: ToolInvocation,
-    ) -> Result<AnyToolResult, FunctionCallError>;
+    ) -> BoxFuture<'a, Result<AnyToolResult, FunctionCallError>>;
 }
 
-#[async_trait]
 impl<T> AnyToolHandler for T
 where
     T: ToolHandler,
@@ -142,8 +145,8 @@ where
         ToolHandler::matches_kind(self, payload)
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        ToolHandler::is_mutating(self, invocation).await
+    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool> {
+        Box::pin(ToolHandler::is_mutating(self, invocation))
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -159,17 +162,19 @@ where
         ToolHandler::post_tool_use_payload(self, call_id, payload, result)
     }
 
-    async fn handle_any(
-        &self,
+    fn handle_any<'a>(
+        &'a self,
         invocation: ToolInvocation,
-    ) -> Result<AnyToolResult, FunctionCallError> {
-        let call_id = invocation.call_id.clone();
-        let payload = invocation.payload.clone();
-        let output = self.handle(invocation).await?;
-        Ok(AnyToolResult {
-            call_id,
-            payload,
-            result: Box::new(output),
+    ) -> BoxFuture<'a, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let call_id = invocation.call_id.clone();
+            let payload = invocation.payload.clone();
+            let output = self.handle(invocation).await?;
+            Ok(AnyToolResult {
+                call_id,
+                payload,
+                result: Box::new(output),
+            })
         })
     }
 }

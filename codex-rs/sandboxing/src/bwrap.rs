@@ -1,20 +1,78 @@
+use codex_protocol::protocol::SandboxPolicy;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Output;
 
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
+const MISSING_BWRAP_WARNING: &str = concat!(
+    "Codex could not find bubblewrap on PATH. ",
+    "Install bubblewrap with your OS package manager. ",
+    "See the sandbox prerequisites: ",
+    "https://developers.openai.com/codex/concepts/sandboxing#prerequisites. ",
+    "Codex will use the vendored bubblewrap in the meantime.",
+);
+const USER_NAMESPACE_WARNING: &str =
+    "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.";
+const USER_NAMESPACE_FAILURES: [&str; 4] = [
+    "loopback: Failed RTM_NEWADDR",
+    "loopback: Failed RTM_NEWLINK",
+    "setting up uid map: Permission denied",
+    "No permissions to create a new namespace",
+];
 
-pub fn system_bwrap_warning() -> Option<String> {
-    system_bwrap_warning_for_lookup(find_system_bwrap_in_path())
+pub fn system_bwrap_warning(sandbox_policy: &SandboxPolicy) -> Option<String> {
+    if !should_warn_about_system_bwrap(sandbox_policy) {
+        return None;
+    }
+
+    let system_bwrap_path = find_system_bwrap_in_path();
+    system_bwrap_warning_for_path(system_bwrap_path.as_deref())
 }
 
-fn system_bwrap_warning_for_lookup(system_bwrap_path: Option<PathBuf>) -> Option<String> {
-    match system_bwrap_path {
-        Some(_) => None,
-        None => Some(
-            "Codex could not find system bubblewrap on PATH. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-                .to_string(),
-        ),
+fn should_warn_about_system_bwrap(sandbox_policy: &SandboxPolicy) -> bool {
+    !matches!(
+        sandbox_policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    )
+}
+
+fn system_bwrap_warning_for_path(system_bwrap_path: Option<&Path>) -> Option<String> {
+    let Some(system_bwrap_path) = system_bwrap_path else {
+        return Some(MISSING_BWRAP_WARNING.to_string());
+    };
+
+    if !system_bwrap_has_user_namespace_access(system_bwrap_path) {
+        return Some(USER_NAMESPACE_WARNING.to_string());
     }
+
+    None
+}
+
+fn system_bwrap_has_user_namespace_access(system_bwrap_path: &Path) -> bool {
+    let output = match Command::new(system_bwrap_path)
+        .args([
+            "--unshare-user",
+            "--unshare-net",
+            "--ro-bind",
+            "/",
+            "/",
+            "/bin/true",
+        ])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return true,
+    };
+
+    output.status.success() || !is_user_namespace_failure(&output)
+}
+
+fn is_user_namespace_failure(output: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    USER_NAMESPACE_FAILURES
+        .iter()
+        .any(|failure| stderr.contains(failure))
 }
 
 pub fn find_system_bwrap_in_path() -> Option<PathBuf> {

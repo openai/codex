@@ -2,15 +2,15 @@ use crate::agent::AgentStatus;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
-use crate::models_manager::manager::RefreshStrategy;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_features::Feature;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -201,11 +201,12 @@ pub(crate) fn parse_collab_input(
 /// skipping this helper and cloning stale config state directly can send the child agent out with
 /// the wrong provider or runtime policy.
 pub(crate) fn build_agent_spawn_config(
-    base_instructions: &BaseInstructions,
+    base_instructions: Option<&BaseInstructions>,
     turn: &TurnContext,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    config.base_instructions = Some(base_instructions.text.clone());
+    config.base_instructions =
+        Some(base_instructions.map(|base_instructions| base_instructions.text.clone()));
     Ok(config)
 }
 
@@ -292,7 +293,7 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
         let selected_model_info = session
             .services
             .models_manager
-            .get_model_info(&selected_model_name, config)
+            .get_model_info(&selected_model_name, &config.to_models_manager_config())
             .await;
 
         config.model = Some(selected_model_name.clone());

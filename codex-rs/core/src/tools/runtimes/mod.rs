@@ -12,9 +12,9 @@ use codex_sandboxing::SandboxCommand;
 use std::collections::HashMap;
 use std::path::Path;
 
-pub mod apply_patch;
-pub mod shell;
-pub mod unified_exec;
+pub(crate) mod apply_patch;
+pub(crate) mod shell;
+pub(crate) mod unified_exec;
 
 /// Shared helper to construct sandbox transform inputs from a tokenized command line.
 /// Validates that at least a program is present.

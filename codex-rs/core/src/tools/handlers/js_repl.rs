@@ -1,11 +1,8 @@
-use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -20,6 +17,8 @@ use crate::tools::js_repl::JsReplArgs;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_features::Feature;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::ExecCommandSource;
 
@@ -92,7 +91,6 @@ async fn emit_js_repl_exec_end(
     };
     emitter.emit(ctx, stage).await;
 }
-#[async_trait]
 impl ToolHandler for JsReplHandler {
     type Output = FunctionToolOutput;
 
@@ -182,7 +180,6 @@ impl ToolHandler for JsReplHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for JsReplResetHandler {
     type Output = FunctionToolOutput;
 

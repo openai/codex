@@ -5,7 +5,7 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_protocol::openai_models::ModelsResponse;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
@@ -94,8 +94,8 @@ fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) 
     config.chatgpt_base_url = apps_base_url.to_string();
     config.model = Some("gpt-5-codex".to_string());
 
-    let mut model_catalog: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let mut model_catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models
         .iter_mut()

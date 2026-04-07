@@ -5,8 +5,6 @@ Handles approval + sandbox orchestration for unified exec requests, delegating t
 the process manager to spawn PTYs once an ExecRequest is prepared.
 */
 use crate::command_canonicalization::canonicalize_command_for_approval;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
@@ -36,6 +34,8 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
@@ -239,7 +239,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    if ctx.turn.environment.exec_server_url().is_some() {
+                    let Some(environment) = ctx.turn.environment.as_ref() else {
+                        return Err(ToolError::Rejected(
+                            "exec_command is unavailable in this session".to_string(),
+                        ));
+                    };
+                    if environment.is_remote() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
                         ));
@@ -251,7 +256,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
-                            ctx.turn.environment.as_ref(),
+                            environment.as_ref(),
                         )
                         .await
                         .map_err(|err| match err {
@@ -281,13 +286,18 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let exec_env = attempt
             .env_for(command, options, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
+        let Some(environment) = ctx.turn.environment.as_ref() else {
+            return Err(ToolError::Rejected(
+                "exec_command is unavailable in this session".to_string(),
+            ));
+        };
         self.manager
             .open_session_with_exec_env(
                 req.process_id,
                 &exec_env,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
-                ctx.turn.environment.as_ref(),
+                environment.as_ref(),
             )
             .await
             .map_err(|err| match err {

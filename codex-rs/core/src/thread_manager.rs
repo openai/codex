@@ -1,5 +1,3 @@
-use crate::ModelProviderInfo;
-use crate::OPENAI_PROVIDER_ID;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
@@ -8,12 +6,8 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
@@ -26,8 +20,15 @@ use codex_app_server_protocol::TurnStatus;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
@@ -42,9 +43,11 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -356,10 +359,7 @@ impl ThreadManager {
         self.state.models_manager.clone()
     }
 
-    pub async fn list_models(
-        &self,
-        refresh_strategy: crate::models_manager::manager::RefreshStrategy,
-    ) -> Vec<ModelPreset> {
+    pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
         self.state
             .models_manager
             .list_models(refresh_strategy)
@@ -401,6 +401,53 @@ impl ThreadManager {
 
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         self.state.get_thread(thread_id).await
+    }
+
+    /// List `thread_id` plus all known descendants in its spawn subtree.
+    pub async fn list_agent_subtree_thread_ids(
+        &self,
+        thread_id: ThreadId,
+    ) -> CodexResult<Vec<ThreadId>> {
+        let thread = self.state.get_thread(thread_id).await?;
+
+        let mut subtree_thread_ids = Vec::new();
+        let mut seen_thread_ids = HashSet::new();
+        subtree_thread_ids.push(thread_id);
+        seen_thread_ids.insert(thread_id);
+
+        if let Some(state_db_ctx) = thread.state_db() {
+            for status in [
+                DirectionalThreadSpawnEdgeStatus::Open,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            ] {
+                for descendant_id in state_db_ctx
+                    .list_thread_spawn_descendants_with_status(thread_id, status)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!("failed to load thread-spawn descendants: {err}"))
+                    })?
+                {
+                    if seen_thread_ids.insert(descendant_id) {
+                        subtree_thread_ids.push(descendant_id);
+                    }
+                }
+            }
+        }
+
+        for descendant_id in thread
+            .codex
+            .session
+            .services
+            .agent_control
+            .list_live_agent_subtree_thread_ids(thread_id)
+            .await?
+        {
+            if seen_thread_ids.insert(descendant_id) {
+                subtree_thread_ids.push(descendant_id);
+            }
+        }
+
+        Ok(subtree_thread_ids)
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
@@ -1012,6 +1059,8 @@ fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>)
     let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id,
         reason: TurnAbortReason::Interrupted,
+        completed_at: None,
+        duration_ms: None,
     }));
 
     match history {

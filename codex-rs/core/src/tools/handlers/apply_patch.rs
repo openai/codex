@@ -21,7 +21,6 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
-use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::models::FileSystemPermissions;
@@ -122,7 +121,6 @@ async fn effective_patch_permissions(
     )
 }
 
-#[async_trait]
 impl ToolHandler for ApplyPatchHandler {
     type Output = ApplyPatchToolOutput;
 

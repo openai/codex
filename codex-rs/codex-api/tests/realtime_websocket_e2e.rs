@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
+use codex_api::Provider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
-use codex_api::provider::Provider;
-use codex_api::provider::RetryConfig;
+use codex_api::RetryConfig;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use futures::SinkExt;
 use futures::StreamExt;

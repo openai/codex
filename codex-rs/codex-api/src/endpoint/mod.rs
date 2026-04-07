@@ -1,7 +1,22 @@
-pub mod compact;
-pub mod memories;
-pub mod models;
-pub mod realtime_websocket;
-pub mod responses;
-pub mod responses_websocket;
+pub(crate) mod compact;
+pub(crate) mod memories;
+pub(crate) mod models;
+pub(crate) mod realtime_websocket;
+pub(crate) mod responses;
+pub(crate) mod responses_websocket;
 mod session;
+
+pub use compact::CompactClient;
+pub use memories::MemoriesClient;
+pub use models::ModelsClient;
+pub use realtime_websocket::RealtimeEventParser;
+pub use realtime_websocket::RealtimeSessionConfig;
+pub use realtime_websocket::RealtimeSessionMode;
+pub use realtime_websocket::RealtimeWebsocketClient;
+pub use realtime_websocket::RealtimeWebsocketConnection;
+pub use realtime_websocket::RealtimeWebsocketEvents;
+pub use realtime_websocket::RealtimeWebsocketWriter;
+pub use responses::ResponsesClient;
+pub use responses::ResponsesOptions;
+pub use responses_websocket::ResponsesWebsocketClient;
+pub use responses_websocket::ResponsesWebsocketConnection;

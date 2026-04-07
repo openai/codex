@@ -46,6 +46,7 @@ pub use model::Stage1StartupClaimParams;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
+pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
 pub use runtime::state_db_filename;

@@ -191,7 +191,6 @@ index 85f31b7..7314584 100644
 +    actual = "@simdutf//:simdutf",
  )
  
- v8_library(
 @@ -4593,7 +4598,7 @@ v8_library(
      copts = ["-Wno-implicit-fallthrough"],
      icu_deps = [

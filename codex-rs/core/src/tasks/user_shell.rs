@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::user_input::UserInput;
@@ -11,9 +10,7 @@ use uuid::Uuid;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
-use crate::exec::ExecToolCallOutput;
 use crate::exec::StdoutStream;
-use crate::exec::StreamOutput;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
@@ -21,6 +18,8 @@ use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::user_shell_command::user_shell_command_record_item;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
@@ -62,7 +61,6 @@ impl UserShellCommandTask {
     }
 }
 
-#[async_trait]
 impl SessionTask for UserShellCommandTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular
@@ -113,6 +111,7 @@ pub(crate) async fn execute_user_shell_command(
         // freshly reinjected context before the summary/replacement history is applied.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_context.sub_id.clone(),
+            started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
             model_context_window: turn_context.model_context_window(),
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });

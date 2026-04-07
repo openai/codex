@@ -337,6 +337,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         dangerously_allow_all_unix_sockets,
         domains,
         managed_allowed_domains_only,
+        danger_full_access_denylist_only,
         unix_sockets,
         allow_local_binding,
     } = network;
@@ -372,6 +373,11 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
         parts.push(format!(
             "managed_allowed_domains_only={managed_allowed_domains_only}"
+        ));
+    }
+    if let Some(danger_full_access_denylist_only) = danger_full_access_denylist_only {
+        parts.push(format!(
+            "danger_full_access_denylist_only={danger_full_access_denylist_only}"
         ));
     }
     if let Some(unix_sockets) = unix_sockets {
@@ -557,6 +563,7 @@ mod tests {
                             NetworkDomainPermissionToml::Allow,
                         )]),
                     }),
+                    danger_full_access_denylist_only: Some(true),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
@@ -566,6 +573,7 @@ mod tests {
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             guardian_developer_instructions: None,
@@ -620,7 +628,7 @@ mod tests {
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
+            "experimental_network: enabled=true, domains={example.com=allow}, danger_full_access_denylist_only=true (source: cloud requirements)"
         ));
         assert!(!rendered.contains("  - rules:"));
     }
@@ -729,6 +737,7 @@ approval_policy = "never"
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_developer_instructions: None,

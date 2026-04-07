@@ -1,9 +1,6 @@
 use super::ShellRequest;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
-use crate::exec::ExecToolCallOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
@@ -23,6 +20,10 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -901,9 +902,9 @@ fn map_exec_result(
 ) -> Result<ExecToolCallOutput, ToolError> {
     let output = ExecToolCallOutput {
         exit_code: result.exit_code,
-        stdout: crate::exec::StreamOutput::new(result.stdout.clone()),
-        stderr: crate::exec::StreamOutput::new(result.stderr.clone()),
-        aggregated_output: crate::exec::StreamOutput::new(result.output.clone()),
+        stdout: StreamOutput::new(result.stdout.clone()),
+        stderr: StreamOutput::new(result.stderr.clone()),
+        aggregated_output: StreamOutput::new(result.output.clone()),
         duration: result.duration,
         timed_out: result.timed_out,
     };
