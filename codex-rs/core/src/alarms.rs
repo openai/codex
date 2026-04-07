@@ -370,6 +370,7 @@ pub(crate) fn alarm_prompt_input_item(alarm: &AlarmInvocationContext) -> Respons
 
 fn render_alarm_prompt_template(template: &str, alarm: &AlarmInvocationContext) -> String {
     template
+        .replace("\r\n", "\n")
         .replace("{{CURRENT_ALARM_ID}}", &alarm.current_alarm_id)
         .replace("{{TRIGGER}}", &alarm.trigger.display())
         .replace("{{PROMPT}}", &alarm.prompt)
