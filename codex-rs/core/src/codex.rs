@@ -1016,10 +1016,17 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
-        path.as_ref()
-            .map(PathBuf::from)
-            .map_or_else(|| self.cwd.to_path_buf(), |p| self.cwd.as_path().join(p))
+    pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
+        let Some(path) = path.as_ref() else {
+            return self.cwd.clone();
+        };
+        match AbsolutePathBuf::resolve_path_against_base(path, &self.cwd) {
+            Ok(path) => path,
+            Err(err) => {
+                warn!("failed to resolve path against cwd: {err}");
+                self.cwd.clone()
+            }
+        }
     }
 
     pub(crate) fn compact_prompt(&self) -> &str {
@@ -1153,7 +1160,7 @@ impl SessionConfiguration {
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
-            cwd: self.cwd.to_path_buf(),
+            cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
@@ -1234,7 +1241,7 @@ impl SessionConfiguration {
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
-    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) cwd: Option<AbsolutePathBuf>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
@@ -1456,7 +1463,7 @@ impl Session {
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             conversation_id.to_string(),
             sub_id.clone(),
-            cwd.to_path_buf(),
+            cwd.clone(),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
         ));
@@ -1810,7 +1817,7 @@ impl Session {
                 ShellSnapshot::start_snapshotting(
                     config.codex_home.clone(),
                     conversation_id,
-                    session_configuration.cwd.to_path_buf(),
+                    session_configuration.cwd.clone(),
                     &mut default_shell,
                     session_telemetry.clone(),
                 )
@@ -2359,12 +2366,12 @@ impl Session {
 
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
-        previous_cwd: &Path,
-        next_cwd: &Path,
+        previous_cwd: &AbsolutePathBuf,
+        next_cwd: &AbsolutePathBuf,
         codex_home: &Path,
         session_source: &SessionSource,
     ) {
-        if previous_cwd == next_cwd {
+        if previous_cwd.as_path() == next_cwd.as_path() {
             return;
         }
 
@@ -2382,7 +2389,7 @@ impl Session {
         ShellSnapshot::refresh_snapshot(
             codex_home.to_path_buf(),
             self.conversation_id,
-            next_cwd.to_path_buf(),
+            next_cwd.clone(),
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
             self.services.session_telemetry.clone(),
@@ -3040,7 +3047,7 @@ impl Session {
         call_id: String,
         approval_id: Option<String>,
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
@@ -3092,7 +3099,7 @@ impl Session {
             approval_id,
             turn_id: turn_context.sub_id.clone(),
             command,
-            cwd,
+            cwd: cwd.to_path_buf(),
             reason,
             network_approval_context,
             proposed_execpolicy_amendment,
@@ -4558,6 +4565,14 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     collaboration_mode,
                     personality,
                 } => {
+                    let cwd = cwd.and_then(|cwd| {
+                        AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(cwd))
+                            .map_err(|err| {
+                                warn!("failed to normalize override cwd: {err}");
+                                err
+                            })
+                            .ok()
+                    });
                     let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                         collab_mode
                     } else {
@@ -4846,6 +4861,14 @@ mod handlers {
                 collaboration_mode,
                 personality,
             } => {
+                let cwd = AbsolutePathBuf::relative_to_current_dir(
+                    crate::path_utils::normalize_for_native_workdir(cwd),
+                )
+                .map_err(|err| {
+                    warn!("failed to normalize user turn cwd: {err}");
+                    err
+                })
+                .ok();
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
                         mode: ModeKind::Default,
@@ -4859,7 +4882,7 @@ mod handlers {
                 (
                     items,
                     SessionSettingsUpdate {
-                        cwd: Some(cwd),
+                        cwd,
                         approval_policy: Some(approval_policy),
                         approvals_reviewer,
                         sandbox_policy: Some(sandbox_policy),
@@ -5663,7 +5686,7 @@ async fn spawn_review_thread(
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.conversation_id.to_string(),
         review_turn_id.clone(),
-        parent_turn_context.cwd.to_path_buf(),
+        parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
     ));

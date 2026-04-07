@@ -33,6 +33,7 @@ use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -136,6 +137,14 @@ impl ConfigApi {
         &self,
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
+        let fallback_cwd = fallback_cwd
+            .map(AbsolutePathBuf::try_from)
+            .transpose()
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("invalid fallback cwd: {err}"),
+                data: None,
+            })?;
         let mut config = codex_core::config::ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
             .cli_overrides(self.current_cli_overrides())
@@ -528,6 +537,7 @@ mod tests {
     use codex_login::CodexAuth;
     use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
+    use core_test_support::TempDirExt;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
@@ -762,7 +772,7 @@ mod tests {
 
         let mut config = codex_core::config::ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
-            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .fallback_cwd(Some(codex_home.abs()))
             .cli_overrides(vec![(
                 "features.apps".to_string(),
                 TomlValue::Boolean(true),

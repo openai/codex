@@ -11,6 +11,7 @@ use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::StdioPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use core_test_support::PathBufExt;
 use tempfile::TempDir;
 
 struct TestScenario {
@@ -188,7 +189,7 @@ os.write(slave, b"ping")
 assert os.read(master, 4) == b"ping""#
                 .to_string(),
         ],
-        command_cwd,
+        command_cwd.abs(),
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
@@ -241,7 +242,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
 
     let child = spawn_command_under_seatbelt(
         vec![java_home_path.to_string_lossy().to_string()],
-        command_cwd,
+        command_cwd.abs(),
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
@@ -298,7 +299,7 @@ async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
             "/usr/bin/touch".to_string(),
             path.to_string_lossy().to_string(),
         ],
-        command_cwd,
+        command_cwd.abs(),
         policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,

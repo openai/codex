@@ -51,6 +51,7 @@ use codex_login::AuthManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::InitialHistory;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[cfg(test)]
 use crate::codex::completed_session_loop_termination;
@@ -451,6 +452,13 @@ async fn handle_exec_approval(
         available_decisions,
         ..
     } = event;
+    let cwd = match AbsolutePathBuf::try_from(cwd.as_path()) {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            tracing::warn!("approval cwd is not absolute: {err}");
+            parent_ctx.cwd.clone()
+        }
+    };
     let decision = if routes_approval_to_guardian(parent_ctx) {
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_guardian_review(
@@ -566,7 +574,7 @@ async fn handle_patch_approval(
                 Arc::clone(parent_ctx),
                 GuardianApprovalRequest::ApplyPatch {
                     id: approval_id.clone(),
-                    cwd: parent_ctx.cwd.to_path_buf(),
+                    cwd: parent_ctx.cwd.clone(),
                     files,
                     patch,
                 },

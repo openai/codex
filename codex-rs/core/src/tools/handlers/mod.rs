@@ -21,11 +21,11 @@ mod view_image;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
@@ -75,17 +75,17 @@ where
 fn resolve_workdir_base_path(
     arguments: &str,
     default_cwd: &Path,
-) -> Result<PathBuf, FunctionCallError> {
+) -> Result<AbsolutePathBuf, FunctionCallError> {
     let arguments: Value = parse_arguments(arguments)?;
-    Ok(arguments
-        .get("workdir")
-        .and_then(Value::as_str)
-        .filter(|workdir| !workdir.is_empty())
-        .map(PathBuf::from)
-        .map_or_else(
-            || default_cwd.to_path_buf(),
-            |workdir| crate::util::resolve_path(default_cwd, &workdir),
-        ))
+    AbsolutePathBuf::resolve_path_against_base(
+        arguments
+            .get("workdir")
+            .and_then(Value::as_str)
+            .filter(|workdir| !workdir.is_empty())
+            .unwrap_or_default(),
+        default_cwd,
+    )
+    .map_err(|err| FunctionCallError::RespondToModel(format!("failed to resolve workdir: {err}")))
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and

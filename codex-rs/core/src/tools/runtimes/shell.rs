@@ -38,14 +38,14 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
     pub command: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
@@ -93,7 +93,7 @@ pub struct ShellRuntime {
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ApprovalKey {
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<PermissionProfile>,
 }

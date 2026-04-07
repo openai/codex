@@ -1,5 +1,6 @@
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
+use core_test_support::PathExt;
 use std::fs;
 use std::path::Path;
 
@@ -102,7 +103,7 @@ plugins = true
 pub(crate) async fn load_plugins_config(codex_home: &Path) -> crate::config::Config {
     ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
-        .fallback_cwd(Some(codex_home.to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await
         .expect("config should load")

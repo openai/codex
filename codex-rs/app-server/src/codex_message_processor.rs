@@ -559,6 +559,14 @@ impl CodexMessageProcessor {
         &self,
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
+        let fallback_cwd = fallback_cwd
+            .map(AbsolutePathBuf::try_from)
+            .transpose()
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("invalid fallback cwd: {err}"),
+                data: None,
+            })?;
         let cloud_requirements = self.current_cloud_requirements();
         let mut config = codex_core::config::ConfigBuilder::default()
             .cli_overrides(self.current_cli_overrides())
@@ -1827,7 +1835,21 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let cwd = cwd.unwrap_or_else(|| self.config.cwd.to_path_buf());
+        let cwd = match cwd {
+            Some(cwd) => match AbsolutePathBuf::try_from(cwd) {
+                Ok(cwd) => cwd,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_PARAMS_ERROR_CODE,
+                        message: format!("invalid command/exec cwd: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            },
+            None => self.config.cwd.clone(),
+        };
         let mut env = create_env(
             &self.config.permissions.shell_environment_policy,
             /*thread_id*/ None,
@@ -2083,7 +2105,7 @@ impl CodexMessageProcessor {
             ephemeral,
             persist_extended_history,
         } = params;
-        let mut typesafe_overrides = self.build_thread_config_overrides(
+        let mut typesafe_overrides = match self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
@@ -2094,7 +2116,13 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
-        );
+        ) {
+            Ok(overrides) => overrides,
+            Err(error) => {
+                self.outgoing.send_error(request_id.clone(), error).await;
+                return;
+            }
+        };
         typesafe_overrides.ephemeral = ephemeral;
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
@@ -2412,7 +2440,7 @@ impl CodexMessageProcessor {
                     model: config_snapshot.model,
                     model_provider: config_snapshot.model_provider_id,
                     service_tier: config_snapshot.service_tier,
-                    cwd: config_snapshot.cwd,
+                    cwd: config_snapshot.cwd.to_path_buf(),
                     approval_policy: config_snapshot.approval_policy.into(),
                     approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
@@ -2476,12 +2504,20 @@ impl CodexMessageProcessor {
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
-    ) -> ConfigOverrides {
-        ConfigOverrides {
+    ) -> Result<ConfigOverrides, JSONRPCErrorError> {
+        let cwd = cwd
+            .map(|cwd| AbsolutePathBuf::relative_to_current_dir(&cwd))
+            .transpose()
+            .map_err(|err| JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: format!("invalid thread cwd: {err}"),
+                data: None,
+            })?;
+        Ok(ConfigOverrides {
             model,
             model_provider,
             service_tier,
-            cwd: cwd.map(PathBuf::from),
+            cwd,
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
             approvals_reviewer: approvals_reviewer
@@ -2493,7 +2529,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
             ..Default::default()
-        }
+        })
     }
 
     async fn thread_archive(
@@ -2941,7 +2977,7 @@ impl CodexMessageProcessor {
                 config_snapshot.session_source.clone(),
             );
             builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.clone();
+            builder.cwd = config_snapshot.cwd.to_path_buf();
             builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
             builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
             builder.approval_mode = config_snapshot.approval_policy;
@@ -3790,7 +3826,7 @@ impl CodexMessageProcessor {
         };
 
         let history_cwd = thread_history.session_cwd();
-        let mut typesafe_overrides = self.build_thread_config_overrides(
+        let mut typesafe_overrides = match self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
@@ -3801,7 +3837,13 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
-        );
+        ) {
+            Ok(overrides) => overrides,
+            Err(error) => {
+                self.outgoing.send_error(request_id.clone(), error).await;
+                return;
+            }
+        };
         let persisted_resume_metadata = self
             .load_and_apply_persisted_resume_metadata(
                 &thread_history,
@@ -4351,7 +4393,7 @@ impl CodexMessageProcessor {
         } else {
             Some(cli_overrides)
         };
-        let mut typesafe_overrides = self.build_thread_config_overrides(
+        let mut typesafe_overrides = match self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
@@ -4362,7 +4404,13 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             /*personality*/ None,
-        );
+        ) {
+            Ok(overrides) => overrides,
+            Err(error) => {
+                self.outgoing.send_error(request_id.clone(), error).await;
+                return;
+            }
+        };
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
@@ -7764,10 +7812,7 @@ impl CodexMessageProcessor {
         };
         let config = Arc::clone(&self.config);
         let cloud_requirements = self.current_cloud_requirements();
-        let command_cwd = params
-            .cwd
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config.cwd.to_path_buf());
+        let command_cwd = params.cwd.unwrap_or_else(|| config.cwd.clone());
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
         let outgoing = Arc::clone(&self.outgoing);
@@ -7781,7 +7826,7 @@ impl CodexMessageProcessor {
                     cwd: Some(command_cwd.clone()),
                     ..Default::default()
                 },
-                Some(command_cwd.clone()),
+                Some(command_cwd.to_path_buf()),
                 &cloud_requirements,
                 &config.codex_home,
                 &runtime_feature_enablement,
@@ -7792,7 +7837,7 @@ impl CodexMessageProcessor {
                     let setup_request = WindowsSandboxSetupRequest {
                         mode,
                         policy: config.permissions.sandbox_policy.get().clone(),
-                        policy_cwd: config.cwd.to_path_buf(),
+                        policy_cwd: config.cwd.clone(),
                         command_cwd,
                         env_map: std::env::vars().collect(),
                         codex_home: config.codex_home.clone(),
@@ -8002,7 +8047,7 @@ async fn handle_pending_thread_resume_request(
         model,
         model_provider: model_provider_id,
         service_tier,
-        cwd,
+        cwd: cwd.to_path_buf(),
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
@@ -8127,7 +8172,7 @@ fn collect_resume_override_mismatches(
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
-        if requested_cwd_path != config_snapshot.cwd {
+        if requested_cwd_path != config_snapshot.cwd.as_path() {
             mismatch_details.push(format!(
                 "cwd requested={} active={}",
                 requested_cwd_path.display(),
@@ -8513,7 +8558,11 @@ async fn derive_config_for_cwd(
         .codex_home(codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
-        .fallback_cwd(cwd)
+        .fallback_cwd(
+            cwd.map(AbsolutePathBuf::try_from)
+                .transpose()
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?,
+        )
         .cloud_requirements(cloud_requirements.clone())
         .build()
         .await?;
@@ -8961,7 +9010,7 @@ fn build_thread_from_snapshot(
         updated_at: now,
         status: ThreadStatus::NotLoaded,
         path,
-        cwd: config_snapshot.cwd.clone(),
+        cwd: config_snapshot.cwd.to_path_buf(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
         agent_nickname: config_snapshot.session_source.get_nickname(),
         agent_role: config_snapshot.session_source.get_agent_role(),
@@ -9026,6 +9075,7 @@ mod tests {
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -9142,7 +9192,7 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_absolute_path("/tmp"),
             ephemeral: false,
             reasoning_effort: None,
             personality: None,

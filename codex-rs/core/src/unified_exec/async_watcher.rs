@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -110,7 +110,7 @@ pub(crate) fn spawn_exit_watcher(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
@@ -196,7 +196,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     fallback_output: String,
@@ -235,7 +235,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     message: String,

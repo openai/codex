@@ -1,4 +1,5 @@
 use super::*;
+use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -193,13 +194,14 @@ async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         shell_path: PathBuf::from("/bin/bash"),
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
+    let session_cwd = dir.abs();
 
-    let snapshot = ShellSnapshot::try_new(dir.path(), ThreadId::new(), dir.path(), &shell)
+    let snapshot = ShellSnapshot::try_new(dir.path(), ThreadId::new(), &session_cwd, &shell)
         .await
         .expect("snapshot should be created");
     let path = snapshot.path.clone();
     assert!(path.exists());
-    assert_eq!(snapshot.cwd, dir.path().to_path_buf());
+    assert_eq!(snapshot.cwd, session_cwd);
 
     drop(snapshot);
 
@@ -218,11 +220,12 @@ async fn try_new_uses_distinct_generation_paths() -> Result<()> {
         shell_path: PathBuf::from("/bin/bash"),
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
+    let session_cwd = dir.abs();
 
-    let initial_snapshot = ShellSnapshot::try_new(dir.path(), session_id, dir.path(), &shell)
+    let initial_snapshot = ShellSnapshot::try_new(dir.path(), session_id, &session_cwd, &shell)
         .await
         .expect("initial snapshot should be created");
-    let refreshed_snapshot = ShellSnapshot::try_new(dir.path(), session_id, dir.path(), &shell)
+    let refreshed_snapshot = ShellSnapshot::try_new(dir.path(), session_id, &session_cwd, &shell)
         .await
         .expect("refreshed snapshot should be created");
     let initial_path = initial_snapshot.path.clone();

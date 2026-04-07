@@ -16,6 +16,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use tempfile::TempDir;
@@ -89,7 +90,7 @@ fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> PluginLoadO
 async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
     ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
-        .fallback_cwd(Some(cwd.to_path_buf()))
+        .fallback_cwd(Some(cwd.abs()))
         .build()
         .await
         .expect("config should load")

@@ -97,7 +97,7 @@ impl RemoteExecServerProcess {
 #[derive(Debug)]
 pub struct TestEnv {
     environment: codex_exec_server::Environment,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     _local_cwd_temp_dir: Option<TempDir>,
     _remote_exec_server_process: Option<RemoteExecServerProcess>,
 }
@@ -105,7 +105,7 @@ pub struct TestEnv {
 impl TestEnv {
     pub async fn local() -> Result<Self> {
         let local_cwd_temp_dir = TempDir::new()?;
-        let cwd = local_cwd_temp_dir.path().to_path_buf();
+        let cwd = local_cwd_temp_dir.abs();
         let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None).await?;
         Ok(Self {
             environment,
@@ -131,7 +131,7 @@ pub async fn test_env() -> Result<TestEnv> {
             let remote_ip = remote_container_ip(&remote_env.container_name)?;
             let websocket_url = rewrite_websocket_host(&remote_process.listen_url, &remote_ip)?;
             let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
-            let cwd = remote_aware_cwd_path();
+            let cwd = remote_aware_cwd_path().abs();
             environment
                 .get_filesystem()
                 .create_directory(
@@ -395,9 +395,9 @@ impl TestCodexBuilder {
             None => Arc::new(TempDir::new()?),
         };
         let base_url = format!("{}/v1", server.uri());
-        let cwd = test_env.cwd.to_path_buf();
+        let cwd = test_env.cwd.clone();
         self.config_mutators.push(Box::new(move |config| {
-            config.cwd = cwd.abs();
+            config.cwd = cwd.clone();
         }));
         let (config, cwd) = self.prepare_config(base_url, &home).await?;
         Box::pin(self.build_from_config(config, cwd, home, /*resume_from*/ None, test_env)).await

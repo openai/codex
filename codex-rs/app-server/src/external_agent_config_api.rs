@@ -10,6 +10,7 @@ use codex_core::external_agent_config::ExternalAgentConfigDetectOptions;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use codex_core::external_agent_config::ExternalAgentConfigService;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::PathBuf;
 
@@ -29,11 +30,20 @@ impl ExternalAgentConfigApi {
         &self,
         params: ExternalAgentConfigDetectParams,
     ) -> Result<ExternalAgentConfigDetectResponse, JSONRPCErrorError> {
+        let cwds = params
+            .cwds
+            .map(|cwds| {
+                cwds.into_iter()
+                    .map(AbsolutePathBuf::try_from)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(|err| map_io_error(io::Error::new(io::ErrorKind::InvalidInput, err)))?;
         let items = self
             .migration_service
             .detect(ExternalAgentConfigDetectOptions {
                 include_home: params.include_home,
-                cwds: params.cwds,
+                cwds,
             })
             .map_err(map_io_error)?;
 
@@ -56,7 +66,7 @@ impl ExternalAgentConfigApi {
                         }
                     },
                     description: migration_item.description,
-                    cwd: migration_item.cwd,
+                    cwd: migration_item.cwd.map(AbsolutePathBuf::into_path_buf),
                 })
                 .collect(),
         })
@@ -71,25 +81,34 @@ impl ExternalAgentConfigApi {
                 params
                     .migration_items
                     .into_iter()
-                    .map(|migration_item| CoreMigrationItem {
-                        item_type: match migration_item.item_type {
-                            ExternalAgentConfigMigrationItemType::Config => {
-                                CoreMigrationItemType::Config
-                            }
-                            ExternalAgentConfigMigrationItemType::Skills => {
-                                CoreMigrationItemType::Skills
-                            }
-                            ExternalAgentConfigMigrationItemType::AgentsMd => {
-                                CoreMigrationItemType::AgentsMd
-                            }
-                            ExternalAgentConfigMigrationItemType::McpServerConfig => {
-                                CoreMigrationItemType::McpServerConfig
-                            }
-                        },
-                        description: migration_item.description,
-                        cwd: migration_item.cwd,
+                    .map(|migration_item| {
+                        let cwd = migration_item
+                            .cwd
+                            .map(AbsolutePathBuf::try_from)
+                            .transpose()
+                            .map_err(|err| {
+                                map_io_error(io::Error::new(io::ErrorKind::InvalidInput, err))
+                            })?;
+                        Ok(CoreMigrationItem {
+                            item_type: match migration_item.item_type {
+                                ExternalAgentConfigMigrationItemType::Config => {
+                                    CoreMigrationItemType::Config
+                                }
+                                ExternalAgentConfigMigrationItemType::Skills => {
+                                    CoreMigrationItemType::Skills
+                                }
+                                ExternalAgentConfigMigrationItemType::AgentsMd => {
+                                    CoreMigrationItemType::AgentsMd
+                                }
+                                ExternalAgentConfigMigrationItemType::McpServerConfig => {
+                                    CoreMigrationItemType::McpServerConfig
+                                }
+                            },
+                            description: migration_item.description,
+                            cwd,
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, JSONRPCErrorError>>()?,
             )
             .map_err(map_io_error)?;
 

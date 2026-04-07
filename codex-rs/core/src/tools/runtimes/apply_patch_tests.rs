@@ -33,7 +33,8 @@ fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
 fn guardian_review_request_includes_patch_context() {
     let path = std::env::temp_dir().join("guardian-apply-patch-test.txt");
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let expected_cwd = action.cwd.clone();
+    let expected_cwd =
+        AbsolutePathBuf::from_absolute_path(&action.cwd).expect("cwd should be absolute");
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
         action,
@@ -55,7 +56,8 @@ fn guardian_review_request_includes_patch_context() {
         timeout_ms: None,
     };
 
-    let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1");
+    let guardian_request =
+        ApplyPatchRuntime::build_guardian_review_request(&request, "call-1", &expected_cwd);
 
     assert_eq!(
         guardian_request,

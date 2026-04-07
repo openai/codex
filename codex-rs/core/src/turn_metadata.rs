@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -15,6 +14,7 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -124,7 +124,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnMetadataState {
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     repo_root: Option<String>,
     base_metadata: TurnMetadataBag,
     base_header: String,
@@ -136,7 +136,7 @@ impl TurnMetadataState {
     pub(crate) fn new(
         session_id: String,
         turn_id: String,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
     ) -> Self {

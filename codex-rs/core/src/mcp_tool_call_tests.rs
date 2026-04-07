@@ -12,6 +12,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
+use core_test_support::TempDirExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -1168,7 +1169,7 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         .expect("trust project");
     let config = ConfigBuilder::default()
         .codex_home(codex_home)
-        .fallback_cwd(Some(project_dir.path().to_path_buf()))
+        .fallback_cwd(Some(project_dir.abs()))
         .build()
         .await
         .expect("load project config");

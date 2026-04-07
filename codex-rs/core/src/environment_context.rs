@@ -4,14 +4,14 @@ use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "environment_context", rename_all = "snake_case")]
 pub(crate) struct EnvironmentContext {
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
     pub shell: Shell,
     pub current_date: Option<String>,
     pub timezone: Option<String>,
@@ -27,7 +27,7 @@ pub(crate) struct NetworkContext {
 
 impl EnvironmentContext {
     pub fn new(
-        cwd: Option<PathBuf>,
+        cwd: Option<AbsolutePathBuf>,
         shell: Shell,
         current_date: Option<String>,
         timezone: Option<String>,
@@ -71,7 +71,7 @@ impl EnvironmentContext {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
         let cwd = if before.cwd.as_path() != after.cwd.as_path() {
-            Some(after.cwd.to_path_buf())
+            Some(after.cwd.clone())
         } else {
             None
         };
@@ -94,7 +94,7 @@ impl EnvironmentContext {
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
-            Some(turn_context.cwd.to_path_buf()),
+            Some(turn_context.cwd.clone()),
             shell.clone(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
@@ -105,7 +105,7 @@ impl EnvironmentContext {
 
     pub fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Self {
         Self::new(
-            Some(turn_context_item.cwd.clone()),
+            AbsolutePathBuf::try_from(turn_context_item.cwd.as_path()).ok(),
             shell.clone(),
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
