@@ -40,6 +40,7 @@ mod guardian;
 mod hook_runtime;
 pub(crate) mod instructions;
 pub(crate) mod landlock;
+pub use landlock::spawn_command_under_linux_sandbox;
 pub(crate) mod mcp;
 mod mcp_skill_dependencies;
 mod mcp_tool_approval_templates;
