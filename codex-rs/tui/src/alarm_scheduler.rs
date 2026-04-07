@@ -1,5 +1,8 @@
 use crate::AppServerTarget;
 use crate::start_app_server_for_picker;
+use chrono::Datelike;
+use chrono::NaiveDateTime;
+use chrono::Timelike;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AlarmDelivery;
 use codex_app_server_protocol::AlarmTrigger;
@@ -14,6 +17,11 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
+
+const LOCAL_DATE_TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
+const MONTH_NAMES: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct ParsedAlarmSpec {
@@ -99,11 +107,48 @@ pub(crate) fn format_alarm_trigger(trigger: &AlarmTrigger) -> String {
             format!("delay {seconds}s{suffix}")
         }
         AlarmTrigger::Schedule { dtstart, rrule } => match (dtstart, rrule) {
-            (Some(dtstart), Some(rrule)) => format!("schedule {dtstart}; {rrule}"),
-            (Some(dtstart), None) => format!("schedule {dtstart}"),
+            (Some(dtstart), Some(rrule)) => {
+                format!("schedule from {}; {rrule}", format_alarm_dtstart(dtstart))
+            }
+            (Some(dtstart), None) => format!("at {}", format_alarm_dtstart(dtstart)),
             (None, Some(rrule)) => format!("schedule {rrule}"),
             (None, None) => "invalid schedule".to_string(),
         },
+    }
+}
+
+fn format_alarm_dtstart(dtstart: &str) -> String {
+    let Ok(dtstart) = NaiveDateTime::parse_from_str(dtstart, LOCAL_DATE_TIME_FORMAT) else {
+        return dtstart.to_string();
+    };
+    let month_name = MONTH_NAMES
+        .get(dtstart.month0() as usize)
+        .copied()
+        .unwrap_or("???");
+    format!(
+        "{} {}, {} {}",
+        month_name,
+        dtstart.day(),
+        dtstart.year(),
+        format_alarm_time(dtstart)
+    )
+}
+
+fn format_alarm_time(dtstart: NaiveDateTime) -> String {
+    let hour = dtstart.hour();
+    let period = if hour < 12 { "AM" } else { "PM" };
+    let hour = match hour % 12 {
+        0 => 12,
+        hour => hour,
+    };
+    if dtstart.second() == 0 {
+        format!("{hour}:{:02} {period}", dtstart.minute())
+    } else {
+        format!(
+            "{hour}:{:02}:{:02} {period}",
+            dtstart.minute(),
+            dtstart.second()
+        )
     }
 }
 
@@ -303,6 +348,28 @@ mod tests {
                 "remind me to take a break",
             ),
             "delay 30s (one-shot, after-turn) -> remind me to take a break"
+        );
+    }
+
+    #[test]
+    fn format_alarm_trigger_renders_one_shot_schedule_as_local_time() {
+        assert_eq!(
+            format_alarm_trigger(&AlarmTrigger::Schedule {
+                dtstart: Some("2026-04-07T21:00:00".to_string()),
+                rrule: None,
+            }),
+            "at Apr 7, 2026 9:00 PM"
+        );
+    }
+
+    #[test]
+    fn format_alarm_trigger_preserves_invalid_schedule_dtstart() {
+        assert_eq!(
+            format_alarm_trigger(&AlarmTrigger::Schedule {
+                dtstart: Some("not-a-date".to_string()),
+                rrule: None,
+            }),
+            "at not-a-date"
         );
     }
 
