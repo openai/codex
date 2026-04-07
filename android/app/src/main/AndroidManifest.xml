@@ -73,6 +73,14 @@
                 <action android:name="com.openai.codex.agent.action.CREATE_SESSION" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".SessionRouterActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/CodexSessionRouterTheme">
             <intent-filter>
                 <action android:name="android.app.agent.action.HANDLE_SESSION" />
                 <category android:name="android.intent.category.DEFAULT" />

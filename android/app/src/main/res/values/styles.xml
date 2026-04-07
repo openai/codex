@@ -11,6 +11,15 @@
         <item name="android:windowMinWidthMinor">90%</item>
     </style>
 
+    <style name="CodexSessionRouterTheme" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
     <style name="CodexSessionPopupButton">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">40dp</item>

@@ -151,7 +151,8 @@ stub SDK docs and the local refactor doc:
   session.
   Launcher may dispatch HOME-anchored icon taps through either
   `ACTION_HANDLE_AGENT_SESSION` or `ACTION_HANDLE_HOME_AGENT_SESSION`; both
-  should resolve to the same Agent-owned popup flow.
+  should first resolve through the transparent `SessionRouterActivity` so running
+  live-preview taps can open the target without flashing Agent UI.
   The full `SessionDetailActivity` remains the fallback inspector for non-popup
   states and Agent-app initiated navigation.
 - HOME completion and cancellation are AGENT-owned policy decisions:
