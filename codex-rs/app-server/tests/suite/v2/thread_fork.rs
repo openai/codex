@@ -345,7 +345,7 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
                 Some(&Value::String(String::new()))
             );
             assert!(
-                developer_texts.iter().any(|text| text.is_empty()),
+                developer_texts.iter().any(String::is_empty),
                 "expected explicit empty developerInstructions to produce an empty developer instruction message: {developer_texts:?}"
             );
         } else {
