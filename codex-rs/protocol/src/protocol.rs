@@ -772,7 +772,7 @@ impl ReadOnlyAccess {
             ReadOnlyAccess::FullAccess => return Vec::new(),
             ReadOnlyAccess::Restricted { readable_roots, .. } => {
                 let mut roots = readable_roots.clone();
-                match AbsolutePathBuf::from_absolute_path(cwd) {
+                match AbsolutePathBuf::relative_to_current_dir(cwd) {
                     Ok(cwd_root) => roots.push(cwd_root),
                     Err(err) => {
                         error!("Ignoring invalid cwd {cwd:?} for sandbox readable root: {err}");
@@ -1023,7 +1023,7 @@ impl SandboxPolicy {
                 // Always include defaults: cwd, /tmp (if present on Unix), and
                 // on macOS, the per-user TMPDIR unless explicitly excluded.
                 // TODO(mbolin): cwd param should be AbsolutePathBuf.
-                let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd);
+                let cwd_absolute = AbsolutePathBuf::relative_to_current_dir(cwd);
                 match cwd_absolute {
                     Ok(cwd) => {
                         roots.push(cwd);
@@ -1071,7 +1071,7 @@ impl SandboxPolicy {
                 }
 
                 // For each root, compute subpaths that should remain read-only.
-                let cwd_root = AbsolutePathBuf::from_absolute_path(cwd).ok();
+                let cwd_root = AbsolutePathBuf::relative_to_current_dir(cwd).ok();
                 roots
                     .into_iter()
                     .map(|writable_root| {
