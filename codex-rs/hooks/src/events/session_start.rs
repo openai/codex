@@ -392,10 +392,10 @@ mod tests {
         let marker_path = temp.path().join("project-ran");
         let (shell_program, shell_args, stopping_command, project_command) = if cfg!(windows) {
             (
-                "powershell.exe".to_string(),
-                vec!["-NoProfile".to_string(), "-Command".to_string()],
-                "Write-Output '{\"continue\":false,\"stopReason\":\"pause\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"trusted context\"}}'".to_string(),
-                "$null = New-Item -ItemType File -Path project-ran -Force; Write-Output 'project context'".to_string(),
+                "cmd.exe".to_string(),
+                vec!["/D".to_string(), "/C".to_string()],
+                "echo {\"continue\":false,\"stopReason\":\"pause\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"trusted context\"}}".to_string(),
+                "type nul > project-ran && echo project context".to_string(),
             )
         } else {
             (
