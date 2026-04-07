@@ -438,14 +438,13 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         ..
     } = exit_info;
 
-    if token_usage.is_zero() {
-        return Vec::new();
+    let mut lines = Vec::new();
+    if !token_usage.is_zero() {
+        lines.push(format!(
+            "{}",
+            codex_protocol::protocol::FinalOutput::from(token_usage)
+        ));
     }
-
-    let mut lines = vec![format!(
-        "{}",
-        codex_protocol::protocol::FinalOutput::from(token_usage)
-    )];
 
     if let Some(resume_cmd) =
         codex_core::util::resume_command(thread_name.as_deref(), conversation_id)

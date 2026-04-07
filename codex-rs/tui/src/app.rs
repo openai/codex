@@ -315,12 +315,13 @@ fn session_summary(
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
 ) -> Option<SessionSummary> {
-    if token_usage.is_zero() {
+    let usage_line = (!token_usage.is_zero()).then(|| FinalOutput::from(token_usage).to_string());
+    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
+
+    if usage_line.is_none() && resume_command.is_none() {
         return None;
     }
 
-    let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -485,7 +486,7 @@ fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
-    usage_line: String,
+    usage_line: Option<String>,
     resume_command: Option<String>,
 }
 
@@ -3301,7 +3302,10 @@ impl App {
                         "Failed to attach to fresh app-server thread: {err}"
                     ));
                 } else if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    let mut lines: Vec<Line<'static>> = Vec::new();
+                    if let Some(usage_line) = summary.usage_line {
+                        lines.push(usage_line.into());
+                    }
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
                         lines.push(spans.into());
@@ -4114,8 +4118,10 @@ impl App {
                                 {
                                     Ok(()) => {
                                         if let Some(summary) = summary {
-                                            let mut lines: Vec<Line<'static>> =
-                                                vec![summary.usage_line.clone().into()];
+                                            let mut lines: Vec<Line<'static>> = Vec::new();
+                                            if let Some(usage_line) = summary.usage_line {
+                                                lines.push(usage_line.into());
+                                            }
                                             if let Some(command) = summary.resume_command {
                                                 let spans = vec![
                                                     "To continue this session, run ".into(),
@@ -4174,8 +4180,10 @@ impl App {
                             {
                                 Ok(()) => {
                                     if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> =
-                                            vec![summary.usage_line.clone().into()];
+                                        let mut lines: Vec<Line<'static>> = Vec::new();
+                                        if let Some(usage_line) = summary.usage_line {
+                                            lines.push(usage_line.into());
+                                        }
                                         if let Some(command) = summary.resume_command {
                                             let spans = vec![
                                                 "To continue this session, run ".into(),
@@ -10897,7 +10905,7 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn session_summary_skip_zero_usage() {
+    async fn session_summary_skips_when_no_usage_or_resume_hint() {
         assert!(
             session_summary(
                 TokenUsage::default(),
@@ -10922,7 +10930,7 @@ guardian_approval = true
             session_summary(usage, Some(conversation), /*thread_name*/ None).expect("summary");
         assert_eq!(
             summary.usage_line,
-            "Token usage: total=12 input=10 output=2"
+            Some("Token usage: total=12 input=10 output=2".to_string())
         );
         assert_eq!(
             summary.resume_command,
