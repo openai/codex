@@ -52,6 +52,7 @@ use codex_analytics::AppInvocation;
 use codex_analytics::CodexTurnSteerEvent;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
+use codex_analytics::ThreadInitializationMode;
 use codex_analytics::TrackEventsContext;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::TurnSteerRejectionReason;
@@ -688,6 +689,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            thread_initialization_mode: ThreadInitializationMode::New,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -1138,6 +1140,14 @@ fn turn_submission_type(submission_type: SubmissionType) -> TurnSubmissionType {
     }
 }
 
+fn thread_initialization_mode(initial_history: &InitialHistory) -> ThreadInitializationMode {
+    match initial_history {
+        InitialHistory::New => ThreadInitializationMode::New,
+        InitialHistory::Forked(_) => ThreadInitializationMode::Forked,
+        InitialHistory::Resumed(_) => ThreadInitializationMode::Resumed,
+    }
+}
+
 fn local_time_context() -> (String, String) {
     match iana_time_zone::get_timezone() {
         Ok(timezone) => (Local::now().format("%Y-%m-%d").to_string(), timezone),
@@ -1199,6 +1209,7 @@ pub(crate) struct SessionConfiguration {
     app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    thread_initialization_mode: ThreadInitializationMode,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1223,6 +1234,7 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            initialization_mode: self.thread_initialization_mode,
         }
     }
 
@@ -1599,6 +1611,8 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
+        session_configuration.thread_initialization_mode =
+            thread_initialization_mode(&initial_history);
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
@@ -6535,6 +6549,10 @@ async fn track_turn_resolved_config_analytics(
     turn_context: &TurnContext,
     input: &[UserInput],
 ) {
+    let thread_config = {
+        let state = sess.state.lock().await;
+        state.session_configuration.thread_config_snapshot()
+    };
     let is_first_turn = {
         let mut state = sess.state.lock().await;
         state.take_next_turn_is_first()
@@ -6556,6 +6574,9 @@ async fn track_turn_resolved_config_analytics(
                     .map(turn_submission_type)
                     .unwrap_or(TurnSubmissionType::Default),
             ),
+            ephemeral: thread_config.ephemeral,
+            session_source: thread_config.session_source,
+            initialization_mode: thread_config.initialization_mode,
             model: turn_context.model_info.slug.clone(),
             model_provider: turn_context.config.model_provider_id.clone(),
             sandbox_policy: turn_context.sandbox_policy.get().clone(),

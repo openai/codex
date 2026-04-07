@@ -10,7 +10,6 @@ use crate::events::CodexTurnEventRequest;
 use crate::events::CodexTurnSteerEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
-use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
@@ -21,6 +20,8 @@ use crate::events::codex_turn_steer_event_params;
 use crate::events::plugin_state_event_type;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
+use crate::events::turn_parent_thread_id;
+use crate::events::turn_subagent_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
@@ -31,6 +32,7 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
@@ -174,8 +176,8 @@ impl AnalyticsReducer {
             ConnectionState {
                 app_server_client: CodexAppServerClientMetadata {
                     product_client_id,
-                    client_name: Some(params.client_info.name),
-                    client_version: Some(params.client_info.version),
+                    client_name: params.client_info.name,
+                    client_version: params.client_info.version,
                     rpc_transport,
                     experimental_api_enabled: params
                         .capabilities
@@ -572,16 +574,24 @@ impl AnalyticsReducer {
         {
             return;
         }
-        let product_client_id = turn_state
+        let connection_metadata = turn_state
             .connection_id
             .and_then(|connection_id| self.connections.get(&connection_id))
-            .map(|connection_state| connection_state.app_server_client.product_client_id.clone())
-            .unwrap_or_else(|| originator().value);
+            .map(|connection_state| {
+                (
+                    connection_state.app_server_client.clone(),
+                    connection_state.runtime.clone(),
+                )
+            });
+        let Some((app_server_client, runtime)) = connection_metadata else {
+            return;
+        };
         out.push(TrackEventRequest::TurnEvent(Box::new(
             CodexTurnEventRequest {
                 event_type: "codex_turn_event",
                 event_params: codex_turn_event_params(
-                    product_client_id,
+                    app_server_client,
+                    runtime,
                     turn_id.to_string(),
                     turn_state,
                 ),
@@ -592,7 +602,8 @@ impl AnalyticsReducer {
 }
 
 fn codex_turn_event_params(
-    product_client_id: String,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
     turn_id: String,
     turn_state: &TurnState,
 ) -> CodexTurnEventParams {
@@ -610,6 +621,9 @@ fn codex_turn_event_params(
         thread_id: _resolved_thread_id,
         num_input_images: _resolved_num_input_images,
         submission_type,
+        ephemeral,
+        session_source,
+        initialization_mode,
         model,
         model_provider,
         sandbox_policy,
@@ -627,8 +641,14 @@ fn codex_turn_event_params(
     CodexTurnEventParams {
         thread_id,
         turn_id,
-        product_client_id,
+        app_server_client,
+        runtime,
         submission_type,
+        ephemeral,
+        thread_source: thread_source_name(&session_source).map(str::to_string),
+        initialization_mode,
+        subagent_source: turn_subagent_source_name(&session_source),
+        parent_thread_id: turn_parent_thread_id(&session_source),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),

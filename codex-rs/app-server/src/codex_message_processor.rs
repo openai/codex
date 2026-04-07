@@ -9165,6 +9165,7 @@ mod tests {
             reasoning_effort: None,
             personality: None,
             session_source: SessionSource::Cli,
+            initialization_mode: codex_analytics::ThreadInitializationMode::New,
         };
 
         assert_eq!(
