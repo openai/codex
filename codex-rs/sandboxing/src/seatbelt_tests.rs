@@ -166,6 +166,7 @@ fn dynamic_network_policy_allows_tls_without_darwin_user_cache_write() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         },
@@ -439,6 +440,7 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         },
@@ -475,6 +477,7 @@ fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         },
@@ -503,6 +506,7 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         },
@@ -793,6 +797,7 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         },
@@ -844,6 +849,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             .map(|p| p.try_into().unwrap())
             .collect(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -1087,6 +1093,7 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation_with_metadata_name_r
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![repo_root.as_path().try_into().expect("absolute repo root")],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -1140,6 +1147,7 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -1236,6 +1244,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

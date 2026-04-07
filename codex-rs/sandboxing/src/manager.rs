@@ -299,6 +299,7 @@ fn compatibility_workspace_write_policy(
     SandboxPolicy::WorkspaceWrite {
         writable_roots,
         network_access: network_policy.is_enabled(),
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: !tmpdir_writable,
         exclude_slash_tmp: !slash_tmp_writable,
     }

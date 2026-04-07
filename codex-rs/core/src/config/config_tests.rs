@@ -795,6 +795,46 @@ async fn runtime_config_uses_tui_raw_output_mode() {
     assert!(cfg.tui_raw_output_mode);
 }
 
+#[tokio::test]
+async fn sandbox_workspace_write_allow_limited_git_writes_keeps_config_and_hooks_read_only()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let git_dir = cwd.path().join(".git");
+    let git_config = git_dir.join("config");
+    let git_hooks = git_dir.join("hooks");
+    std::fs::create_dir_all(&git_hooks)?;
+    std::fs::write(&git_config, "[core]\n")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access: false,
+                allow_limited_git_writes: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    let file_system = config.permissions.file_system_sandbox_policy();
+
+    assert!(file_system.can_write_path_with_cwd(git_dir.join("index").as_path(), cwd.path()));
+    assert!(!file_system.can_write_path_with_cwd(git_config.as_path(), cwd.path()));
+    assert!(
+        !file_system.can_write_path_with_cwd(git_hooks.join("pre-commit").as_path(), cwd.path())
+    );
+    Ok(())
+}
+
 #[test]
 fn config_toml_deserializes_permission_profiles() {
     let toml = r#"
@@ -1654,6 +1694,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         }
@@ -1926,6 +1967,7 @@ async fn permission_profile_override_keeps_memories_root_out_of_legacy_projectio
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         }
@@ -2312,6 +2354,7 @@ async fn explicit_builtin_workspace_profile_ignores_legacy_workspace_write_setti
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
                 writable_roots: vec![extra_root.path().abs()],
                 network_access: true,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }),
@@ -2528,6 +2571,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
                 writable_roots: vec![extra_root.clone()],
                 network_access: true,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: false,
             }),
@@ -2564,6 +2608,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
             network_access,
+            allow_limited_git_writes: _,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         } => {
@@ -2833,6 +2878,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![external_write_path],
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         }
@@ -3554,6 +3600,7 @@ trust_level = "trusted"
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable_root.clone()],
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }
@@ -3594,6 +3641,7 @@ exclude_slash_tmp = true
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable_root],
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }

@@ -2086,6 +2086,7 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     let v2_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
+        allow_limited_git_writes: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
@@ -2096,6 +2097,7 @@ fn sandbox_policy_round_trips_workspace_write_access() {
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
+            allow_limited_git_writes: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -2142,6 +2144,7 @@ fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![absolute_path("/workspace")],
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         }

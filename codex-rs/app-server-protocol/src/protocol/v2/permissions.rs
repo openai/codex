@@ -449,6 +449,8 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
+        allow_limited_git_writes: bool,
+        #[serde(default)]
         exclude_tmpdir_env_var: bool,
         #[serde(default)]
         exclude_slash_tmp: bool,
@@ -479,6 +481,8 @@ enum SandboxPolicyDeserialize {
         read_only_access: Option<LegacyReadOnlyAccess>,
         #[serde(default)]
         network_access: bool,
+        #[serde(default)]
+        allow_limited_git_writes: bool,
         #[serde(default)]
         exclude_tmpdir_env_var: bool,
         #[serde(default)]
@@ -518,6 +522,7 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
                 writable_roots,
                 read_only_access,
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => {
@@ -529,6 +534,7 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
                 Ok(SandboxPolicy::WorkspaceWrite {
                     writable_roots,
                     network_access,
+                    allow_limited_git_writes,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
                 })
@@ -559,11 +565,13 @@ impl SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 network_access: *network_access,
+                allow_limited_git_writes: *allow_limited_git_writes,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             },
@@ -591,11 +599,13 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },

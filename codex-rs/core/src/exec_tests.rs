@@ -472,6 +472,7 @@ fn windows_restricted_token_allows_legacy_workspace_write_policies() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -530,6 +531,7 @@ fn windows_restricted_token_rejects_split_only_filesystem_policies() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -575,6 +577,7 @@ fn windows_restricted_token_rejects_root_write_read_only_carveouts() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -621,6 +624,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -679,6 +683,7 @@ fn windows_restricted_token_rejects_unreadable_split_carveouts() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -766,6 +771,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -824,6 +830,7 @@ fn windows_elevated_supports_unreadable_split_carveouts() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -887,6 +894,7 @@ fn windows_elevated_supports_unreadable_globs() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -944,6 +952,7 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

@@ -136,6 +136,8 @@ pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
+    pub allow_limited_git_writes: bool,
+    #[serde(default)]
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,

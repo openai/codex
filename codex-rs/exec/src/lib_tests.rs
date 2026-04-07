@@ -727,6 +727,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },

@@ -39,6 +39,7 @@ async fn guardian_review_session_does_not_inherit_legacy_notify() -> Result<()> 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

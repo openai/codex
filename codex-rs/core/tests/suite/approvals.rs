@@ -844,6 +844,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
     let workspace_write = |network_access| SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -2064,6 +2065,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -2993,6 +2995,7 @@ allow_local_binding = true
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -3274,6 +3277,7 @@ allow_local_binding = true
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -3479,6 +3483,7 @@ allow_local_binding = true
     let turn_sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

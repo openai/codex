@@ -86,6 +86,12 @@ codex --sandbox danger-full-access
 ```
 
 In `workspace-write`, Codex also includes `~/.codex/memories` in its writable roots so memory maintenance does not require an extra approval.
+Set the following to allow Git metadata writes under writable roots while keeping Git config and hooks read-only:
+
+```toml
+[sandbox_workspace_write]
+allow_limited_git_writes = true
+```
 
 ## Code Organization
 

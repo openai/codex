@@ -77,9 +77,10 @@ pub(crate) fn builtin_permission_profile(
             Some(SandboxWorkspaceWrite {
                 writable_roots: _,
                 network_access,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
-            }) => PermissionProfile::workspace_write_with(
+            }) => PermissionProfile::workspace_write_with_limited_git_writes(
                 &[],
                 if *network_access {
                     NetworkSandboxPolicy::Enabled
@@ -88,6 +89,7 @@ pub(crate) fn builtin_permission_profile(
                 },
                 *exclude_tmpdir_env_var,
                 *exclude_slash_tmp,
+                *allow_limited_git_writes,
             ),
             None => PermissionProfile::workspace_write(),
         }),

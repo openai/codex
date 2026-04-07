@@ -3770,6 +3770,7 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -3906,6 +3907,7 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![external_write_path],
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         }
@@ -4204,6 +4206,7 @@ async fn session_configuration_apply_retargets_legacy_workspace_root_on_cwd_upda
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

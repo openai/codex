@@ -133,6 +133,7 @@ mod tests {
         let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![writable_root.clone()],
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         });

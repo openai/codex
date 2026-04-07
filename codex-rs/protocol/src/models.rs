@@ -413,10 +413,27 @@ impl PermissionProfile {
         exclude_tmpdir_env_var: bool,
         exclude_slash_tmp: bool,
     ) -> Self {
-        let file_system = FileSystemSandboxPolicy::workspace_write(
+        Self::workspace_write_with_limited_git_writes(
+            writable_roots,
+            network,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            /*allow_limited_git_writes*/ false,
+        )
+    }
+
+    pub fn workspace_write_with_limited_git_writes(
+        writable_roots: &[AbsolutePathBuf],
+        network: NetworkSandboxPolicy,
+        exclude_tmpdir_env_var: bool,
+        exclude_slash_tmp: bool,
+        allow_limited_git_writes: bool,
+    ) -> Self {
+        let file_system = FileSystemSandboxPolicy::workspace_write_with_limited_git_writes(
             writable_roots,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
+            allow_limited_git_writes,
         );
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),

@@ -915,6 +915,11 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
 
+        /// When set to `true`, Git metadata under writable roots can be written
+        /// while Git config and hooks remain read-only.
+        #[serde(default)]
+        allow_limited_git_writes: bool,
+
         /// When set to `true`, will NOT include the per-user `TMPDIR`
         /// environment variable among the default writable roots. Defaults to
         /// `false`.
@@ -1021,6 +1026,7 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -1058,6 +1064,7 @@ impl SandboxPolicy {
             SandboxPolicy::ReadOnly { .. } => Vec::new(),
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
@@ -1131,6 +1138,7 @@ impl SandboxPolicy {
                             read_only_subpaths: default_read_only_subpaths_for_writable_root(
                                 &writable_root,
                                 protect_missing_dot_codex,
+                                *allow_limited_git_writes,
                             ),
                             protected_metadata_names: Vec::new(),
                             root: writable_root,
@@ -4518,12 +4526,14 @@ mod tests {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable_root],
                 network_access: true,
+                allow_limited_git_writes: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: true,
             },
