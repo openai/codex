@@ -1197,6 +1197,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1252,6 +1253,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&forked.thread, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2811,6 +2813,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*network*/ None,
         Some(environment),
         "turn_id".to_string(),
+        /*submission_type*/ None,
         Arc::clone(&js_repl),
         skills_outcome,
     );
@@ -3149,6 +3152,7 @@ fn op_kind_distinguishes_turn_ops() {
         Op::UserInput {
             items: vec![],
             final_output_json_schema: None,
+            submission_type: None,
         }
         .kind(),
         "user_input"
@@ -3179,6 +3183,7 @@ async fn user_turn_updates_approvals_reviewer() {
             final_output_json_schema: None,
             collaboration_mode: None,
             personality: config.personality,
+            submission_type: None,
         },
     )
     .await;
@@ -3653,6 +3658,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         /*network*/ None,
         Some(environment),
         "turn_id".to_string(),
+        /*submission_type*/ None,
         Arc::clone(&js_repl),
         skills_outcome,
     ));

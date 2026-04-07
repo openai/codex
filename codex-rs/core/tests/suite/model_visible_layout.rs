@@ -129,6 +129,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -153,6 +154,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -232,6 +234,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -256,6 +259,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -322,6 +326,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -366,6 +371,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            submission_type: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
@@ -421,6 +427,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -466,6 +473,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
