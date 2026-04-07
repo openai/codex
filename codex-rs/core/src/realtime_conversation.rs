@@ -507,9 +507,15 @@ async fn prepare_realtime_start(
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let auth = auth_manager.auth().await;
-    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     let config = sess.get_config().await;
+    let transport = params
+        .transport
+        .unwrap_or(ConversationStartTransport::Websocket);
+    let mut api_provider = if matches!(transport, ConversationStartTransport::Websocket) {
+        provider.to_api_provider(Some(AuthMode::ApiKey))?
+    } else {
+        provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?
+    };
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }
@@ -517,17 +523,25 @@ async fn prepare_realtime_start(
     let session_config =
         build_realtime_session_config(sess, params.prompt, params.session_id).await?;
     let requested_session_id = session_config.session_id.clone();
-    let extra_headers =
-        realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
+    let extra_headers = match transport {
+        ConversationStartTransport::Websocket => {
+            let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
+            realtime_request_headers(
+                requested_session_id.as_deref(),
+                Some(realtime_api_key.as_str()),
+            )?
+        }
+        ConversationStartTransport::Webrtc { .. } => {
+            realtime_request_headers(requested_session_id.as_deref(), None)?
+        }
+    };
     Ok(PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
         requested_session_id,
         version,
         session_config,
-        transport: params
-            .transport
-            .unwrap_or(ConversationStartTransport::Websocket),
+        transport,
     })
 }
 
@@ -752,7 +766,7 @@ fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> C
 
 fn realtime_request_headers(
     session_id: Option<&str>,
-    api_key: &str,
+    api_key: Option<&str>,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
@@ -762,10 +776,12 @@ fn realtime_request_headers(
         headers.insert("x-session-id", session_id);
     }
 
-    let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
-        CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
-    })?;
-    headers.insert(AUTHORIZATION, auth_value);
+    if let Some(api_key) = api_key {
+        let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
+            CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
+        })?;
+        headers.insert(AUTHORIZATION, auth_value);
+    }
 
     Ok(Some(headers))
 }
