@@ -195,8 +195,11 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response_mock =
-        responses::mount_sse_sequence(&server, vec![body.clone(), body.clone(), body]).await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![body.clone(), body.clone(), body.clone(), body],
+    )
+    .await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -243,7 +246,7 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         (
             json!({
                 "threadId": conversation_id.clone(),
-                "config": disabled_instruction_config,
+                "config": disabled_instruction_config.clone(),
                 "baseInstructions": "",
                 "developerInstructions": "",
             }),
@@ -251,6 +254,7 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         ),
     ];
 
+    let mut forked_thread_ids = Vec::new();
     for (params, _expect_instructions) in fork_params {
         let fork_id = mcp.send_raw_request("thread/fork", Some(params)).await?;
         let fork_resp: JSONRPCResponse = timeout(
@@ -259,6 +263,7 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         )
         .await??;
         let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+        forked_thread_ids.push(thread.id.clone());
 
         let turn_id = mcp
             .send_turn_start_request(TurnStartParams {
@@ -283,10 +288,49 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         .await??;
     }
 
+    let refork_id = mcp
+        .send_raw_request(
+            "thread/fork",
+            Some(json!({
+                "threadId": forked_thread_ids[1].clone(),
+                "config": disabled_instruction_config.clone(),
+            })),
+        )
+        .await?;
+    let refork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(refork_resp)?;
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "continue again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 3);
-    for (index, (request, expect_instructions)) in
-        requests.into_iter().zip([true, false, true]).enumerate()
+    assert_eq!(requests.len(), 4);
+    for (index, (request, expect_instructions)) in requests
+        .into_iter()
+        .zip([true, false, true, false])
+        .enumerate()
     {
         let payload = request.body_json();
         assert_eq!(

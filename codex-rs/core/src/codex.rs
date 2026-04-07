@@ -581,8 +581,10 @@ impl Codex {
             Some(base_instructions) => base_instructions,
             None => conversation_history
                 .get_base_instructions()
-                .map(|base_instructions| base_instructions.text)
-                .or_else(|| Some(model_info.get_model_instructions(config.personality))),
+                .map(|base_instructions| {
+                    base_instructions.map(|base_instructions| base_instructions.text)
+                })
+                .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
         };
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
@@ -1543,12 +1545,10 @@ impl Session {
                         conversation_id,
                         forked_from_id,
                         session_source,
-                        BaseInstructions {
-                            text: session_configuration
-                                .base_instructions
-                                .clone()
-                                .unwrap_or_default(),
-                        },
+                        session_configuration
+                            .base_instructions
+                            .clone()
+                            .map(|text| BaseInstructions { text }),
                         session_configuration.dynamic_tools.clone(),
                         if session_configuration.persist_extended_history {
                             EventPersistenceMode::Extended

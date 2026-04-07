@@ -2332,7 +2332,7 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
+    pub fn get_base_instructions(&self) -> Option<Option<BaseInstructions>> {
         // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
             InitialHistory::New => None,
@@ -2540,7 +2540,13 @@ pub struct SessionMeta {
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
-    pub base_instructions: Option<BaseInstructions>,
+    #[serde(
+        default,
+        deserialize_with = "serde_with::rust::double_option::deserialize",
+        serialize_with = "serde_with::rust::double_option::serialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_instructions: Option<Option<BaseInstructions>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
