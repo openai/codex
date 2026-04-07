@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use std::path::Path;
 
 use codex_app_server_protocol::AuthMode;
