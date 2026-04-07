@@ -1714,7 +1714,8 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456"
+                    "sessionId": "sess_456",
+                    "transport": null
                 }
             }),
             serde_json::to_value(&request)?,

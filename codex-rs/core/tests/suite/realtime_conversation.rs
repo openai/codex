@@ -390,23 +390,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = json!({
-        "type": "quicksilver",
-        "instructions": "backend prompt\n\nstartup context",
-        "audio": {
-            "input": {
-                "format": {
-                    "type": "audio/pcm",
-                    "rate": 24_000,
-                },
-            },
-            "output": {
-                "voice": "fathom",
-            },
-        },
-        "model": "realtime-test-model",
-    })
-    .to_string();
+    let session = r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"fathom"}},"type":"quicksilver","model":"realtime-test-model","instructions":"backend prompt\n\nstartup context"}"#;
     assert_eq!(
         body,
         format!(
