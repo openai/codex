@@ -227,58 +227,81 @@ pub async fn list_threads_db(
         })
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
-    match ctx
-        .list_threads(
-            page_size,
-            anchor.as_ref(),
-            match sort_key {
-                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
-            },
-            allowed_sources.as_slice(),
-            model_providers.as_deref(),
-            archived,
-            search_term,
-        )
-        .await
-    {
-        Ok(mut page) => {
-            let mut valid_items = Vec::with_capacity(page.items.len());
-            for mut item in page.items {
-                if tokio::fs::try_exists(&item.rollout_path)
-                    .await
-                    .unwrap_or(false)
-                {
-                    let missing_preview =
-                        item.first_user_message.as_deref().is_none_or(str::is_empty);
-                    if missing_preview {
-                        if let Some(alarm_preview) =
-                            thread_preview_from_alarm_sidecar(&item.rollout_path).await
-                        {
-                            item.first_user_message = Some(alarm_preview);
-                        } else {
-                            continue;
-                        }
-                    }
-                    valid_items.push(item);
-                } else {
-                    warn!(
-                        "state db list_threads returned stale rollout path for thread {}: {}",
-                        item.id,
-                        item.rollout_path.display()
-                    );
-                    warn!("state db discrepancy during list_threads_db: stale_db_path_dropped");
-                    let _ = ctx.delete_thread(item.id).await;
-                }
-            }
-            page.items = valid_items;
-            Some(page)
+    let db_sort_key = match sort_key {
+        ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+        ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+    };
+    let mut db_anchor = anchor;
+    let mut valid_items = Vec::with_capacity(page_size);
+    let mut next_anchor = None;
+    let mut num_scanned_rows = 0;
+    loop {
+        let remaining = page_size.saturating_sub(valid_items.len());
+        if remaining == 0 {
+            break;
         }
-        Err(err) => {
-            warn!("state db list_threads failed: {err}");
-            None
+        let mut page = match ctx
+            .list_threads(
+                remaining,
+                db_anchor.as_ref(),
+                db_sort_key,
+                allowed_sources.as_slice(),
+                model_providers.as_deref(),
+                archived,
+                search_term,
+            )
+            .await
+        {
+            Ok(page) => page,
+            Err(err) => {
+                warn!("state db list_threads failed: {err}");
+                return None;
+            }
+        };
+        num_scanned_rows += page.num_scanned_rows;
+        let page_next_anchor = page.next_anchor.take();
+        for mut item in page.items {
+            if tokio::fs::try_exists(&item.rollout_path)
+                .await
+                .unwrap_or(false)
+            {
+                let missing_preview = item.first_user_message.as_deref().is_none_or(str::is_empty);
+                if missing_preview {
+                    if let Some(alarm_preview) =
+                        thread_preview_from_alarm_sidecar(&item.rollout_path).await
+                    {
+                        item.first_user_message = Some(alarm_preview);
+                    } else {
+                        continue;
+                    }
+                }
+                valid_items.push(item);
+            } else {
+                warn!(
+                    "state db list_threads returned stale rollout path for thread {}: {}",
+                    item.id,
+                    item.rollout_path.display()
+                );
+                warn!("state db discrepancy during list_threads_db: stale_db_path_dropped");
+                let _ = ctx.delete_thread(item.id).await;
+            }
+        }
+
+        if valid_items.len() == page_size {
+            next_anchor = page_next_anchor;
+            break;
+        }
+
+        match page_next_anchor {
+            Some(anchor) => db_anchor = Some(anchor),
+            None => break,
         }
     }
+    Some(codex_state::ThreadsPage {
+        items: valid_items,
+        next_anchor,
+        num_scanned_rows,
+    })
 }
 
 /// Look up the rollout path for a thread id using SQLite.

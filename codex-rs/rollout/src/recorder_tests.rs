@@ -516,6 +516,86 @@ async fn list_threads_includes_alarm_only_sessions_without_user_messages() -> st
 }
 
 #[tokio::test]
+async fn list_threads_db_enabled_fills_page_after_filtering_empty_threads() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let empty_uuid = Uuid::from_u128(9015);
+    let valid_uuid = Uuid::from_u128(9016);
+    let empty_thread_id =
+        ThreadId::from_string(&empty_uuid.to_string()).expect("valid empty thread id");
+    let valid_thread_id = ThreadId::from_string(&valid_uuid.to_string()).expect("valid thread id");
+    let empty_path =
+        write_session_file_without_user_message(home.path(), "2025-01-03T15-00-00", empty_uuid)?;
+    let valid_path = write_session_file(home.path(), "2025-01-03T14-00-00", valid_uuid)?;
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+
+    let empty_created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 15, 0, 0)
+        .single()
+        .expect("valid empty thread datetime");
+    let mut empty_builder = codex_state::ThreadMetadataBuilder::new(
+        empty_thread_id,
+        empty_path,
+        empty_created_at,
+        SessionSource::Cli,
+    );
+    empty_builder.model_provider = Some(config.model_provider_id.clone());
+    empty_builder.cwd = home.path().to_path_buf();
+    let empty_metadata = empty_builder.build(config.model_provider_id.as_str());
+    runtime
+        .upsert_thread(&empty_metadata)
+        .await
+        .expect("state db empty upsert should succeed");
+
+    let valid_created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 14, 0, 0)
+        .single()
+        .expect("valid thread datetime");
+    let mut valid_builder = codex_state::ThreadMetadataBuilder::new(
+        valid_thread_id,
+        valid_path.clone(),
+        valid_created_at,
+        SessionSource::Cli,
+    );
+    valid_builder.model_provider = Some(config.model_provider_id.clone());
+    valid_builder.cwd = home.path().to_path_buf();
+    let mut valid_metadata = valid_builder.build(config.model_provider_id.as_str());
+    valid_metadata.first_user_message = Some("Hello from user".to_string());
+    runtime
+        .upsert_thread(&valid_metadata)
+        .await
+        .expect("state db valid upsert should succeed");
+
+    let default_provider = config.model_provider_id.clone();
+    let page = RolloutRecorder::list_threads(
+        &config,
+        /*page_size*/ 1,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        &[],
+        /*model_providers*/ None,
+        default_provider.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].path, valid_path);
+    assert!(page.next_cursor.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let stale_cwd = home.path().join("stale");
