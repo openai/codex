@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AlarmDelivery": {
+      "enum": [
+        "after-turn",
+        "steer-current-turn"
+      ],
+      "type": "string"
+    },
+    "AlarmTrigger": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "delay"
+              ],
+              "type": "string"
+            },
+            "repeat": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "seconds": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "seconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dtstart": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "schedule"
+              ],
+              "type": "string"
+            },
+            "rrule": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "KindAlarmTrigger",
+          "type": "object"
+        }
+      ]
+    },
+    "ThreadAlarm": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "delivery": {
+          "$ref": "#/definitions/AlarmDelivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nextRunAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "trigger": {
+          "$ref": "#/definitions/AlarmTrigger"
+        }
+      },
+      "required": [
+        "createdAt",
+        "delivery",
+        "id",
+        "prompt",
+        "trigger"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "alarms": {
+      "items": {
+        "$ref": "#/definitions/ThreadAlarm"
+      },
+      "type": "array"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "alarms",
+    "threadId"
+  ],
+  "title": "ThreadAlarmUpdatedNotification",
+  "type": "object"
+}

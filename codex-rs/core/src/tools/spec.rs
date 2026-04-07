@@ -1,5 +1,8 @@
 use crate::shell::Shell;
 use crate::shell::ShellType;
+use crate::tools::handlers::AlarmCreateHandler;
+use crate::tools::handlers::AlarmDeleteHandler;
+use crate::tools::handlers::AlarmListHandler;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
@@ -130,6 +133,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     for handler in plan.handlers {
         match handler.kind {
+            ToolHandlerKind::AlarmCreate => {
+                builder.register_handler(handler.name, Arc::new(AlarmCreateHandler));
+            }
+            ToolHandlerKind::AlarmDelete => {
+                builder.register_handler(handler.name, Arc::new(AlarmDeleteHandler));
+            }
+            ToolHandlerKind::AlarmList => {
+                builder.register_handler(handler.name, Arc::new(AlarmListHandler));
+            }
             ToolHandlerKind::AgentJobs => {
                 builder.register_handler(handler.name, Arc::new(BatchJobHandler));
             }

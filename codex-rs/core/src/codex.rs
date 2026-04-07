@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -255,6 +256,19 @@ use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
+use crate::alarms::ALARM_FIRED_BACKGROUND_EVENT_PREFIX;
+use crate::alarms::ALARM_UPDATED_BACKGROUND_EVENT_PREFIX;
+use crate::alarms::AlarmDelivery;
+use crate::alarms::AlarmTimerSpec;
+use crate::alarms::AlarmsState;
+use crate::alarms::ClaimedAlarm;
+use crate::alarms::CreateAlarm;
+use crate::alarms::PersistedAlarm;
+use crate::alarms::ThreadAlarm;
+use crate::alarms::ThreadAlarmTrigger;
+use crate::alarms::alarm_prompt_input_item;
+use crate::alarms::load_alarm_sidecar;
+use crate::alarms::write_alarm_sidecar;
 use crate::build_skill_injections;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
@@ -832,13 +846,27 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Prevents concurrent alarm timers from claiming multiple alarms before a
+    /// newly started turn becomes the active turn.
+    alarm_start_in_progress: Mutex<bool>,
+    /// Serializes alarm sidecar snapshots and file writes so stale alarm state
+    /// cannot overwrite newer persisted state.
+    alarm_sidecar_write_lock: Mutex<()>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    alarms: Mutex<AlarmsState>,
+    alarm_timers_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.alarm_timers_cancellation_token.cancel();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1995,9 +2023,13 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            alarm_start_in_progress: Mutex::new(false),
+            alarm_sidecar_write_lock: Mutex::new(()),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
+            alarms: Mutex::new(AlarmsState::default()),
+            alarm_timers_cancellation_token: CancellationToken::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -2035,6 +2067,7 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+        sess.restore_alarms_from_sidecar().await;
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
@@ -2678,6 +2711,303 @@ impl Session {
             /*sandbox_policy_changed*/ false,
         )
         .await
+    }
+
+    pub(crate) async fn list_alarms(&self) -> Vec<ThreadAlarm> {
+        self.alarms.lock().await.list_alarms()
+    }
+
+    pub(crate) async fn create_alarm(
+        self: &Arc<Self>,
+        trigger: ThreadAlarmTrigger,
+        prompt: String,
+        delivery: AlarmDelivery,
+    ) -> Result<ThreadAlarm, String> {
+        self.ensure_rollout_materialized().await;
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return Err("alarms require a persisted rollout path for restoration".to_string());
+        };
+
+        let timer_cancel = CancellationToken::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let (alarm, timer_spec) = {
+            let mut alarms = self.alarms.lock().await;
+            alarms.create_alarm(
+                CreateAlarm {
+                    id: id.clone(),
+                    trigger,
+                    prompt,
+                    delivery,
+                    now: Utc::now(),
+                },
+                Some(timer_cancel.clone()),
+            )?
+        };
+        if let Err(err) = self.persist_alarms_to_rollout_sidecar(&rollout_path).await {
+            if let Some(runtime) = self.alarms.lock().await.remove_alarm(&id) {
+                AlarmsState::cancel_runtime(&runtime);
+            }
+            return Err(err);
+        }
+
+        if let Some(timer_spec) = timer_spec {
+            self.spawn_alarm_timer(id, timer_spec, timer_cancel);
+        }
+        self.emit_alarm_updated_notification().await;
+        self.maybe_start_pending_alarm().await;
+        Ok(alarm)
+    }
+
+    pub(crate) async fn delete_alarm(&self, id: &str) -> Result<bool, String> {
+        let Some(runtime) = self.alarms.lock().await.remove_alarm(id) else {
+            return Ok(false);
+        };
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            self.alarms.lock().await.restore_runtime(runtime);
+            return Err("alarms require a persisted rollout path for restoration".to_string());
+        };
+        if let Err(err) = self.persist_alarms_to_rollout_sidecar(&rollout_path).await {
+            self.alarms.lock().await.restore_runtime(runtime);
+            return Err(err);
+        }
+        AlarmsState::cancel_runtime(&runtime);
+        self.emit_alarm_updated_notification().await;
+        Ok(true)
+    }
+
+    pub(crate) async fn maybe_start_pending_alarm(self: &Arc<Self>) {
+        let Some(ClaimedAlarm {
+            alarm,
+            context,
+            deleted_one_shot_alarm,
+        }) = self.claim_next_alarm_for_delivery().await
+        else {
+            return;
+        };
+
+        self.emit_alarm_fired_notification(&alarm).await;
+        if deleted_one_shot_alarm {
+            self.emit_alarm_updated_notification().await;
+        }
+        self.persist_alarms_sidecar_best_effort().await;
+
+        let input_item = alarm_prompt_input_item(&context);
+        match context.delivery {
+            AlarmDelivery::SteerCurrentTurn => {
+                if !self.inject_alarm_into_active_turn(input_item.clone()).await {
+                    self.queue_response_items_for_next_turn(vec![input_item])
+                        .await;
+                    self.maybe_start_turn_for_pending_work().await;
+                }
+            }
+            AlarmDelivery::AfterTurn => {
+                self.queue_response_items_for_next_turn(vec![input_item])
+                    .await;
+                self.maybe_start_turn_for_pending_work().await;
+            }
+        }
+        *self.alarm_start_in_progress.lock().await = false;
+    }
+
+    async fn claim_next_alarm_for_delivery(self: &Arc<Self>) -> Option<ClaimedAlarm> {
+        let mut alarm_start_in_progress = self.alarm_start_in_progress.lock().await;
+        if *alarm_start_in_progress {
+            return None;
+        }
+        *alarm_start_in_progress = true;
+        drop(alarm_start_in_progress);
+
+        let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await;
+
+        let (has_active_turn, active_turn_is_regular) = {
+            let active_turn = self.active_turn.lock().await;
+            let has_active_turn = active_turn.is_some();
+            let active_turn_is_regular = active_turn
+                .as_ref()
+                .and_then(|turn| turn.tasks.first())
+                .is_some_and(|(_, task)| matches!(task.kind, crate::state::TaskKind::Regular));
+            (has_active_turn, active_turn_is_regular)
+        };
+        let can_after_turn = !has_active_turn && !has_pending_turn_inputs;
+        let claimed = self.alarms.lock().await.claim_next_alarm(
+            Utc::now(),
+            can_after_turn,
+            active_turn_is_regular,
+        );
+        if claimed.is_none() {
+            *self.alarm_start_in_progress.lock().await = false;
+        }
+        claimed
+    }
+
+    async fn inject_alarm_into_active_turn(&self, item: ResponseInputItem) -> bool {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            let Some(active_turn) = active.as_ref() else {
+                return false;
+            };
+
+            match active_turn.tasks.first().map(|(_, task)| task.kind) {
+                Some(crate::state::TaskKind::Regular) => Arc::clone(&active_turn.turn_state),
+                Some(crate::state::TaskKind::Review | crate::state::TaskKind::Compact) | None => {
+                    return false;
+                }
+            }
+        };
+
+        let mut turn_state = turn_state.lock().await;
+        turn_state.push_pending_input(item);
+        true
+    }
+
+    fn spawn_alarm_timer(
+        self: &Arc<Self>,
+        id: String,
+        timer_spec: AlarmTimerSpec,
+        cancellation_token: CancellationToken,
+    ) {
+        let weak = Arc::downgrade(self);
+        let session_cancel = self.alarm_timers_cancellation_token.clone();
+        tokio::spawn(async move {
+            let mut delay = timer_spec.delay;
+            loop {
+                tokio::select! {
+                    _ = session_cancel.cancelled() => break,
+                    _ = cancellation_token.cancelled() => break,
+                    _ = tokio::time::sleep(delay) => {}
+                }
+                let Some(session) = weak.upgrade() else {
+                    break;
+                };
+                let changed = session.alarms.lock().await.mark_alarm_due(&id, Utc::now());
+                if changed {
+                    session.persist_alarms_sidecar_best_effort().await;
+                }
+                session.maybe_start_pending_alarm().await;
+                let next_timer_spec = session
+                    .alarms
+                    .lock()
+                    .await
+                    .timer_spec_for_alarm(&id, Utc::now());
+                let Some(next_timer_spec) = next_timer_spec else {
+                    break;
+                };
+                delay = next_timer_spec.delay;
+            }
+        });
+    }
+
+    async fn persist_alarms_to_rollout_sidecar(&self, rollout_path: &Path) -> Result<(), String> {
+        let rollout_path = rollout_path.to_path_buf();
+        self.persist_alarms_sidecar_with_writer(|alarms| async move {
+            write_alarm_sidecar(&rollout_path, &alarms).await
+        })
+        .await
+    }
+
+    async fn persist_alarms_sidecar_with_writer<W, Fut>(
+        &self,
+        write_sidecar: W,
+    ) -> Result<(), String>
+    where
+        W: FnOnce(Vec<PersistedAlarm>) -> Fut,
+        Fut: Future<Output = Result<(), String>>,
+    {
+        let _write_lock = self.alarm_sidecar_write_lock.lock().await;
+        let alarms = self.alarms.lock().await.persisted_alarms();
+        write_sidecar(alarms).await
+    }
+
+    async fn persist_alarms_sidecar_best_effort(&self) {
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return;
+        };
+        if let Err(err) = self.persist_alarms_to_rollout_sidecar(&rollout_path).await {
+            warn!("failed to persist alarms sidecar: {err}");
+        }
+    }
+
+    async fn restore_alarms_from_sidecar(self: &Arc<Self>) {
+        if !self.features.enabled(Feature::AlarmScheduler) {
+            return;
+        }
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return;
+        };
+        let persisted = match load_alarm_sidecar(&rollout_path).await {
+            Ok(persisted) => persisted,
+            Err(err) => {
+                warn!("{err}");
+                return;
+            }
+        };
+        if persisted.is_empty() {
+            return;
+        }
+
+        let mut normalized = Vec::<PersistedAlarm>::new();
+        for persisted_alarm in persisted {
+            let timer_cancel = CancellationToken::new();
+            let timer_spec = {
+                let mut alarms = self.alarms.lock().await;
+                match alarms.restore_alarm(
+                    persisted_alarm.clone(),
+                    Utc::now(),
+                    Some(timer_cancel.clone()),
+                ) {
+                    Ok(timer_spec) => {
+                        normalized = alarms.persisted_alarms();
+                        timer_spec
+                    }
+                    Err(err) => {
+                        warn!(
+                            "skipping invalid persisted alarm {}: {err}",
+                            persisted_alarm.alarm.id
+                        );
+                        continue;
+                    }
+                }
+            };
+            if let Some(timer_spec) = timer_spec {
+                self.spawn_alarm_timer(persisted_alarm.alarm.id.clone(), timer_spec, timer_cancel);
+            }
+        }
+
+        if let Err(err) = write_alarm_sidecar(&rollout_path, &normalized).await {
+            warn!("failed to rewrite normalized alarm sidecar: {err}");
+        }
+        self.emit_alarm_updated_notification().await;
+        self.maybe_start_pending_alarm().await;
+    }
+
+    async fn emit_alarm_updated_notification(&self) {
+        let alarms = self.list_alarms().await;
+        let Ok(payload) = serde_json::to_string(&alarms) else {
+            warn!("failed to serialize alarm update payload");
+            return;
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("{ALARM_UPDATED_BACKGROUND_EVENT_PREFIX}{payload}"),
+            }),
+        })
+        .await;
+    }
+
+    async fn emit_alarm_fired_notification(&self, alarm: &ThreadAlarm) {
+        let Ok(payload) = serde_json::to_string(alarm) else {
+            warn!("failed to serialize alarm fired payload");
+            return;
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("{ALARM_FIRED_BACKGROUND_EVENT_PREFIX}{payload}"),
+            }),
+        })
+        .await;
     }
 
     async fn build_settings_update_items(
@@ -4222,8 +4552,6 @@ impl Session {
         }
     }
 
-    /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;

@@ -27,6 +27,9 @@ use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
+use crate::alarms::AlarmDelivery;
+use crate::alarms::ThreadAlarm;
+use crate::alarms::ThreadAlarmTrigger;
 use codex_rollout::state_db::StateDbHandle;
 
 #[derive(Clone, Debug)]
@@ -257,6 +260,26 @@ impl CodexThread {
         }
 
         Ok(*guard)
+    }
+
+    pub async fn create_alarm(
+        &self,
+        trigger: ThreadAlarmTrigger,
+        prompt: String,
+        delivery: AlarmDelivery,
+    ) -> Result<ThreadAlarm, String> {
+        self.codex
+            .session
+            .create_alarm(trigger, prompt, delivery)
+            .await
+    }
+
+    pub async fn delete_alarm(&self, id: &str) -> Result<bool, String> {
+        self.codex.session.delete_alarm(id).await
+    }
+
+    pub async fn list_alarms(&self) -> Vec<ThreadAlarm> {
+        self.codex.session.list_alarms().await
     }
 }
 

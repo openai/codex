@@ -15,6 +15,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
+    pub(crate) alarm_scheduler_command_enabled: bool,
     pub(crate) fast_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
@@ -33,6 +34,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         })
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
+        .filter(|(_, cmd)| flags.alarm_scheduler_command_enabled || *cmd != SlashCommand::Loop)
         .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
@@ -66,6 +68,7 @@ mod tests {
             collaboration_modes_enabled: true,
             connectors_enabled: true,
             plugins_command_enabled: true,
+            alarm_scheduler_command_enabled: true,
             fast_command_enabled: true,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,

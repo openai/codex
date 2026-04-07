@@ -3219,6 +3219,112 @@ pub struct ThreadReadResponse {
     pub thread: Thread,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum AlarmDelivery {
+    AfterTurn,
+    SteerCurrentTurn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(tag = "kind")]
+#[ts(export_to = "v2/")]
+pub enum AlarmTrigger {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Delay {
+        #[ts(type = "number")]
+        seconds: u64,
+        repeat: Option<bool>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Schedule {
+        dtstart: Option<String>,
+        rrule: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarm {
+    pub id: String,
+    pub trigger: AlarmTrigger,
+    pub prompt: String,
+    pub delivery: AlarmDelivery,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number | null")]
+    pub next_run_at: Option<i64>,
+    #[ts(type = "number | null")]
+    pub last_run_at: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmCreateParams {
+    pub thread_id: String,
+    pub trigger: AlarmTrigger,
+    pub prompt: String,
+    pub delivery: AlarmDelivery,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmCreateResponse {
+    pub alarm: ThreadAlarm,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmDeleteParams {
+    pub thread_id: String,
+    pub id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmDeleteResponse {
+    pub deleted: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmListParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmListResponse {
+    pub data: Vec<ThreadAlarm>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmUpdatedNotification {
+    pub thread_id: String,
+    pub alarms: Vec<ThreadAlarm>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAlarmFiredNotification {
+    pub thread_id: String,
+    pub alarm: ThreadAlarm,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

@@ -1,4 +1,5 @@
 pub(crate) mod agent_jobs;
+mod alarms;
 pub mod apply_patch;
 mod dynamic;
 mod js_repl;
@@ -32,6 +33,9 @@ use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
+pub use alarms::AlarmCreateHandler;
+pub use alarms::AlarmDeleteHandler;
+pub use alarms::AlarmListHandler;
 pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;

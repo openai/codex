@@ -15,6 +15,7 @@ use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
+use codex_app_server_protocol::AlarmTrigger;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
@@ -74,6 +75,9 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
+use codex_app_server_protocol::ThreadAlarm;
+use codex_app_server_protocol::ThreadAlarmFiredNotification;
+use codex_app_server_protocol::ThreadAlarmUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -108,6 +112,8 @@ use codex_app_server_protocol::convert_patch_changes;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::alarms::ALARM_FIRED_BACKGROUND_EVENT_PREFIX;
+use codex_core::alarms::ALARM_UPDATED_BACKGROUND_EVENT_PREFIX;
 use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
@@ -160,6 +166,35 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
+fn thread_alarm_from_core(value: codex_core::alarms::ThreadAlarm) -> ThreadAlarm {
+    ThreadAlarm {
+        id: value.id,
+        trigger: alarm_trigger_from_core(value.trigger),
+        prompt: value.prompt,
+        delivery: match value.delivery {
+            codex_core::alarms::AlarmDelivery::AfterTurn => {
+                codex_app_server_protocol::AlarmDelivery::AfterTurn
+            }
+            codex_core::alarms::AlarmDelivery::SteerCurrentTurn => {
+                codex_app_server_protocol::AlarmDelivery::SteerCurrentTurn
+            }
+        },
+        created_at: value.created_at,
+        next_run_at: value.next_run_at,
+        last_run_at: value.last_run_at,
+    }
+}
+
+fn alarm_trigger_from_core(value: codex_core::alarms::ThreadAlarmTrigger) -> AlarmTrigger {
+    match value {
+        codex_core::alarms::ThreadAlarmTrigger::Delay { seconds, repeat } => {
+            AlarmTrigger::Delay { seconds, repeat }
+        }
+        codex_core::alarms::ThreadAlarmTrigger::Schedule { dtstart, rrule } => {
+            AlarmTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -1292,6 +1327,34 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::DeprecationNotice(notification))
                 .await;
+        }
+        EventMsg::BackgroundEvent(event) => {
+            if let Some(payload) = event
+                .message
+                .strip_prefix(ALARM_UPDATED_BACKGROUND_EVENT_PREFIX)
+                && let Ok(alarms) =
+                    serde_json::from_str::<Vec<codex_core::alarms::ThreadAlarm>>(payload)
+            {
+                let notification = ThreadAlarmUpdatedNotification {
+                    thread_id: conversation_id.to_string(),
+                    alarms: alarms.into_iter().map(thread_alarm_from_core).collect(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadAlarmUpdated(notification))
+                    .await;
+            } else if let Some(payload) = event
+                .message
+                .strip_prefix(ALARM_FIRED_BACKGROUND_EVENT_PREFIX)
+                && let Ok(alarm) = serde_json::from_str::<codex_core::alarms::ThreadAlarm>(payload)
+            {
+                let notification = ThreadAlarmFiredNotification {
+                    thread_id: conversation_id.to_string(),
+                    alarm: thread_alarm_from_core(alarm),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadAlarmFired(notification))
+                    .await;
+            }
         }
         EventMsg::ReasoningContentDelta(event) => {
             let notification = ReasoningSummaryTextDeltaNotification {

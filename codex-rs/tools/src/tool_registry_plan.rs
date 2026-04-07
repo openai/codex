@@ -16,6 +16,9 @@ use crate::WebSearchToolOptions;
 use crate::collect_code_mode_tool_definitions;
 use crate::collect_tool_search_app_infos;
 use crate::collect_tool_suggest_entries;
+use crate::create_alarm_create_tool;
+use crate::create_alarm_delete_tool;
+use crate::create_alarm_list_tool;
 use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;
 use crate::create_close_agent_tool_v1;
@@ -227,6 +230,27 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
+    }
+
+    if config.alarm_scheduler {
+        plan.push_spec(
+            create_alarm_create_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.push_spec(
+            create_alarm_delete_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.push_spec(
+            create_alarm_list_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("AlarmCreate", ToolHandlerKind::AlarmCreate);
+        plan.register_handler("AlarmDelete", ToolHandlerKind::AlarmDelete);
+        plan.register_handler("AlarmList", ToolHandlerKind::AlarmList);
     }
 
     if config.search_tool

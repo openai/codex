@@ -3,6 +3,7 @@
 
 mod agent_job_tool;
 mod agent_tool;
+mod alarm_tool;
 mod apply_patch_tool;
 mod code_mode;
 mod dynamic_tool;
@@ -40,6 +41,9 @@ pub use agent_tool::create_spawn_agent_tool_v1;
 pub use agent_tool::create_spawn_agent_tool_v2;
 pub use agent_tool::create_wait_agent_tool_v1;
 pub use agent_tool::create_wait_agent_tool_v2;
+pub use alarm_tool::create_alarm_create_tool;
+pub use alarm_tool::create_alarm_delete_tool;
+pub use alarm_tool::create_alarm_list_tool;
 pub use apply_patch_tool::ApplyPatchToolArgs;
 pub use apply_patch_tool::create_apply_patch_freeform_tool;
 pub use apply_patch_tool::create_apply_patch_json_tool;

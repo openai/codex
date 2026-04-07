@@ -26,6 +26,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::alarm_scheduler::ParsedAlarmSpec;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -107,6 +108,30 @@ pub(crate) enum AppEvent {
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
+
+    /// List alarms for the specified thread and open the management UI.
+    OpenThreadAlarms {
+        thread_id: ThreadId,
+    },
+
+    /// Parse a `/loop <spec>` input into structured alarm params.
+    CreateThreadAlarmFromSpec {
+        thread_id: ThreadId,
+        spec: String,
+    },
+
+    /// Result of parsing a `/loop <spec>` input.
+    ThreadAlarmSpecParsed {
+        thread_id: ThreadId,
+        spec: String,
+        result: Result<ParsedAlarmSpec, String>,
+    },
+
+    /// Delete one alarm from the specified thread.
+    DeleteThreadAlarm {
+        thread_id: ThreadId,
+        id: String,
+    },
 
     /// Request to exit the application.
     ///

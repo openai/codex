@@ -95,6 +95,7 @@ mod audio_device {
         ))
     }
 }
+mod alarm_scheduler;
 mod bottom_pane;
 mod chatwidget;
 mod cli;

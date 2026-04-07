@@ -8,6 +8,8 @@ export type { AdditionalFileSystemPermissions } from "./AdditionalFileSystemPerm
 export type { AdditionalNetworkPermissions } from "./AdditionalNetworkPermissions";
 export type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";
 export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotification";
+export type { AlarmDelivery } from "./AlarmDelivery";
+export type { AlarmTrigger } from "./AlarmTrigger";
 export type { AnalyticsConfig } from "./AnalyticsConfig";
 export type { AppBranding } from "./AppBranding";
 export type { AppInfo } from "./AppInfo";
@@ -270,6 +272,9 @@ export type { TextPosition } from "./TextPosition";
 export type { TextRange } from "./TextRange";
 export type { Thread } from "./Thread";
 export type { ThreadActiveFlag } from "./ThreadActiveFlag";
+export type { ThreadAlarm } from "./ThreadAlarm";
+export type { ThreadAlarmFiredNotification } from "./ThreadAlarmFiredNotification";
+export type { ThreadAlarmUpdatedNotification } from "./ThreadAlarmUpdatedNotification";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification";

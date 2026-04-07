@@ -6,6 +6,8 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AlarmDelivery;
+use codex_app_server_protocol::AlarmTrigger;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -24,6 +26,13 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAlarm;
+use codex_app_server_protocol::ThreadAlarmCreateParams;
+use codex_app_server_protocol::ThreadAlarmCreateResponse;
+use codex_app_server_protocol::ThreadAlarmDeleteParams;
+use codex_app_server_protocol::ThreadAlarmDeleteResponse;
+use codex_app_server_protocol::ThreadAlarmListParams;
+use codex_app_server_protocol::ThreadAlarmListResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -312,6 +321,28 @@ impl AppServerSession {
         started_thread_from_start_response(response, config).await
     }
 
+    pub(crate) async fn start_ephemeral_thread_with_base_instructions(
+        &mut self,
+        config: &Config,
+        base_instructions: String,
+    ) -> Result<AppServerStartedThread> {
+        let request_id = self.next_request_id();
+        let mut params = thread_start_params_from_config(
+            config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+        );
+        params.ephemeral = Some(true);
+        params.persist_extended_history = false;
+        params.base_instructions = Some(Some(base_instructions));
+        let response: ThreadStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
+            .await
+            .wrap_err("thread/start failed during alarm spec parsing")?;
+        started_thread_from_start_response(response, config).await
+    }
+
     pub(crate) async fn resume_thread(
         &mut self,
         config: Config,
@@ -408,6 +439,68 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_alarm_create(
+        &mut self,
+        thread_id: ThreadId,
+        trigger: AlarmTrigger,
+        prompt: String,
+        delivery: AlarmDelivery,
+    ) -> Result<ThreadAlarm> {
+        let request_id = self.next_request_id();
+        let response: ThreadAlarmCreateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAlarmCreate {
+                request_id,
+                params: ThreadAlarmCreateParams {
+                    thread_id: thread_id.to_string(),
+                    trigger,
+                    prompt,
+                    delivery,
+                },
+            })
+            .await
+            .wrap_err("thread/alarm/create failed in TUI")?;
+        Ok(response.alarm)
+    }
+
+    pub(crate) async fn thread_alarm_delete(
+        &mut self,
+        thread_id: ThreadId,
+        id: String,
+    ) -> Result<bool> {
+        let request_id = self.next_request_id();
+        let response: ThreadAlarmDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAlarmDelete {
+                request_id,
+                params: ThreadAlarmDeleteParams {
+                    thread_id: thread_id.to_string(),
+                    id,
+                },
+            })
+            .await
+            .wrap_err("thread/alarm/delete failed in TUI")?;
+        Ok(response.deleted)
+    }
+
+    pub(crate) async fn thread_alarm_list(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<Vec<ThreadAlarm>> {
+        let request_id = self.next_request_id();
+        let response: ThreadAlarmListResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAlarmList {
+                request_id,
+                params: ThreadAlarmListParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/alarm/list failed in TUI")?;
+        Ok(response.data)
     }
 
     #[allow(clippy::too_many_arguments)]

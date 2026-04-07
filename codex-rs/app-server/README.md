@@ -145,6 +145,11 @@ Example with notification opt-out:
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
+- `thread/alarm/create` — create a runtime alarm on a loaded thread; accepts a structured `trigger`, `prompt`, and `delivery`, returns the created alarm, and requires the under-development feature flag `alarm_tool` to be enabled for that thread. Delay triggers use `seconds` plus optional `repeat`; schedule triggers use optional `dtstart` and/or `rrule`.
+- `thread/alarm/delete` — delete one runtime alarm from a loaded thread by id; returns `{ deleted }` and requires `alarm_tool`.
+- `thread/alarm/list` — list runtime alarms for a loaded thread; returns `{ data }` and requires `alarm_tool`.
+- `thread/alarm/updated` — notification emitted when a loaded thread’s alarm list changes, including one-shot alarms deleting themselves after execution or alarms restored from disk.
+- `thread/alarm/fired` — notification emitted when a thread alarm fires, either for a synthetic follow-on turn or a same-turn steer delivery.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
