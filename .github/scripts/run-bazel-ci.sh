@@ -133,6 +133,13 @@ print_failed_bazel_test_logs() {
       echo "Missing test log: $test_log"
     fi
   done
+
+  echo
+  echo "Bazel failed test targets:"
+  for target_log in "${failed_target_logs[@]}"; do
+    local target="${target_log%%$'\t'*}"
+    echo "  FAIL ${target}"
+  done
 }
 
 bazel_args=()
