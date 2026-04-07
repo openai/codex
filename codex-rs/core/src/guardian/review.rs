@@ -336,15 +336,13 @@ pub(super) async fn run_guardian_review_session(
         })
         .await
     {
-        GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => {
-            GuardianReviewOutcome::Completed(parse_guardian_assessment(
+        GuardianReviewSessionOutcome::Completed { result, report: _ } => match result {
+            Ok(last_agent_message) => GuardianReviewOutcome::Completed(parse_guardian_assessment(
                 last_agent_message.as_deref(),
-            ))
-        }
-        GuardianReviewSessionOutcome::Completed(Err(err)) => {
-            GuardianReviewOutcome::Completed(Err(err))
-        }
-        GuardianReviewSessionOutcome::TimedOut => GuardianReviewOutcome::TimedOut,
-        GuardianReviewSessionOutcome::Aborted => GuardianReviewOutcome::Aborted,
+            )),
+            Err(err) => GuardianReviewOutcome::Completed(Err(err)),
+        },
+        GuardianReviewSessionOutcome::TimedOut { report: _ } => GuardianReviewOutcome::TimedOut,
+        GuardianReviewSessionOutcome::Aborted { report: _ } => GuardianReviewOutcome::Aborted,
     }
 }

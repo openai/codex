@@ -15,6 +15,7 @@ mod approval_request;
 mod prompt;
 mod review;
 mod review_session;
+mod review_session_analytics;
 
 use std::time::Duration;
 
