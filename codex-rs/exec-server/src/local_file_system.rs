@@ -509,7 +509,10 @@ mod tests {
             AccessPathMode::ResolveAll,
         )?;
 
-        assert_eq!(resolved, temp_dir.path().join("secret.txt"));
+        assert_eq!(
+            resolved,
+            resolve_existing_path(temp_dir.path())?.join("secret.txt")
+        );
         Ok(())
     }
 
