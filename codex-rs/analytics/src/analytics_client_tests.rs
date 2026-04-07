@@ -226,7 +226,7 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         turn_id: turn_id.to_string(),
         thread_id: "thread-2".to_string(),
         num_input_images: 1,
-        submission_type: None,
+        submission_type: Some(codex_protocol::protocol::SubmissionType::Default),
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -1048,7 +1048,7 @@ fn turn_event_serializes_expected_shape() {
             thread_id: "thread-2".to_string(),
             turn_id: "turn-2".to_string(),
             product_client_id: "codex-tui".to_string(),
-            submission_type: None,
+            submission_type: Some(codex_protocol::protocol::SubmissionType::Default),
             model: Some("gpt-5".to_string()),
             model_provider: "openai".to_string(),
             sandbox_policy: Some("read_only"),
@@ -1094,7 +1094,7 @@ fn turn_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": "codex-tui",
-                "submission_type": null,
+                "submission_type": "default",
                 "model": "gpt-5",
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",
@@ -1180,6 +1180,89 @@ async fn turn_lifecycle_emits_turn_event() {
         json!(13)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(321));
+}
+
+#[tokio::test]
+async fn queued_submission_type_emits_queued_turn_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
+                product_client_id: "codex-tui".to_string(),
+                runtime: CodexRuntimeMetadata {
+                    codex_rs_version: "0.1.0".to_string(),
+                    runtime_os: "macos".to_string(),
+                    runtime_os_version: "15.3.1".to_string(),
+                    runtime_arch: "aarch64".to_string(),
+                },
+                rpc_transport: AppServerRpcTransport::Stdio,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
+            },
+            &mut out,
+        )
+        .await;
+    let mut resolved_config = sample_turn_resolved_config("turn-2");
+    resolved_config.submission_type = Some(codex_protocol::protocol::SubmissionType::Queued);
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                resolved_config,
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
+                "thread-2", "turn-2",
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(payload["event_params"]["submission_type"], json!("queued"));
 }
 
 #[tokio::test]

@@ -86,6 +86,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![expected_input.clone()],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -142,6 +143,7 @@ async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -200,6 +202,7 @@ async fn reasoning_item_is_emitted() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -259,6 +262,7 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -323,6 +327,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -385,6 +390,7 @@ async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyho
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -438,6 +444,7 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -530,6 +537,7 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -607,6 +615,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -716,6 +725,7 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -903,6 +913,7 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1017,6 +1028,7 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1085,6 +1097,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1144,6 +1157,7 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
