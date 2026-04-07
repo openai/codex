@@ -242,7 +242,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
-        if ctx.turn.environment.exec_server_url().is_some() {
+        if let Some(environment) = ctx
+            .turn
+            .environment
+            .as_ref()
+            .filter(|environment| environment.exec_server_url().is_some())
+        {
             if let UnifiedExecShellMode::ZshFork(_) = &self.shell_mode {
                 return Err(ToolError::Rejected(
                     "unified_exec zsh-fork is not supported when exec_server_url is configured"
@@ -263,7 +268,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             };
             return self
                 .manager
-                .open_session_with_remote_exec(exec_params, ctx.turn.environment.as_ref())
+                .open_session_with_remote_exec(exec_params, environment.as_ref())
                 .await
                 .map_err(|err| match err {
                     UnifiedExecError::SandboxDenied { output, .. } => {
@@ -275,6 +280,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                     other => ToolError::Rejected(other.to_string()),
                 });
         }
+        let Some(environment) = ctx.turn.environment.as_ref() else {
+            return Err(ToolError::Rejected(
+                "exec_command is unavailable in this session".to_string(),
+            ));
+        };
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
@@ -343,11 +353,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let exec_env = attempt
             .env_for(command, options, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let Some(environment) = ctx.turn.environment.as_ref() else {
-            return Err(ToolError::Rejected(
-                "exec_command is unavailable in this session".to_string(),
-            ));
-        };
         self.manager
             .open_session_with_exec_env(
                 req.process_id,
