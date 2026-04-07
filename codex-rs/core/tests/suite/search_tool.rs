@@ -427,6 +427,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 

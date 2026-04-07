@@ -103,6 +103,13 @@ pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionType {
+    Prompt,
+    PromptQueued,
+}
+
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Submission {
@@ -244,6 +251,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Metadata describing how the prompt was submitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission_type: Option<SubmissionType>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -301,6 +311,10 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Metadata describing how the prompt was submitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission_type: Option<SubmissionType>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
@@ -517,6 +531,7 @@ impl From<Vec<UserInput>> for Op {
         Op::UserInput {
             items: value,
             final_output_json_schema: None,
+            submission_type: None,
         }
     }
 }
@@ -4484,6 +4499,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            submission_type: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4501,6 +4517,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                submission_type: None,
             }
         );
 
@@ -4520,6 +4537,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            submission_type: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4529,6 +4547,27 @@ mod tests {
                 "type": "user_input",
                 "items": [],
                 "final_output_json_schema": schema,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_serialization_includes_submission_type_when_some() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: None,
+            submission_type: Some(SubmissionType::PromptQueued),
+        };
+
+        let json_op = serde_json::to_value(op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "submission_type": "prompt_queued",
             })
         );
 
