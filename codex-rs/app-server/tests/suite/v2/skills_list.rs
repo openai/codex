@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -20,6 +21,14 @@ const WATCHER_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn write_skill(root: &TempDir, name: &str) -> Result<()> {
     let skill_dir = root.path().join("skills").join(name);
+    std::fs::create_dir_all(&skill_dir)?;
+    let content = format!("---\nname: {name}\ndescription: {name} description\n---\n\n# Body\n");
+    std::fs::write(skill_dir.join("SKILL.md"), content)?;
+    Ok(())
+}
+
+fn write_skill_at_root(root: &std::path::Path, name: &str) -> Result<()> {
+    let skill_dir = root.join(name);
     std::fs::create_dir_all(&skill_dir)?;
     let content = format!("---\nname: {name}\ndescription: {name} description\n---\n\n# Body\n");
     std::fs::write(skill_dir.join("SKILL.md"), content)?;
@@ -60,6 +69,41 @@ async fn skills_list_includes_skills_from_per_cwd_extra_user_roots() -> Result<(
             .skills
             .iter()
             .any(|skill| skill.name == "extra-skill")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_resolves_relative_cwd_for_repo_skills() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = codex_home.path().join("relative-root");
+    std::fs::create_dir_all(repo_root.join(".git"))?;
+    write_skill_at_root(&repo_root.join(".agents/skills"), "repo-skill")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![PathBuf::from("relative-root")],
+            force_reload: true,
+            per_cwd_extra_user_roots: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].cwd, PathBuf::from("relative-root"));
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .any(|skill| skill.name == "repo-skill")
     );
     Ok(())
 }

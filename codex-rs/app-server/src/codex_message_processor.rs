@@ -6024,6 +6024,7 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
+            let normalized_cwd = cwd_abs.to_path_buf();
             let config_layer_stack = match load_config_layers_state(
                 &self.config.codex_home,
                 Some(cwd_abs),
@@ -6052,7 +6053,7 @@ impl CodexMessageProcessor {
                 config.features.enabled(Feature::Plugins),
             );
             let skills_input = codex_core::skills::SkillsLoadInput::new(
-                cwd.clone(),
+                normalized_cwd,
                 effective_skill_roots,
                 config_layer_stack,
                 config.bundled_skills_enabled(),
@@ -6079,7 +6080,27 @@ impl CodexMessageProcessor {
             cwds,
             force_remote_sync,
         } = params;
-        let roots = cwds.unwrap_or_default();
+        let roots = match cwds
+            .unwrap_or_default()
+            .into_iter()
+            .map(AbsolutePathBuf::relative_to_current_dir)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(roots) => roots,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("invalid plugin cwd: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
         plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
@@ -7865,6 +7886,25 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: WindowsSandboxSetupStartParams,
     ) {
+        let command_cwd = match params.cwd {
+            Some(cwd) => match AbsolutePathBuf::relative_to_current_dir(cwd) {
+                Ok(cwd) => cwd,
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("invalid windows sandbox setup cwd: {err}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                }
+            },
+            None => self.config.cwd.clone(),
+        };
         self.outgoing
             .send_response(
                 request_id.clone(),
@@ -7878,7 +7918,6 @@ impl CodexMessageProcessor {
         };
         let config = Arc::clone(&self.config);
         let cloud_requirements = self.current_cloud_requirements();
-        let command_cwd = params.cwd.unwrap_or_else(|| config.cwd.clone());
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
         let outgoing = Arc::clone(&self.outgoing);

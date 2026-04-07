@@ -133,16 +133,27 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
         // fixture test is platform-independent.
         let text = String::from_utf8(bytes)
             .with_context(|| format!("expected UTF-8 TypeScript in {}", path.display()))?;
-        let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        // Fixture comparisons care about schema content, not whether the generator
-        // re-prepended the standard banner to every TypeScript file.
-        let text = text
-            .strip_prefix(GENERATED_TS_HEADER)
-            .unwrap_or(&text)
-            .to_string();
+        let text = normalize_typescript_fixture_text(text);
         return Ok(text.into_bytes());
     }
     Ok(bytes)
+}
+
+fn normalize_typescript_fixture_text(text: String) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    // Fixture comparisons care about schema content, not whether the generator
+    // re-prepended the standard banner to every TypeScript file.
+    let text = text.strip_prefix(GENERATED_TS_HEADER).unwrap_or(&text);
+    let mut normalized = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        if let Some(line) = line.strip_suffix('\n') {
+            normalized.push_str(line.trim_end());
+            normalized.push('\n');
+        } else {
+            normalized.push_str(line.trim_end());
+        }
+    }
+    normalized
 }
 
 fn canonicalize_json(value: &Value) -> Value {
@@ -274,12 +285,11 @@ fn collect_typescript_fixture_file<T: TS + 'static + ?Sized>(
         return Ok(());
     }
 
-    let contents = T::export_to_string().context("export TypeScript fixture content")?;
+    let contents = T::export_to_string()
+        .map(normalize_typescript_fixture_text)
+        .context("export TypeScript fixture content")?;
     let output_path = normalize_relative_fixture_path(&output_path);
-    files.insert(
-        output_path,
-        contents.replace("\r\n", "\n").replace('\r', "\n"),
-    );
+    files.insert(output_path, contents);
 
     let mut visitor = TypeScriptFixtureCollector {
         files,
@@ -353,5 +363,15 @@ mod tests {
             {"$ref": "#/definitions/B"}
         ]);
         assert_eq!(canonicalize_json(&value), expected);
+    }
+
+    #[test]
+    fn normalize_typescript_fixture_text_trims_trailing_whitespace() {
+        let text = format!("{GENERATED_TS_HEADER}type Example = {{ \r\nfield: string, \n}};\t");
+
+        assert_eq!(
+            normalize_typescript_fixture_text(text),
+            "type Example = {\nfield: string,\n};"
+        );
     }
 }

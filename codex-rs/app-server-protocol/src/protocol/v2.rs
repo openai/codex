@@ -3259,7 +3259,7 @@ pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
     /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
-    pub cwds: Option<Vec<AbsolutePathBuf>>,
+    pub cwds: Option<Vec<PathBuf>>,
     /// When true, reconcile the official curated marketplace against the remote plugin state
     /// before listing marketplaces.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -5456,7 +5456,7 @@ pub enum WindowsSandboxSetupMode {
 pub struct WindowsSandboxSetupStartParams {
     pub mode: WindowsSandboxSetupMode,
     #[ts(optional = nullable)]
-    pub cwd: Option<AbsolutePathBuf>,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
