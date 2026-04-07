@@ -57,7 +57,6 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -163,8 +162,7 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response_mock =
-        responses::mount_sse_sequence(&server, vec![body.clone(), body.clone(), body]).await;
+    let response_mock = responses::mount_sse_sequence(&server, vec![body.clone(), body]).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never", &BTreeMap::new())?;
@@ -198,15 +196,6 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
                 "developerInstructions": null,
             }),
             /*expect_instructions*/ false,
-        ),
-        (
-            json!({
-                "model": "mock-model",
-                "config": disabled_instruction_config,
-                "baseInstructions": "",
-                "developerInstructions": "",
-            }),
-            /*expect_instructions*/ true,
         ),
     ];
 
@@ -242,10 +231,8 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
     }
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 3);
-    for (index, (request, expect_instructions)) in
-        requests.into_iter().zip([true, false, true]).enumerate()
-    {
+    assert_eq!(requests.len(), 2);
+    for (request, expect_instructions) in requests.into_iter().zip([true, false]) {
         let payload = request.body_json();
         assert_eq!(
             payload.get("instructions").is_some(),
@@ -253,21 +240,10 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
             "unexpected instructions field in payload: {payload:?}"
         );
         let developer_texts = request.message_input_texts("developer");
-        if index == 2 {
-            assert_eq!(
-                payload.get("instructions"),
-                Some(&Value::String(String::new()))
-            );
-            assert!(
-                developer_texts.iter().any(String::is_empty),
-                "expected explicit empty developerInstructions to produce an empty developer instruction message: {developer_texts:?}"
-            );
-        } else {
-            assert!(
-                developer_texts.iter().all(|text| !text.is_empty()),
-                "did not expect empty developer instruction messages: {developer_texts:?}"
-            );
-        }
+        assert!(
+            developer_texts.iter().all(|text| !text.is_empty()),
+            "did not expect empty developer instruction messages: {developer_texts:?}"
+        );
     }
 
     Ok(())

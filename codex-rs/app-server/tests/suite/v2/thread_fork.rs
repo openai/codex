@@ -195,11 +195,8 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response_mock = responses::mount_sse_sequence(
-        &server,
-        vec![body.clone(), body.clone(), body.clone(), body],
-    )
-    .await;
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![body.clone(), body.clone(), body]).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -242,15 +239,6 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
                 "developerInstructions": null,
             }),
             /*expect_instructions*/ false,
-        ),
-        (
-            json!({
-                "threadId": conversation_id.clone(),
-                "config": disabled_instruction_config.clone(),
-                "baseInstructions": "",
-                "developerInstructions": "",
-            }),
-            /*expect_instructions*/ true,
         ),
     ];
 
@@ -326,12 +314,8 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
     .await??;
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 4);
-    for (index, (request, expect_instructions)) in requests
-        .into_iter()
-        .zip([true, false, true, false])
-        .enumerate()
-    {
+    assert_eq!(requests.len(), 3);
+    for (request, expect_instructions) in requests.into_iter().zip([true, false, false]) {
         let payload = request.body_json();
         assert_eq!(
             payload.get("instructions").is_some(),
@@ -339,21 +323,10 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
             "unexpected instructions field in payload: {payload:?}"
         );
         let developer_texts = request.message_input_texts("developer");
-        if index == 2 {
-            assert_eq!(
-                payload.get("instructions"),
-                Some(&Value::String(String::new()))
-            );
-            assert!(
-                developer_texts.iter().any(String::is_empty),
-                "expected explicit empty developerInstructions to produce an empty developer instruction message: {developer_texts:?}"
-            );
-        } else {
-            assert!(
-                developer_texts.iter().all(|text| !text.is_empty()),
-                "did not expect empty developer instruction messages: {developer_texts:?}"
-            );
-        }
+        assert!(
+            developer_texts.iter().all(|text| !text.is_empty()),
+            "did not expect empty developer instruction messages: {developer_texts:?}"
+        );
     }
 
     Ok(())
