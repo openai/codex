@@ -532,7 +532,7 @@ async fn prepare_realtime_start(
             )?
         }
         ConversationStartTransport::Webrtc { .. } => {
-            realtime_request_headers(requested_session_id.as_deref(), None)?
+            realtime_request_headers(requested_session_id.as_deref(), /*api_key*/ None)?
         }
     };
     Ok(PreparedRealtimeConversationStart {
