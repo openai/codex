@@ -202,7 +202,14 @@ async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
     let config_path = codex_home.path().join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str("\ndeveloper_instructions = \"Config developer instructions sentinel\"\n");
+    let provider_table = "\n[model_providers.mock_provider]";
+    let provider_table_index = config_toml
+        .find(provider_table)
+        .expect("test config must include mock provider table");
+    config_toml.insert_str(
+        provider_table_index,
+        "\ndeveloper_instructions = \"Config developer instructions sentinel\"\n",
+    );
     std::fs::write(config_path, config_toml)?;
 
     let conversation_id = create_fake_rollout(
