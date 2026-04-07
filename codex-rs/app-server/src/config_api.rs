@@ -678,6 +678,7 @@ mod tests {
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
+            allow_managed_hooks_only: None,
             guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: None,

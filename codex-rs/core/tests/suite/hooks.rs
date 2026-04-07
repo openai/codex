@@ -448,16 +448,16 @@ fn sse_event(event: Value) -> String {
     sse(vec![event])
 }
 
-fn enable_managed_hooks_only(config: &mut Config) {
+fn enable_managed_hooks_only(config: &mut Config) -> Result<()> {
     let system_dir = config.codex_home.join("managed");
     let system_config_file =
         AbsolutePathBuf::from_absolute_path(system_dir.join(codex_config::CONFIG_TOML_FILE))
-            .expect("absolute managed config path");
+            .context("absolute managed config path")?;
     let mut layers = config
         .config_layer_stack
         .get_layers(
             codex_config::ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            true,
+            /*include_disabled*/ true,
         )
         .into_iter()
         .cloned()
@@ -473,12 +473,15 @@ fn enable_managed_hooks_only(config: &mut Config) {
     );
 
     let mut requirements = config.config_layer_stack.requirements().clone();
-    requirements.allow_managed_hooks_only =
-        Some(Sourced::new(true, RequirementSource::CloudRequirements));
+    requirements.allow_managed_hooks_only = Some(Sourced::new(
+        /*value*/ true,
+        RequirementSource::CloudRequirements,
+    ));
     let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
     requirements_toml.allow_managed_hooks_only = Some(true);
     config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
-        .expect("rebuild config layer stack with managed hooks requirement");
+        .context("rebuild config layer stack with managed hooks requirement")?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -545,7 +548,9 @@ async fn managed_hooks_only_skips_user_hooks() -> Result<()> {
                 .features
                 .enable(Feature::CodexHooks)
                 .expect("test config should allow feature update");
-            enable_managed_hooks_only(config);
+            if let Err(error) = enable_managed_hooks_only(config) {
+                panic!("failed to enable managed-hooks-only test config: {error:#}");
+            }
         });
     let test = builder.build(&server).await?;
 
