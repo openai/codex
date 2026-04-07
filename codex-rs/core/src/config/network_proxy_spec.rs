@@ -24,6 +24,8 @@ const GLOBAL_ALLOWLIST_PATTERN: &str = "*";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkProxySpec {
+    base_config: NetworkProxyConfig,
+    requirements: Option<NetworkConstraints>,
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
     hard_deny_allowlist_misses: bool,
@@ -91,13 +93,14 @@ impl NetworkProxySpec {
         requirements: Option<NetworkConstraints>,
         sandbox_policy: &SandboxPolicy,
     ) -> std::io::Result<Self> {
+        let base_config = config.clone();
         let hard_deny_allowlist_misses = requirements
             .as_ref()
             .is_some_and(Self::managed_allowed_domains_only);
-        let (config, constraints) = if let Some(requirements) = requirements {
+        let (config, constraints) = if let Some(requirements) = requirements.as_ref() {
             Self::apply_requirements(
                 config,
-                &requirements,
+                requirements,
                 sandbox_policy,
                 hard_deny_allowlist_misses,
             )
@@ -111,6 +114,8 @@ impl NetworkProxySpec {
             )
         })?;
         Ok(Self {
+            base_config,
+            requirements,
             config,
             constraints,
             hard_deny_allowlist_misses,
@@ -156,6 +161,17 @@ impl NetworkProxySpec {
         Ok(StartedNetworkProxy::new(proxy, handle))
     }
 
+    pub(crate) fn recompute_for_sandbox_policy(
+        &self,
+        sandbox_policy: &SandboxPolicy,
+    ) -> std::io::Result<Self> {
+        Self::from_config_and_constraints(
+            self.base_config.clone(),
+            self.requirements.clone(),
+            sandbox_policy,
+        )
+    }
+
     pub(crate) fn with_exec_policy_network_rules(
         &self,
         exec_policy: &Policy,
@@ -171,20 +187,37 @@ impl NetworkProxySpec {
         Ok(spec)
     }
 
+    pub(crate) async fn apply_to_started_proxy(
+        &self,
+        started_proxy: &StartedNetworkProxy,
+    ) -> std::io::Result<()> {
+        let state = self.build_config_state_for_spec()?;
+        started_proxy
+            .proxy()
+            .replace_config_state(state)
+            .await
+            .map_err(|err| {
+                std::io::Error::other(format!("failed to update network proxy state: {err}"))
+            })
+    }
+
     fn build_state_with_audit_metadata(
         &self,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> std::io::Result<NetworkProxyState> {
-        let state =
-            build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
-                std::io::Error::other(format!("failed to build network proxy state: {err}"))
-            })?;
+        let state = self.build_config_state_for_spec()?;
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
         Ok(NetworkProxyState::with_reloader_and_audit_metadata(
             state,
             reloader,
             audit_metadata,
         ))
+    }
+
+    fn build_config_state_for_spec(&self) -> std::io::Result<ConfigState> {
+        build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
+            std::io::Error::other(format!("failed to build network proxy state: {err}"))
+        })
     }
 
     fn apply_requirements(

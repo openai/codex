@@ -545,6 +545,71 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 }
 
 #[tokio::test]
+async fn managed_network_proxy_refreshes_when_sandbox_policy_changes() -> anyhow::Result<()> {
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([(
+                    "blocked.example.com".to_string(),
+                    NetworkDomainPermissionToml::Deny,
+                )]),
+            }),
+            danger_full_access_denylist_only: Some(true),
+            allow_local_binding: Some(false),
+            ..Default::default()
+        }),
+        &SandboxPolicy::new_workspace_write_policy(),
+    )?;
+    let exec_policy = Policy::empty();
+
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &exec_policy,
+        &SandboxPolicy::new_workspace_write_policy(),
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+
+    assert!(!started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::DangerFullAccess)?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+
+    assert!(started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(
+        current_cfg.network.allowed_domains(),
+        Some(vec!["*".to_string()])
+    );
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+
+    assert!(!started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_base_instructions_no_user_content() {
     let prompt_with_apply_patch_instructions =
         include_str!("../prompt_with_apply_patch_instructions.md");

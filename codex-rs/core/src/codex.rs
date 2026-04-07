@@ -1344,6 +1344,46 @@ impl Session {
         Ok((network_proxy, session_network_proxy))
     }
 
+    async fn refresh_managed_network_proxy_for_sandbox_policy(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) {
+        let Some(started_proxy) = self.services.network_proxy.as_ref() else {
+            return;
+        };
+        let Some(spec) = session_configuration
+            .original_config_do_not_use
+            .permissions
+            .network
+            .as_ref()
+        else {
+            return;
+        };
+
+        let spec = match spec
+            .recompute_for_sandbox_policy(session_configuration.sandbox_policy.get())
+        {
+            Ok(spec) => spec,
+            Err(err) => {
+                warn!("failed to rebuild managed network proxy policy for sandbox change: {err}");
+                return;
+            }
+        };
+        let current_exec_policy = self.services.exec_policy.current();
+        let spec = match spec.with_exec_policy_network_rules(current_exec_policy.as_ref()) {
+            Ok(spec) => spec,
+            Err(err) => {
+                warn!(
+                    "failed to apply execpolicy network rules while refreshing managed network proxy: {err}"
+                );
+                spec
+            }
+        };
+        if let Err(err) = spec.apply_to_started_proxy(started_proxy).await {
+            warn!("failed to refresh managed network proxy for sandbox change: {err}");
+        }
+    }
+
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
@@ -2421,10 +2461,14 @@ impl Session {
         match state.session_configuration.apply(&updates) {
             Ok(updated) => {
                 let previous_cwd = state.session_configuration.cwd.clone();
+                let sandbox_policy_changed =
+                    state.session_configuration.sandbox_policy != updated.sandbox_policy;
                 let next_cwd = updated.cwd.clone();
                 let codex_home = updated.codex_home.clone();
                 let session_source = updated.session_source.clone();
                 state.session_configuration = updated;
+                let session_configuration =
+                    sandbox_policy_changed.then(|| state.session_configuration.clone());
                 drop(state);
 
                 self.maybe_refresh_shell_snapshot_for_cwd(
@@ -2433,6 +2477,10 @@ impl Session {
                     &codex_home,
                     &session_source,
                 );
+                if let Some(session_configuration) = session_configuration {
+                    self.refresh_managed_network_proxy_for_sandbox_policy(&session_configuration)
+                        .await;
+                }
 
                 Ok(())
             }
@@ -2519,6 +2567,8 @@ impl Session {
             .set_approval_policy(&session_configuration.approval_policy);
 
         if sandbox_policy_changed {
+            self.refresh_managed_network_proxy_for_sandbox_policy(&session_configuration)
+                .await;
             let sandbox_state = SandboxState {
                 sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
