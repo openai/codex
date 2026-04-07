@@ -192,14 +192,7 @@ pub async fn maybe_parse_apply_patch_verified(
                         let ApplyPatchFileUpdate {
                             unified_diff,
                             content: contents,
-                        } = match unified_diff_from_chunks(
-                            path.as_path(),
-                            &effective_cwd,
-                            &chunks,
-                            fs,
-                        )
-                        .await
-                        {
+                        } = match unified_diff_from_chunks(&path, &chunks, fs).await {
                             Ok(diff) => diff,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(e);
@@ -386,6 +379,7 @@ mod tests {
     use crate::unified_diff_from_chunks;
     use assert_matches::assert_matches;
     use codex_exec_server::LOCAL_FS;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
@@ -698,14 +692,10 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let diff = unified_diff_from_chunks(
-            &path,
-            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-            chunks,
-            LOCAL_FS.as_ref(),
-        )
-        .await
-        .unwrap();
+        let path_abs = path.as_path().abs();
+        let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
+            .await
+            .unwrap();
         let expected_diff = r#"@@ -2,2 +2,2 @@
  bar
 -baz
@@ -740,14 +730,10 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let diff = unified_diff_from_chunks(
-            &path,
-            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-            chunks,
-            LOCAL_FS.as_ref(),
-        )
-        .await
-        .unwrap();
+        let path_abs = path.as_path().abs();
+        let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
+            .await
+            .unwrap();
         let expected_diff = r#"@@ -3 +3,2 @@
  baz
 +quux
