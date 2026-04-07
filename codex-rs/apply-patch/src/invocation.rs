@@ -164,14 +164,13 @@ pub async fn maybe_parse_apply_patch_verified(
                 let path = hunk.resolve_path(&effective_cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
-                        changes.insert(path, ApplyPatchFileChange::Add { content: contents });
+                        changes.insert(
+                            path.into_path_buf(),
+                            ApplyPatchFileChange::Add { content: contents },
+                        );
                     }
                     Hunk::DeleteFile { .. } => {
-                        let path_abs = AbsolutePathBuf::resolve_path_against_base(
-                            path.as_path(),
-                            &effective_cwd,
-                        );
-                        let content = match fs.read_file_text(&path_abs).await {
+                        let content = match fs.read_file_text(&path).await {
                             Ok(content) => content,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(
@@ -182,7 +181,10 @@ pub async fn maybe_parse_apply_patch_verified(
                                 );
                             }
                         };
-                        changes.insert(path, ApplyPatchFileChange::Delete { content });
+                        changes.insert(
+                            path.into_path_buf(),
+                            ApplyPatchFileChange::Delete { content },
+                        );
                     }
                     Hunk::UpdateFile {
                         move_path, chunks, ..
@@ -190,7 +192,13 @@ pub async fn maybe_parse_apply_patch_verified(
                         let ApplyPatchFileUpdate {
                             unified_diff,
                             content: contents,
-                        } = match unified_diff_from_chunks(&path, &effective_cwd, &chunks, fs).await
+                        } = match unified_diff_from_chunks(
+                            path.as_path(),
+                            &effective_cwd,
+                            &chunks,
+                            fs,
+                        )
+                        .await
                         {
                             Ok(diff) => diff,
                             Err(e) => {
@@ -198,10 +206,10 @@ pub async fn maybe_parse_apply_patch_verified(
                             }
                         };
                         changes.insert(
-                            path,
+                            path.into_path_buf(),
                             ApplyPatchFileChange::Update {
                                 unified_diff,
-                                move_path: move_path.map(|p| effective_cwd.as_path().join(p)),
+                                move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),
                                 new_content: contents,
                             },
                         );

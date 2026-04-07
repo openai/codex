@@ -76,11 +76,11 @@ pub enum Hunk {
 }
 
 impl Hunk {
-    pub fn resolve_path(&self, cwd: &AbsolutePathBuf) -> PathBuf {
+    pub fn resolve_path(&self, cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
         match self {
-            Hunk::AddFile { path, .. } => cwd.as_path().join(path),
-            Hunk::DeleteFile { path } => cwd.as_path().join(path),
-            Hunk::UpdateFile { path, .. } => cwd.as_path().join(path),
+            Hunk::AddFile { path, .. } => cwd.join(path),
+            Hunk::DeleteFile { path } => cwd.join(path),
+            Hunk::UpdateFile { path, .. } => cwd.join(path),
         }
     }
 }
