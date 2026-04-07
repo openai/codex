@@ -36,9 +36,9 @@ Folder structure (under {{ memory_root }}/):
 
 Memory extensions (under {{ memory_extensions_root }}/):
 
-- <extension_name>/instruction.md
+- <extension_name>/instructions.md
   - Source-specific guidance for interpreting additional memory signals. If an
-    extension folder exists, you must read its instruction.md to determine how to use this memory
+    extension folder exists, you must read its instructions.md to determine how to use this memory
     source.
 
 If the user has any memory extensions, you MUST read the instructions for each extension to
@@ -150,8 +150,8 @@ Under `{{ memory_root }}/`:
 Optional source-specific inputs:
 Under `{{ memory_extensions_root }}/`:
 
-- `<extension_name>/instruction.md`
-  - If extension folders exist, read each instruction.md first and follow it when interpreting
+- `<extension_name>/instructions.md`
+  - If extension folders exist, read each instructions.md first and follow it when interpreting
     that extension's memory source.
 
 Mode selection:

@@ -73,7 +73,7 @@ async fn build_consolidation_prompt_points_to_extensions_without_inlining_them()
         .await
         .unwrap();
     tokio_fs::write(
-        extension_dir.join("instruction.md"),
+        extension_dir.join("instructions.md"),
         "source-specific instructions\n",
     )
     .await
@@ -91,7 +91,7 @@ async fn build_consolidation_prompt_points_to_extensions_without_inlining_them()
         "Memory extensions (under {}/memories_extensions/)",
         temp.path().display()
     )));
-    assert!(prompt.contains("<extension_name>/instruction.md"));
+    assert!(prompt.contains("<extension_name>/instructions.md"));
     assert!(!prompt.contains("source-specific instructions"));
     assert!(!prompt.contains("source-specific resource"));
 }
