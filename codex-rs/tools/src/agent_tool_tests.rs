@@ -97,7 +97,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 }
 
 #[test]
-fn send_message_tool_requires_message_and_uses_submission_output() {
+fn send_message_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -122,14 +122,11 @@ fn send_message_tool_requires_message_and_uses_submission_output() {
         required,
         Some(vec!["target".to_string(), "message".to_string()])
     );
-    assert_eq!(
-        output_schema.expect("send_message output schema")["required"],
-        json!(["submission_id"])
-    );
+    assert_eq!(output_schema, None);
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_uses_submission_output() {
+fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -154,10 +151,7 @@ fn followup_task_tool_requires_message_and_uses_submission_output() {
         required,
         Some(vec!["target".to_string(), "message".to_string()])
     );
-    assert_eq!(
-        output_schema.expect("followup_task output schema")["required"],
-        json!(["submission_id"])
-    );
+    assert_eq!(output_schema, None);
 }
 
 #[test]

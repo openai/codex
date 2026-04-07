@@ -155,7 +155,7 @@ pub fn create_send_message_tool() -> ToolSpec {
             required: Some(vec!["target".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(send_input_output_schema()),
+        output_schema: None,
     })
 }
 
@@ -197,7 +197,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
             required: Some(vec!["target".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(send_input_output_schema()),
+        output_schema: None,
     })
 }
 

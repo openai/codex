@@ -246,9 +246,15 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     assert_eq!(output_schema["required"], json!(["task_name", "nickname"]));
 
     let send_message = find_tool(&tools, "send_message");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_message.spec else {
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &send_message.spec
+    else {
         panic!("send_message should be a function tool");
     };
+    assert_eq!(output_schema, &None);
     let JsonSchema::Object {
         properties,
         required,
@@ -267,9 +273,15 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     );
 
     let followup_task = find_tool(&tools, "followup_task");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &followup_task.spec else {
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &followup_task.spec
+    else {
         panic!("followup_task should be a function tool");
     };
+    assert_eq!(output_schema, &None);
     let JsonSchema::Object {
         properties,
         required,
