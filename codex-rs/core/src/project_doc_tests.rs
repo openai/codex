@@ -96,6 +96,16 @@ async fn no_doc_file_returns_none() {
     assert!(res.is_none(), "Expected None when AGENTS.md is absent");
 }
 
+#[tokio::test]
+async fn no_environment_returns_none() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
+
+    let res = super::get_user_instructions(&config, /*environment*/ None).await;
+
+    assert_eq!(res, None);
+}
+
 /// Small file within the byte-limit is returned unmodified.
 #[tokio::test]
 async fn doc_smaller_than_limit_is_returned() {

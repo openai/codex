@@ -482,10 +482,7 @@ impl TestCodexBuilder {
         let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
             test_env.exec_server_url().map(str::to_owned),
         ));
-        let file_system = match environment_manager.current().await? {
-            Some(environment) => environment.get_filesystem(),
-            None => Arc::clone(&codex_exec_server::LOCAL_FS),
-        };
+        let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
         for setup in workspace_setups {

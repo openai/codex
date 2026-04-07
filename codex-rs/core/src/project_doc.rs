@@ -23,12 +23,10 @@ use crate::config_loader::project_root_markers_from_config;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
 use std::io;
-use std::sync::Arc;
 use toml::Value as TomlValue;
 use tracing::error;
 
@@ -84,10 +82,7 @@ pub(crate) async fn get_user_instructions(
     config: &Config,
     environment: Option<&Environment>,
 ) -> Option<String> {
-    let fs: Arc<dyn ExecutorFileSystem> = match environment {
-        Some(environment) => environment.get_filesystem(),
-        None => Arc::clone(&LOCAL_FS),
-    };
+    let fs = environment?.get_filesystem();
     get_user_instructions_with_fs(config, fs.as_ref()).await
 }
 
