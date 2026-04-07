@@ -1077,7 +1077,7 @@ impl JsReplManager {
             .transform(
                 command,
                 &sandbox_launch_config,
-                None,
+                /*network*/ None,
                 turn.codex_linux_sandbox_exe.as_ref(),
             )
             .map(|request| {
