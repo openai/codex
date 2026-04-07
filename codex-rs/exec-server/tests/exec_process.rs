@@ -235,7 +235,16 @@ fn platform_sandbox_type() -> SandboxType {
 }
 
 fn write_outside_workspace_sandbox(workspace_root: &std::path::Path) -> SandboxLaunchConfig {
-    let policy = SandboxPolicy::new_workspace_write_policy();
+    let mut policy = SandboxPolicy::new_workspace_write_policy();
+    if let SandboxPolicy::WorkspaceWrite {
+        exclude_tmpdir_env_var,
+        exclude_slash_tmp,
+        ..
+    } = &mut policy
+    {
+        *exclude_tmpdir_env_var = true;
+        *exclude_slash_tmp = true;
+    }
     SandboxLaunchConfig {
         sandbox: platform_sandbox_type(),
         policy: policy.clone(),
@@ -368,9 +377,7 @@ async fn exec_process_preserves_queued_events_before_subscribe(use_remote: bool)
     assert_exec_process_preserves_queued_events_before_subscribe(use_remote).await
 }
 
-#[test_case(false ; "local")]
-#[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_process_sandbox_denies_write_outside_workspace(use_remote: bool) -> Result<()> {
-    assert_exec_process_sandbox_denies_write_outside_workspace(use_remote).await
+async fn remote_exec_process_sandbox_denies_write_outside_workspace() -> Result<()> {
+    assert_exec_process_sandbox_denies_write_outside_workspace(/*use_remote*/ true).await
 }

@@ -43,6 +43,9 @@ tokio = { workspace = true, features = [
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+codex-linux-sandbox = { workspace = true }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
