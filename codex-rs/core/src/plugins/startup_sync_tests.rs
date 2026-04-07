@@ -34,17 +34,14 @@ fn has_plugins_clone_dirs(codex_home: &Path) -> bool {
     })
 }
 
+#[cfg(unix)]
 fn write_executable_script(path: &Path, contents: &str) {
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::write(path, contents).expect("write script");
-    #[cfg(unix)]
-    {
-        let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(path, permissions).expect("chmod");
-    }
+    let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("chmod");
 }
 
 async fn mount_github_repo_and_ref(server: &MockServer, sha: &str) {
