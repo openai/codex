@@ -69,6 +69,15 @@ pub enum SessionSelection {
     Exit,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PreferredSession {
+    pub(crate) target: SessionTarget,
+    pub(crate) preview: String,
+    pub(crate) thread_name: Option<String>,
+    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) updated_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum SessionPickerAction {
     Resume,
@@ -116,6 +125,13 @@ enum ProviderFilter {
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
 
+struct SessionPickerOptions {
+    show_all: bool,
+    action: SessionPickerAction,
+    is_remote: bool,
+    preferred_session: Option<PreferredSession>,
+}
+
 enum BackgroundEvent {
     PageLoaded {
         request_token: usize,
@@ -136,6 +152,17 @@ struct PickerPage {
     next_cursor: Option<PageCursor>,
     num_scanned_files: usize,
     reached_scan_cap: bool,
+}
+
+struct PickerStateInit {
+    codex_home: PathBuf,
+    requester: FrameRequester,
+    page_loader: PageLoader,
+    provider_filter: ProviderFilter,
+    show_all: bool,
+    filter_cwd: Option<PathBuf>,
+    action: SessionPickerAction,
+    preferred_session: Option<PreferredSession>,
 }
 
 /// Interactive session picker that lists recorded rollout files with simple
@@ -169,6 +196,7 @@ pub async fn run_resume_picker_with_app_server(
     show_all: bool,
     include_non_interactive: bool,
     app_server: AppServerSession,
+    preferred_session: Option<PreferredSession>,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
@@ -180,11 +208,14 @@ pub async fn run_resume_picker_with_app_server(
     run_session_picker_with_loader(
         tui,
         config,
-        show_all,
-        SessionPickerAction::Resume,
-        is_remote,
         spawn_app_server_page_loader(app_server, cwd_filter, include_non_interactive, bg_tx),
         bg_rx,
+        SessionPickerOptions {
+            show_all,
+            action: SessionPickerAction::Resume,
+            is_remote,
+            preferred_session,
+        },
     )
     .await
 }
@@ -205,13 +236,16 @@ pub async fn run_fork_picker_with_app_server(
     run_session_picker_with_loader(
         tui,
         config,
-        show_all,
-        SessionPickerAction::Fork,
-        is_remote,
         spawn_app_server_page_loader(
             app_server, cwd_filter, /*include_non_interactive*/ false, bg_tx,
         ),
         bg_rx,
+        SessionPickerOptions {
+            show_all,
+            action: SessionPickerAction::Fork,
+            is_remote,
+            preferred_session: None,
+        },
     )
     .await
 }
@@ -227,11 +261,14 @@ async fn run_session_picker(
     run_session_picker_with_loader(
         tui,
         config,
-        show_all,
-        action,
-        /*is_remote*/ false,
         spawn_rollout_page_loader(config, bg_tx),
         bg_rx,
+        SessionPickerOptions {
+            show_all,
+            action,
+            is_remote: false,
+            preferred_session: None,
+        },
     )
     .await
 }
@@ -239,20 +276,18 @@ async fn run_session_picker(
 async fn run_session_picker_with_loader(
     tui: &mut Tui,
     config: &Config,
-    show_all: bool,
-    action: SessionPickerAction,
-    is_remote: bool,
     page_loader: PageLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
+    options: SessionPickerOptions,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
-    let provider_filter = if is_remote {
+    let provider_filter = if options.is_remote {
         ProviderFilter::Any
     } else {
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
     };
     let codex_home = config.codex_home.as_path();
-    let filter_cwd = if show_all || is_remote {
+    let filter_cwd = if options.show_all || options.is_remote {
         // Remote sessions live in the server's filesystem namespace, so the client
         // process cwd is not a meaningful row filter. If the user provided an
         // explicit remote --cd, filtering is handled server-side in thread/list.
@@ -261,15 +296,16 @@ async fn run_session_picker_with_loader(
         std::env::current_dir().ok()
     };
 
-    let mut state = PickerState::new(
-        codex_home.to_path_buf(),
-        alt.tui.frame_requester(),
+    let mut state = PickerState::new(PickerStateInit {
+        codex_home: codex_home.to_path_buf(),
+        requester: alt.tui.frame_requester(),
         page_loader,
         provider_filter,
-        show_all,
+        show_all: options.show_all,
         filter_cwd,
-        action,
-    );
+        action: options.action,
+        preferred_session: options.preferred_session,
+    });
     state.start_initial_load();
     state.request_frame();
 
@@ -444,6 +480,7 @@ struct PickerState {
     sort_key: ThreadSortKey,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
     inline_error: Option<String>,
+    preferred_row: Option<Row>,
 }
 
 struct PaginationState {
@@ -537,6 +574,7 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    is_preferred: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -571,15 +609,17 @@ impl Row {
 }
 
 impl PickerState {
-    fn new(
-        codex_home: PathBuf,
-        requester: FrameRequester,
-        page_loader: PageLoader,
-        provider_filter: ProviderFilter,
-        show_all: bool,
-        filter_cwd: Option<PathBuf>,
-        action: SessionPickerAction,
-    ) -> Self {
+    fn new(init: PickerStateInit) -> Self {
+        let PickerStateInit {
+            codex_home,
+            requester,
+            page_loader,
+            provider_filter,
+            show_all,
+            filter_cwd,
+            action,
+            preferred_session,
+        } = init;
         Self {
             codex_home,
             requester,
@@ -608,6 +648,17 @@ impl PickerState {
             sort_key: ThreadSortKey::UpdatedAt,
             thread_name_cache: HashMap::new(),
             inline_error: None,
+            preferred_row: preferred_session.map(|session| Row {
+                path: session.target.path,
+                preview: session.preview,
+                thread_id: Some(session.target.thread_id),
+                thread_name: session.thread_name,
+                created_at: None,
+                updated_at: Some(session.updated_at),
+                cwd: session.cwd,
+                git_branch: None,
+                is_preferred: true,
+            }),
         }
     }
 
@@ -722,6 +773,7 @@ impl PickerState {
         self.filtered_rows.clear();
         self.seen_rows.clear();
         self.selected = 0;
+        self.seed_preferred_row();
 
         let search_token = if self.query.is_empty() {
             self.search_state = SearchState::Idle;
@@ -737,7 +789,7 @@ impl PickerState {
             request_token,
             search_token,
         });
-        self.request_frame();
+        self.apply_filter();
 
         (self.page_loader)(PageLoadRequest {
             cursor: None,
@@ -778,6 +830,16 @@ impl PickerState {
         self.pagination.num_scanned_files = 0;
         self.pagination.reached_scan_cap = false;
         self.pagination.loading = LoadingState::Idle;
+    }
+
+    fn seed_preferred_row(&mut self) {
+        let Some(row) = self.preferred_row.clone() else {
+            return;
+        };
+        if let Some(seen_key) = row.seen_key() {
+            self.seen_rows.insert(seen_key);
+        }
+        self.all_rows.push(row);
     }
 
     fn ingest_page(&mut self, page: PickerPage) {
@@ -874,6 +936,9 @@ impl PickerState {
     }
 
     fn row_matches_filter(&self, row: &Row) -> bool {
+        if row.is_preferred {
+            return true;
+        }
         if self.show_all {
             return true;
         }
@@ -1091,6 +1156,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         updated_at,
         cwd: item.cwd.clone(),
         git_branch: item.git_branch.clone(),
+        is_preferred: false,
     }
 }
 
@@ -1118,6 +1184,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         cwd: Some(thread.cwd),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
+        is_preferred: false,
     })
 }
 
@@ -1689,6 +1756,27 @@ mod tests {
         })
     }
 
+    fn test_picker_state(
+        codex_home: PathBuf,
+        loader: PageLoader,
+        provider_filter: ProviderFilter,
+        show_all: bool,
+        filter_cwd: Option<PathBuf>,
+        action: SessionPickerAction,
+        preferred_session: Option<PreferredSession>,
+    ) -> PickerState {
+        PickerState::new(PickerStateInit {
+            codex_home,
+            requester: FrameRequester::test_dummy(),
+            page_loader: loader,
+            provider_filter,
+            show_all,
+            filter_cwd,
+            action,
+            preferred_session,
+        })
+    }
+
     #[allow(dead_code)]
     fn set_rollout_mtime(path: &Path, updated_at: DateTime<Utc>) {
         let times = FileTimes::new().set_modified(updated_at.into());
@@ -1857,6 +1945,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_preferred: false,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -1899,14 +1988,14 @@ mod tests {
     #[test]
     fn remote_picker_does_not_filter_rows_by_local_cwd() {
         let loader: PageLoader = Arc::new(|_| {});
-        let state = PickerState::new(
+        let state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::Any,
             /*show_all*/ false,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
         let row = Row {
             path: None,
@@ -1917,6 +2006,7 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
             git_branch: None,
+            is_preferred: false,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -1930,14 +2020,14 @@ mod tests {
         use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         let now = Utc::now();
@@ -1951,6 +2041,7 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                is_preferred: false,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
@@ -1961,6 +2052,7 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                is_preferred: false,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/c.jsonl")),
@@ -1971,6 +2063,7 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                is_preferred: false,
             },
         ];
         state.all_rows = rows.clone();
@@ -2009,14 +2102,14 @@ mod tests {
         use crate::test_backend::VT100Backend;
 
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
         state.inline_error = Some(String::from(
             "Failed to read session metadata from /tmp/missing.jsonl",
@@ -2245,14 +2338,14 @@ mod tests {
         std::fs::write(&session_index_path, out).expect("write session index");
 
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             tempdir.path().to_path_buf(),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         let now = Utc::now();
@@ -2266,6 +2359,7 @@ mod tests {
                 updated_at: Some(now - Duration::days(2)),
                 cwd: None,
                 git_branch: None,
+                is_preferred: false,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
@@ -2276,6 +2370,7 @@ mod tests {
                 updated_at: Some(now - Duration::days(3)),
                 cwd: None,
                 git_branch: None,
+                is_preferred: false,
             },
         ];
         state.all_rows = rows.clone();
@@ -2327,14 +2422,14 @@ mod tests {
         .expect("write session index");
 
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             tempdir.path().to_path_buf(),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         state.all_rows = vec![Row {
@@ -2346,6 +2441,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_preferred: false,
         }];
         state.filtered_rows = state.all_rows.clone();
 
@@ -2362,16 +2458,149 @@ mod tests {
     }
 
     #[test]
-    fn pageless_scrolling_deduplicates_and_keeps_order() {
+    fn preferred_session_is_pinned_and_deduped() {
+        let thread_id =
+            ThreadId::from_string("11111111-1111-1111-1111-111111111111").expect("thread id");
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let now = Utc::now();
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            Some(PreferredSession {
+                target: SessionTarget {
+                    path: Some(PathBuf::from("/tmp/recent.jsonl")),
+                    thread_id,
+                },
+                preview: String::from("Previous session"),
+                thread_name: Some(String::from("Recovered thread")),
+                cwd: Some(PathBuf::from("/tmp/project")),
+                updated_at: now,
+            }),
+        );
+
+        state.start_initial_load();
+        state.ingest_page(PickerPage {
+            rows: vec![
+                Row {
+                    path: Some(PathBuf::from("/tmp/recent.jsonl")),
+                    preview: String::from("duplicate"),
+                    thread_id: Some(thread_id),
+                    thread_name: Some(String::from("Duplicate row")),
+                    created_at: None,
+                    updated_at: Some(now - Duration::minutes(1)),
+                    cwd: None,
+                    git_branch: None,
+                    is_preferred: false,
+                },
+                Row {
+                    path: Some(PathBuf::from("/tmp/older.jsonl")),
+                    preview: String::from("Older session"),
+                    thread_id: Some(ThreadId::new()),
+                    thread_name: None,
+                    created_at: None,
+                    updated_at: Some(now - Duration::hours(1)),
+                    cwd: None,
+                    git_branch: None,
+                    is_preferred: false,
+                },
+            ],
+            next_cursor: None,
+            num_scanned_files: 2,
+            reached_scan_cap: false,
+        });
+
+        assert_eq!(state.filtered_rows.len(), 2);
+        assert_eq!(state.selected, 0);
+        assert_eq!(state.filtered_rows[0].display_preview(), "Recovered thread");
+        assert!(state.filtered_rows[0].is_preferred);
+        assert_eq!(state.filtered_rows[1].display_preview(), "Older session");
+    }
+
+    #[test]
+    fn preferred_session_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+        use ratatui::layout::Constraint;
+        use ratatui::layout::Layout;
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let now = Utc::now();
+        let mut state = test_picker_state(
+            PathBuf::from("/tmp"),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+            Some(PreferredSession {
+                target: SessionTarget {
+                    path: Some(PathBuf::from("/tmp/recent.jsonl")),
+                    thread_id: ThreadId::new(),
+                },
+                preview: String::from("Previous session"),
+                thread_name: Some(String::from("Recovered thread")),
+                cwd: Some(PathBuf::from("/tmp/project")),
+                updated_at: now,
+            }),
+        );
+        state.start_initial_load();
+        state.ingest_page(PickerPage {
+            rows: vec![Row {
+                path: Some(PathBuf::from("/tmp/older.jsonl")),
+                preview: String::from("Older session"),
+                thread_id: Some(ThreadId::new()),
+                thread_name: None,
+                created_at: None,
+                updated_at: Some(now - Duration::hours(1)),
+                cwd: None,
+                git_branch: None,
+                is_preferred: false,
+            }],
+            next_cursor: None,
+            num_scanned_files: 1,
+            reached_scan_cap: false,
+        });
+        state.pagination.loading = LoadingState::Idle;
+        state.relative_time_reference = Some(now);
+        state.view_rows = Some(2);
+        state.update_view_rows(/*rows*/ 2);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, now);
+        let width: u16 = 80;
+        let height: u16 = 4;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let segments =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
+            render_list(&mut frame, segments[1], &state, &metrics);
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_preferred_session", snapshot);
+    }
+
+    #[test]
+    fn pageless_scrolling_deduplicates_and_keeps_order() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = test_picker_state(
+            PathBuf::from("/tmp"),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         state.reset_pagination();
@@ -2433,14 +2662,14 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -2514,14 +2743,14 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         state.start_initial_load();
@@ -2544,14 +2773,14 @@ mod tests {
     #[tokio::test]
     async fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         let mut items = Vec::new();
@@ -2592,14 +2821,14 @@ mod tests {
     #[tokio::test]
     async fn enter_on_row_without_resolvable_thread_id_shows_inline_error() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         let row = Row {
@@ -2611,6 +2840,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_preferred: false,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -2632,14 +2862,14 @@ mod tests {
     #[tokio::test]
     async fn enter_on_pathless_thread_uses_thread_id() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
         let thread_id = ThreadId::new();
         let row = Row {
@@ -2651,6 +2881,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            is_preferred: false,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -2702,14 +2933,14 @@ mod tests {
     #[tokio::test]
     async fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
 
         let mut items = Vec::new();
@@ -2750,14 +2981,14 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state = PickerState::new(
+        let mut state = test_picker_state(
             PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
             /*show_all*/ true,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
+            /*preferred_session*/ None,
         );
         state.reset_pagination();
         state.ingest_page(page(
