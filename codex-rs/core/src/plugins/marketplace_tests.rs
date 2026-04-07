@@ -756,18 +756,16 @@ fn resolve_marketplace_plugin_rejects_non_relative_local_paths() {
     )
     .unwrap();
 
-    let err = resolve_marketplace_plugin(
-        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
-        "local-plugin",
-        Some(Product::Codex),
-    )
-    .unwrap_err();
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap();
+    let err = resolve_marketplace_plugin(&marketplace_path, "local-plugin", Some(Product::Codex))
+        .unwrap_err();
 
     assert_eq!(
         err.to_string(),
         format!(
             "invalid marketplace file `{}`: local plugin source path must start with `./`",
-            repo_root.join(".agents/plugins/marketplace.json").display()
+            marketplace_path.display()
         )
     );
 }

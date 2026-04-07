@@ -2,7 +2,6 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use crate::error::ImageProcessingError;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_utils_cache::BlockingLruCache;
@@ -21,7 +20,9 @@ pub const MAX_WIDTH: u32 = 2048;
 /// Maximum height used when resizing images before uploading.
 pub const MAX_HEIGHT: u32 = 768;
 
-pub mod error;
+pub(crate) mod error;
+
+pub use crate::error::ImageProcessingError;
 
 #[derive(Debug, Clone)]
 pub struct EncodedImage {

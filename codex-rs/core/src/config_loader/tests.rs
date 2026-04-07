@@ -78,7 +78,7 @@ async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<(
         .build()
         .await?;
 
-    let expected = AbsolutePathBuf::resolve_path_against_base("run-logs", cwd_path)?;
+    let expected = AbsolutePathBuf::resolve_path_against_base("run-logs", cwd_path);
     assert_eq!(config.log_dir, expected.to_path_buf());
     Ok(())
 }
@@ -250,7 +250,6 @@ async fn returns_empty_when_all_layers_missing() {
         &ConfigLayerEntry {
             name: super::ConfigLayerSource::User {
                 file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path())
-                    .expect("resolve user config.toml path")
             },
             config: TomlValue::Table(toml::map::Map::new()),
             raw_toml: None,
@@ -905,7 +904,7 @@ model_instructions_file = "child.txt"
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_deref(),
+        config.base_instructions.as_ref().and_then(Option::as_deref),
         Some("child instructions")
     );
 
@@ -941,7 +940,7 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_deref(),
+        config.base_instructions.as_ref().and_then(Option::as_deref),
         Some("cli override instructions")
     );
 

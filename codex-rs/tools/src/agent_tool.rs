@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 pub struct SpawnAgentToolOptions<'a> {
     pub available_models: &'a [ModelPreset],
     pub agent_type_description: String,
+    pub hide_agent_type_model_reasoning: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,15 +21,19 @@ pub struct WaitAgentTimeoutOptions {
 }
 
 pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpec {
-    let available_models_description = spawn_agent_models_description(options.available_models);
+    let available_models_description = (!options.hide_agent_type_model_reasoning)
+        .then(|| spawn_agent_models_description(options.available_models));
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
-    let properties = spawn_agent_common_properties_v1(&options.agent_type_description);
+    let mut properties = spawn_agent_common_properties_v1(&options.agent_type_description);
+    if options.hide_agent_type_model_reasoning {
+        hide_spawn_agent_metadata_options(&mut properties);
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description: spawn_agent_tool_description(
-            &available_models_description,
+            available_models_description.as_deref(),
             return_value_description,
         ),
         strict: false,
@@ -43,9 +48,17 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
 }
 
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpec {
-    let available_models_description = spawn_agent_models_description(options.available_models);
-    let return_value_description = "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available.";
+    let available_models_description = (!options.hide_agent_type_model_reasoning)
+        .then(|| spawn_agent_models_description(options.available_models));
+    let return_value_description = if options.hide_agent_type_model_reasoning {
+        "Returns the canonical task name for the spawned agent."
+    } else {
+        "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available."
+    };
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
+    if options.hide_agent_type_model_reasoning {
+        hide_spawn_agent_metadata_options(&mut properties);
+    }
     properties.insert(
         "task_name".to_string(),
         JsonSchema::String {
@@ -59,7 +72,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description: spawn_agent_tool_description(
-            &available_models_description,
+            available_models_description.as_deref(),
             return_value_description,
         ),
         strict: false,
@@ -69,7 +82,9 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
             required: Some(vec!["task_name".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(spawn_agent_output_schema_v2()),
+        output_schema: Some(spawn_agent_output_schema_v2(
+            options.hide_agent_type_model_reasoning,
+        )),
     })
 }
 
@@ -146,7 +161,7 @@ pub fn create_send_message_tool() -> ToolSpec {
             required: Some(vec!["target".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(send_input_output_schema()),
+        output_schema: None,
     })
 }
 
@@ -188,7 +203,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
             required: Some(vec!["target".to_string(), "message".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(send_input_output_schema()),
+        output_schema: None,
     })
 }
 
@@ -362,14 +377,24 @@ fn spawn_agent_output_schema_v1() -> Value {
     })
 }
 
-fn spawn_agent_output_schema_v2() -> Value {
+fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
+    if hide_agent_metadata {
+        return json!({
+            "type": "object",
+            "properties": {
+                "task_name": {
+                    "type": "string",
+                    "description": "Canonical task name for the spawned agent."
+                }
+            },
+            "required": ["task_name"],
+            "additionalProperties": false
+        });
+    }
+
     json!({
         "type": "object",
         "properties": {
-            "agent_id": {
-                "type": ["string", "null"],
-                "description": "Legacy thread identifier for the spawned agent."
-            },
             "task_name": {
                 "type": "string",
                 "description": "Canonical task name for the spawned agent."
@@ -379,7 +404,7 @@ fn spawn_agent_output_schema_v2() -> Value {
                 "description": "User-facing nickname for the spawned agent when available."
             }
         },
-        "required": ["agent_id", "task_name", "nickname"],
+        "required": ["task_name", "nickname"],
         "additionalProperties": false
     })
 }
@@ -637,18 +662,30 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
     ])
 }
 
+fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchema>) {
+    properties.remove("agent_type");
+    properties.remove("model");
+    properties.remove("reasoning_effort");
+}
+
 fn spawn_agent_tool_description(
-    available_models_description: &str,
+    available_models_description: Option<&str>,
     return_value_description: &str,
 ) -> String {
+    let agent_role_guidance = available_models_description
+        .map(|description| {
+            format!(
+                "Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.\n{description}"
+            )
+        })
+        .unwrap_or_default();
     format!(
         r#"
         Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
         Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
-        Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
+        {agent_role_guidance}
         Spawn a sub-agent for a well-scoped task. {return_value_description} This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
-{available_models_description}
 ### When to delegate vs. do the subtask yourself
 - First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
 - Use the smaller subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.

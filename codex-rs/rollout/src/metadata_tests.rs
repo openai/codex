@@ -56,6 +56,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         agent_role: None,
         model_provider: Some("openai".to_string()),
         base_instructions: None,
+        developer_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
     };
@@ -107,6 +108,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         agent_role: None,
         model_provider: Some("openai".to_string()),
         base_instructions: None,
+        developer_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
     };
@@ -369,6 +371,7 @@ fn write_rollout_in_sessions_with_cwd(
         agent_role: None,
         model_provider: Some("test-provider".to_string()),
         base_instructions: None,
+        developer_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
     };

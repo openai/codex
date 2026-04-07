@@ -496,8 +496,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         /*include_disabled*/ false,
     ) {
         if let Some(config_folder) = layer.config_folder() {
-            #[expect(clippy::expect_used)]
-            let policy_dir = config_folder.join(RULES_DIR_NAME).expect("safe join");
+            let policy_dir = config_folder.join(RULES_DIR_NAME);
             let layer_policy_paths = collect_policy_files(&policy_dir).await?;
             policy_paths.extend(layer_policy_paths);
         }

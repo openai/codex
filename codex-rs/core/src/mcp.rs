@@ -5,10 +5,10 @@ use crate::config::Config;
 use crate::plugins::PluginsManager;
 use codex_config::McpServerConfig;
 use codex_login::CodexAuth;
-use codex_mcp::mcp::ToolPluginProvenance;
-use codex_mcp::mcp::configured_mcp_servers;
-use codex_mcp::mcp::effective_mcp_servers;
-use codex_mcp::mcp::tool_plugin_provenance as collect_tool_plugin_provenance;
+use codex_mcp::ToolPluginProvenance;
+use codex_mcp::configured_mcp_servers;
+use codex_mcp::effective_mcp_servers;
+use codex_mcp::tool_plugin_provenance as collect_tool_plugin_provenance;
 
 #[derive(Clone)]
 pub struct McpManager {

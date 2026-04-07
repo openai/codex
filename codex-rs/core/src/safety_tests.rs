@@ -162,8 +162,36 @@ fn granular_sandbox_approval_false_rejects_out_of_root_patch() {
             WindowsSandboxLevel::Disabled,
         ),
         SafetyCheck::Reject {
-            reason: "writing outside of the project; rejected by user approval settings"
-                .to_string(),
+            reason: PATCH_REJECTED_OUTSIDE_PROJECT_REASON.to_string(),
+        },
+    );
+}
+
+#[test]
+fn read_only_policy_rejects_patch_with_read_only_reason() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().to_path_buf();
+    let action = ApplyPatchAction::new_add_for_test(&cwd.join("inside.txt"), "".to_string());
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, &cwd);
+
+    assert!(!is_write_patch_constrained_to_writable_paths(
+        &action,
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+    assert_eq!(
+        assess_patch_safety(
+            &action,
+            AskForApproval::Never,
+            &sandbox_policy,
+            &file_system_sandbox_policy,
+            &cwd,
+            WindowsSandboxLevel::Disabled,
+        ),
+        SafetyCheck::Reject {
+            reason: PATCH_REJECTED_READ_ONLY_REASON.to_string(),
         },
     );
 }
@@ -215,7 +243,7 @@ fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().to_path_buf();
     let blocked_path = cwd.join("docs").join("blocked.txt");
-    let docs_absolute = AbsolutePathBuf::resolve_path_against_base("docs", &cwd).unwrap();
+    let docs_absolute = AbsolutePathBuf::resolve_path_against_base("docs", &cwd);
     let action = ApplyPatchAction::new_add_for_test(&blocked_path, "".to_string());
     let sandbox_policy = SandboxPolicy::ExternalSandbox {
         network_access: codex_protocol::protocol::NetworkAccess::Restricted,

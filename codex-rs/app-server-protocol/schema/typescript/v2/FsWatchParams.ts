@@ -8,6 +8,10 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
  */
 export type FsWatchParams = { 
 /**
+ * Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
+ */
+watchId: string, 
+/**
  * Absolute file or directory path to watch.
  */
 path: AbsolutePathBuf, };
