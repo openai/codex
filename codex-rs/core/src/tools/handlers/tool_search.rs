@@ -80,8 +80,7 @@ impl ToolHandler for ToolSearchHandler {
             results
                 .into_iter()
                 .filter_map(|result| entries.get(result.document.id))
-                .map(|(name, tool)| ToolSearchResultSource {
-                    qualified_tool_name: name.as_str(),
+                .map(|(_, tool)| ToolSearchResultSource {
                     server_name: tool.server_name.as_str(),
                     tool_namespace: tool.tool_namespace.as_str(),
                     tool_name: tool.tool_name.as_str(),

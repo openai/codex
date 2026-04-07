@@ -10,11 +10,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     ToolInfo {
         server_name: server_name.to_string(),
         tool_name: tool_name.to_string(),
-        tool_namespace: if server_name == CODEX_APPS_MCP_SERVER_NAME {
-            format!("mcp__{server_name}__")
-        } else {
-            server_name.to_string()
-        },
+        tool_namespace: format!("mcp__{server_name}__"),
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,

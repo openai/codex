@@ -1201,7 +1201,6 @@ fn search_tool_description_lists_each_mcp_source_once() {
         ])),
         Some(vec![
             deferred_mcp_tool(
-                "mcp__codex_apps__calendar_create_event",
                 "_create_event",
                 "mcp__codex_apps__calendar",
                 CODEX_APPS_MCP_SERVER_NAME,
@@ -1209,7 +1208,6 @@ fn search_tool_description_lists_each_mcp_source_once() {
                 Some("Plan events and manage your calendar."),
             ),
             deferred_mcp_tool(
-                "mcp__codex_apps__calendar_list_events",
                 "_list_events",
                 "mcp__codex_apps__calendar",
                 CODEX_APPS_MCP_SERVER_NAME,
@@ -1217,7 +1215,6 @@ fn search_tool_description_lists_each_mcp_source_once() {
                 Some("Plan events and manage your calendar."),
             ),
             deferred_mcp_tool(
-                "mcp__codex_apps__gmail_search_threads",
                 "_search_threads",
                 "mcp__codex_apps__gmail",
                 CODEX_APPS_MCP_SERVER_NAME,
@@ -1225,9 +1222,8 @@ fn search_tool_description_lists_each_mcp_source_once() {
                 Some("Find and summarize email threads."),
             ),
             deferred_mcp_tool(
-                "mcp__rmcp__echo",
                 "echo",
-                "rmcp",
+                "mcp__rmcp__",
                 "rmcp",
                 /*connector_name*/ None,
                 /*connector_description*/ None,
@@ -1266,7 +1262,6 @@ fn search_tool_description_lists_each_mcp_source_once() {
 fn search_tool_requires_model_capability_and_feature_flag() {
     let model_info = search_capable_model_info();
     let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
-        "mcp__codex_apps__calendar_create_event",
         "_create_event",
         "mcp__codex_apps__calendar",
         CODEX_APPS_MCP_SERVER_NAME,
@@ -1789,7 +1784,6 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
 }
 
 fn deferred_mcp_tool<'a>(
-    qualified_tool_name: &'a str,
     tool_name: &'a str,
     tool_namespace: &'a str,
     server_name: &'a str,
@@ -1797,7 +1791,6 @@ fn deferred_mcp_tool<'a>(
     connector_description: Option<&'a str>,
 ) -> ToolRegistryPlanDeferredTool<'a> {
     ToolRegistryPlanDeferredTool {
-        qualified_tool_name,
         tool_name,
         tool_namespace,
         server_name,

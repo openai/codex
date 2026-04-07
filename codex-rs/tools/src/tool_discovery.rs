@@ -30,7 +30,6 @@ pub struct ToolSearchSource<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToolSearchResultSource<'a> {
-    pub qualified_tool_name: &'a str,
     pub server_name: &'a str,
     pub tool_namespace: &'a str,
     pub tool_name: &'a str,
@@ -212,15 +211,10 @@ pub fn collect_tool_search_output_tools<'a>(
     let grouped = tool_sources.into_iter().fold(
         BTreeMap::<String, Vec<(String, ToolSearchResultSource<'a>)>>::new(),
         |mut grouped, tool| {
-            let (tool_namespace, tool_name) = tool_search_output_namespace_and_name(
-                tool.qualified_tool_name,
-                tool.tool_namespace,
-                tool.tool_name,
-            );
             grouped
-                .entry(tool_namespace)
+                .entry(tool.tool_namespace.to_string())
                 .or_default()
-                .push((tool_name, tool));
+                .push((tool.tool_name.to_string(), tool));
             grouped
         },
     );
@@ -266,39 +260,6 @@ pub fn collect_tool_search_output_tools<'a>(
     }
 
     Ok(results)
-}
-
-pub fn tool_search_output_namespace_and_name(
-    qualified_tool_name: &str,
-    tool_namespace: &str,
-    tool_name: &str,
-) -> (String, String) {
-    if let Some(child_name) = qualified_tool_name.strip_prefix(tool_namespace)
-        && child_name == tool_name
-    {
-        return (tool_namespace.to_string(), tool_name.to_string());
-    }
-
-    if let Some((namespace, child_name)) =
-        split_qualified_mcp_tool_name_for_search(qualified_tool_name)
-    {
-        return (namespace.to_string(), child_name.to_string());
-    }
-
-    (tool_namespace.to_string(), tool_name.to_string())
-}
-
-fn split_qualified_mcp_tool_name_for_search(qualified_tool_name: &str) -> Option<(&str, &str)> {
-    let stripped = qualified_tool_name.strip_prefix("mcp__")?;
-    let server_name_len = stripped.find("__")?;
-    let child_name_start = server_name_len + "__".len();
-    let child_name = stripped.get(child_name_start..)?;
-    if child_name.is_empty() {
-        return None;
-    }
-
-    let namespace_len = "mcp__".len() + server_name_len + "__".len();
-    Some((&qualified_tool_name[..namespace_len], child_name))
 }
 
 pub fn collect_tool_search_source_infos<'a>(

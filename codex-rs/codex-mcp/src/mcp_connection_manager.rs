@@ -143,14 +143,7 @@ where
     let mut seen_raw_names = HashSet::new();
     let mut qualified_tools = HashMap::new();
     for tool in tools {
-        let qualified_name_raw = if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            format!(
-                "mcp{}{}{}{}",
-                MCP_TOOL_NAME_DELIMITER, tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
-            )
-        } else {
-            format!("{}{}", tool.tool_namespace, tool.tool_name)
-        };
+        let qualified_name_raw = format!("{}{}", tool.tool_namespace, tool.tool_name);
         if !seen_raw_names.insert(qualified_name_raw.clone()) {
             warn!("skipping duplicated tool {}", qualified_name_raw);
             continue;
@@ -1255,9 +1248,9 @@ fn normalize_codex_apps_tool_name(
 }
 
 fn normalize_codex_apps_namespace(server_name: &str, connector_name: Option<&str>) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        server_name.to_string()
-    } else if let Some(connector_name) = connector_name {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(connector_name) = connector_name
+    {
         format!(
             "mcp{}{}{}{}",
             MCP_TOOL_NAME_DELIMITER,
@@ -1266,7 +1259,10 @@ fn normalize_codex_apps_namespace(server_name: &str, connector_name: Option<&str
             sanitize_name(connector_name)
         )
     } else {
-        server_name.to_string()
+        format!(
+            "mcp{}{}{}",
+            MCP_TOOL_NAME_DELIMITER, server_name, MCP_TOOL_NAME_DELIMITER
+        )
     }
 }
 

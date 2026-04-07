@@ -164,7 +164,6 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
 
     let tools = collect_tool_search_output_tools([
         ToolSearchResultSource {
-            qualified_tool_name: "mcp__codex_apps__calendar_create_event",
             server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__calendar",
             tool_name: "_create_event",
@@ -173,7 +172,6 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
             connector_description: Some("Plan events"),
         },
         ToolSearchResultSource {
-            qualified_tool_name: "mcp__codex_apps__gmail_read_email",
             server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__gmail",
             tool_name: "_read_email",
@@ -182,7 +180,6 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
             connector_description: Some("Read mail"),
         },
         ToolSearchResultSource {
-            qualified_tool_name: "mcp__codex_apps__calendar_list_events",
             server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__calendar",
             tool_name: "_list_events",
@@ -191,9 +188,8 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
             connector_description: Some("Plan events"),
         },
         ToolSearchResultSource {
-            qualified_tool_name: "mcp__docs__search",
             server_name: "docs",
-            tool_namespace: "docs",
+            tool_namespace: "mcp__docs__",
             tool_name: "search",
             tool: &docs_search,
             connector_name: None,
@@ -276,7 +272,6 @@ fn collect_tool_search_output_tools_falls_back_to_connector_name_description() {
     let gmail_batch_read_email = mcp_tool("gmail-batch-read-email", "Read multiple emails.");
 
     let tools = collect_tool_search_output_tools([ToolSearchResultSource {
-        qualified_tool_name: "mcp__codex_apps__gmail_batch_read_email",
         server_name: "codex_apps",
         tool_namespace: "mcp__codex_apps__gmail",
         tool_name: "_batch_read_email",

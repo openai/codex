@@ -58,7 +58,6 @@ use crate::mcp_tool_to_responses_api_tool;
 use crate::request_permissions_tool_description;
 use crate::request_user_input_tool_description;
 use crate::tool_registry_plan_types::agent_type_description;
-use crate::tool_search_output_namespace_and_name;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use rmcp::model::Tool as McpTool;
@@ -247,13 +246,8 @@ pub fn build_tool_registry_plan(
         plan.register_handler(TOOL_SEARCH_TOOL_NAME, ToolHandlerKind::ToolSearch);
 
         for tool in deferred_mcp_tools {
-            let (tool_namespace, tool_name) = tool_search_output_namespace_and_name(
-                tool.qualified_tool_name,
-                tool.tool_namespace,
-                tool.tool_name,
-            );
             plan.register_handler(
-                format!("{tool_namespace}:{tool_name}"),
+                format!("{}:{}", tool.tool_namespace, tool.tool_name),
                 ToolHandlerKind::Mcp,
             );
         }

@@ -399,7 +399,7 @@ fn make_mcp_tool(
             .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
             .unwrap_or_else(|| server_name.to_string())
     } else {
-        server_name.to_string()
+        format!("mcp__{server_name}__")
     };
 
     ToolInfo {

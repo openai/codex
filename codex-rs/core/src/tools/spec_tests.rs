@@ -784,7 +784,7 @@ fn search_tool_registers_namespaced_mcp_tool_aliases() {
                 ToolInfo {
                     server_name: "rmcp".to_string(),
                     tool_name: "echo".to_string(),
-                    tool_namespace: "rmcp".to_string(),
+                    tool_namespace: "mcp__rmcp__".to_string(),
                     tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
                     connector_id: None,
                     connector_name: None,

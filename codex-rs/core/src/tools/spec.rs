@@ -69,9 +69,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let mut builder = ToolRegistryBuilder::new();
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
-            .iter()
-            .map(|(qualified_tool_name, tool)| ToolRegistryPlanDeferredTool {
-                qualified_tool_name: qualified_tool_name.as_str(),
+            .values()
+            .map(|tool| ToolRegistryPlanDeferredTool {
                 tool_name: tool.tool_name.as_str(),
                 tool_namespace: tool.tool_namespace.as_str(),
                 server_name: tool.server_name.as_str(),

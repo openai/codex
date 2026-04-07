@@ -67,7 +67,6 @@ pub struct ToolRegistryPlanParams<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ToolRegistryPlanDeferredTool<'a> {
-    pub qualified_tool_name: &'a str,
     pub tool_name: &'a str,
     pub tool_namespace: &'a str,
     pub server_name: &'a str,
