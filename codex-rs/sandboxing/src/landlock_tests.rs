@@ -13,6 +13,7 @@ fn legacy_landlock_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ false,
         /*allow_network_for_proxy*/ false,
+        LinuxSandboxDetachedChildren::Disallow,
     );
     assert_eq!(
         default_bwrap.contains(&"--use-legacy-landlock".to_string()),
@@ -25,6 +26,7 @@ fn legacy_landlock_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
+        LinuxSandboxDetachedChildren::Disallow,
     );
     assert_eq!(
         legacy_landlock.contains(&"--use-legacy-landlock".to_string()),
@@ -44,9 +46,30 @@ fn proxy_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ true,
+        LinuxSandboxDetachedChildren::Disallow,
     );
     assert_eq!(
         args.contains(&"--allow-network-for-proxy".to_string()),
+        true
+    );
+}
+
+#[test]
+fn detached_children_flag_is_included_when_requested() {
+    let command = vec!["/bin/true".to_string()];
+    let command_cwd = Path::new("/tmp/link");
+    let cwd = Path::new("/tmp");
+
+    let args = create_linux_sandbox_command_args(
+        command,
+        command_cwd,
+        cwd,
+        /*use_legacy_landlock*/ false,
+        /*allow_network_for_proxy*/ false,
+        LinuxSandboxDetachedChildren::Allow,
+    );
+    assert_eq!(
+        args.contains(&"--allow-detached-children".to_string()),
         true
     );
 }
@@ -69,6 +92,7 @@ fn split_policy_flags_are_included() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
+        LinuxSandboxDetachedChildren::Disallow,
     );
 
     assert_eq!(

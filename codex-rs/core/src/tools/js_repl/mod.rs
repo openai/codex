@@ -41,6 +41,7 @@ use crate::original_image_detail::normalize_output_image_detail;
 use crate::sandboxing::ExecOptions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use codex_sandboxing::LinuxSandboxDetachedChildren;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -1069,6 +1070,7 @@ impl JsReplManager {
                 network: None,
                 sandbox_policy_cwd: &turn.cwd,
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
+                linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
                 use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
                 windows_sandbox_private_desktop: turn

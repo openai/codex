@@ -10,6 +10,7 @@ pub mod seatbelt;
 pub use bwrap::find_system_bwrap_in_path;
 #[cfg(target_os = "linux")]
 pub use bwrap::system_bwrap_warning;
+pub use manager::LinuxSandboxDetachedChildren;
 pub use manager::SandboxCommand;
 pub use manager::SandboxExecRequest;
 pub use manager::SandboxManager;

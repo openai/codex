@@ -1,3 +1,4 @@
+use super::LinuxSandboxDetachedChildren;
 use super::SandboxCommand;
 use super::SandboxManager;
 use super::SandboxTransformRequest;
@@ -94,6 +95,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
             codex_linux_sandbox_exe: None,
+            linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -146,6 +148,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
             codex_linux_sandbox_exe: None,
+            linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -214,6 +217,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
             codex_linux_sandbox_exe: None,
+            linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -268,6 +272,7 @@ fn transform_linux_seccomp_request(
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
             codex_linux_sandbox_exe: Some(codex_linux_sandbox_exe),
+            linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,

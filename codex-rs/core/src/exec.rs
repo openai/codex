@@ -38,6 +38,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::LinuxSandboxDetachedChildren;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -220,6 +221,7 @@ pub async fn process_exec_tool_call(
         network_sandbox_policy,
         sandbox_cwd,
         codex_linux_sandbox_exe,
+        LinuxSandboxDetachedChildren::Allow,
         use_legacy_landlock,
     )?;
 
@@ -229,6 +231,7 @@ pub async fn process_exec_tool_call(
 
 /// Transform a portable exec request into the concrete argv/env that should be
 /// spawned under the requested sandbox policy.
+#[allow(clippy::too_many_arguments)]
 pub fn build_exec_request(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
@@ -236,6 +239,7 @@ pub fn build_exec_request(
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
+    linux_sandbox_detached_children: LinuxSandboxDetachedChildren,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
     let windows_sandbox_level = params.windows_sandbox_level;
@@ -294,6 +298,7 @@ pub fn build_exec_request(
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
+            linux_sandbox_detached_children,
             use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,

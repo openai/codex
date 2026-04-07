@@ -291,6 +291,7 @@ use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
+use codex_sandboxing::LinuxSandboxDetachedChildren;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
@@ -1978,6 +1979,7 @@ impl CodexMessageProcessor {
             effective_network_sandbox_policy,
             sandbox_cwd.as_path(),
             &codex_linux_sandbox_exe,
+            LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock,
         ) {
             Ok(exec_request) => {

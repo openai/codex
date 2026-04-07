@@ -16,6 +16,7 @@ use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::LinuxSandboxDetachedChildren;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args_for_policies;
@@ -289,6 +290,7 @@ async fn run_command_under_sandbox(
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 /*allow_network_for_proxy*/ false,
+                LinuxSandboxDetachedChildren::Disallow,
             );
             let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
