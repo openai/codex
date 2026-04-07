@@ -747,7 +747,10 @@ impl Codex {
             Err(err) => return Err(err),
         }
         session_loop_termination.await;
-        Ok(())
+        match self.session.shutdown_failure.borrow().clone() {
+            Some(message) => Err(CodexErr::Fatal(message)),
+            _ => Ok(()),
+        }
     }
 
     pub async fn next_event(&self) -> CodexResult<Event> {
@@ -821,6 +824,7 @@ pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
+    shutdown_failure: watch::Sender<Option<String>>,
     out_of_band_elicitation_paused: watch::Sender<bool>,
     state: Mutex<SessionState>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
@@ -2039,12 +2043,14 @@ impl Session {
         ));
         let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
             watch::channel(false);
+        let (shutdown_failure, _shutdown_failure_rx) = watch::channel(None);
 
         let (mailbox, mailbox_rx) = Mailbox::new();
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
             agent_status,
+            shutdown_failure,
             out_of_band_elicitation_paused,
             state: Mutex::new(state),
             managed_network_proxy_refresh_lock: Mutex::new(()),
@@ -5637,10 +5643,12 @@ mod handlers {
             && let Err(e) = rec.shutdown().await
         {
             warn!("failed to shutdown rollout recorder: {e}");
+            let message = "Failed to shutdown rollout recorder".to_string();
+            sess.shutdown_failure.send_replace(Some(message.clone()));
             let event = Event {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Failed to shutdown rollout recorder".to_string(),
+                    message,
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
@@ -5651,10 +5659,12 @@ mod handlers {
             && let Err(e) = state_db.checkpoint_wal().await
         {
             warn!("failed to checkpoint state db WAL during shutdown: {e}");
+            let message = "Failed to checkpoint state database WAL".to_string();
+            sess.shutdown_failure.send_replace(Some(message.clone()));
             let event = Event {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Failed to checkpoint state database WAL".to_string(),
+                    message,
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };

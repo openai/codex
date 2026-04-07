@@ -2949,6 +2949,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
+        shutdown_failure: watch::channel(None).0,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Mutex::new(()),
@@ -3495,6 +3496,42 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
 }
 
 #[tokio::test]
+async fn shutdown_and_wait_returns_shutdown_error_status() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let (tx_sub, rx_sub) = async_channel::bounded(4);
+    let (_tx_event, rx_event) = async_channel::unbounded();
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let error_message = "shutdown durability failed".to_string();
+    let status_message = error_message.clone();
+    let session = Arc::new(session);
+    let session_for_loop = Arc::clone(&session);
+    let session_loop_handle = tokio::spawn(async move {
+        let shutdown: Submission = rx_sub.recv().await.expect("shutdown submission");
+        assert_eq!(shutdown.op, Op::Shutdown);
+        session_for_loop
+            .shutdown_failure
+            .send_replace(Some(status_message));
+    });
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session,
+        session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+    });
+
+    let err = codex
+        .shutdown_and_wait()
+        .await
+        .expect_err("shutdown error status should propagate");
+
+    match err {
+        CodexErr::Fatal(message) => assert_eq!(message, error_message),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
     let (parent_session, parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
@@ -3793,6 +3830,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
+        shutdown_failure: watch::channel(None).0,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Mutex::new(()),
