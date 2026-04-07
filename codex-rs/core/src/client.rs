@@ -118,6 +118,7 @@ use codex_response_debug_context::telemetry_api_error_message;
 use codex_response_debug_context::telemetry_transport_error_message;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
@@ -142,6 +143,7 @@ struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     conversation_id: ThreadId,
     window_generation: AtomicU64,
+    installation_id: String,
     provider: ModelProviderInfo,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
@@ -263,6 +265,7 @@ impl ModelClient {
     pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
         conversation_id: ThreadId,
+        installation_id: String,
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
@@ -280,6 +283,7 @@ impl ModelClient {
                 auth_manager,
                 conversation_id,
                 window_generation: AtomicU64::new(0),
+                installation_id,
                 provider,
                 auth_env_telemetry,
                 session_source,
@@ -429,7 +433,11 @@ impl ModelClient {
             text,
         };
 
-        let mut extra_headers = self.build_responses_identity_headers();
+        let mut extra_headers = ApiHeaderMap::new();
+        if let Ok(header_value) = HeaderValue::from_str(&self.state.installation_id) {
+            extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
+        }
+        extra_headers.extend(self.build_responses_identity_headers());
         extra_headers.extend(build_conversation_headers(Some(
             self.state.conversation_id.to_string(),
         )));
@@ -515,6 +523,10 @@ impl ModelClient {
         turn_metadata_header: Option<&str>,
     ) -> HashMap<String, String> {
         let mut client_metadata = HashMap::new();
+        client_metadata.insert(
+            X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+            self.state.installation_id.clone(),
+        );
         client_metadata.insert(
             X_CODEX_WINDOW_ID_HEADER.to_string(),
             self.current_window_id(),
@@ -817,6 +829,10 @@ impl ModelClientSession {
             },
             prompt_cache_key,
             text,
+            client_metadata: Some(HashMap::from([(
+                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+                self.client.state.installation_id.clone(),
+            )])),
         };
         Ok(request)
     }

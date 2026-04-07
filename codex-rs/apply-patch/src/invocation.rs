@@ -155,20 +155,10 @@ pub async fn maybe_parse_apply_patch_verified(
             hunks,
             workdir,
         }) => {
-            let effective_cwd = match workdir.as_ref() {
-                Some(dir) => match cwd.join(Path::new(dir)) {
-                    Ok(path) => path,
-                    Err(e) => {
-                        return MaybeApplyPatchVerified::CorrectnessError(
-                            ApplyPatchError::IoError(IoError {
-                                context: format!("Failed to resolve {dir}"),
-                                source: e,
-                            }),
-                        );
-                    }
-                },
-                None => cwd.clone(),
-            };
+            let effective_cwd = workdir
+                .as_ref()
+                .map(|dir| cwd.join(Path::new(dir)))
+                .unwrap_or_else(|| cwd.clone());
             let mut changes = HashMap::new();
             for hunk in hunks {
                 let path = hunk.resolve_path(&effective_cwd);
@@ -177,20 +167,10 @@ pub async fn maybe_parse_apply_patch_verified(
                         changes.insert(path, ApplyPatchFileChange::Add { content: contents });
                     }
                     Hunk::DeleteFile { .. } => {
-                        let path_abs = match AbsolutePathBuf::resolve_path_against_base(
+                        let path_abs = AbsolutePathBuf::resolve_path_against_base(
                             path.as_path(),
                             &effective_cwd,
-                        ) {
-                            Ok(path_abs) => path_abs,
-                            Err(e) => {
-                                return MaybeApplyPatchVerified::CorrectnessError(
-                                    ApplyPatchError::IoError(IoError {
-                                        context: format!("Failed to resolve {}", path.display()),
-                                        source: e,
-                                    }),
-                                );
-                            }
-                        };
+                        );
                         let original_bytes = match fs.read_file(&path_abs).await {
                             Ok(content) => content,
                             Err(e) => {

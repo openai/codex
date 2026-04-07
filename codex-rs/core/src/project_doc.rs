@@ -288,7 +288,7 @@ pub async fn discover_project_doc_paths(
     let candidate_filenames = candidate_filenames(config);
     for d in search_dirs {
         for name in &candidate_filenames {
-            let candidate = d.join(name)?;
+            let candidate = d.join(name);
             match fs.get_metadata(&candidate).await {
                 Ok(md) if md.is_file => {
                     found.push(candidate);

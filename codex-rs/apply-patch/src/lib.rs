@@ -277,26 +277,21 @@ async fn apply_hunks_to_files(
                 if let Some(parent) = path.parent()
                     && !parent.as_os_str().is_empty()
                 {
-                    let parent_abs = AbsolutePathBuf::resolve_path_against_base(parent, cwd)
-                        .with_context(|| {
-                            format!("Failed to resolve parent directory for {}", path.display())
-                        })?;
+                    let parent_abs = AbsolutePathBuf::resolve_path_against_base(parent, cwd);
                     fs.create_directory(&parent_abs, CreateDirectoryOptions { recursive: true })
                         .await
                         .with_context(|| {
                             format!("Failed to create parent directories for {}", path.display())
                         })?;
                 }
-                let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd)
-                    .with_context(|| format!("Failed to resolve path {}", path.display()))?;
+                let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
                 fs.write_file(&path_abs, contents.clone().into_bytes())
                     .await
                     .with_context(|| format!("Failed to write file {}", path.display()))?;
                 added.push(path.clone());
             }
             Hunk::DeleteFile { path } => {
-                let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd)
-                    .with_context(|| format!("Failed to resolve path {}", path.display()))?;
+                let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
                 let result: io::Result<()> = async {
                     let metadata = fs.get_metadata(&path_abs).await?;
                     if metadata.is_directory {
@@ -329,10 +324,7 @@ async fn apply_hunks_to_files(
                     if let Some(parent) = dest.parent()
                         && !parent.as_os_str().is_empty()
                     {
-                        let parent_abs = AbsolutePathBuf::resolve_path_against_base(parent, cwd)
-                            .with_context(|| {
-                                format!("Failed to resolve parent directory for {}", dest.display())
-                            })?;
+                        let parent_abs = AbsolutePathBuf::resolve_path_against_base(parent, cwd);
                         fs.create_directory(
                             &parent_abs,
                             CreateDirectoryOptions { recursive: true },
@@ -342,13 +334,11 @@ async fn apply_hunks_to_files(
                             format!("Failed to create parent directories for {}", dest.display())
                         })?;
                     }
-                    let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd)
-                        .with_context(|| format!("Failed to resolve path {}", dest.display()))?;
+                    let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
                     fs.write_file(&dest_abs, new_contents.into_bytes())
                         .await
                         .with_context(|| format!("Failed to write file {}", dest.display()))?;
-                    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd)
-                        .with_context(|| format!("Failed to resolve path {}", path.display()))?;
+                    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
                     let result: io::Result<()> = async {
                         let metadata = fs.get_metadata(&path_abs).await?;
                         if metadata.is_directory {
@@ -371,8 +361,7 @@ async fn apply_hunks_to_files(
                         .with_context(|| format!("Failed to remove original {}", path.display()))?;
                     modified.push(dest.clone());
                 } else {
-                    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd)
-                        .with_context(|| format!("Failed to resolve path {}", path.display()))?;
+                    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
                     fs.write_file(&path_abs, new_contents.into_bytes())
                         .await
                         .with_context(|| format!("Failed to write file {}", path.display()))?;
@@ -401,12 +390,7 @@ async fn derive_new_contents_from_chunks(
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd).map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!("Failed to resolve path {}", path.display()),
-            source: err,
-        })
-    })?;
+    let path_abs = AbsolutePathBuf::resolve_path_against_base(path, cwd);
     let original_bytes = fs.read_file(&path_abs).await.map_err(|err| {
         ApplyPatchError::IoError(IoError {
             context: format!("Failed to read file to update {}", path.display()),
