@@ -5645,11 +5645,21 @@ mod handlers {
                 }),
             };
             sess.send_event_raw(event).await;
+            return true;
         }
         if let Some(state_db) = sess.services.state_db.as_deref()
             && let Err(e) = state_db.checkpoint_wal().await
         {
             warn!("failed to checkpoint state db WAL during shutdown: {e}");
+            let event = Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Failed to checkpoint state database WAL".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return true;
         }
 
         let event = Event {

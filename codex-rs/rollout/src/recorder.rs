@@ -766,66 +766,33 @@ async fn rollout_writer(
                 .await?;
             }
             RolloutCmd::Persist { ack } => {
-                if writer.is_none() {
-                    let result = async {
-                        let Some(log_file_info) = deferred_log_file_info.take() else {
-                            return Err(IoError::other(
-                                "deferred rollout recorder missing log file metadata",
-                            ));
-                        };
-                        let file = open_log_file(log_file_info.path.as_path())?;
-                        writer = Some(JsonlWriter {
-                            file: tokio::fs::File::from_std(file),
-                        });
+                let result = async {
+                    materialize_writer_if_needed(
+                        &mut writer,
+                        &mut deferred_log_file_info,
+                        &mut meta,
+                        &mut buffered_items,
+                        &cwd,
+                        &rollout_path,
+                        state_db_ctx.as_deref(),
+                        &mut state_builder,
+                        default_provider.as_str(),
+                        generate_memories,
+                    )
+                    .await?;
+                    flush_writer(writer.as_mut()).await
+                }
+                .await;
 
-                        if let Some(session_meta) = meta.take() {
-                            write_session_meta(
-                                writer.as_mut(),
-                                session_meta,
-                                &cwd,
-                                &rollout_path,
-                                state_db_ctx.as_deref(),
-                                &mut state_builder,
-                                default_provider.as_str(),
-                                generate_memories,
-                            )
-                            .await?;
-                        }
-
-                        if !buffered_items.is_empty() {
-                            write_and_reconcile_items(
-                                writer.as_mut(),
-                                buffered_items.as_slice(),
-                                &rollout_path,
-                                state_db_ctx.as_deref(),
-                                state_builder.as_ref(),
-                                default_provider.as_str(),
-                            )
-                            .await?;
-                            buffered_items.clear();
-                        }
-
-                        flush_writer(writer.as_mut()).await?;
-                        Ok(())
+                match result {
+                    Ok(()) => {
+                        let _ = ack.send(Ok(()));
                     }
-                    .await;
-
-                    match result {
-                        Ok(()) => {
-                            let _ = ack.send(Ok(()));
-                        }
-                        Err(err) => {
-                            let return_err = clone_io_error(&err);
-                            let _ = ack.send(Err(err));
-                            return Err(return_err);
-                        }
+                    Err(err) => {
+                        let return_err = clone_io_error(&err);
+                        let _ = ack.send(Err(err));
+                        return Err(return_err);
                     }
-                } else if let Err(err) = flush_writer(writer.as_mut()).await {
-                    let return_err = clone_io_error(&err);
-                    let _ = ack.send(Err(err));
-                    return Err(return_err);
-                } else {
-                    let _ = ack.send(Ok(()));
                 }
             }
             RolloutCmd::Flush { ack } => {
@@ -841,17 +808,36 @@ async fn rollout_writer(
                     }
                 }
             }
-            RolloutCmd::Shutdown { ack } => match sync_writer(writer.as_mut()).await {
-                Ok(()) => {
-                    let _ = ack.send(Ok(()));
-                    break;
+            RolloutCmd::Shutdown { ack } => {
+                let result = async {
+                    materialize_writer_if_needed(
+                        &mut writer,
+                        &mut deferred_log_file_info,
+                        &mut meta,
+                        &mut buffered_items,
+                        &cwd,
+                        &rollout_path,
+                        state_db_ctx.as_deref(),
+                        &mut state_builder,
+                        default_provider.as_str(),
+                        generate_memories,
+                    )
+                    .await?;
+                    sync_writer(writer.as_mut()).await
                 }
-                Err(err) => {
-                    let return_err = clone_io_error(&err);
-                    let _ = ack.send(Err(err));
-                    return Err(return_err);
+                .await;
+                match result {
+                    Ok(()) => {
+                        let _ = ack.send(Ok(()));
+                        break;
+                    }
+                    Err(err) => {
+                        let return_err = clone_io_error(&err);
+                        let _ = ack.send(Err(err));
+                        return Err(return_err);
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -874,6 +860,63 @@ async fn flush_writer(writer: Option<&mut JsonlWriter>) -> std::io::Result<()> {
     if let Some(writer) = writer {
         writer.file.flush().await?;
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn materialize_writer_if_needed(
+    writer: &mut Option<JsonlWriter>,
+    deferred_log_file_info: &mut Option<LogFileInfo>,
+    meta: &mut Option<SessionMeta>,
+    buffered_items: &mut Vec<RolloutItem>,
+    cwd: &Path,
+    rollout_path: &Path,
+    state_db_ctx: Option<&StateRuntime>,
+    state_builder: &mut Option<ThreadMetadataBuilder>,
+    default_provider: &str,
+    generate_memories: bool,
+) -> std::io::Result<()> {
+    if writer.is_some() {
+        return Ok(());
+    }
+
+    let Some(log_file_info) = deferred_log_file_info.take() else {
+        return Err(IoError::other(
+            "deferred rollout recorder missing log file metadata",
+        ));
+    };
+    let file = open_log_file(log_file_info.path.as_path())?;
+    *writer = Some(JsonlWriter {
+        file: tokio::fs::File::from_std(file),
+    });
+
+    if let Some(session_meta) = meta.take() {
+        write_session_meta(
+            writer.as_mut(),
+            session_meta,
+            cwd,
+            rollout_path,
+            state_db_ctx,
+            state_builder,
+            default_provider,
+            generate_memories,
+        )
+        .await?;
+    }
+
+    if !buffered_items.is_empty() {
+        write_and_reconcile_items(
+            writer.as_mut(),
+            buffered_items.as_slice(),
+            rollout_path,
+            state_db_ctx,
+            state_builder.as_ref(),
+            default_provider,
+        )
+        .await?;
+        buffered_items.clear();
+    }
+
     Ok(())
 }
 
