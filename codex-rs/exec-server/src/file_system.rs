@@ -50,6 +50,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
+        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<u8>>;
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
@@ -59,6 +60,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
         sandbox_policy: Option<&SandboxPolicy>,
+        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()>;
 
     async fn create_directory(
@@ -72,6 +74,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         path: &AbsolutePathBuf,
         create_directory_options: CreateDirectoryOptions,
         sandbox_policy: Option<&SandboxPolicy>,
+        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()>;
 
     async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata>;
@@ -80,6 +83,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
+        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<FileMetadata>;
 
     async fn read_directory(
@@ -91,6 +95,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
+        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
 
     async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()>;
@@ -100,6 +105,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         path: &AbsolutePathBuf,
         remove_options: RemoveOptions,
         sandbox_policy: Option<&SandboxPolicy>,
+        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()>;
 
     async fn copy(
@@ -115,5 +121,6 @@ pub trait ExecutorFileSystem: Send + Sync {
         destination_path: &AbsolutePathBuf,
         copy_options: CopyOptions,
         sandbox_policy: Option<&SandboxPolicy>,
+        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()>;
 }

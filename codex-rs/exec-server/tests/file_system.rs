@@ -3,8 +3,11 @@
 mod common;
 
 use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -20,6 +23,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
+use tokio::sync::Mutex;
 
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
@@ -27,6 +31,30 @@ use common::exec_server::exec_server;
 struct FileSystemContext {
     file_system: Arc<dyn ExecutorFileSystem>,
     _server: Option<ExecServerHarness>,
+}
+
+static CWD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn cwd_lock() -> &'static Mutex<()> {
+    CWD_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct CurrentDirGuard {
+    original: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn change_to(path: &Path) -> Result<Self> {
+        let original = std::env::current_dir()?;
+        std::env::set_current_dir(path)?;
+        Ok(Self { original })
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.original).expect("restore cwd");
+    }
 }
 
 async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContext> {
@@ -63,6 +91,16 @@ fn read_only_sandbox_policy(readable_root: std::path::PathBuf) -> SandboxPolicy 
         access: ReadOnlyAccess::Restricted {
             include_platform_defaults: false,
             readable_roots: vec![absolute_path(readable_root)],
+        },
+        network_access: false,
+    }
+}
+
+fn cwd_only_read_only_sandbox_policy() -> SandboxPolicy {
+    SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::Restricted {
+            include_platform_defaults: false,
+            readable_roots: vec![],
         },
         network_access: false,
     }
@@ -258,7 +296,7 @@ async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: b
     let sandbox_policy = read_only_sandbox_policy(allowed_dir);
 
     let contents = file_system
-        .read_file_with_sandbox_policy(&absolute_path(file_path), Some(&sandbox_policy))
+        .read_file_with_sandbox_policy(&absolute_path(file_path), Some(&sandbox_policy), None)
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -286,6 +324,7 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
             &absolute_path(blocked_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -328,6 +367,50 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
         .read_file_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
+            None,
+        )
+        .await
+    {
+        Ok(_) => anyhow::bail!("read should be blocked"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "fs/read is not permitted for path {}",
+            requested_path.display()
+        )
+    );
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_with_sandbox_policy_rejects_symlink_parent_dotdot_escape(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let outside_dir = tmp.path().join("outside");
+    let secret_path = tmp.path().join("secret.txt");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::create_dir_all(&outside_dir)?;
+    std::fs::write(&secret_path, "nope")?;
+    symlink(&outside_dir, allowed_dir.join("link"))?;
+
+    let requested_path = allowed_dir.join("link").join("..").join("secret.txt");
+    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let error = match file_system
+        .read_file_with_sandbox_policy(
+            &absolute_path(requested_path.clone()),
+            Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -369,6 +452,7 @@ async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
             &absolute_path(requested_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -411,6 +495,7 @@ async fn file_system_create_directory_with_sandbox_policy_rejects_symlink_escape
             &absolute_path(requested_path.clone()),
             CreateDirectoryOptions { recursive: false },
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -453,6 +538,7 @@ async fn file_system_get_metadata_with_sandbox_policy_rejects_symlink_escape(
         .get_metadata_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -494,6 +580,7 @@ async fn file_system_read_directory_with_sandbox_policy_rejects_symlink_escape(
         .read_directory_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -537,6 +624,7 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -552,6 +640,30 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
         )
     );
     assert!(!outside_dir.join("copied.txt").exists());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn remote_file_system_with_sandbox_policy_uses_client_cwd() -> Result<()> {
+    let _cwd_lock = cwd_lock().lock().await;
+    let server = exec_server().await?;
+
+    let tmp = TempDir::new()?;
+    let client_workspace = tmp.path().join("client-workspace");
+    let note_path = client_workspace.join("note.txt");
+    std::fs::create_dir_all(&client_workspace)?;
+    std::fs::write(&note_path, "hello from cwd")?;
+
+    let _cwd_guard = CurrentDirGuard::change_to(&client_workspace)?;
+    let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
+    let file_system = environment.get_filesystem();
+    let sandbox_policy = cwd_only_read_only_sandbox_policy();
+
+    let contents = file_system
+        .read_file_with_sandbox_policy(&absolute_path(note_path), Some(&sandbox_policy), None)
+        .await?;
+    assert_eq!(contents, b"hello from cwd");
 
     Ok(())
 }
@@ -584,6 +696,7 @@ async fn file_system_remove_with_sandbox_policy_removes_symlink_not_target(
                 force: false,
             },
             Some(&sandbox_policy),
+            None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -622,6 +735,7 @@ async fn file_system_copy_with_sandbox_policy_preserves_symlink_source(
             &absolute_path(copied_symlink.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
+            None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -661,6 +775,7 @@ async fn file_system_remove_with_sandbox_policy_rejects_symlink_escape(
                 force: false,
             },
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
@@ -707,6 +822,7 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_source(
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
+            None,
         )
         .await
     {
