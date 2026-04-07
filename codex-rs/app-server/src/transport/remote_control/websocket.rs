@@ -932,7 +932,7 @@ mod tests {
 
     fn remote_control_url_for_listener(listener: &TcpListener) -> String {
         format!(
-            "http://localhost:{}/backend-api/",
+            "http://127.0.0.1:{}/backend-api/",
             listener
                 .local_addr()
                 .expect("listener should have a local addr")
