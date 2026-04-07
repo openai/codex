@@ -2391,6 +2391,18 @@ impl ChatWidget {
         {
             self.record_agent_markdown(message);
         }
+        let notification_response = last_agent_message
+            .as_ref()
+            .filter(|message| !message.is_empty())
+            .cloned()
+            .or_else(|| {
+                if self.saw_copy_source_this_turn {
+                    self.last_agent_markdown.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
         self.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
@@ -2451,7 +2463,7 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
-            response: last_agent_message.unwrap_or_default(),
+            response: notification_response,
         });
 
         self.maybe_show_pending_rate_limit_prompt();
@@ -5969,6 +5981,7 @@ impl ChatWidget {
                 local_image_paths,
                 remote_image_urls,
             ));
+            self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         } else if render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
@@ -5983,6 +5996,7 @@ impl ChatWidget {
                 Vec::new(),
                 remote_image_urls,
             ));
+            self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         }
 
         self.needs_final_message_separator = false;
