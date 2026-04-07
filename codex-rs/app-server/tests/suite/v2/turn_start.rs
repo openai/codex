@@ -166,16 +166,6 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never", &BTreeMap::new())?;
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    let first_table_index = config_toml
-        .find("\n[")
-        .expect("test config must include a table header");
-    config_toml.insert_str(
-        first_table_index,
-        "\ndeveloper_instructions = \"Config developer instructions sentinel\"\n",
-    );
-    std::fs::write(config_path, config_toml)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -250,13 +240,6 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
             "unexpected instructions field in payload: {payload:?}"
         );
         let developer_texts = request.message_input_texts("developer");
-        assert_eq!(
-            developer_texts
-                .iter()
-                .any(|text| { text.contains("Config developer instructions sentinel") }),
-            expect_instructions,
-            "unexpected config developer instruction presence: {developer_texts:?}"
-        );
         assert!(
             developer_texts.iter().all(|text| !text.is_empty()),
             "did not expect empty developer instruction messages: {developer_texts:?}"

@@ -616,14 +616,6 @@ impl Codex {
             dynamic_tools
         };
 
-        let developer_instructions_override = config
-            .developer_instructions_override
-            .clone()
-            .or_else(|| conversation_history.get_developer_instructions());
-        let developer_instructions = developer_instructions_override
-            .clone()
-            .unwrap_or_else(|| config.developer_instructions.clone());
-
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode {
@@ -639,8 +631,7 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
-            developer_instructions,
-            developer_instructions_override,
+            developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -1105,10 +1096,6 @@ pub(crate) struct SessionConfiguration {
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
 
-    /// Explicit developer instructions override, preserving `null` as distinct
-    /// from a missing override.
-    developer_instructions_override: Option<Option<String>>,
-
     /// Model instructions that are appended to the base instructions.
     user_instructions: Option<String>,
 
@@ -1559,9 +1546,6 @@ impl Session {
                             .base_instructions
                             .clone()
                             .map(|text| BaseInstructions { text }),
-                        session_configuration
-                            .developer_instructions_override
-                            .clone(),
                         session_configuration.dynamic_tools.clone(),
                         if session_configuration.persist_extended_history {
                             EventPersistenceMode::Extended

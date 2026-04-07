@@ -2337,26 +2337,6 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_developer_instructions(&self) -> Option<Option<String>> {
-        match self {
-            InitialHistory::New => None,
-            InitialHistory::Resumed(resumed) => {
-                resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => {
-                        meta_line.meta.developer_instructions.clone()
-                    }
-                    _ => None,
-                })
-            }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
-                RolloutItem::SessionMeta(meta_line) => {
-                    meta_line.meta.developer_instructions.clone()
-                }
-                _ => None,
-            }),
-        }
-    }
-
     pub fn get_dynamic_tools(&self) -> Option<Vec<DynamicToolSpec>> {
         match self {
             InitialHistory::New => None,
@@ -2555,13 +2535,6 @@ pub struct SessionMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub base_instructions: Option<Option<BaseInstructions>>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_double_option",
-        serialize_with = "serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub developer_instructions: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2583,7 +2556,6 @@ impl Default for SessionMeta {
             agent_path: None,
             model_provider: None,
             base_instructions: None,
-            developer_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
         }
