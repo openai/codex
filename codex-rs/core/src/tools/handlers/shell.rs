@@ -12,6 +12,7 @@ use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -35,6 +36,7 @@ use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use codex_features::Feature;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -133,7 +135,19 @@ impl ShellCommandHandler {
         Ok(login.unwrap_or(allow_login_shell))
     }
 
-    fn base_command(shell: &Shell, command: &str, use_login_shell: bool) -> Vec<String> {
+    fn base_command(
+        shell: &Shell,
+        command: &str,
+        use_login_shell: bool,
+        windows_sandbox_level: WindowsSandboxLevel,
+    ) -> Vec<String> {
+        let use_login_shell = if windows_sandbox_level != WindowsSandboxLevel::Disabled
+            && matches!(shell.shell_type, ShellType::PowerShell)
+        {
+            false
+        } else {
+            use_login_shell
+        };
         shell.derive_exec_args(command, use_login_shell)
     }
 
@@ -146,7 +160,12 @@ impl ShellCommandHandler {
     ) -> Result<ExecParams, FunctionCallError> {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
-        let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
+        let command = Self::base_command(
+            shell.as_ref(),
+            &params.command,
+            use_login_shell,
+            turn_context.windows_sandbox_level,
+        );
 
         Ok(ExecParams {
             command,
@@ -303,7 +322,12 @@ impl ToolHandler for ShellCommandHandler {
                     Err(_) => return true,
                 };
                 let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
+                let command = Self::base_command(
+                    shell.as_ref(),
+                    &params.command,
+                    use_login_shell,
+                    invocation.turn.windows_sandbox_level,
+                );
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)

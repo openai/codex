@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ShellCommandToolCallParams;
 use pretty_assertions::assert_eq;
 
@@ -138,6 +139,7 @@ fn shell_command_handler_respects_explicit_login_flag() {
         &shell,
         "echo login shell",
         /*use_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     );
     assert_eq!(
         login_command,
@@ -148,10 +150,37 @@ fn shell_command_handler_respects_explicit_login_flag() {
         &shell,
         "echo non login shell",
         /*use_login_shell*/ false,
+        WindowsSandboxLevel::Disabled,
     );
     assert_eq!(
         non_login_command,
         shell.derive_exec_args("echo non login shell", /*use_login_shell*/ false)
+    );
+}
+
+#[test]
+fn shell_command_handler_forces_non_login_powershell_inside_windows_sandbox() {
+    let shell = Shell {
+        shell_type: ShellType::PowerShell,
+        shell_path: PathBuf::from("powershell.exe"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    };
+
+    let command = ShellCommandHandler::base_command(
+        &shell,
+        "Get-ChildItem",
+        /*use_login_shell*/ true,
+        WindowsSandboxLevel::RestrictedToken,
+    );
+
+    assert_eq!(
+        command,
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Get-ChildItem".to_string(),
+        ]
     );
 }
 

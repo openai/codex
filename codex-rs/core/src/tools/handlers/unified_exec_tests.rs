@@ -33,6 +33,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -54,6 +55,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -80,10 +82,43 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
     assert_eq!(command[2], "echo hello");
+    Ok(())
+}
+
+#[test]
+fn test_get_command_forces_non_login_powershell_inside_windows_sandbox() -> anyhow::Result<()> {
+    let json = r#"{"cmd": "Get-ChildItem", "login": true}"#;
+
+    let args: ExecCommandArgs = parse_arguments(json)?;
+    let shell = Shell {
+        shell_type: ShellType::PowerShell,
+        shell_path: PathBuf::from("powershell.exe"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    };
+
+    let command = get_command(
+        &args,
+        Arc::new(shell),
+        &UnifiedExecShellMode::Direct,
+        /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Elevated,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(
+        command,
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Get-ChildItem".to_string(),
+        ]
+    );
     Ok(())
 }
 
@@ -100,6 +135,7 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -117,6 +153,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ false,
+        WindowsSandboxLevel::Disabled,
     )
     .expect_err("explicit login should be rejected");
 
@@ -150,6 +187,7 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         Arc::new(default_user_shell()),
         &shell_mode,
         /*allow_login_shell*/ true,
+        WindowsSandboxLevel::Disabled,
     )
     .map_err(anyhow::Error::msg)?;
 
