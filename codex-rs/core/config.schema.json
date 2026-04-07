@@ -362,6 +362,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "debug_hide_spawn_agent_metadata": {
+              "type": "boolean"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -2070,6 +2073,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "debug_hide_spawn_agent_metadata": {
           "type": "boolean"
         },
         "default_mode_request_user_input": {

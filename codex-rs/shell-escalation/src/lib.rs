@@ -2,6 +2,8 @@
 mod unix;
 
 #[cfg(unix)]
+pub use unix::ESCALATE_SOCKET_ENV_VAR;
+#[cfg(unix)]
 pub use unix::EscalateAction;
 #[cfg(unix)]
 pub use unix::EscalateServer;
@@ -27,8 +29,6 @@ pub use unix::PreparedExec;
 pub use unix::ShellCommandExecutor;
 #[cfg(unix)]
 pub use unix::Stopwatch;
-#[cfg(unix)]
-pub use unix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
 #[cfg(unix)]
 pub use unix::main_execve_wrapper;
 #[cfg(unix)]

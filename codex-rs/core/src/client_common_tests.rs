@@ -1,6 +1,6 @@
+use codex_api::OpenAiVerbosity;
 use codex_api::ResponsesApiRequest;
-use codex_api::common::OpenAiVerbosity;
-use codex_api::common::TextControls;
+use codex_api::TextControls;
 use codex_api::create_text_param_for_request;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -14,7 +14,7 @@ fn serializes_text_verbosity_when_set() {
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
         model: "gpt-5.1".to_string(),
-        instructions: "i".to_string(),
+        instructions: Some("i".to_string()),
         input,
         tools,
         tool_choice: "auto".to_string(),
@@ -29,6 +29,7 @@ fn serializes_text_verbosity_when_set() {
             verbosity: Some(OpenAiVerbosity::Low),
             format: None,
         }),
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
@@ -57,7 +58,7 @@ fn serializes_text_schema_with_strict_format() {
 
     let req = ResponsesApiRequest {
         model: "gpt-5.1".to_string(),
-        instructions: "i".to_string(),
+        instructions: Some("i".to_string()),
         input,
         tools,
         tool_choice: "auto".to_string(),
@@ -69,6 +70,7 @@ fn serializes_text_schema_with_strict_format() {
         prompt_cache_key: None,
         service_tier: None,
         text: Some(text_controls),
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
@@ -94,7 +96,7 @@ fn omits_text_when_not_set() {
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
         model: "gpt-5.1".to_string(),
-        instructions: "i".to_string(),
+        instructions: Some("i".to_string()),
         input,
         tools,
         tool_choice: "auto".to_string(),
@@ -106,6 +108,7 @@ fn omits_text_when_not_set() {
         prompt_cache_key: None,
         service_tier: None,
         text: None,
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
@@ -116,7 +119,7 @@ fn omits_text_when_not_set() {
 fn serializes_flex_service_tier_when_set() {
     let req = ResponsesApiRequest {
         model: "gpt-5.1".to_string(),
-        instructions: "i".to_string(),
+        instructions: Some("i".to_string()),
         input: vec![],
         tools: vec![],
         tool_choice: "auto".to_string(),
@@ -128,6 +131,7 @@ fn serializes_flex_service_tier_when_set() {
         prompt_cache_key: None,
         service_tier: Some(ServiceTier::Flex.to_string()),
         text: None,
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
