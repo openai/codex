@@ -260,7 +260,7 @@ fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
 
 #[test]
 fn format_guardian_action_pretty_truncates_large_string_fields() -> serde_json::Result<()> {
-    let patch = "line\n".repeat(10_000);
+    let patch = "line\n".repeat(100_000);
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd: PathBuf::from("/tmp"),
@@ -271,6 +271,7 @@ fn format_guardian_action_pretty_truncates_large_string_fields() -> serde_json::
     let rendered = format_guardian_action_pretty(&action)?;
 
     assert!(rendered.contains("\"tool\": \"apply_patch\""));
+    assert!(rendered.contains("<truncated omitted_approx_tokens="));
     assert!(rendered.len() < patch.len());
     Ok(())
 }

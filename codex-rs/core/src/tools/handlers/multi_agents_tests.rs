@@ -129,6 +129,7 @@ async fn wait_for_turn_aborted(
                 EventMsg::TurnAborted(TurnAbortedEvent {
                     turn_id: Some(ref turn_id),
                     ref reason,
+                    ..
                 }) if turn_id == expected_turn_id && *reason == expected_reason
             ) {
                 break;
