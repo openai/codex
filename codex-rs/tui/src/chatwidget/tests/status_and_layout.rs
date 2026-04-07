@@ -435,8 +435,13 @@ async fn core_usage_limit_error_shows_notify_owner_hint() {
         "expected usage-limit error, got {rendered:?}"
     );
     assert!(
-        rendered.contains("/notify-owner"),
-        "expected notify-owner hint, got {rendered:?}"
+        rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected workspace-owner prompt, got {rendered:?}"
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Request more from your workspace owner? [y/N]"),
+        "expected workspace-owner confirmation popup, got {popup:?}"
     );
 }
 
@@ -480,8 +485,8 @@ async fn core_usage_limit_error_shows_spend_cap_hint_when_reached() {
         "expected spend-cap hint, got {rendered:?}"
     );
     assert!(
-        !rendered.contains("/notify-owner"),
-        "expected spend-cap hint instead of notify-owner guidance, got {rendered:?}"
+        !rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected spend-cap hint instead of workspace-owner prompt, got {rendered:?}"
     );
 }
 

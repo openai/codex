@@ -38,7 +38,6 @@ pub enum SlashCommand {
     Mention,
     Usage,
     Status,
-    NotifyOwner,
     DebugConfig,
     Title,
     Statusline,
@@ -89,7 +88,6 @@ impl SlashCommand {
             SlashCommand::Usage => "open Codex usage settings in your browser",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::NotifyOwner => "ask your workspace owner to add credits",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -170,7 +168,6 @@ impl SlashCommand {
             | SlashCommand::Usage
             | SlashCommand::Skills
             | SlashCommand::Status
-            | SlashCommand::NotifyOwner
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

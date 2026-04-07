@@ -597,8 +597,13 @@ async fn live_app_server_usage_limit_error_shows_notify_owner_hint() {
         "expected usage-limit error, got {rendered:?}"
     );
     assert!(
-        rendered.contains("/notify-owner"),
-        "expected notify-owner hint, got {rendered:?}"
+        rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected workspace-owner prompt, got {rendered:?}"
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Request more from your workspace owner? [y/N]"),
+        "expected workspace-owner confirmation popup, got {popup:?}"
     );
     assert_chatwidget_snapshot!(
         "live_app_server_usage_limit_error_shows_notify_owner_hint",
@@ -652,8 +657,8 @@ async fn live_app_server_usage_limit_error_shows_spend_cap_hint() {
         "expected spend-cap error, got {rendered:?}"
     );
     assert!(
-        !rendered.contains("/notify-owner"),
-        "expected spend-cap guidance instead of notify-owner hint, got {rendered:?}"
+        !rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected spend-cap guidance instead of workspace-owner prompt, got {rendered:?}"
     );
 }
 

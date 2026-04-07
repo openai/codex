@@ -155,7 +155,7 @@ async fn usage_limit_error_requests_background_rate_limit_refresh() {
 }
 
 #[tokio::test]
-async fn notify_owner_refreshes_rate_limits_when_snapshot_is_missing() {
+async fn usage_limit_error_opens_workspace_owner_prompt_after_rate_limits_refresh() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.update_account_state(
@@ -166,27 +166,43 @@ async fn notify_owner_refreshes_rate_limits_when_snapshot_is_missing() {
         /*has_chatgpt_account*/ true,
     );
 
-    chat.dispatch_command(SlashCommand::NotifyOwner);
+    chat.handle_codex_event(Event {
+        id: "usage-limit".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "The usage limit has been reached".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
         events
             .iter()
             .any(|event| matches!(event, AppEvent::RefreshRateLimits { .. })),
-        "expected /notify-owner to request a refresh when rate limits are missing; events: {events:?}"
+        "expected usage-limit errors to request a refresh when rate limits are missing; events: {events:?}"
     );
 
-    let rendered = events
-        .iter()
-        .find_map(|event| match event {
-            AppEvent::InsertHistoryCell(cell) => {
-                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
-            }
-            _ => None,
-        })
-        .expect("expected informational history cell");
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: None,
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        rendered.contains("Refreshing workspace rate limits"),
-        "expected missing-snapshot guidance, got: {rendered}"
+        popup.contains("Request more from your workspace owner? [y/N]"),
+        "expected workspace-owner prompt after refresh, got: {popup}"
     );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::NotifyWorkspaceOwner));
 }

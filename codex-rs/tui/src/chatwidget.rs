@@ -606,6 +606,8 @@ enum RateLimitErrorKind {
 }
 
 pub(crate) const CODEX_USAGE_SETTINGS_URL: &str = "https://chatgpt.com/codex/settings/usage";
+const WORKSPACE_OWNER_NOTIFICATION_PROMPT: &str =
+    "Your workspace is out of credits. Request more from your workspace owner? [y/N]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UsageBasedWorkspaceRateLimitState {
@@ -796,6 +798,7 @@ pub(crate) struct ChatWidget {
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
     notify_workspace_owner_in_flight: bool,
+    pending_workspace_owner_notification_prompt: bool,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     adaptive_chunking: AdaptiveChunkingPolicy,
@@ -2742,6 +2745,7 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
         }
+        self.maybe_show_pending_workspace_owner_notification_prompt();
         self.refresh_status_line();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
@@ -2803,9 +2807,14 @@ impl ChatWidget {
             self.request_rate_limit_refresh();
         }
         let guidance = self.usage_based_workspace_rate_limit_error_guidance();
-        let hint = guidance.as_ref().map(|(_, hint)| hint.clone());
+        let should_prompt_workspace_owner = self.should_prompt_workspace_owner_notification();
+        let hint = guidance.as_ref().and_then(|(_, hint)| hint.clone());
         let message = guidance.map(|(message, _)| message).unwrap_or(message);
         self.on_error_with_hint(message, hint);
+        if should_prompt_workspace_owner {
+            self.pending_workspace_owner_notification_prompt = true;
+            self.maybe_show_pending_workspace_owner_notification_prompt();
+        }
     }
 
     fn handle_non_retry_error(
@@ -4770,6 +4779,7 @@ impl ChatWidget {
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
             notify_workspace_owner_in_flight: false,
+            pending_workspace_owner_notification_prompt: false,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
@@ -5405,9 +5415,6 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
-            }
-            SlashCommand::NotifyOwner => {
-                self.notify_workspace_owner_from_ui();
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
@@ -9688,27 +9695,30 @@ impl ChatWidget {
         })
     }
 
-    fn usage_based_workspace_rate_limit_error_guidance(&self) -> Option<(String, String)> {
+    fn usage_based_workspace_rate_limit_error_guidance(&self) -> Option<(String, Option<String>)> {
         if let Some(state) = self.usage_based_workspace_rate_limit_state() {
             return match state {
                 UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted => Some((
                     "Your workspace is out of credits.".to_string(),
-                    "Run `/usage` to add workspace credits and continue using Codex.".to_string(),
+                    Some("Run `/usage` to add workspace credits and continue using Codex.".to_string()),
                 )),
                 UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached => Some((
                     "Your workspace has reached its spend cap.".to_string(),
-                    "Run `/usage` to increase your workspace spend cap and continue using Codex."
-                        .to_string(),
+                    Some(
+                        "Run `/usage` to increase your workspace spend cap and continue using Codex."
+                            .to_string(),
+                    ),
                 )),
                 UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => Some((
-                    "Your workspace is out of credits.".to_string(),
-                    "Run `/notify-owner` to ask your workspace owner to add credits and continue using Codex."
-                        .to_string(),
+                    WORKSPACE_OWNER_NOTIFICATION_PROMPT.to_string(),
+                    None,
                 )),
                 UsageBasedWorkspaceRateLimitState::MemberSpendCapReached => Some((
                     "Your workspace has reached its spend cap.".to_string(),
-                    "Ask an admin to increase your workspace spend cap. Run `/usage` to open usage settings in your browser."
-                        .to_string(),
+                    Some(
+                        "Ask an admin to increase your workspace spend cap. Run `/usage` to open usage settings in your browser."
+                            .to_string(),
+                    ),
                 )),
             };
         }
@@ -9716,13 +9726,17 @@ impl ChatWidget {
         match self.usage_based_workspace_block_kind()? {
             UsageBasedWorkspaceBlockKind::CreditsDepleted => Some((
                 "Your workspace is out of credits.".to_string(),
-                "If you're the workspace owner, run `/usage` to add credits. Otherwise run `/notify-owner` to ask your workspace owner for help."
-                    .to_string(),
+                Some(
+                    "If you're the workspace owner, run `/usage` to add credits. Otherwise wait a moment while Codex refreshes your workspace status."
+                        .to_string(),
+                ),
             )),
             UsageBasedWorkspaceBlockKind::SpendCapReached => Some((
                 "Your workspace has reached its spend cap.".to_string(),
-                "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
-                    .to_string(),
+                Some(
+                    "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
+                        .to_string(),
+                ),
             )),
         }
     }
@@ -9742,80 +9756,81 @@ impl ChatWidget {
             && !self.rate_limit_snapshots_by_limit_id.contains_key("codex")
     }
 
-    fn notify_workspace_owner_from_ui(&mut self) {
+    fn should_prompt_workspace_owner_notification(&self) -> bool {
         if self.notify_workspace_owner_in_flight {
-            self.add_info_message(
-                "A workspace owner notification is already in progress.".to_string(),
-                None,
-            );
+            return false;
+        }
+
+        if matches!(
+            self.usage_based_workspace_rate_limit_state(),
+            Some(UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted)
+        ) {
+            return true;
+        }
+
+        self.plan_type
+            .filter(|plan_type| is_usage_based_workspace_plan(*plan_type))
+            .is_some()
+            && self.current_is_workspace_owner() == Some(false)
+    }
+
+    fn maybe_show_pending_workspace_owner_notification_prompt(&mut self) {
+        if !self.pending_workspace_owner_notification_prompt {
+            return;
+        }
+        if self.notify_workspace_owner_in_flight {
+            self.pending_workspace_owner_notification_prompt = false;
+            return;
+        }
+        if !self.bottom_pane.no_modal_or_popup_active() {
             return;
         }
 
         match self.usage_based_workspace_rate_limit_state() {
             Some(UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted) => {
-                self.notify_workspace_owner_in_flight = true;
-                self.app_event_tx.send(AppEvent::NotifyWorkspaceOwner);
+                self.pending_workspace_owner_notification_prompt = false;
+                self.open_workspace_owner_notification_prompt();
             }
-            Some(
-                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted
-                | UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached,
-            ) => {
-                self.add_info_message(
-                    "You are the workspace owner. Run `/usage` to manage credits or spend cap."
-                        .to_string(),
-                    None,
-                );
-            }
-            Some(UsageBasedWorkspaceRateLimitState::MemberSpendCapReached) => {
-                self.add_info_message(
-                    "`/notify-owner` is unavailable because your workspace still has credits."
-                        .to_string(),
-                    Some(
-                        "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
-                            .to_string(),
-                    ),
-                );
+            Some(_) => {
+                self.pending_workspace_owner_notification_prompt = false;
             }
             None => {
-                if let Some(block_kind) = self.usage_based_workspace_block_kind() {
-                    match block_kind {
-                        UsageBasedWorkspaceBlockKind::CreditsDepleted => {
-                            self.add_info_message(
-                                "`/notify-owner` needs workspace role information before it can decide whether to send the request."
-                                    .to_string(),
-                                Some(
-                                    "Your workspace is out of credits. If you're not the workspace owner, restart Codex and try `/notify-owner` again. If you are the owner, run `/usage`."
-                                        .to_string(),
-                                ),
-                            );
-                        }
-                        UsageBasedWorkspaceBlockKind::SpendCapReached => {
-                            self.add_info_message(
-                                "`/notify-owner` is unavailable because your workspace has reached its spend cap."
-                                    .to_string(),
-                                Some(
-                                    "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
-                                        .to_string(),
-                                ),
-                            );
-                        }
-                    }
-                } else if self.missing_usage_based_workspace_rate_limit_snapshot() {
-                    self.request_rate_limit_refresh();
-                    self.add_info_message(
-                        "Refreshing workspace rate limits. Wait a moment, then try `/notify-owner` again."
-                            .to_string(),
-                        Some("Run `/status` if you want to monitor the refresh.".to_string()),
-                    );
-                } else {
-                    self.add_info_message(
-                        "`/notify-owner` is only available when a usage-based workspace member is blocked because the workspace is out of credits."
-                            .to_string(),
-                        Some("Run `/status` for current rate-limit details.".to_string()),
-                    );
+                if !self.missing_usage_based_workspace_rate_limit_snapshot() {
+                    self.pending_workspace_owner_notification_prompt = false;
                 }
             }
         }
+    }
+
+    fn open_workspace_owner_notification_prompt(&mut self) {
+        let items = vec![
+            SelectionItem {
+                name: "Yes".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('y'))),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::NotifyWorkspaceOwner))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "No".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('n'))),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(WORKSPACE_OWNER_NOTIFICATION_PROMPT.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: Some(1),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn start_notify_workspace_owner(&mut self) {
+        self.notify_workspace_owner_in_flight = true;
+        self.pending_workspace_owner_notification_prompt = false;
     }
 
     pub(crate) fn finish_notify_workspace_owner(
@@ -9823,6 +9838,7 @@ impl ChatWidget {
         result: Result<AddCreditsNudgeEmailStatus, String>,
     ) {
         self.notify_workspace_owner_in_flight = false;
+        self.pending_workspace_owner_notification_prompt = false;
         match result {
             Ok(AddCreditsNudgeEmailStatus::Sent) => {
                 self.add_info_message("Workspace owner notified.".to_string(), None);
@@ -9854,6 +9870,7 @@ impl ChatWidget {
         self.is_workspace_owner = is_workspace_owner;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
+        self.maybe_show_pending_workspace_owner_notification_prompt();
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
     }

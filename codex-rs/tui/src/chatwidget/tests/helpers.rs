@@ -203,6 +203,7 @@ pub(super) async fn make_chatwidget_manual(
         next_status_refresh_request_id: 0,
         plan_type: None,
         notify_workspace_owner_in_flight: false,
+        pending_workspace_owner_notification_prompt: false,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),

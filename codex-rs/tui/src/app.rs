@@ -4445,6 +4445,7 @@ impl App {
                 }
             },
             AppEvent::NotifyWorkspaceOwner => {
+                self.chat_widget.start_notify_workspace_owner();
                 self.notify_workspace_owner(app_server);
             }
             AppEvent::NotifyWorkspaceOwnerLoaded { result } => {
