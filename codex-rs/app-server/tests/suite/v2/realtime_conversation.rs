@@ -480,8 +480,18 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     assert_eq!(
         sdp_notification,
         ThreadRealtimeSdpNotification {
-            thread_id,
+            thread_id: thread_id.clone(),
             sdp: "v=answer\r\n".to_string()
+        }
+    );
+    let closed_notification =
+        read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
+            .await?;
+    assert_eq!(
+        closed_notification,
+        ThreadRealtimeClosedNotification {
+            thread_id: thread_id.clone(),
+            reason: Some("transport_closed".to_string())
         }
     );
 

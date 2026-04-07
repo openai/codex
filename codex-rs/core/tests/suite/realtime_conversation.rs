@@ -371,6 +371,12 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
     assert_eq!(created.sdp, "v=answer\r\n");
+    let closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
 
     let request = capture.single_request();
     assert_eq!(request.url.path(), "/v1/realtime/calls");

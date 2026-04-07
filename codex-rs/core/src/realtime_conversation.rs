@@ -1,3 +1,4 @@
+use crate::client::ModelClient;
 use crate::codex::Session;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
@@ -141,6 +142,24 @@ struct ConversationState {
     realtime_active: Arc<AtomicBool>,
 }
 
+struct RealtimeStart {
+    api_provider: ApiProvider,
+    extra_headers: Option<HeaderMap>,
+    session_config: RealtimeSessionConfig,
+    model_client: ModelClient,
+    sdp: Option<String>,
+}
+
+struct RealtimeStartOutput {
+    realtime_active: Arc<AtomicBool>,
+    connection: RealtimeStartConnection,
+}
+
+enum RealtimeStartConnection {
+    Websocket { events_rx: Receiver<RealtimeEvent> },
+    Webrtc { sdp: String },
+}
+
 #[allow(dead_code)]
 impl RealtimeConversationManager {
     pub(crate) fn new() -> Self {
@@ -156,12 +175,7 @@ impl RealtimeConversationManager {
             .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
     }
 
-    pub(crate) async fn start(
-        &self,
-        api_provider: ApiProvider,
-        extra_headers: Option<HeaderMap>,
-        session_config: RealtimeSessionConfig,
-    ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
+    async fn start(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.take()
@@ -169,10 +183,37 @@ impl RealtimeConversationManager {
         if let Some(state) = previous_state {
             stop_conversation_state(state, RealtimeFanoutTaskStop::Abort).await;
         }
+
+        self.start_inner(start).await
+    }
+
+    async fn start_inner(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
+        let RealtimeStart {
+            api_provider,
+            extra_headers,
+            session_config,
+            model_client,
+            sdp,
+        } = start;
         let session_kind = match session_config.event_parser {
             RealtimeEventParser::V1 => RealtimeSessionKind::V1,
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
+        let realtime_active = Arc::new(AtomicBool::new(true));
+
+        if let Some(sdp) = sdp {
+            let sdp = model_client
+                .create_realtime_call_with_headers(
+                    sdp,
+                    session_config,
+                    extra_headers.unwrap_or_default(),
+                )
+                .await?;
+            return Ok(RealtimeStartOutput {
+                realtime_active,
+                connection: RealtimeStartConnection::Webrtc { sdp },
+            });
+        }
 
         let client = RealtimeWebsocketClient::new(api_provider);
         let connection = client
@@ -218,7 +259,10 @@ impl RealtimeConversationManager {
             fanout_task: None,
             realtime_active: Arc::clone(&realtime_active),
         });
-        Ok((events_rx, realtime_active))
+        Ok(RealtimeStartOutput {
+            realtime_active,
+            connection: RealtimeStartConnection::Websocket { events_rx },
+        })
     }
 
     pub(crate) async fn register_fanout_task(
@@ -413,7 +457,7 @@ pub(crate) async fn handle_start(
     sub_id: String,
     params: ConversationStartParams,
 ) -> CodexResult<()> {
-    let mut prepared_start = match prepare_realtime_start(sess, params).await {
+    let prepared_start = match prepare_realtime_start(sess, params).await {
         Ok(prepared_start) => prepared_start,
         Err(err) => {
             error!("failed to prepare realtime conversation: {err}");
@@ -429,21 +473,6 @@ pub(crate) async fn handle_start(
         }
     };
 
-    if let Some(ConversationStartTransport::Webrtc { sdp }) = prepared_start.transport.take() {
-        if let Err(err) = handle_webrtc_start(sess, &sub_id, prepared_start, sdp).await {
-            error!("failed to start realtime WebRTC session: {err}");
-            let message = err.to_string();
-            sess.send_event_raw(Event {
-                id: sub_id,
-                msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-                    payload: RealtimeEvent::Error(message),
-                }),
-            })
-            .await;
-        }
-        return Ok(());
-    }
-
     if let Err(err) = handle_start_inner(sess, &sub_id, prepared_start).await {
         error!("failed to start realtime conversation: {err}");
         let message = err.to_string();
@@ -458,48 +487,13 @@ pub(crate) async fn handle_start(
     Ok(())
 }
 
-async fn handle_webrtc_start(
-    sess: &Arc<Session>,
-    sub_id: &str,
-    prepared_start: PreparedRealtimeConversationStart,
-    sdp: String,
-) -> CodexResult<()> {
-    let PreparedRealtimeConversationStart {
-        requested_session_id,
-        version,
-        session_config,
-        ..
-    } = prepared_start;
-    let sdp = sess
-        .services
-        .model_client
-        .create_realtime_call(sdp, session_config)
-        .await?;
-
-    sess.send_event_raw(Event {
-        id: sub_id.to_string(),
-        msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
-            session_id: requested_session_id,
-            version,
-        }),
-    })
-    .await;
-
-    sess.send_event_raw(Event {
-        id: sub_id.to_string(),
-        msg: EventMsg::RealtimeConversationSdp(RealtimeConversationSdpEvent { sdp }),
-    })
-    .await;
-    Ok(())
-}
-
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
     requested_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
-    transport: Option<ConversationStartTransport>,
+    transport: ConversationStartTransport,
 }
 
 async fn prepare_realtime_start(
@@ -531,7 +525,9 @@ async fn prepare_realtime_start(
         requested_session_id,
         version,
         session_config,
-        transport: params.transport,
+        transport: params
+            .transport
+            .unwrap_or(ConversationStartTransport::Websocket),
     })
 }
 
@@ -587,13 +583,21 @@ async fn handle_start_inner(
         requested_session_id,
         version,
         session_config,
-        transport: _,
+        transport,
     } = prepared_start;
     info!("starting realtime conversation");
-    let (events_rx, realtime_active) = sess
-        .conversation
-        .start(api_provider, extra_headers, session_config)
-        .await?;
+    let sdp = match transport {
+        ConversationStartTransport::Websocket => None,
+        ConversationStartTransport::Webrtc { sdp } => Some(sdp),
+    };
+    let start = RealtimeStart {
+        api_provider,
+        extra_headers,
+        session_config,
+        model_client: sess.services.model_client.clone(),
+        sdp,
+    };
+    let start_output = sess.conversation.start(start).await?;
 
     info!("realtime conversation started");
 
@@ -605,6 +609,29 @@ async fn handle_start_inner(
         }),
     })
     .await;
+
+    let RealtimeStartOutput {
+        realtime_active,
+        connection,
+    } = start_output;
+    let events_rx = match connection {
+        RealtimeStartConnection::Websocket { events_rx } => events_rx,
+        RealtimeStartConnection::Webrtc { sdp } => {
+            sess.send_event_raw(Event {
+                id: sub_id.to_string(),
+                msg: EventMsg::RealtimeConversationSdp(RealtimeConversationSdpEvent { sdp }),
+            })
+            .await;
+            sess.conversation.finish_if_active(&realtime_active).await;
+            send_realtime_conversation_closed(
+                sess,
+                sub_id.to_string(),
+                RealtimeConversationEnd::TransportClosed,
+            )
+            .await;
+            return Ok(());
+        }
+    };
 
     let sess_clone = Arc::clone(sess);
     let sub_id = sub_id.to_string();
