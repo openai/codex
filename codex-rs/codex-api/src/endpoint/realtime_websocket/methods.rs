@@ -14,6 +14,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use codex_client::backoff;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
@@ -28,6 +29,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::sleep;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
@@ -37,6 +39,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
+use tracing::warn;
 use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
@@ -463,7 +466,70 @@ impl RealtimeWebsocketClient {
             config.event_parser,
             config.session_mode,
         )?;
+        self.connect_url(ws_url, config, extra_headers, default_headers)
+            .await
+    }
 
+    pub async fn connect_call_id(
+        &self,
+        config: RealtimeSessionConfig,
+        call_id: &str,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        for attempt in 0..=self.provider.retry.max_attempts {
+            let result = self
+                .connect_call_id_once(
+                    config.clone(),
+                    call_id,
+                    extra_headers.clone(),
+                    default_headers.clone(),
+                )
+                .await;
+            match result {
+                Ok(connection) => return Ok(connection),
+                Err(err) if attempt < self.provider.retry.max_attempts => {
+                    let delay = backoff(self.provider.retry.base_delay, attempt + 1);
+                    warn!(
+                        attempt = attempt + 1,
+                        call_id,
+                        delay_ms = delay.as_millis(),
+                        "realtime sideband websocket connect failed; retrying: {err}"
+                    );
+                    sleep(delay).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(ApiError::Stream(
+            "realtime sideband websocket retry loop exhausted".to_string(),
+        ))
+    }
+
+    async fn connect_call_id_once(
+        &self,
+        config: RealtimeSessionConfig,
+        call_id: &str,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        let ws_url = websocket_url_from_api_url_for_call(
+            self.provider.base_url.as_str(),
+            self.provider.query_params.as_ref(),
+            call_id,
+        )?;
+        self.connect_url(ws_url, config, extra_headers, default_headers)
+            .await
+    }
+
+    async fn connect_url(
+        &self,
+        ws_url: Url,
+        config: RealtimeSessionConfig,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
         let mut request = ws_url
             .as_str()
             .into_client_request()
@@ -593,6 +659,22 @@ fn websocket_url_from_api_url(
         }
     }
 
+    Ok(url)
+}
+
+fn websocket_url_from_api_url_for_call(
+    api_url: &str,
+    query_params: Option<&HashMap<String, String>>,
+    call_id: &str,
+) -> Result<Url, ApiError> {
+    let mut url = websocket_url_from_api_url(
+        api_url,
+        query_params,
+        /*model*/ None,
+        RealtimeEventParser::RealtimeV2,
+        RealtimeSessionMode::Conversational,
+    )?;
+    url.query_pairs_mut().append_pair("call_id", call_id);
     Ok(url)
 }
 
@@ -1092,6 +1174,20 @@ mod tests {
         )
         .expect("build ws url");
         assert_eq!(url.as_str(), "wss://example.com/v1/realtime");
+    }
+
+    #[test]
+    fn websocket_url_for_call_id_joins_existing_realtime_session() {
+        let url = websocket_url_from_api_url_for_call(
+            "https://api.openai.com/v1",
+            /*query_params*/ None,
+            "rtc_test",
+        )
+        .expect("build ws url");
+        assert_eq!(
+            url.as_str(),
+            "wss://api.openai.com/v1/realtime?call_id=rtc_test"
+        );
     }
 
     #[tokio::test]

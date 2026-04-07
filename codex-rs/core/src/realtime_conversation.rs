@@ -152,12 +152,8 @@ struct RealtimeStart {
 
 struct RealtimeStartOutput {
     realtime_active: Arc<AtomicBool>,
-    connection: RealtimeStartConnection,
-}
-
-enum RealtimeStartConnection {
-    Websocket { events_rx: Receiver<RealtimeEvent> },
-    Webrtc { sdp: String },
+    events_rx: Receiver<RealtimeEvent>,
+    sdp: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -199,31 +195,37 @@ impl RealtimeConversationManager {
             RealtimeEventParser::V1 => RealtimeSessionKind::V1,
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
-        let realtime_active = Arc::new(AtomicBool::new(true));
 
-        if let Some(sdp) = sdp {
-            let sdp = model_client
+        let client = RealtimeWebsocketClient::new(api_provider);
+        let (connection, sdp) = if let Some(sdp) = sdp {
+            let call = model_client
                 .create_realtime_call_with_headers(
                     sdp,
-                    session_config,
+                    session_config.clone(),
                     extra_headers.unwrap_or_default(),
                 )
                 .await?;
-            return Ok(RealtimeStartOutput {
-                realtime_active,
-                connection: RealtimeStartConnection::Webrtc { sdp },
-            });
-        }
-
-        let client = RealtimeWebsocketClient::new(api_provider);
-        let connection = client
-            .connect(
-                session_config,
-                extra_headers.unwrap_or_default(),
-                default_headers(),
-            )
-            .await
-            .map_err(map_api_error)?;
+            let connection = client
+                .connect_call_id(
+                    session_config,
+                    &call.call_id,
+                    call.sideband_headers,
+                    default_headers(),
+                )
+                .await
+                .map_err(map_api_error)?;
+            (connection, Some(call.sdp))
+        } else {
+            let connection = client
+                .connect(
+                    session_config,
+                    extra_headers.unwrap_or_default(),
+                    default_headers(),
+                )
+                .await
+                .map_err(map_api_error)?;
+            (connection, None)
+        };
 
         let writer = connection.writer();
         let events = connection.events();
@@ -261,7 +263,8 @@ impl RealtimeConversationManager {
         });
         Ok(RealtimeStartOutput {
             realtime_active,
-            connection: RealtimeStartConnection::Websocket { events_rx },
+            events_rx,
+            sdp,
         })
     }
 
@@ -511,11 +514,7 @@ async fn prepare_realtime_start(
     let transport = params
         .transport
         .unwrap_or(ConversationStartTransport::Websocket);
-    let mut api_provider = if matches!(transport, ConversationStartTransport::Websocket) {
-        provider.to_api_provider(Some(AuthMode::ApiKey))?
-    } else {
-        provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?
-    };
+    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }
@@ -626,26 +625,16 @@ async fn handle_start_inner(
 
     let RealtimeStartOutput {
         realtime_active,
-        connection,
+        events_rx,
+        sdp,
     } = start_output;
-    let events_rx = match connection {
-        RealtimeStartConnection::Websocket { events_rx } => events_rx,
-        RealtimeStartConnection::Webrtc { sdp } => {
-            sess.send_event_raw(Event {
-                id: sub_id.to_string(),
-                msg: EventMsg::RealtimeConversationSdp(RealtimeConversationSdpEvent { sdp }),
-            })
-            .await;
-            sess.conversation.finish_if_active(&realtime_active).await;
-            send_realtime_conversation_closed(
-                sess,
-                sub_id.to_string(),
-                RealtimeConversationEnd::TransportClosed,
-            )
-            .await;
-            return Ok(());
-        }
-    };
+    if let Some(sdp) = sdp {
+        sess.send_event_raw(Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::RealtimeConversationSdp(RealtimeConversationSdpEvent { sdp }),
+        })
+        .await;
+    }
 
     let sess_clone = Arc::clone(sess);
     let sub_id = sub_id.to_string();

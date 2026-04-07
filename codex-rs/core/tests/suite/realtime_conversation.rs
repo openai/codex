@@ -19,8 +19,10 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
+use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -337,19 +339,37 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = start_mock_server().await;
     let capture = RealtimeCallRequestCapture::new();
     Mock::given(method("POST"))
         .and(path_regex(".*/realtime/calls$"))
         .and(capture.clone())
-        .respond_with(ResponseTemplate::new(200).set_body_string("v=answer\r\n"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/realtime/calls/calls/rtc_core_test")
+                .set_body_string("v=answer\r\n"),
+        )
         .mount(&server)
         .await;
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_webrtc", "instructions": "backend prompt" }
+        })]],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
         config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
         config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
         config.experimental_realtime_ws_startup_context = Some("startup context".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
     });
     let test = builder.build(&server).await?;
 
@@ -371,12 +391,15 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
     assert_eq!(created.sdp, "v=answer\r\n");
-    let closed = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
         _ => None,
     })
     .await;
-    assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
+    assert_eq!(session_updated, "sess_webrtc");
 
     let request = capture.single_request();
     assert_eq!(request.url.path(), "/v1/realtime/calls");
@@ -415,6 +438,37 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         )
     );
 
+    let session_update = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(
+        session_update.body_json()["type"].as_str(),
+        Some("session.update")
+    );
+    assert!(
+        websocket_request_instructions(&session_update)
+            .context("session.update should include instructions")?
+            .contains("startup context")
+    );
+    let handshake = realtime_server.single_handshake();
+    assert_eq!(handshake.uri(), "/v1/realtime?call_id=rtc_core_test");
+    assert_eq!(
+        handshake.header("authorization").as_deref(),
+        Some("Bearer dummy")
+    );
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(matches!(
+        closed.reason.as_deref(),
+        Some("requested" | "transport_closed")
+    ));
+
+    realtime_server.shutdown().await;
     Ok(())
 }
 
