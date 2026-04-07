@@ -126,6 +126,13 @@ pub(crate) fn resolve_role_config<'a>(
         .or_else(|| built_in::configs().get(role_name))
 }
 
+pub(crate) fn default_fork_context_for_role(config: &Config, role_name: Option<&str>) -> bool {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    resolve_role_config(config, role_name)
+        .and_then(|role| role.fork_context)
+        .unwrap_or(true)
+}
+
 fn preservation_policy(config: &Config, role_layer_toml: &TomlValue) -> (bool, bool) {
     let role_selects_provider = role_layer_toml.get("model_provider").is_some();
     let role_selects_profile = role_layer_toml.get("profile").is_some();
@@ -359,6 +366,7 @@ mod built_in {
                         description: Some("Default agent.".to_string()),
                         config_file: None,
                         nickname_candidates: None,
+                        fork_context: Some(true),
                     }
                 ),
                 (
@@ -373,6 +381,7 @@ Rules:
 - Reuse existing explorers for related questions."#.to_string()),
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
                         nickname_candidates: None,
+                        fork_context: Some(true),
                     }
                 ),
                 (
@@ -388,6 +397,7 @@ Rules:
 - Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product."#.to_string()),
                         config_file: None,
                         nickname_candidates: None,
+                        fork_context: Some(true),
                     }
                 ),
                 // Awaiter is temp removed
