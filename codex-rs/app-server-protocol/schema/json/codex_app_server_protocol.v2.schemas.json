@@ -6375,6 +6375,12 @@
             "null"
           ]
         },
+        "dangerFullAccessDenylistOnly": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "dangerouslyAllowAllUnixSockets": {
           "type": [
             "boolean",

@@ -885,6 +885,7 @@ pub struct NetworkRequirements {
     /// Legacy compatibility view derived from `unix_sockets`.
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
+    pub danger_full_access_denylist_only: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -2602,10 +2603,22 @@ pub struct ThreadStartParams {
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
     pub service_name: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<String>,
+    pub base_instructions: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<String>,
+    pub developer_instructions: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
@@ -2720,10 +2733,22 @@ pub struct ThreadResumeParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<String>,
+    pub base_instructions: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<String>,
+    pub developer_instructions: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// If true, persist additional rollout EventMsg variants required to
@@ -2797,10 +2822,22 @@ pub struct ThreadForkParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<String>,
+    pub base_instructions: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<String>,
+    pub developer_instructions: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// If true, persist additional rollout EventMsg variants required to
@@ -7820,6 +7857,7 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
+                danger_full_access_denylist_only: None,
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["blocked.example.com".to_string()]),
                 unix_sockets: None,
@@ -7846,6 +7884,7 @@ mod tests {
                 ),
             ])),
             managed_allowed_domains_only: Some(true),
+            danger_full_access_denylist_only: Some(true),
             allowed_domains: Some(vec!["api.openai.com".to_string()]),
             denied_domains: Some(vec!["blocked.example.com".to_string()]),
             unix_sockets: Some(BTreeMap::from([
@@ -7876,6 +7915,7 @@ mod tests {
                     "blocked.example.com": "deny"
                 },
                 "managedAllowedDomainsOnly": true,
+                "dangerFullAccessDenylistOnly": true,
                 "allowedDomains": ["api.openai.com"],
                 "deniedDomains": ["blocked.example.com"],
                 "unixSockets": {
@@ -8319,6 +8359,35 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_start_params_preserve_explicit_null_instructions() {
+        let params: ThreadStartParams = serde_json::from_value(json!({
+            "baseInstructions": null,
+            "developerInstructions": null,
+        }))
+        .expect("params should deserialize");
+        assert_eq!(params.base_instructions, Some(None));
+        assert_eq!(params.developer_instructions, Some(None));
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("baseInstructions"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            serialized.get("developerInstructions"),
+            Some(&serde_json::Value::Null)
+        );
+
+        let serialized_without_override =
+            serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
+        assert_eq!(serialized_without_override.get("baseInstructions"), None);
+        assert_eq!(
+            serialized_without_override.get("developerInstructions"),
+            None
+        );
     }
 
     #[test]

@@ -356,6 +356,14 @@ pub(crate) fn invalid_params(message: String) -> JSONRPCErrorError {
     }
 }
 
+pub(crate) fn not_found(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: -32004,
+        data: None,
+        message,
+    }
+}
+
 pub(crate) fn internal_error(message: String) -> JSONRPCErrorError {
     JSONRPCErrorError {
         code: -32603,
