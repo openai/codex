@@ -65,43 +65,73 @@ case "${RUNNER_OS:-}" in
     ;;
 esac
 
-print_bazel_test_log_tails() {
+print_failed_bazel_test_logs() {
   local console_log="$1"
-  local testlogs_dir
+  local testlogs_dir=
   local -a bazel_info_cmd=(bazel)
 
-  if (( ${#bazel_startup_args[@]} > 0 )); then
-    bazel_info_cmd+=("${bazel_startup_args[@]}")
-  fi
-
-  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
-
-  local failed_targets=()
-  while IFS= read -r target; do
-    failed_targets+=("$target")
+  local failed_target_logs=()
+  while IFS= read -r target_log; do
+    failed_target_logs+=("$target_log")
   done < <(
     grep -E '^FAIL: //' "$console_log" \
-      | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
+      | awk '{
+          target = $2
+          test_log = ""
+          if (match($0, /\(see [^)]*test\.log\)/)) {
+            test_log = substr($0, RSTART + 5, RLENGTH - 6)
+          }
+          if (!(target in test_logs) || test_logs[target] == "") {
+            test_logs[target] = test_log
+          }
+        }
+        END {
+          for (target in test_logs) {
+            print target "\t" test_logs[target]
+          }
+        }' \
       | sort -u
   )
 
-  if [[ ${#failed_targets[@]} -eq 0 ]]; then
+  if [[ ${#failed_target_logs[@]} -eq 0 ]]; then
     echo "No failed Bazel test targets were found in console output."
     return
   fi
 
-  for target in "${failed_targets[@]}"; do
-    local rel_path="${target#//}"
-    rel_path="${rel_path/:/\/}"
-    local test_log="${testlogs_dir}/${rel_path}/test.log"
+  echo
+  echo "Bazel failed test targets:"
+  for target_log in "${failed_target_logs[@]}"; do
+    local target="${target_log%%$'\t'*}"
+    echo "  FAIL ${target}"
+  done
 
-    echo "::group::Bazel test log tail for ${target}"
+  for target_log in "${failed_target_logs[@]}"; do
+    local target="${target_log%%$'\t'*}"
+    local test_log="${target_log#*$'\t'}"
+
+    if [[ -z "$test_log" ]]; then
+      if [[ -z "$testlogs_dir" ]]; then
+        if (( ${#bazel_startup_args[@]} > 0 )); then
+          bazel_info_cmd+=("${bazel_startup_args[@]}")
+        fi
+
+        testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+      fi
+
+      local rel_path="${target#//}"
+      rel_path="${rel_path/:/\/}"
+      test_log="${testlogs_dir}/${rel_path}/test.log"
+    fi
+
+    echo
+    echo "FAIL ${target}"
+    echo "test log: ${test_log}"
+    echo
     if [[ -f "$test_log" ]]; then
-      tail -n 200 "$test_log"
+      cat "$test_log"
     else
       echo "Missing test log: $test_log"
     fi
-    echo "::endgroup::"
   done
 }
 
@@ -272,7 +302,7 @@ fi
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
   if [[ $print_failed_bazel_test_logs -eq 1 ]]; then
-    print_bazel_test_log_tails "$bazel_console_log"
+    print_failed_bazel_test_logs "$bazel_console_log"
   fi
   exit "$bazel_status"
 fi
