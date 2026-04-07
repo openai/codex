@@ -53,39 +53,48 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
     assert!(message.contains(&expected_truncated));
 }
 
-#[tokio::test]
-async fn build_consolidation_prompt_renders_embedded_template_without_modules() {
+#[test]
+fn build_consolidation_prompt_renders_embedded_template() {
     let prompt =
-        build_consolidation_prompt(Path::new("/tmp/memories"), &Phase2InputSelection::default())
-            .await;
+        build_consolidation_prompt(Path::new("/tmp/codex"), &Phase2InputSelection::default());
 
-    assert!(prompt.contains("Folder structure (under /tmp/memories/):"));
+    assert!(prompt.contains("Folder structure (under /tmp/codex/memories/):"));
+    assert!(prompt.contains("Optional memory extensions (under /tmp/codex/memories_extensions/)"));
     assert!(prompt.contains("**Diff since last consolidation:**"));
     assert!(prompt.contains("- selected inputs this run: 0"));
 }
 
 #[tokio::test]
-async fn build_consolidation_prompt_appends_modules_in_sorted_order() {
+async fn build_consolidation_prompt_points_to_extensions_without_inlining_them() {
     let temp = tempdir().unwrap();
-    let memories_dir = temp.path();
-    let modules_dir = memories_dir.join("consolidation");
-    tokio_fs::create_dir_all(&modules_dir).await.unwrap();
-    tokio_fs::write(modules_dir.join("02-second.md"), "second module\n")
+    let codex_home = temp.path();
+    let extension_dir = codex_home.join("memories_extensions/tape_recorder");
+    tokio_fs::create_dir_all(extension_dir.join("resources"))
         .await
         .unwrap();
-    tokio_fs::write(modules_dir.join("01-first.md"), "first module\n")
-        .await
-        .unwrap();
-    tokio_fs::write(modules_dir.join("ignored.txt"), "ignored module\n")
-        .await
-        .unwrap();
+    tokio_fs::write(
+        extension_dir.join("instruction.md"),
+        "source-specific instructions\n",
+    )
+    .await
+    .unwrap();
+    tokio_fs::write(
+        extension_dir.join("resources/notes.md"),
+        "source-specific resource\n",
+    )
+    .await
+    .unwrap();
 
-    let prompt = build_consolidation_prompt(memories_dir, &Phase2InputSelection::default()).await;
+    let prompt = build_consolidation_prompt(codex_home, &Phase2InputSelection::default());
 
-    let first_index = prompt.find("first module").unwrap();
-    let second_index = prompt.find("second module").unwrap();
-    assert!(first_index < second_index);
-    assert!(!prompt.contains("ignored module"));
+    assert!(prompt.contains(&format!(
+        "Optional memory extensions (under {}/memories_extensions/)",
+        codex_home.display()
+    )));
+    assert!(prompt.contains("<extension_name>/instruction.md"));
+    assert!(prompt.contains("<extension_name>/resources/"));
+    assert!(!prompt.contains("source-specific instructions"));
+    assert!(!prompt.contains("source-specific resource"));
 }
 
 #[tokio::test]

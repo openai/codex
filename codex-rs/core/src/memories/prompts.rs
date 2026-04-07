@@ -1,4 +1,4 @@
-use crate::memories::consolidation_prompt_modules_dir;
+use crate::memories::memory_extensions_root;
 use crate::memories::memory_root;
 use crate::memories::phase_one;
 use crate::memories::storage::rollout_summary_file_stem_from_parts;
@@ -40,18 +40,20 @@ fn parse_embedded_template(source: &'static str, template_name: &str) -> Templat
     }
 }
 
-/// Builds the consolidation subagent prompt for a specific memory root.
-pub(super) async fn build_consolidation_prompt(
-    memory_root: &Path,
+/// Builds the consolidation subagent prompt for a specific Codex home.
+pub(super) fn build_consolidation_prompt(
+    codex_home: &Path,
     selection: &Phase2InputSelection,
 ) -> String {
-    // additional prompt modules can be added here
-    let consolidation_prompt_modules = read_consolidation_prompt_modules(memory_root).await;
+    let memory_root = memory_root(codex_home);
+    let memory_extensions_root = memory_extensions_root(codex_home);
     let memory_root = memory_root.display().to_string();
+    let memory_extensions_root = memory_extensions_root.display().to_string();
     let phase2_input_selection = render_phase2_input_selection(selection);
-    let mut prompt = CONSOLIDATION_PROMPT_TEMPLATE
+    CONSOLIDATION_PROMPT_TEMPLATE
         .render([
             ("memory_root", memory_root.as_str()),
+            ("memory_extensions_root", memory_extensions_root.as_str()),
             ("phase2_input_selection", phase2_input_selection.as_str()),
         ])
         .unwrap_or_else(|err| {
@@ -59,71 +61,7 @@ pub(super) async fn build_consolidation_prompt(
             format!(
                 "## Memory Phase 2 (Consolidation)\nConsolidate Codex memories in: {memory_root}\n\n{phase2_input_selection}"
             )
-        });
-    if !consolidation_prompt_modules.is_empty() {
-        prompt.push_str("\n\n");
-        prompt.push_str(&consolidation_prompt_modules);
-    }
-    prompt
-}
-
-async fn read_consolidation_prompt_modules(memory_root: &Path) -> String {
-    let modules_dir = consolidation_prompt_modules_dir(memory_root);
-    let mut dir = match fs::read_dir(&modules_dir).await {
-        Ok(dir) => dir,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return String::new(),
-        Err(err) => {
-            warn!(
-                "failed to read memories consolidation prompt modules dir {}: {err}",
-                modules_dir.display()
-            );
-            return String::new();
-        }
-    };
-
-    let mut module_paths = Vec::new();
-    loop {
-        match dir.next_entry().await {
-            Ok(Some(entry)) => {
-                let path = entry.path();
-                if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
-                    module_paths.push(path);
-                }
-            }
-            Ok(None) => break,
-            Err(err) => {
-                warn!(
-                    "failed to list memories consolidation prompt modules dir {}: {err}",
-                    modules_dir.display()
-                );
-                return String::new();
-            }
-        }
-    }
-
-    module_paths.sort();
-
-    let mut modules_concat = String::new();
-    for path in module_paths {
-        let module = match fs::read_to_string(&path).await {
-            Ok(module) => module,
-            Err(err) => {
-                warn!(
-                    "failed to read memories consolidation prompt module {}: {err}",
-                    path.display()
-                );
-                continue;
-            }
-        };
-        let module = module.trim();
-        if module.is_empty() {
-            continue;
-        }
-        modules_concat.push_str("\n\n");
-        modules_concat.push_str(module);
-    }
-
-    modules_concat
+        })
 }
 
 fn render_phase2_input_selection(selection: &Phase2InputSelection) -> String {

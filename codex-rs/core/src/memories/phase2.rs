@@ -324,8 +324,7 @@ mod agent {
         config: Arc<Config>,
         selection: &codex_state::Phase2InputSelection,
     ) -> Vec<UserInput> {
-        let root = memory_root(&config.codex_home);
-        let prompt = build_consolidation_prompt(&root, selection).await;
+        let prompt = build_consolidation_prompt(&config.codex_home, selection);
         vec![UserInput::Text {
             text: prompt,
             text_elements: vec![],

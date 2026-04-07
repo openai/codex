@@ -34,6 +34,17 @@ Folder structure (under {{ memory_root }}/):
     pointers/references, and pruned raw evidence snippets. Distilled version of
     everything valuable from the raw rollout.
 
+Memory extensions (under {{ memory_extensions_root }}/):
+
+- <extension_name>/instruction.md
+  - Source-specific guidance for interpreting additional memory signals. If an
+    extension folder exists, you must read its instruction.md to determine how to use this memory
+    source.
+
+If the user has any memory extensions, you MUST read the instructions for each extension to
+determine how to use the memory source. If `{{ memory_extensions_root }}` does not exist or has no
+extension folders, continue with the standard memory inputs only.
+
 ============================================================
 GLOBAL SAFETY, HYGIENE, AND NO-FILLER RULES (STRICT)
 ============================================================
@@ -135,6 +146,13 @@ Under `{{ memory_root }}/`:
   - read the existing summary so updates stay consistent
 - `skills/*`
   - read existing skills so updates are incremental and non-duplicative
+
+Optional source-specific inputs:
+Under `{{ memory_extensions_root }}/`:
+
+- `<extension_name>/instruction.md`
+  - If extension folders exist, read each instruction.md first and follow it when interpreting
+    that extension's memory source.
 
 Mode selection:
 
