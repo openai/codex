@@ -348,6 +348,34 @@ struct ThreadListFilters {
     search_term: Option<String>,
 }
 
+struct TurnContextOverrides {
+    cwd: Option<PathBuf>,
+    approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
+    sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
+    model: Option<String>,
+    effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
+    summary: Option<codex_protocol::config_types::ReasoningSummary>,
+    service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
+    collaboration_mode: Option<CollaborationMode>,
+    personality: Option<Personality>,
+}
+
+impl TurnContextOverrides {
+    fn has_any_override(&self) -> bool {
+        self.cwd.is_some()
+            || self.approval_policy.is_some()
+            || self.approvals_reviewer.is_some()
+            || self.sandbox_policy.is_some()
+            || self.model.is_some()
+            || self.effort.is_some()
+            || self.summary.is_some()
+            || self.service_tier.is_some()
+            || self.collaboration_mode.is_some()
+            || self.personality.is_some()
+    }
+}
+
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
@@ -627,6 +655,37 @@ impl CodexMessageProcessor {
         }
 
         collaboration_mode
+    }
+
+    fn build_override_turn_context_op(
+        &self,
+        thread: &CodexThread,
+        overrides: TurnContextOverrides,
+    ) -> Op {
+        let collaboration_modes_config = CollaborationModesConfig {
+            default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
+        };
+        let collaboration_mode = overrides.collaboration_mode.map(|mode| {
+            self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
+        });
+
+        Op::OverrideTurnContext {
+            cwd: overrides.cwd,
+            approval_policy: overrides.approval_policy.map(AskForApproval::to_core),
+            approvals_reviewer: overrides
+                .approvals_reviewer
+                .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
+            sandbox_policy: overrides.sandbox_policy.map(|p| p.to_core()),
+            // The v2 app-server API does not expose Windows sandbox level yet;
+            // keep matching `turn/start` by leaving it unchanged here.
+            windows_sandbox_level: None,
+            model: overrides.model,
+            effort: overrides.effort,
+            summary: overrides.summary,
+            service_tier: overrides.service_tier,
+            collaboration_mode,
+            personality: overrides.personality,
+        }
     }
 
     fn review_request_from_target(
@@ -2676,6 +2735,9 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// Handle `thread/turnContext/update`: apply turn-context overrides (cwd, model,
+    /// approval policy, etc.) to a loaded thread by forwarding them as an
+    /// `Op::OverrideTurnContext` to the core session.
     async fn thread_turn_context_update(
         &self,
         request_id: ConnectionRequestId,
@@ -2694,6 +2756,18 @@ impl CodexMessageProcessor {
             collaboration_mode,
             personality,
         } = params;
+        let overrides = TurnContextOverrides {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        };
         let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
@@ -2702,31 +2776,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        let collaboration_modes_config = CollaborationModesConfig {
-            default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
-        };
-        let collaboration_mode = collaboration_mode.map(|mode| {
-            self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
-        });
-
         match self
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::OverrideTurnContext {
-                    cwd,
-                    approval_policy: approval_policy.map(AskForApproval::to_core),
-                    approvals_reviewer: approvals_reviewer
-                        .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
-                    sandbox_policy: sandbox_policy.map(|p| p.to_core()),
-                    windows_sandbox_level: None,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                },
+                self.build_override_turn_context_op(thread.as_ref(), overrides),
             )
             .await
         {
@@ -6554,52 +6608,32 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let collaboration_modes_config = CollaborationModesConfig {
-            default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
-        };
-        let collaboration_mode = params.collaboration_mode.map(|mode| {
-            self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
-        });
-
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
             .input
             .into_iter()
             .map(V2UserInput::into_core)
             .collect();
-
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.approvals_reviewer.is_some()
-            || params.sandbox_policy.is_some()
-            || params.model.is_some()
-            || params.service_tier.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
-            || collaboration_mode.is_some()
-            || params.personality.is_some();
+        let overrides = TurnContextOverrides {
+            cwd: params.cwd,
+            approval_policy: params.approval_policy,
+            approvals_reviewer: params.approvals_reviewer,
+            sandbox_policy: params.sandbox_policy,
+            model: params.model,
+            effort: params.effort.map(Some),
+            summary: params.summary,
+            service_tier: params.service_tier,
+            collaboration_mode: params.collaboration_mode,
+            personality: params.personality,
+        };
 
         // If any overrides are provided, update the session turn context first.
-        if has_any_overrides {
+        if overrides.has_any_override() {
             let _ = self
                 .submit_core_op(
                     &request_id,
                     thread.as_ref(),
-                    Op::OverrideTurnContext {
-                        cwd: params.cwd,
-                        approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                        approvals_reviewer: params
-                            .approvals_reviewer
-                            .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
-                        sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                        windows_sandbox_level: None,
-                        model: params.model,
-                        effort: params.effort.map(Some),
-                        summary: params.summary,
-                        service_tier: params.service_tier,
-                        collaboration_mode,
-                        personality: params.personality,
-                    },
+                    self.build_override_turn_context_op(thread.as_ref(), overrides),
                 )
                 .await;
         }

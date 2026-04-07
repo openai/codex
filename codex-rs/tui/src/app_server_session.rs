@@ -646,40 +646,17 @@ impl AppServerSession {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Send a `thread/turnContext/update` request to the app-server, applying
+    /// the given overrides (cwd, model, approval policy, etc.) to the loaded
+    /// thread so they take effect on subsequent turns and shell commands.
     pub(crate) async fn thread_turn_context_update(
         &mut self,
-        thread_id: ThreadId,
-        cwd: Option<PathBuf>,
-        approval_policy: Option<AskForApproval>,
-        approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
-        sandbox_policy: Option<SandboxPolicy>,
-        model: Option<String>,
-        effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
-        summary: Option<codex_protocol::config_types::ReasoningSummary>,
-        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
-        collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
-        personality: Option<codex_protocol::config_types::Personality>,
+        params: ThreadTurnContextUpdateParams,
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadTurnContextUpdateResponse = self
             .client
-            .request_typed(ClientRequest::ThreadTurnContextUpdate {
-                request_id,
-                params: ThreadTurnContextUpdateParams {
-                    thread_id: thread_id.to_string(),
-                    cwd,
-                    approval_policy: approval_policy.map(Into::into),
-                    approvals_reviewer: approvals_reviewer.map(Into::into),
-                    sandbox_policy: sandbox_policy.map(Into::into),
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                },
-            })
+            .request_typed(ClientRequest::ThreadTurnContextUpdate { request_id, params })
             .await
             .wrap_err("thread/turnContext/update failed in TUI")?;
         Ok(())

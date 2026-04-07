@@ -79,6 +79,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadTurnContextUpdateParams;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
@@ -2417,19 +2418,19 @@ impl App {
                 personality,
             } => {
                 app_server
-                    .thread_turn_context_update(
-                        thread_id,
-                        (*cwd).clone(),
-                        *approval_policy,
-                        *approvals_reviewer,
-                        (*sandbox_policy).clone(),
-                        (*model).clone(),
-                        *effort,
-                        *summary,
-                        *service_tier,
-                        (*collaboration_mode).clone(),
-                        *personality,
-                    )
+                    .thread_turn_context_update(ThreadTurnContextUpdateParams {
+                        thread_id: thread_id.to_string(),
+                        cwd: (*cwd).clone(),
+                        approval_policy: (*approval_policy).map(Into::into),
+                        approvals_reviewer: (*approvals_reviewer).map(Into::into),
+                        sandbox_policy: (*sandbox_policy).clone().map(Into::into),
+                        model: (*model).clone(),
+                        effort: *effort,
+                        summary: *summary,
+                        service_tier: *service_tier,
+                        collaboration_mode: (*collaboration_mode).clone(),
+                        personality: *personality,
+                    })
                     .await?;
                 Ok(true)
             }
