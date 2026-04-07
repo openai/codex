@@ -1,6 +1,14 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn turn_complete_event(turn_id: &str, last_agent_message: Option<&str>) -> TurnCompleteEvent {
+    serde_json::from_value(serde_json::json!({
+        "turn_id": turn_id,
+        "last_agent_message": last_agent_message,
+    }))
+    .expect("turn complete event should deserialize")
+}
+
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -380,10 +388,7 @@ async fn slash_copy_preserves_surviving_response_after_local_prompt_rollback() {
     let _ = drain_insert_history(&mut rx);
     chat.handle_codex_event(Event {
         id: "turn-2".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-2".to_string(),
-            last_agent_message: None,
-        }),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-2", None)),
     });
     let _ = drain_insert_history(&mut rx);
     assert_eq!(
@@ -404,19 +409,13 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Previous reply".to_string()),
-        }),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Previous reply"))),
     });
     chat.pending_notification = None;
 
     chat.handle_codex_event(Event {
         id: "turn-2".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-2".to_string(),
-            last_agent_message: None,
-        }),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-2", None)),
     });
 
     assert_matches!(
