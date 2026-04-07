@@ -210,8 +210,12 @@ impl BreakdownAccumulator {
             return;
         }
         let verbose = self.verbose;
-        if !verbose && label.starts_with("Tool call: ") {
-            label = "Tool calls".to_string();
+        if !verbose {
+            if label.starts_with("Tool call: ") {
+                label = "Tool calls".to_string();
+            } else if label.starts_with("Assistant message") {
+                label = "Assistant messages".to_string();
+            }
         }
         let section = self
             .section_accumulator(section)
@@ -366,7 +370,7 @@ fn classify_developer_text(text: &str) -> (ContextSectionKind, String) {
     if starts_with_tag(trimmed, COLLABORATION_MODE_OPEN_TAG) {
         return (
             ContextSectionKind::BuiltIn,
-            "Collaboration mode instructions".to_string(),
+            "Developer instructions".to_string(),
         );
     }
     if starts_with_tag(trimmed, "<personality_spec>") {
@@ -394,7 +398,7 @@ fn classify_user_text(text: &str, phase: Option<&MessagePhase>) -> (ContextSecti
     if ENVIRONMENT_CONTEXT_FRAGMENT.matches_text(text) {
         return (
             ContextSectionKind::BuiltIn,
-            "Environment context".to_string(),
+            "Developer instructions".to_string(),
         );
     }
     if USER_SHELL_COMMAND_FRAGMENT.matches_text(text) {
@@ -668,7 +672,7 @@ mod tests {
             vec![
                 "AGENTS.md instructions for /repo".to_string(),
                 "Base instructions".to_string(),
-                "Environment context".to_string(),
+                "Developer instructions".to_string(),
                 "Skill instructions".to_string(),
                 "Reasoning".to_string(),
                 "Skill: notify (/tmp/skills/notify/SKILL.md)".to_string(),
@@ -808,6 +812,82 @@ mod tests {
                 .map(|detail| detail.tokens)
                 .sum::<i64>(),
             conversation.tokens
+        );
+    }
+
+    #[test]
+    fn non_verbose_breakdown_merges_assistant_messages_into_one_row() {
+        let breakdown = build_context_window_breakdown(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "thinking".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: Some(MessagePhase::Commentary),
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "answer".to_string(),
+                    }],
+                    end_turn: Some(true),
+                    phase: Some(MessagePhase::FinalAnswer),
+                },
+            ],
+            &BaseInstructions {
+                text: String::new(),
+            },
+            /*model_context_window*/ None,
+            /*verbose*/ false,
+        );
+
+        let conversation = breakdown
+            .sections
+            .iter()
+            .find(|section| section.label == "Conversation")
+            .expect("conversation section");
+
+        assert_eq!(
+            conversation
+                .details
+                .iter()
+                .map(|detail| detail.label.clone())
+                .collect::<Vec<_>>(),
+            vec!["Assistant messages".to_string()]
+        );
+    }
+
+    #[test]
+    fn collaboration_and_environment_context_are_grouped_under_developer_instructions() {
+        let breakdown = build_context_window_breakdown(
+            &[
+                developer_text("<collaboration_mode>default</collaboration_mode>"),
+                user_text("<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"),
+            ],
+            &BaseInstructions {
+                text: String::new(),
+            },
+            /*model_context_window*/ None,
+            /*verbose*/ false,
+        );
+
+        let built_in = breakdown
+            .sections
+            .iter()
+            .find(|section| section.label == "Built-in")
+            .expect("built-in section");
+
+        assert_eq!(
+            built_in
+                .details
+                .iter()
+                .map(|detail| detail.label.clone())
+                .collect::<Vec<_>>(),
+            vec!["Developer instructions".to_string()]
         );
     }
 }
