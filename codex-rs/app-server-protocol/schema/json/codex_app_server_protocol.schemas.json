@@ -11616,6 +11616,10 @@
           },
           {
             "properties": {
+              "allowLimitedGitWrites": {
+                "default": false,
+                "type": "boolean"
+              },
               "excludeSlashTmp": {
                 "default": false,
                 "type": "boolean"
@@ -11663,6 +11667,10 @@
       },
       "SandboxWorkspaceWrite": {
         "properties": {
+          "allow_limited_git_writes": {
+            "default": false,
+            "type": "boolean"
+          },
           "exclude_slash_tmp": {
             "default": false,
             "type": "boolean"

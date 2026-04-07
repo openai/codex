@@ -365,6 +365,7 @@ fn sandbox_policy_with_additional_permissions(
             writable_roots,
             read_only_access,
             network_access,
+            allow_limited_git_writes,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         } => {
@@ -377,6 +378,7 @@ fn sandbox_policy_with_additional_permissions(
                     extra_reads,
                 ),
                 network_access: merge_network_access(*network_access, additional_permissions),
+                allow_limited_git_writes: *allow_limited_git_writes,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             }
@@ -401,6 +403,7 @@ fn sandbox_policy_with_additional_permissions(
                         extra_reads,
                     ),
                     network_access: merge_network_access(*network_access, additional_permissions),
+                    allow_limited_git_writes: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
                 }

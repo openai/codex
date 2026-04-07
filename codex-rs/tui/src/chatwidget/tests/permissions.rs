@@ -55,6 +55,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         writable_roots: vec![PathBuf::from("C:\\extra").abs()],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
@@ -513,6 +514,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
                 writable_roots: vec![extra_root],
                 read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },

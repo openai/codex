@@ -79,6 +79,7 @@ async fn if_parent_of_repo_is_writable_then_dot_git_folder_is_writable() {
         writable_roots: vec![test_scenario.repo_parent.as_path().try_into().unwrap()],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -106,6 +107,7 @@ async fn if_git_repo_is_writable_root_then_dot_git_folder_is_read_only() {
         writable_roots: vec![test_scenario.repo_root.as_path().try_into().unwrap()],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

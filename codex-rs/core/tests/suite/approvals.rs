@@ -765,6 +765,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
@@ -1796,6 +1797,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
@@ -2525,6 +2527,7 @@ allow_local_binding = true
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: true,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

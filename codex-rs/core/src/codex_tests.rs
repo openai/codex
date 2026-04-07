@@ -2357,6 +2357,7 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
                 readable_roots: vec![docs_dir.clone()],
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         });
@@ -2484,6 +2485,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
                 readable_roots: vec![docs_dir],
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         });

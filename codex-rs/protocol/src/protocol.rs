@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::fmt;
 use std::ops::Mul;
 use std::path::Path;
@@ -48,6 +47,7 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::sandbox_paths::default_read_only_subpaths_for_writable_root;
 use crate::serde_helpers::deserialize_double_option;
 use crate::serde_helpers::serialize_double_option;
 use crate::user_input::UserInput;
@@ -843,6 +843,11 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
 
+        /// When set to `true`, `.git` metadata may be written under writable
+        /// roots, while `.git/config` and `.git/hooks` remain read-only.
+        #[serde(default)]
+        allow_limited_git_writes: bool,
+
         /// When set to `true`, will NOT include the per-user `TMPDIR`
         /// environment variable among the default writable roots. Defaults to
         /// `false`.
@@ -928,6 +933,7 @@ impl SandboxPolicy {
             writable_roots: vec![],
             read_only_access: ReadOnlyAccess::FullAccess,
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -1013,6 +1019,7 @@ impl SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access: _,
+                allow_limited_git_writes,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
@@ -1082,6 +1089,7 @@ impl SandboxPolicy {
                             read_only_subpaths: default_read_only_subpaths_for_writable_root(
                                 &writable_root,
                                 protect_missing_dot_codex,
+                                *allow_limited_git_writes,
                             ),
                             root: writable_root,
                         }
@@ -1090,107 +1098,6 @@ impl SandboxPolicy {
             }
         }
     }
-}
-
-fn default_read_only_subpaths_for_writable_root(
-    writable_root: &AbsolutePathBuf,
-    protect_missing_dot_codex: bool,
-) -> Vec<AbsolutePathBuf> {
-    let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
-    let top_level_git = writable_root.join(".git");
-    // This applies to typical repos (directory .git), worktrees/submodules
-    // (file .git with gitdir pointer), and bare repos when the gitdir is the
-    // writable root itself.
-    let top_level_git_is_file = top_level_git.as_path().is_file();
-    let top_level_git_is_dir = top_level_git.as_path().is_dir();
-    if top_level_git_is_dir || top_level_git_is_file {
-        if top_level_git_is_file
-            && is_git_pointer_file(&top_level_git)
-            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-        {
-            subpaths.push(gitdir);
-        }
-        subpaths.push(top_level_git);
-    }
-
-    let top_level_agents = writable_root.join(".agents");
-    if top_level_agents.as_path().is_dir() {
-        subpaths.push(top_level_agents);
-    }
-
-    // Keep top-level project metadata under .codex read-only to the agent by
-    // default. For the workspace root itself, protect it even before the
-    // directory exists so first-time creation still goes through the
-    // protected-path approval flow.
-    let top_level_codex = writable_root.join(".codex");
-    if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
-        subpaths.push(top_level_codex);
-    }
-
-    let mut deduped = Vec::with_capacity(subpaths.len());
-    let mut seen = HashSet::new();
-    for path in subpaths {
-        if seen.insert(path.to_path_buf()) {
-            deduped.push(path);
-        }
-    }
-    deduped
-}
-
-fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
-    path.as_path().is_file() && path.as_path().file_name() == Some(OsStr::new(".git"))
-}
-
-fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
-    let contents = match std::fs::read_to_string(dot_git.as_path()) {
-        Ok(contents) => contents,
-        Err(err) => {
-            error!(
-                "Failed to read {path} for gitdir pointer: {err}",
-                path = dot_git.as_path().display()
-            );
-            return None;
-        }
-    };
-
-    let trimmed = contents.trim();
-    let (_, gitdir_raw) = match trimmed.split_once(':') {
-        Some(parts) => parts,
-        None => {
-            error!(
-                "Expected {path} to contain a gitdir pointer, but it did not match `gitdir: <path>`.",
-                path = dot_git.as_path().display()
-            );
-            return None;
-        }
-    };
-    let gitdir_raw = gitdir_raw.trim();
-    if gitdir_raw.is_empty() {
-        error!(
-            "Expected {path} to contain a gitdir pointer, but it was empty.",
-            path = dot_git.as_path().display()
-        );
-        return None;
-    }
-    let base = match dot_git.as_path().parent() {
-        Some(base) => base,
-        None => {
-            error!(
-                "Unable to resolve parent directory for {path}.",
-                path = dot_git.as_path().display()
-            );
-            return None;
-        }
-    };
-    let gitdir_path = AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base);
-    if !gitdir_path.as_path().exists() {
-        error!(
-            "Resolved gitdir path {path} does not exist.",
-            path = gitdir_path.as_path().display()
-        );
-        return None;
-    }
-    Some(gitdir_path)
 }
 
 /// Event Queue Entry - events from agent
@@ -3969,6 +3876,7 @@ mod tests {
                 readable_roots: vec![],
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
         };
@@ -4192,6 +4100,7 @@ mod tests {
                 readable_roots: vec![docs],
             },
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -4264,6 +4173,7 @@ mod tests {
                 writable_roots: vec![],
                 read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
@@ -4274,6 +4184,7 @@ mod tests {
                     readable_roots: vec![readable_root],
                 },
                 network_access: true,
+                allow_limited_git_writes: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: true,
             },
@@ -4284,6 +4195,7 @@ mod tests {
                     readable_roots: vec![nested_readable_root],
                 },
                 network_access: false,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
