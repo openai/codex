@@ -79,7 +79,9 @@
             android:name=".SessionRouterActivity"
             android:exported="true"
             android:excludeFromRecents="true"
+            android:launchMode="singleTask"
             android:noHistory="true"
+            android:taskAffinity="com.openai.codex.agent.router"
             android:theme="@style/CodexSessionRouterTheme">
             <intent-filter>
                 <action android:name="android.app.agent.action.HANDLE_SESSION" />
