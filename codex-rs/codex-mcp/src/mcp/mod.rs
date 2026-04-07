@@ -12,6 +12,7 @@ use async_channel::unbounded;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::Resource;
@@ -21,7 +22,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
 use serde_json::Value;
 
 use crate::mcp::auth::compute_auth_statuses;
@@ -35,8 +35,22 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
-/// Model-visible MCP tool names must also be valid code-mode identifiers, so
-/// MCP server/tool names are sanitized to ASCII alphanumeric and `_`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum McpSnapshotDetail {
+    #[default]
+    Full,
+    ToolsAndAuthOnly,
+}
+
+impl McpSnapshotDetail {
+    fn include_resources(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
+/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
+/// name we expose to the model by replacing any disallowed character with `_`.
 pub(crate) fn sanitize_responses_api_tool_name(name: &str) -> String {
     let mut sanitized = String::with_capacity(name.len());
     for c in name.chars() {
@@ -284,6 +298,15 @@ pub async fn collect_mcp_snapshot(
     auth: Option<&CodexAuth>,
     submit_id: String,
 ) -> McpListToolsResponseEvent {
+    collect_mcp_snapshot_with_detail(config, auth, submit_id, McpSnapshotDetail::Full).await
+}
+
+pub async fn collect_mcp_snapshot_with_detail(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    submit_id: String,
+    detail: McpSnapshotDetail,
+) -> McpListToolsResponseEvent {
     let mcp_servers = effective_mcp_servers(config, auth);
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
@@ -323,8 +346,12 @@ pub async fn collect_mcp_snapshot(
     )
     .await;
 
-    let snapshot =
-        collect_mcp_snapshot_from_manager(&mcp_connection_manager, auth_status_entries).await;
+    let snapshot = collect_mcp_snapshot_from_manager_with_detail(
+        &mcp_connection_manager,
+        auth_status_entries,
+        detail,
+    )
+    .await;
 
     cancel_token.cancel();
 
@@ -343,6 +370,16 @@ pub async fn collect_mcp_server_status_snapshot(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+) -> McpServerStatusSnapshot {
+    collect_mcp_server_status_snapshot_with_detail(config, auth, submit_id, McpSnapshotDetail::Full)
+        .await
+}
+
+pub async fn collect_mcp_server_status_snapshot_with_detail(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    submit_id: String,
+    detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
     let tool_plugin_provenance = tool_plugin_provenance(config);
@@ -385,6 +422,7 @@ pub async fn collect_mcp_server_status_snapshot(
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
         &mcp_connection_manager,
         auth_status_entries,
+        detail,
     )
     .await;
 
@@ -529,11 +567,24 @@ fn convert_mcp_resource_templates(
 async fn collect_mcp_server_status_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let (tools, resources, resource_templates) = tokio::join!(
         mcp_connection_manager.list_all_tools(),
-        mcp_connection_manager.list_all_resources(),
-        mcp_connection_manager.list_all_resource_templates(),
+        async {
+            if detail.include_resources() {
+                mcp_connection_manager.list_all_resources().await
+            } else {
+                HashMap::new()
+            }
+        },
+        async {
+            if detail.include_resources() {
+                mcp_connection_manager.list_all_resource_templates().await
+            } else {
+                HashMap::new()
+            }
+        },
     );
 
     let mut tools_by_server = HashMap::<String, HashMap<String, Tool>>::new();
@@ -560,10 +611,35 @@ pub async fn collect_mcp_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
 ) -> McpListToolsResponseEvent {
+    collect_mcp_snapshot_from_manager_with_detail(
+        mcp_connection_manager,
+        auth_status_entries,
+        McpSnapshotDetail::Full,
+    )
+    .await
+}
+
+pub async fn collect_mcp_snapshot_from_manager_with_detail(
+    mcp_connection_manager: &McpConnectionManager,
+    auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    detail: McpSnapshotDetail,
+) -> McpListToolsResponseEvent {
     let (tools, resources, resource_templates) = tokio::join!(
         mcp_connection_manager.list_all_tools(),
-        mcp_connection_manager.list_all_resources(),
-        mcp_connection_manager.list_all_resource_templates(),
+        async {
+            if detail.include_resources() {
+                mcp_connection_manager.list_all_resources().await
+            } else {
+                HashMap::new()
+            }
+        },
+        async {
+            if detail.include_resources() {
+                mcp_connection_manager.list_all_resource_templates().await
+            } else {
+                HashMap::new()
+            }
+        },
     );
 
     let tools = tools

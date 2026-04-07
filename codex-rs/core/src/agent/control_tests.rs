@@ -5,7 +5,6 @@ use crate::agent::agent_status_from_event;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
-use crate::config_loader::LoaderOverrides;
 use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
 use assert_matches::assert_matches;
 use chrono::Utc;
@@ -36,15 +35,9 @@ async fn test_config_with_cli_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> (TempDir, Config) {
     let home = TempDir::new().expect("create temp dir");
-    let config = ConfigBuilder::default()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(home.path().to_path_buf())
         .cli_overrides(cli_overrides)
-        .loader_overrides(LoaderOverrides {
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(String::new()),
-            ..LoaderOverrides::default()
-        })
         .build()
         .await
         .expect("load default test config");
@@ -263,6 +256,7 @@ async fn get_status_returns_not_found_without_manager() {
 async fn on_event_updates_status_from_task_started() {
     let status = agent_status_from_event(&EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: "turn-1".to_string(),
+        started_at: None,
         model_context_window: None,
         collaboration_mode_kind: ModeKind::Default,
     }));
@@ -274,6 +268,8 @@ async fn on_event_updates_status_from_task_complete() {
     let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
         last_agent_message: Some("done".to_string()),
+        completed_at: None,
+        duration_ms: None,
     }));
     let expected = AgentStatus::Completed(Some("done".to_string()));
     assert_eq!(status, Some(expected));
@@ -295,6 +291,8 @@ async fn on_event_updates_status_from_turn_aborted() {
     let status = agent_status_from_event(&EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id: Some("turn-1".to_string()),
         reason: TurnAbortReason::Interrupted,
+        completed_at: None,
+        duration_ms: None,
     }));
 
     let expected = AgentStatus::Interrupted;
@@ -1207,6 +1205,8 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
             }),
         )
         .await;
@@ -1291,6 +1291,8 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
             }),
         )
         .await;

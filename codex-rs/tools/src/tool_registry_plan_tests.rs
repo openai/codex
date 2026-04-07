@@ -454,6 +454,42 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
 }
 
 #[test]
+fn disabled_environment_omits_environment_backed_tools() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    features.enable(Feature::JsRepl);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_has_environment(/*has_environment*/ false);
+    tools_config
+        .experimental_supported_tools
+        .push("list_dir".to_string());
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, "exec_command");
+    assert_lacks_tool_name(&tools, "write_stdin");
+    assert_lacks_tool_name(&tools, "js_repl");
+    assert_lacks_tool_name(&tools, "js_repl_reset");
+    assert_lacks_tool_name(&tools, "apply_patch");
+    assert_lacks_tool_name(&tools, "list_dir");
+    assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
+}
+
+#[test]
 fn test_build_specs_agent_job_worker_tools_enabled() {
     let model_info = model_info();
     let mut features = Features::with_defaults();

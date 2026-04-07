@@ -1,6 +1,4 @@
 use crate::codex::Session;
-use crate::config::RealtimeWsMode;
-use crate::config::RealtimeWsVersion;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -18,6 +16,8 @@ use codex_api::api_bridge::map_api_error;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
 use codex_app_server_protocol::AuthMode;
+use codex_config::config_toml::RealtimeWsMode;
+use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;

@@ -56,10 +56,9 @@ impl MessageProcessor {
         environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
+        let auth_manager = AuthManager::shared_from_config(
+            config.as_ref(),
             /*enable_codex_api_key_env*/ false,
-            config.cli_auth_credentials_store_mode,
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),

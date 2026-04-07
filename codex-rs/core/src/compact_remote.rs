@@ -40,6 +40,7 @@ pub(crate) async fn run_remote_compact_task(
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
+        started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
@@ -75,10 +76,16 @@ async fn run_remote_compact_task_inner_impl(
         .await;
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
+    let token_count_base_instructions =
+        base_instructions
+            .clone()
+            .unwrap_or_else(|| BaseInstructions {
+                text: String::new(),
+            });
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
         turn_context.as_ref(),
-        &base_instructions,
+        &token_count_base_instructions,
     );
     if deleted_items > 0 {
         info!(
@@ -126,8 +133,13 @@ async fn run_remote_compact_task_inner_impl(
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+            let base_instruction_text = prompt
+                .base_instructions
+                .as_ref()
+                .map(|base_instructions| base_instructions.text.as_str())
+                .unwrap_or("");
             let compact_request_log_data =
-                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
+                build_compact_request_log_data(&prompt.input, base_instruction_text);
             log_remote_compact_failure(
                 turn_context,
                 &compact_request_log_data,

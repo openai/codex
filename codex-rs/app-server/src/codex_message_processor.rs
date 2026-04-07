@@ -76,11 +76,14 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MarketplaceInterface;
+use codex_app_server_protocol::McpResourceReadParams;
+use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
@@ -246,9 +249,10 @@ use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
 use codex_mcp::mcp::McpServerStatusSnapshot;
+use codex_mcp::mcp::McpSnapshotDetail;
 use codex_mcp::mcp::auth::discover_supported_scopes;
 use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::collect_mcp_server_status_snapshot;
+use codex_mcp::mcp::collect_mcp_server_status_snapshot_with_detail;
 use codex_mcp::mcp::effective_mcp_servers;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
@@ -474,22 +478,13 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
-    pub(crate) fn clear_plugin_related_caches(&self) {
-        self.thread_manager.plugins_manager().clear_cache();
-        self.thread_manager.skills_manager().clear_cache();
+    pub(crate) fn handle_config_mutation(&self) {
+        self.clear_plugin_related_caches();
     }
 
-    pub(crate) async fn maybe_start_plugin_startup_tasks_for_latest_config(&self) {
-        match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => self
-                .thread_manager
-                .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(
-                    &config,
-                    self.thread_manager.auth_manager(),
-                ),
-            Err(err) => warn!("failed to load latest config for plugin startup tasks: {err:?}"),
-        }
+    fn clear_plugin_related_caches(&self) {
+        self.thread_manager.plugins_manager().clear_cache();
+        self.thread_manager.skills_manager().clear_cache();
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -887,6 +882,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::McpResourceRead { request_id, params } => {
+                self.read_mcp_resource(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::WindowsSandboxSetupStart { request_id, params } => {
@@ -2474,8 +2473,8 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        base_instructions: Option<String>,
-        developer_instructions: Option<String>,
+        base_instructions: Option<Option<String>>,
+        developer_instructions: Option<Option<String>>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
         ConfigOverrides {
@@ -2753,24 +2752,6 @@ impl CodexMessageProcessor {
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
             state_db_ctx = get_state_db(&self.config).await;
-        }
-        if state_db_ctx.is_none() {
-            match StateRuntime::init(
-                self.config.sqlite_home.clone(),
-                self.config.model_provider_id.clone(),
-            )
-            .await
-            {
-                Ok(ctx) => {
-                    state_db_ctx = Some(ctx);
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to initialize state db for thread metadata update at {}: {err}",
-                        self.config.sqlite_home.display()
-                    );
-                }
-            }
         }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
@@ -4382,6 +4363,13 @@ impl CodexMessageProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        if typesafe_overrides.base_instructions.is_none()
+            && let Ok(history) = RolloutRecorder::get_rollout_history(&rollout_path).await
+            && let Some(base_instructions) = history.get_base_instructions()
+        {
+            typesafe_overrides.base_instructions =
+                Some(base_instructions.map(|base_instructions| base_instructions.text));
+        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
@@ -5190,10 +5178,16 @@ impl CodexMessageProcessor {
         mcp_config: codex_mcp::mcp::McpConfig,
         auth: Option<CodexAuth>,
     ) {
-        let snapshot = collect_mcp_server_status_snapshot(
+        let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
+            McpServerStatusDetail::Full => McpSnapshotDetail::Full,
+            McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
+        };
+
+        let snapshot = collect_mcp_server_status_snapshot_with_detail(
             &mcp_config,
             auth.as_ref(),
             request_id.request_id.to_string(),
+            detail,
         )
         .await;
 
@@ -5275,6 +5269,58 @@ impl CodexMessageProcessor {
         let response = ListMcpServerStatusResponse { data, next_cursor };
 
         outgoing.send_response(request_id, response).await;
+    }
+
+    async fn read_mcp_resource(
+        &self,
+        request_id: ConnectionRequestId,
+        params: McpResourceReadParams,
+    ) {
+        let outgoing = Arc::clone(&self.outgoing);
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(thread) => thread,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            let result = thread.read_mcp_resource(&params.server, &params.uri).await;
+            match result {
+                Ok(result) => match serde_json::from_value::<McpResourceReadResponse>(result) {
+                    Ok(response) => {
+                        outgoing.send_response(request_id, response).await;
+                    }
+                    Err(error) => {
+                        outgoing
+                            .send_error(
+                                request_id,
+                                JSONRPCErrorError {
+                                    code: INTERNAL_ERROR_CODE,
+                                    message: format!(
+                                        "failed to deserialize MCP resource read response: {error}"
+                                    ),
+                                    data: None,
+                                },
+                            )
+                            .await;
+                    }
+                },
+                Err(error) => {
+                    outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("{error:#}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                }
+            }
+        });
     }
 
     async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
@@ -5612,7 +5658,11 @@ impl CodexMessageProcessor {
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
         }
 
-        if !config.features.apps_enabled(Some(&self.auth_manager)).await {
+        let auth = self.auth_manager.auth().await;
+        if !config
+            .features
+            .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+        {
             self.outgoing
                 .send_response(
                     request_id,
@@ -5943,6 +5993,7 @@ impl CodexMessageProcessor {
             force_remote_sync,
         } = params;
         let roots = cwds.unwrap_or_default();
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
@@ -6279,9 +6330,11 @@ impl CodexMessageProcessor {
                 }
 
                 let plugin_apps = load_plugin_apps(result.installed_path.as_path());
+                let auth = self.auth_manager.auth().await;
                 let apps_needing_auth = if plugin_apps.is_empty()
-                    || !config.features.apps_enabled(Some(&self.auth_manager)).await
-                {
+                    || !config.features.apps_enabled_for_auth(
+                        auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
+                    ) {
                     Vec::new()
                 } else {
                     let (all_connectors_result, accessible_connectors_result) = tokio::join!(
@@ -6572,6 +6625,9 @@ impl CodexMessageProcessor {
                     items: vec![],
                     error: None,
                     status: TurnStatus::InProgress,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
                 };
 
                 let response = TurnStartResponse { turn };
@@ -6908,6 +6964,9 @@ impl CodexMessageProcessor {
             items,
             error: None,
             status: TurnStatus::InProgress,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         }
     }
 
@@ -9557,6 +9616,7 @@ mod tests {
             state.track_current_turn_event(&EventMsg::TurnStarted(
                 codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
                 },
