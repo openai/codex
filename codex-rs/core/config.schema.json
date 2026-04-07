@@ -654,6 +654,12 @@
       ]
     },
     "FilesystemPermissionsToml": {
+      "properties": {
+        "allow_limited_git_writes": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "ForcedLoginMethod": {
@@ -1531,6 +1537,10 @@
     "SandboxWorkspaceWrite": {
       "additionalProperties": false,
       "properties": {
+        "allow_limited_git_writes": {
+          "default": false,
+          "type": "boolean"
+        },
         "exclude_slash_tmp": {
           "default": false,
           "type": "boolean"

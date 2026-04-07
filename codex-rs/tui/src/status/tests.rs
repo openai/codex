@@ -102,6 +102,7 @@ async fn status_snapshot_includes_reasoning_details() {
             writable_roots: Vec::new(),
             read_only_access: Default::default(),
             network_access: false,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         })
@@ -187,6 +188,7 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
             writable_roots: Vec::new(),
             read_only_access: Default::default(),
             network_access: true,
+            allow_limited_git_writes: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         })

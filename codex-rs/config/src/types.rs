@@ -586,6 +586,8 @@ pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
+    pub allow_limited_git_writes: bool,
+    #[serde(default)]
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
@@ -596,6 +598,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,
             network_access: Some(sandbox_workspace_write.network_access),
+            allow_limited_git_writes: Some(sandbox_workspace_write.allow_limited_git_writes),
             exclude_tmpdir_env_var: Some(sandbox_workspace_write.exclude_tmpdir_env_var),
             exclude_slash_tmp: Some(sandbox_workspace_write.exclude_slash_tmp),
         }

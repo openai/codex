@@ -67,8 +67,15 @@ pub(crate) fn compile_permission_profile(
 
     let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
 
+    let allow_limited_git_writes = profile
+        .filesystem
+        .as_ref()
+        .is_some_and(|filesystem| filesystem.allow_limited_git_writes);
     Ok((
-        FileSystemSandboxPolicy::restricted(entries),
+        FileSystemSandboxPolicy {
+            allow_limited_git_writes,
+            ..FileSystemSandboxPolicy::restricted(entries)
+        },
         network_sandbox_policy,
     ))
 }

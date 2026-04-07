@@ -462,6 +462,7 @@ fn windows_restricted_token_allows_legacy_workspace_write_policies() {
         writable_roots: vec![],
         read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -490,6 +491,7 @@ fn windows_restricted_token_rejects_split_only_filesystem_policies() {
         writable_roots: vec![],
         read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -534,6 +536,7 @@ fn windows_restricted_token_rejects_root_write_read_only_carveouts() {
         writable_roots: vec![],
         read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -579,6 +582,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
         writable_roots: vec![],
         read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
@@ -641,6 +645,7 @@ fn windows_elevated_rejects_split_write_read_carveouts() {
         writable_roots: vec![],
         read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

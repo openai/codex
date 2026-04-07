@@ -12,7 +12,10 @@ Expects `/usr/bin/sandbox-exec` to be present.
 
 When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or
-pointer file), the resolved `gitdir:` target, and `.codex` read-only.
+pointer file), the resolved `gitdir:` target, and `.codex` read-only by
+default. When `allow_limited_git_writes` is enabled, Git metadata writes are allowed,
+but `.git/config`, `.git/hooks`, and resolved worktree gitdir config/hooks
+remain read-only.
 
 Network access and filesystem read/write roots are controlled by
 `SandboxPolicy`. Seatbelt consumes the resolved policy and enforces it.

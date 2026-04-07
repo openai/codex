@@ -41,6 +41,7 @@ fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root()
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: false,
     });
@@ -63,6 +64,7 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
         writable_roots: vec![],
         read_only_access: Default::default(),
         network_access: false,
+        allow_limited_git_writes: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     });

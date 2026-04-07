@@ -704,7 +704,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 Notes:
 
 - Empty `command` arrays are rejected.
-- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
+- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`). For `workspaceWrite`, `allowLimitedGitWrites: true` allows Git metadata writes under writable roots while keeping Git config and hooks read-only; it defaults to `false`.
 - `env` merges into the environment produced by the server's shell environment policy. Matching names are overridden; unspecified variables are left intact.
 - When omitted, `timeoutMs` falls back to the server default.
 - When omitted, `outputBytesCap` falls back to the server default of 1 MiB per stream.

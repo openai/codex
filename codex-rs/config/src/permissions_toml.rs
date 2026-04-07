@@ -31,6 +31,8 @@ pub struct PermissionProfileToml {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct FilesystemPermissionsToml {
+    #[serde(default)]
+    pub allow_limited_git_writes: bool,
     #[serde(flatten)]
     pub entries: BTreeMap<String, FilesystemPermissionToml>,
 }

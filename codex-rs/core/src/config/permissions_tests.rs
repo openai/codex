@@ -49,6 +49,7 @@ fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()>
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            allow_limited_git_writes: false,
                             entries: BTreeMap::new(),
                         }),
                         network: None,
