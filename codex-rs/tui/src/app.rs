@@ -108,6 +108,7 @@ use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::GetHistoryEntryResponseEvent;
@@ -934,6 +935,22 @@ async fn handle_model_migration_prompt_if_needed(
     }
 
     None
+}
+
+fn cwd_is_usable_under_sandbox(
+    sandbox_policy: &SandboxPolicy,
+    sandbox_cwd: &Path,
+    requested_cwd: &Path,
+) -> bool {
+    let file_system_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_cwd);
+    file_system_policy.can_read_path_with_cwd(requested_cwd, sandbox_cwd)
+        && match sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                file_system_policy.can_write_path_with_cwd(requested_cwd, sandbox_cwd)
+            }
+            _ => true,
+        }
 }
 
 pub(crate) struct App {
@@ -4343,6 +4360,11 @@ impl App {
                         format!("Already in {}", resolved.display()),
                         /*hint*/ None,
                     );
+                    return Ok(AppRunControl::Continue);
+                }
+                let sandbox_policy = self.config.permissions.sandbox_policy.get();
+                if !cwd_is_usable_under_sandbox(sandbox_policy, current_cwd.as_path(), &resolved) {
+                    self.chat_widget.open_cwd_permissions_prompt(resolved);
                     return Ok(AppRunControl::Continue);
                 }
 
@@ -10223,6 +10245,49 @@ guardian_approval = true
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+        Ok(())
+    }
+
+    #[test]
+    fn cwd_sandbox_check_allows_descendants_of_current_workspace() -> Result<()> {
+        let workspace = tempdir()?;
+        let nested = workspace.path().join("nested");
+        std::fs::create_dir(&nested)?;
+
+        assert!(cwd_is_usable_under_sandbox(
+            &SandboxPolicy::new_workspace_write_policy(),
+            workspace.path(),
+            &nested
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn cwd_sandbox_check_rejects_paths_outside_workspace_write_roots() -> Result<()> {
+        let workspace = tempdir()?;
+        let outside_workspace = std::env::current_dir()?;
+
+        assert!(!cwd_is_usable_under_sandbox(
+            &SandboxPolicy::new_workspace_write_policy(),
+            workspace.path(),
+            outside_workspace.as_path()
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn cwd_sandbox_check_allows_sibling_directories_in_read_only_mode() -> Result<()> {
+        let root = tempdir()?;
+        let workspace = root.path().join("workspace");
+        let sibling = root.path().join("sibling");
+        std::fs::create_dir(&workspace)?;
+        std::fs::create_dir(&sibling)?;
+
+        assert!(cwd_is_usable_under_sandbox(
+            &SandboxPolicy::new_read_only_policy(),
+            workspace.as_path(),
+            sibling.as_path()
+        ));
         Ok(())
     }
 

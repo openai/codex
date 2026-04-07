@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/permissions.rs
+expression: popup
+---
+  Directory blocked by sandbox
+  /tmp/outside is outside the current working permissions.
+
+› 1. Open permissions  Choose a broader permission mode for this session, then
+                       retry `/cwd`.
+  2. Cancel            Keep the current working directory.
+
+  Press enter to confirm or esc to go back

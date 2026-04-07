@@ -2,6 +2,16 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn cwd_permissions_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.open_cwd_permissions_prompt(PathBuf::from("/tmp/outside"));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("cwd_permissions_prompt", popup);
+}
+
+#[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

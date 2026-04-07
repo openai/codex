@@ -8490,6 +8490,43 @@ impl ChatWidget {
         self.open_permissions_popup();
     }
 
+    /// Prompt the user to broaden permissions before retrying `/cwd`.
+    pub(crate) fn open_cwd_permissions_prompt(&mut self, path: PathBuf) {
+        let items = vec![
+            SelectionItem {
+                name: "Open permissions".to_string(),
+                description: Some(
+                    "Choose a broader permission mode for this session, then retry `/cwd`."
+                        .to_string(),
+                ),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenPermissionsPopup);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Keep the current working directory.".to_string()),
+                actions: Vec::new(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Directory blocked by sandbox".to_string()),
+            subtitle: Some(format!(
+                "{} is outside the current working permissions.",
+                path.display()
+            )),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+        self.request_redraw();
+    }
+
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
