@@ -64,6 +64,7 @@ export type { ServiceTier } from "./ServiceTier";
 export type { SessionSource } from "./SessionSource";
 export type { Settings } from "./Settings";
 export type { SubAgentSource } from "./SubAgentSource";
+export type { SubmissionType } from "./SubmissionType";
 export type { ThreadId } from "./ThreadId";
 export type { Tool } from "./Tool";
 export type { Verbosity } from "./Verbosity";
