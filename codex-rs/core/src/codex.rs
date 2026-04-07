@@ -49,9 +49,13 @@ use chrono::Local;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
+use codex_analytics::CodexTurnSteerEvent;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
+use codex_analytics::TrackEventsContext;
 use codex_analytics::TurnResolvedConfigFact;
+use codex_analytics::TurnSteerRejectionReason;
+use codex_analytics::TurnSteerResult;
 use codex_analytics::TurnSubmissionType;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -240,6 +244,32 @@ impl SteerInputError {
             },
         }
     }
+
+    fn to_turn_steer_rejection_reason(&self) -> TurnSteerRejectionReason {
+        match self {
+            Self::NoActiveTurn(_) => TurnSteerRejectionReason::NoActiveTurn,
+            Self::ExpectedTurnMismatch { .. } => TurnSteerRejectionReason::ExpectedTurnMismatch,
+            Self::ActiveTurnNotSteerable { turn_kind } => match turn_kind {
+                NonSteerableTurnKind::Review => TurnSteerRejectionReason::NonSteerableReview,
+                NonSteerableTurnKind::Compact => TurnSteerRejectionReason::NonSteerableCompact,
+            },
+            Self::EmptyInput => TurnSteerRejectionReason::EmptyInput,
+        }
+    }
+}
+
+struct AcceptedSteerInput {
+    turn_id: String,
+    tracking: TrackEventsContext,
+    expected_turn_id: String,
+    num_input_images: usize,
+}
+
+struct RejectedSteerInput {
+    error: SteerInputError,
+    tracking: TrackEventsContext,
+    expected_turn_id: Option<String>,
+    num_input_images: usize,
 }
 
 /// Notes from the previous real user turn.
@@ -4096,47 +4126,163 @@ impl Session {
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
-        if input.is_empty() {
-            return Err(SteerInputError::EmptyInput);
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        match self
+            .try_append_input_to_active_turn(input, expected_turn_id)
+            .await
+        {
+            Ok(accepted) => {
+                self.services.analytics_events_client.track_turn_steer(
+                    accepted.tracking,
+                    CodexTurnSteerEvent {
+                        expected_turn_id: Some(accepted.expected_turn_id),
+                        accepted_turn_id: Some(accepted.turn_id.clone()),
+                        num_input_images: accepted.num_input_images,
+                        result: TurnSteerResult::Accepted,
+                        rejection_reason: None,
+                        created_at,
+                    },
+                );
+                Ok(accepted.turn_id)
+            }
+            Err(rejected) => {
+                self.services.analytics_events_client.track_turn_steer(
+                    rejected.tracking,
+                    CodexTurnSteerEvent {
+                        expected_turn_id: rejected.expected_turn_id,
+                        accepted_turn_id: None,
+                        num_input_images: rejected.num_input_images,
+                        result: TurnSteerResult::Rejected,
+                        rejection_reason: Some(rejected.error.to_turn_steer_rejection_reason()),
+                        created_at,
+                    },
+                );
+                Err(rejected.error)
+            }
         }
+    }
+
+    async fn try_append_input_to_active_turn(
+        &self,
+        input: Vec<UserInput>,
+        expected_turn_id: Option<&str>,
+    ) -> Result<AcceptedSteerInput, RejectedSteerInput> {
+        let thread_id = self.conversation_id.to_string();
+        let fallback_tracking = || {
+            build_track_events_context(
+                String::new(),
+                thread_id.clone(),
+                expected_turn_id.unwrap_or_default().to_string(),
+            )
+        };
+
+        if input.is_empty() {
+            return Err(RejectedSteerInput {
+                error: SteerInputError::EmptyInput,
+                tracking: fallback_tracking(),
+                expected_turn_id: expected_turn_id.map(str::to_string),
+                num_input_images: 0,
+            });
+        }
+
+        let num_input_images = input
+            .iter()
+            .filter(|item| matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. }))
+            .count();
 
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
-            return Err(SteerInputError::NoActiveTurn(input));
+            return Err(RejectedSteerInput {
+                error: SteerInputError::NoActiveTurn(input),
+                tracking: fallback_tracking(),
+                expected_turn_id: expected_turn_id.map(str::to_string),
+                num_input_images,
+            });
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
-            return Err(SteerInputError::NoActiveTurn(input));
+        let Some((active_turn_id, task)) = active_turn.tasks.first() else {
+            return Err(RejectedSteerInput {
+                error: SteerInputError::NoActiveTurn(input),
+                tracking: fallback_tracking(),
+                expected_turn_id: expected_turn_id.map(str::to_string),
+                num_input_images,
+            });
         };
+        let active_turn_id = active_turn_id.clone();
+        let tracking = build_track_events_context(
+            task.turn_context.model_info.slug.clone(),
+            thread_id.clone(),
+            task.turn_context.sub_id.clone(),
+        );
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
         {
-            return Err(SteerInputError::ExpectedTurnMismatch {
-                expected: expected_turn_id.to_string(),
-                actual: active_turn_id.clone(),
+            return Err(RejectedSteerInput {
+                error: SteerInputError::ExpectedTurnMismatch {
+                    expected: expected_turn_id.to_string(),
+                    actual: active_turn_id,
+                },
+                tracking,
+                expected_turn_id: Some(expected_turn_id.to_string()),
+                num_input_images,
             });
         }
 
         match active_turn.tasks.first().map(|(_, task)| task.kind) {
             Some(crate::state::TaskKind::Regular) => {}
             Some(crate::state::TaskKind::Review) => {
-                return Err(SteerInputError::ActiveTurnNotSteerable {
-                    turn_kind: NonSteerableTurnKind::Review,
+                return Err(RejectedSteerInput {
+                    error: SteerInputError::ActiveTurnNotSteerable {
+                        turn_kind: NonSteerableTurnKind::Review,
+                    },
+                    tracking,
+                    expected_turn_id: expected_turn_id
+                        .map(str::to_string)
+                        .or(Some(active_turn_id)),
+                    num_input_images,
                 });
             }
             Some(crate::state::TaskKind::Compact) => {
-                return Err(SteerInputError::ActiveTurnNotSteerable {
-                    turn_kind: NonSteerableTurnKind::Compact,
+                return Err(RejectedSteerInput {
+                    error: SteerInputError::ActiveTurnNotSteerable {
+                        turn_kind: NonSteerableTurnKind::Compact,
+                    },
+                    tracking,
+                    expected_turn_id: expected_turn_id
+                        .map(str::to_string)
+                        .or(Some(active_turn_id)),
+                    num_input_images,
                 });
             }
-            None => return Err(SteerInputError::NoActiveTurn(input)),
+            None => {
+                return Err(RejectedSteerInput {
+                    error: SteerInputError::NoActiveTurn(input),
+                    tracking: fallback_tracking(),
+                    expected_turn_id: expected_turn_id.map(str::to_string),
+                    num_input_images,
+                });
+            }
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
         turn_state.accept_mailbox_delivery_for_current_turn();
-        Ok(active_turn_id.clone())
+        drop(turn_state);
+
+        let expected_turn_id = expected_turn_id
+            .map(str::to_string)
+            .unwrap_or_else(|| active_turn_id.clone());
+
+        Ok(AcceptedSteerInput {
+            turn_id: active_turn_id,
+            tracking,
+            expected_turn_id,
+            num_input_images,
+        })
     }
 
     /// Returns the input if there was no task running to inject into.
@@ -4801,6 +4947,7 @@ fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
 
 /// Operation handlers
 mod handlers {
+    use crate::codex::RejectedSteerInput;
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
@@ -4961,11 +5108,14 @@ mod handlers {
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         match sess
-            .steer_input(items.clone(), /*expected_turn_id*/ None)
+            .try_append_input_to_active_turn(items.clone(), /*expected_turn_id*/ None)
             .await
         {
             Ok(_) => current_context.session_telemetry.user_prompt(&items),
-            Err(SteerInputError::NoActiveTurn(items)) => {
+            Err(RejectedSteerInput {
+                error: SteerInputError::NoActiveTurn(items),
+                ..
+            }) => {
                 current_context.session_telemetry.user_prompt(&items);
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
@@ -4976,10 +5126,10 @@ mod handlers {
                 )
                 .await;
             }
-            Err(err) => {
+            Err(RejectedSteerInput { error, .. }) => {
                 sess.send_event_raw(Event {
                     id: sub_id,
-                    msg: EventMsg::Error(err.to_error_event()),
+                    msg: EventMsg::Error(error.to_error_event()),
                 })
                 .await;
             }
