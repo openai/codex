@@ -776,10 +776,22 @@ fn build_payload_roots(
         )
     };
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
-    let mut read_roots = gather_read_roots(request.command_cwd, request.policy, request.codex_home);
-    if let Some(roots) = overrides.read_roots.as_deref() {
-        read_roots.extend(canonical_existing(roots));
-    }
+    let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
+        // An explicit override is the split policy's complete readable set. Keep only the
+        // helper/platform roots the elevated setup needs; do not re-add legacy cwd/full-read roots.
+        let mut read_roots = gather_helper_read_roots(request.codex_home);
+        if request.policy.include_platform_defaults() {
+            read_roots.extend(
+                WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
+                    .iter()
+                    .map(PathBuf::from),
+            );
+        }
+        read_roots.extend(roots.iter().cloned());
+        canonical_existing(&read_roots)
+    } else {
+        gather_read_roots(request.command_cwd, request.policy, request.codex_home)
+    };
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -1193,16 +1205,65 @@ mod tests {
         );
         let expected_helper =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+        let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
         let expected_readable =
             dunce::canonicalize(&readable_root).expect("canonical readable root");
 
         assert_eq!(write_roots, Vec::<PathBuf>::new());
         assert!(read_roots.contains(&expected_helper));
+        assert!(!read_roots.contains(&expected_cwd));
         assert!(read_roots.contains(&expected_readable));
         assert!(
             canonical_windows_platform_default_roots()
                 .into_iter()
                 .all(|path| read_roots.contains(&path))
+        );
+    }
+
+    #[test]
+    fn build_payload_roots_replaces_full_read_policy_when_read_override_is_provided() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let policy_cwd = tmp.path().join("policy-cwd");
+        let command_cwd = tmp.path().join("workspace");
+        let readable_root = tmp.path().join("docs");
+        fs::create_dir_all(&policy_cwd).expect("create policy cwd");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&readable_root).expect("create readable root");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            network_access: false,
+        };
+
+        let (read_roots, write_roots) = build_payload_roots(
+            &super::SandboxSetupRequest {
+                policy: &policy,
+                policy_cwd: &policy_cwd,
+                command_cwd: &command_cwd,
+                env_map: &HashMap::new(),
+                codex_home: &codex_home,
+                proxy_enforced: false,
+            },
+            &super::SetupRootOverrides {
+                read_roots: Some(vec![readable_root.clone()]),
+                write_roots: None,
+                deny_write_paths: None,
+            },
+        );
+        let expected_helper =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+        let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
+        let expected_readable =
+            dunce::canonicalize(&readable_root).expect("canonical readable root");
+
+        assert_eq!(write_roots, Vec::<PathBuf>::new());
+        assert!(read_roots.contains(&expected_helper));
+        assert!(!read_roots.contains(&expected_cwd));
+        assert!(read_roots.contains(&expected_readable));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| !read_roots.contains(&path))
         );
     }
 
