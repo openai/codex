@@ -34,7 +34,7 @@ impl ExternalAgentConfigApi {
             .cwds
             .map(|cwds| {
                 cwds.into_iter()
-                    .map(AbsolutePathBuf::try_from)
+                    .map(AbsolutePathBuf::relative_to_current_dir)
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()
@@ -84,7 +84,7 @@ impl ExternalAgentConfigApi {
                     .map(|migration_item| {
                         let cwd = migration_item
                             .cwd
-                            .map(AbsolutePathBuf::try_from)
+                            .map(AbsolutePathBuf::relative_to_current_dir)
                             .transpose()
                             .map_err(|err| {
                                 map_io_error(io::Error::new(io::ErrorKind::InvalidInput, err))

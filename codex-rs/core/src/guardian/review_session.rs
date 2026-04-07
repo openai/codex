@@ -138,7 +138,7 @@ impl GuardianReviewSessionReuseKey {
             model_reasoning_summary: spawn_config.model_reasoning_summary,
             permissions: spawn_config.permissions.clone(),
             developer_instructions: spawn_config.developer_instructions.clone(),
-            base_instructions: spawn_config.base_instructions.clone(),
+            base_instructions: spawn_config.base_instructions.clone().flatten(),
             user_instructions: spawn_config.user_instructions.clone(),
             compact_prompt: spawn_config.compact_prompt.clone(),
             cwd: spawn_config.cwd.clone(),

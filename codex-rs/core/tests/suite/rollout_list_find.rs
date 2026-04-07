@@ -173,7 +173,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             thread_id,
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            BaseInstructions::default(),
+            Some(BaseInstructions::default()),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),

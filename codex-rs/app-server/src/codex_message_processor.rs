@@ -560,7 +560,7 @@ impl CodexMessageProcessor {
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
         let fallback_cwd = fallback_cwd
-            .map(AbsolutePathBuf::try_from)
+            .map(AbsolutePathBuf::relative_to_current_dir)
             .transpose()
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -1836,7 +1836,7 @@ impl CodexMessageProcessor {
         }
 
         let cwd = match cwd {
-            Some(cwd) => match AbsolutePathBuf::try_from(cwd) {
+            Some(cwd) => match AbsolutePathBuf::relative_to_current_dir(cwd) {
                 Ok(cwd) => cwd,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -2501,8 +2501,8 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        base_instructions: Option<String>,
-        developer_instructions: Option<String>,
+        base_instructions: Option<Option<String>>,
+        developer_instructions: Option<Option<String>>,
         personality: Option<Personality>,
     ) -> Result<ConfigOverrides, JSONRPCErrorError> {
         let cwd = cwd
@@ -4411,6 +4411,13 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if typesafe_overrides.base_instructions.is_none()
+            && let Ok(history) = RolloutRecorder::get_rollout_history(&rollout_path).await
+            && let Some(base_instructions) = history.get_base_instructions()
+        {
+            typesafe_overrides.base_instructions =
+                Some(base_instructions.map(|base_instructions| base_instructions.text));
+        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
@@ -6002,7 +6009,7 @@ impl CodexMessageProcessor {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
-            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+            let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
                 Ok(path) => path,
                 Err(err) => {
                     let error_path = cwd.clone();
@@ -8559,7 +8566,7 @@ async fn derive_config_for_cwd(
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(
-            cwd.map(AbsolutePathBuf::try_from)
+            cwd.map(AbsolutePathBuf::relative_to_current_dir)
                 .transpose()
                 .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?,
         )

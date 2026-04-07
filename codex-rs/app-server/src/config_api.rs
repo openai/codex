@@ -138,7 +138,7 @@ impl ConfigApi {
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
         let fallback_cwd = fallback_cwd
-            .map(AbsolutePathBuf::try_from)
+            .map(AbsolutePathBuf::relative_to_current_dir)
             .transpose()
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,

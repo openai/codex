@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -34,12 +35,12 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::PathBufExt;
-use crate::PathExt;
 use crate::RemoteEnvConfig;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
@@ -55,6 +56,8 @@ use wiremock::matchers::path_regex;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
+type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -> BoxFuture<'static, Result<()>>
+    + Send;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
 const REMOTE_EXEC_SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_EXEC_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -98,21 +101,25 @@ impl RemoteExecServerProcess {
 pub struct TestEnv {
     environment: codex_exec_server::Environment,
     cwd: AbsolutePathBuf,
-    _local_cwd_temp_dir: Option<TempDir>,
+    local_cwd_temp_dir: Option<Arc<TempDir>>,
     _remote_exec_server_process: Option<RemoteExecServerProcess>,
 }
 
 impl TestEnv {
     pub async fn local() -> Result<Self> {
-        let local_cwd_temp_dir = TempDir::new()?;
+        let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
         let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None).await?;
         Ok(Self {
             environment,
             cwd,
-            _local_cwd_temp_dir: Some(local_cwd_temp_dir),
+            local_cwd_temp_dir: Some(local_cwd_temp_dir),
             _remote_exec_server_process: None,
         })
+    }
+
+    pub fn cwd(&self) -> &AbsolutePathBuf {
+        &self.cwd
     }
 
     pub fn environment(&self) -> &codex_exec_server::Environment {
@@ -121,6 +128,10 @@ impl TestEnv {
 
     pub fn exec_server_url(&self) -> Option<&str> {
         self.environment.exec_server_url()
+    }
+
+    fn local_cwd_temp_dir(&self) -> Option<Arc<TempDir>> {
+        self.local_cwd_temp_dir.clone()
     }
 }
 
@@ -131,19 +142,16 @@ pub async fn test_env() -> Result<TestEnv> {
             let remote_ip = remote_container_ip(&remote_env.container_name)?;
             let websocket_url = rewrite_websocket_host(&remote_process.listen_url, &remote_ip)?;
             let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
-            let cwd = remote_aware_cwd_path().abs();
+            let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
-                .create_directory(
-                    &absolute_path(&cwd)?,
-                    CreateDirectoryOptions { recursive: true },
-                )
+                .create_directory(&cwd, CreateDirectoryOptions { recursive: true })
                 .await?;
-            remote_process.process.register_cleanup_path(&cwd);
+            remote_process.process.register_cleanup_path(cwd.as_path());
             Ok(TestEnv {
                 environment,
                 cwd,
-                _local_cwd_temp_dir: None,
+                local_cwd_temp_dir: None,
                 _remote_exec_server_process: Some(remote_process.process),
             })
         }
@@ -201,11 +209,12 @@ echo $!"
     })
 }
 
-fn remote_aware_cwd_path() -> PathBuf {
+fn remote_aware_cwd_path() -> AbsolutePathBuf {
     PathBuf::from(format!(
         "/tmp/codex-core-test-cwd-{}",
         remote_exec_server_instance_id()
     ))
+    .abs()
 }
 
 fn wait_for_remote_listen_url(container_name: &str, stdout_path: &str) -> Result<String> {
@@ -299,10 +308,6 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
-fn absolute_path(path: &Path) -> Result<AbsolutePathBuf> {
-    Ok(path.abs())
-}
-
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
@@ -326,6 +331,7 @@ pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
     pre_build_hooks: Vec<Box<PreBuildHook>>,
+    workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
     user_shell_override: Option<Shell>,
 }
@@ -359,6 +365,16 @@ impl TestCodexBuilder {
         self
     }
 
+    pub fn with_workspace_setup<F, Fut>(mut self, setup: F) -> Self
+    where
+        F: FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.workspace_setups
+            .push(Box::new(move |cwd, fs| Box::pin(setup(cwd, fs))));
+        self
+    }
+
     pub fn with_home(mut self, home: Arc<TempDir>) -> Self {
         self.home = Some(home);
         self
@@ -382,25 +398,24 @@ impl TestCodexBuilder {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),
         };
-        Box::pin(self.build_with_home(server, home, /*resume_from*/ None)).await
+        let base_url = format!("{}/v1", server.uri());
+        let test_env = TestEnv::local().await?;
+        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
+            .await
     }
 
     pub async fn build_remote_aware(
         &mut self,
         server: &wiremock::MockServer,
     ) -> anyhow::Result<TestCodex> {
-        let test_env = test_env().await?;
         let home = match self.home.clone() {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),
         };
         let base_url = format!("{}/v1", server.uri());
-        let cwd = test_env.cwd.clone();
-        self.config_mutators.push(Box::new(move |config| {
-            config.cwd = cwd.clone();
-        }));
-        let (config, cwd) = self.prepare_config(base_url, &home).await?;
-        Box::pin(self.build_from_config(config, cwd, home, /*resume_from*/ None, test_env)).await
+        let test_env = test_env().await?;
+        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
+            .await
     }
 
     pub async fn build_with_streaming_server(
@@ -412,10 +427,12 @@ impl TestCodexBuilder {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),
         };
+        let test_env = TestEnv::local().await?;
         Box::pin(self.build_with_home_and_base_url(
             format!("{base_url}/v1"),
             home,
             /*resume_from*/ None,
+            test_env,
         ))
         .await
     }
@@ -435,7 +452,9 @@ impl TestCodexBuilder {
             config.model_provider.supports_websockets = true;
             config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
         }));
-        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None)).await
+        let test_env = TestEnv::local().await?;
+        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
+            .await
     }
 
     pub async fn resume(
@@ -444,18 +463,9 @@ impl TestCodexBuilder {
         home: Arc<TempDir>,
         rollout_path: PathBuf,
     ) -> anyhow::Result<TestCodex> {
-        Box::pin(self.build_with_home(server, home, Some(rollout_path))).await
-    }
-
-    async fn build_with_home(
-        &mut self,
-        server: &wiremock::MockServer,
-        home: Arc<TempDir>,
-        resume_from: Option<PathBuf>,
-    ) -> anyhow::Result<TestCodex> {
         let base_url = format!("{}/v1", server.uri());
-        let (config, cwd) = self.prepare_config(base_url, &home).await?;
-        Box::pin(self.build_from_config(config, cwd, home, resume_from, TestEnv::local().await?))
+        let test_env = TestEnv::local().await?;
+        Box::pin(self.build_with_home_and_base_url(base_url, home, Some(rollout_path), test_env))
             .await
     }
 
@@ -464,10 +474,30 @@ impl TestCodexBuilder {
         base_url: String,
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
+        test_env: TestEnv,
     ) -> anyhow::Result<TestCodex> {
-        let (config, cwd) = self.prepare_config(base_url, &home).await?;
-        Box::pin(self.build_from_config(config, cwd, home, resume_from, TestEnv::local().await?))
-            .await
+        let (config, fallback_cwd) = self
+            .prepare_config(base_url, &home, test_env.cwd().clone())
+            .await?;
+        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
+            test_env.exec_server_url().map(str::to_owned),
+        ));
+        let file_system = test_env.environment().get_filesystem();
+        let mut workspace_setups = vec![];
+        swap(&mut self.workspace_setups, &mut workspace_setups);
+        for setup in workspace_setups {
+            setup(config.cwd.clone(), Arc::clone(&file_system)).await?;
+        }
+        let cwd = test_env.local_cwd_temp_dir().unwrap_or(fallback_cwd);
+        Box::pin(self.build_from_config(
+            config,
+            cwd,
+            home,
+            resume_from,
+            test_env,
+            environment_manager,
+        ))
+        .await
     }
 
     async fn build_from_config(
@@ -477,11 +507,9 @@ impl TestCodexBuilder {
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
+        environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            test_env.exec_server_url().map(str::to_owned),
-        ));
         let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
                 &config,
@@ -553,6 +581,7 @@ impl TestCodexBuilder {
         &mut self,
         base_url: String,
         home: &TempDir,
+        cwd_override: AbsolutePathBuf,
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let model_provider = ModelProviderInfo {
             base_url: Some(base_url),
@@ -563,7 +592,7 @@ impl TestCodexBuilder {
         };
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;
-        config.cwd = cwd.abs();
+        config.cwd = cwd_override;
         config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
@@ -897,6 +926,7 @@ pub fn test_codex() -> TestCodexBuilder {
         config_mutators: vec![],
         auth: CodexAuth::from_api_key("dummy"),
         pre_build_hooks: vec![],
+        workspace_setups: vec![],
         home: None,
         user_shell_override: None,
     }

@@ -48,6 +48,8 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::serde_helpers::deserialize_double_option;
+use crate::serde_helpers::serialize_double_option;
 use crate::user_input::UserInput;
 use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -2332,7 +2334,7 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
+    pub fn get_base_instructions(&self) -> Option<Option<BaseInstructions>> {
         // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
             InitialHistory::New => None,
@@ -2540,7 +2542,13 @@ pub struct SessionMeta {
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
-    pub base_instructions: Option<BaseInstructions>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_double_option",
+        serialize_with = "serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_instructions: Option<Option<BaseInstructions>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
