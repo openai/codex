@@ -1,6 +1,5 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -102,37 +101,22 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
 async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    #[cfg(target_os = "windows")]
-    let shell_command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 1".to_string(),
-    ];
-    #[cfg(not(target_os = "windows"))]
-    let shell_command = vec!["sleep".to_string(), "1".to_string()];
-
     let codex_home = TempDir::new()?;
-    let workdir = codex_home.path().join("workdir");
-    std::fs::create_dir(&workdir)?;
 
     let server = responses::start_mock_server().await;
-    let request_log = responses::mount_sse_sequence(
-        &server,
-        vec![
-            create_shell_command_sse_response(
-                shell_command,
-                Some(&workdir),
-                Some(5_000),
-                "call_sleep",
-            )?,
-            responses::sse(vec![
-                responses::ev_response_created("resp-2"),
-                responses::ev_assistant_message("msg-2", "Done"),
-                responses::ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
+    let first_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Working"),
+        responses::ev_completed("resp-1"),
+    ]))
+    .set_delay(std::time::Duration::from_secs(2));
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]));
+    let request_log =
+        responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
 
     create_config_toml(
         codex_home.path(),
@@ -163,7 +147,6 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
                 text_elements: Vec::new(),
             }],
             responsesapi_client_metadata: Some(start_metadata.clone()),
-            cwd: Some(workdir.clone()),
             ..Default::default()
         })
         .await?;
