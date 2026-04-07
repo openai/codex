@@ -34,7 +34,6 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
-use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
@@ -835,20 +834,20 @@ impl CoreShellCommandExecutor {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
-        let exec_request = sandbox_manager.transform(SandboxTransformRequest {
+        let exec_request = sandbox_manager.transform(
             command,
-            policy: sandbox_policy,
-            file_system_policy: file_system_sandbox_policy,
-            network_policy: network_sandbox_policy,
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
             sandbox,
-            enforce_managed_network: self.network.is_some(),
-            network: self.network.as_ref(),
-            sandbox_policy_cwd: &self.sandbox_policy_cwd,
-            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
-            use_legacy_landlock: self.use_legacy_landlock,
-            windows_sandbox_level: self.windows_sandbox_level,
-            windows_sandbox_private_desktop: false,
-        })?;
+            self.network.is_some(),
+            self.network.as_ref(),
+            &self.sandbox_policy_cwd,
+            self.codex_linux_sandbox_exe.as_ref(),
+            self.use_legacy_landlock,
+            self.windows_sandbox_level,
+            false,
+        )?;
         let mut exec_request =
             crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, options);
         if let Some(network) = exec_request.network.as_ref() {

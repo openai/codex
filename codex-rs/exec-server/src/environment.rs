@@ -160,6 +160,7 @@ mod tests {
     use super::Environment;
     use super::EnvironmentManager;
     use crate::ProcessId;
+    use codex_sandboxing::SandboxLaunchConfig;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -202,7 +203,9 @@ mod tests {
                 env: Default::default(),
                 tty: false,
                 arg0: None,
-                sandbox: None,
+                sandbox: SandboxLaunchConfig::no_sandbox(
+                    std::env::current_dir().expect("read current dir"),
+                ),
             })
             .await
             .expect("start process");

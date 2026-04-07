@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_sandboxing::SandboxType;
 use tokio::sync::watch;
 use tracing::trace;
 
@@ -35,10 +34,7 @@ impl RemoteProcess {
 impl ExecBackend for RemoteProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let process_id = params.process_id.clone();
-        let sandbox_type = params
-            .sandbox
-            .as_ref()
-            .map_or(SandboxType::None, |sandbox| sandbox.sandbox);
+        let sandbox_type = params.sandbox.sandbox;
         let session = self.client.register_session(&process_id).await?;
         match self.client.exec(params).await {
             Ok(_) => {}

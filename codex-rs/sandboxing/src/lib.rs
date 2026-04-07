@@ -15,7 +15,6 @@ pub use manager::SandboxExecRequest;
 pub use manager::SandboxLaunchConfig;
 pub use manager::SandboxManager;
 pub use manager::SandboxTransformError;
-pub use manager::SandboxTransformRequest;
 pub use manager::SandboxType;
 pub use manager::SandboxablePreference;
 pub use manager::get_platform_sandbox;

@@ -62,7 +62,7 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub tty: bool,
     pub arg0: Option<String>,
-    pub sandbox: Option<SandboxLaunchConfig>,
+    pub sandbox: SandboxLaunchConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

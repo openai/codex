@@ -609,7 +609,7 @@ impl UnifiedExecProcessManager {
                     env: env.env.clone(),
                     tty,
                     arg0: env.arg0.clone(),
-                    sandbox: None,
+                    sandbox: codex_sandboxing::SandboxLaunchConfig::no_sandbox(env.cwd.clone()),
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
