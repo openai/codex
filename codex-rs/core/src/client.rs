@@ -39,6 +39,8 @@ use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
 use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
 use codex_api::RawMemory as ApiRawMemory;
+use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
+use codex_api::RealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -444,6 +446,20 @@ impl ModelClient {
         client
             .compact_input(&payload, extra_headers)
             .await
+            .map_err(map_api_error)
+    }
+
+    pub async fn create_realtime_call(
+        &self,
+        sdp: String,
+        session_config: RealtimeSessionConfig,
+    ) -> Result<String> {
+        let client_setup = self.current_client_setup().await?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+            .create_with_session(sdp, session_config)
+            .await
+            .map(|response| response.sdp)
             .map_err(map_api_error)
     }
 

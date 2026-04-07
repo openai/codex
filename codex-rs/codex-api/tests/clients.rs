@@ -13,6 +13,7 @@ use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
 use codex_client::HttpTransport;
 use codex_client::Request;
+use codex_client::RequestBody;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
@@ -363,6 +364,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let input_id = req
         .body
         .as_ref()
+        .and_then(RequestBody::json)
         .and_then(|body| body.get("input"))
         .and_then(|input| input.get(0))
         .and_then(|item| item.get("id"))

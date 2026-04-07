@@ -27,12 +27,14 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationSdpEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use http::HeaderMap;
@@ -411,7 +413,7 @@ pub(crate) async fn handle_start(
     sub_id: String,
     params: ConversationStartParams,
 ) -> CodexResult<()> {
-    let prepared_start = match prepare_realtime_start(sess, params).await {
+    let mut prepared_start = match prepare_realtime_start(sess, params).await {
         Ok(prepared_start) => prepared_start,
         Err(err) => {
             error!("failed to prepare realtime conversation: {err}");
@@ -427,6 +429,21 @@ pub(crate) async fn handle_start(
         }
     };
 
+    if let Some(ConversationStartTransport::Webrtc { sdp }) = prepared_start.transport.take() {
+        if let Err(err) = handle_webrtc_start(sess, &sub_id, prepared_start, sdp).await {
+            error!("failed to start realtime WebRTC session: {err}");
+            let message = err.to_string();
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }),
+            })
+            .await;
+        }
+        return Ok(());
+    }
+
     if let Err(err) = handle_start_inner(sess, &sub_id, prepared_start).await {
         error!("failed to start realtime conversation: {err}");
         let message = err.to_string();
@@ -441,12 +458,48 @@ pub(crate) async fn handle_start(
     Ok(())
 }
 
+async fn handle_webrtc_start(
+    sess: &Arc<Session>,
+    sub_id: &str,
+    prepared_start: PreparedRealtimeConversationStart,
+    sdp: String,
+) -> CodexResult<()> {
+    let PreparedRealtimeConversationStart {
+        requested_session_id,
+        version,
+        session_config,
+        ..
+    } = prepared_start;
+    let sdp = sess
+        .services
+        .model_client
+        .create_realtime_call(sdp, session_config)
+        .await?;
+
+    sess.send_event_raw(Event {
+        id: sub_id.to_string(),
+        msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
+            session_id: requested_session_id,
+            version,
+        }),
+    })
+    .await;
+
+    sess.send_event_raw(Event {
+        id: sub_id.to_string(),
+        msg: EventMsg::RealtimeConversationSdp(RealtimeConversationSdpEvent { sdp }),
+    })
+    .await;
+    Ok(())
+}
+
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
     requested_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
+    transport: Option<ConversationStartTransport>,
 }
 
 async fn prepare_realtime_start(
@@ -466,10 +519,32 @@ async fn prepare_realtime_start(
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }
+    let version = config.realtime.version;
+    let session_config =
+        build_realtime_session_config(sess, params.prompt, params.session_id).await?;
+    let requested_session_id = session_config.session_id.clone();
+    let extra_headers =
+        realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
+    Ok(PreparedRealtimeConversationStart {
+        api_provider,
+        extra_headers,
+        requested_session_id,
+        version,
+        session_config,
+        transport: params.transport,
+    })
+}
+
+pub(crate) async fn build_realtime_session_config(
+    sess: &Arc<Session>,
+    prompt: String,
+    session_id: Option<String>,
+) -> CodexResult<RealtimeSessionConfig> {
+    let config = sess.get_config().await;
     let prompt = config
         .experimental_realtime_ws_backend_prompt
         .clone()
-        .unwrap_or(params.prompt);
+        .unwrap_or(prompt);
     let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
         Some(startup_context) => startup_context,
         None => {
@@ -484,8 +559,7 @@ async fn prepare_realtime_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-    let version = config.realtime.version;
-    let event_parser = match version {
+    let event_parser = match config.realtime.version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
@@ -493,22 +567,12 @@ async fn prepare_realtime_start(
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
-    let requested_session_id = params.session_id.or(Some(sess.conversation_id.to_string()));
-    let session_config = RealtimeSessionConfig {
+    Ok(RealtimeSessionConfig {
         instructions: prompt,
         model,
-        session_id: requested_session_id.clone(),
+        session_id: Some(session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
         event_parser,
         session_mode,
-    };
-    let extra_headers =
-        realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
-    Ok(PreparedRealtimeConversationStart {
-        api_provider,
-        extra_headers,
-        requested_session_id,
-        version,
-        session_config,
     })
 }
 
@@ -523,6 +587,7 @@ async fn handle_start_inner(
         requested_session_id,
         version,
         session_config,
+        transport: _,
     } = prepared_start;
     info!("starting realtime conversation");
     let (events_rx, realtime_active) = sess
