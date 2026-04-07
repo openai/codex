@@ -41,9 +41,7 @@ pub struct ContextWindowDetail {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ContextSectionKind {
     BuiltIn,
-    Agents,
-    Skills,
-    Runtime,
+    User,
     Conversation,
 }
 
@@ -62,9 +60,7 @@ struct SectionAccumulator {
 #[derive(Debug, Default)]
 struct BreakdownAccumulator {
     built_in: SectionAccumulator,
-    agents: SectionAccumulator,
-    skills: SectionAccumulator,
-    runtime: SectionAccumulator,
+    user: SectionAccumulator,
     conversation: SectionAccumulator,
     verbose: bool,
 }
@@ -241,9 +237,7 @@ impl BreakdownAccumulator {
     fn section_accumulator(&mut self, section: ContextSectionKind) -> &mut SectionAccumulator {
         match section {
             ContextSectionKind::BuiltIn => &mut self.built_in,
-            ContextSectionKind::Agents => &mut self.agents,
-            ContextSectionKind::Skills => &mut self.skills,
-            ContextSectionKind::Runtime => &mut self.runtime,
+            ContextSectionKind::User => &mut self.user,
             ContextSectionKind::Conversation => &mut self.conversation,
         }
     }
@@ -251,9 +245,7 @@ impl BreakdownAccumulator {
     fn into_sections(self) -> Vec<ContextWindowSection> {
         let mut sections: Vec<ContextWindowSection> = [
             self.built_in.section,
-            self.agents.section,
-            self.skills.section,
-            self.runtime.section,
+            self.user.section,
             self.conversation.section,
         ]
         .into_iter()
@@ -340,7 +332,7 @@ fn classify_developer_text(text: &str) -> (ContextSectionKind, String) {
     let trimmed = text.trim_start();
     if starts_with_tag(trimmed, SKILLS_INSTRUCTIONS_OPEN_TAG) {
         return (
-            ContextSectionKind::Skills,
+            ContextSectionKind::User,
             format!(
                 "Implicit skills catalog ({} skills)",
                 count_catalog_entries(trimmed)
@@ -349,13 +341,13 @@ fn classify_developer_text(text: &str) -> (ContextSectionKind, String) {
     }
     if starts_with_tag(trimmed, APPS_INSTRUCTIONS_OPEN_TAG) {
         return (
-            ContextSectionKind::BuiltIn,
+            ContextSectionKind::User,
             "Apps connector instructions".to_string(),
         );
     }
     if starts_with_tag(trimmed, PLUGINS_INSTRUCTIONS_OPEN_TAG) {
         return (
-            ContextSectionKind::BuiltIn,
+            ContextSectionKind::User,
             format!(
                 "Plugin instructions ({} plugins)",
                 count_catalog_entries(trimmed)
@@ -387,7 +379,7 @@ fn classify_developer_text(text: &str) -> (ContextSectionKind, String) {
         );
     }
     if starts_with_tag(trimmed, REALTIME_CONVERSATION_OPEN_TAG) {
-        return (ContextSectionKind::Runtime, "Realtime context".to_string());
+        return (ContextSectionKind::BuiltIn, "Realtime context".to_string());
     }
     (
         ContextSectionKind::BuiltIn,
@@ -397,38 +389,38 @@ fn classify_developer_text(text: &str) -> (ContextSectionKind, String) {
 
 fn classify_user_text(text: &str, phase: Option<&MessagePhase>) -> (ContextSectionKind, String) {
     if AGENTS_MD_FRAGMENT.matches_text(text) {
-        return (ContextSectionKind::Agents, format_agents_label(text));
+        return (ContextSectionKind::User, format_agents_label(text));
     }
     if SKILL_FRAGMENT.matches_text(text) {
-        return (ContextSectionKind::Skills, format_skill_label(text));
+        return (ContextSectionKind::User, format_skill_label(text));
     }
     if ENVIRONMENT_CONTEXT_FRAGMENT.matches_text(text) {
         return (
-            ContextSectionKind::Runtime,
+            ContextSectionKind::BuiltIn,
             "Environment context".to_string(),
         );
     }
     if USER_SHELL_COMMAND_FRAGMENT.matches_text(text) {
         return (
-            ContextSectionKind::Runtime,
+            ContextSectionKind::BuiltIn,
             "User shell command".to_string(),
         );
     }
     if TURN_ABORTED_FRAGMENT.matches_text(text) {
         return (
-            ContextSectionKind::Runtime,
+            ContextSectionKind::BuiltIn,
             "Turn aborted marker".to_string(),
         );
     }
     if SUBAGENT_NOTIFICATION_FRAGMENT.matches_text(text) {
         return (
-            ContextSectionKind::Runtime,
+            ContextSectionKind::BuiltIn,
             "Subagent notification".to_string(),
         );
     }
     if parse_hook_prompt_fragment(text).is_some() {
         return (
-            ContextSectionKind::Runtime,
+            ContextSectionKind::BuiltIn,
             "Hook prompt context".to_string(),
         );
     }
@@ -568,10 +560,8 @@ fn section_for_message_role(role: &str) -> ContextSectionKind {
 fn section_order(label: &str) -> usize {
     match label {
         "Built-in" => 0,
-        "AGENTS.md" => 1,
-        "Skills" => 2,
-        "Runtime context" => 3,
-        "Conversation" => 4,
+        "User" => 1,
+        "Conversation" => 2,
         _ => usize::MAX,
     }
 }
@@ -580,9 +570,7 @@ impl ContextSectionKind {
     fn label(self) -> &'static str {
         match self {
             ContextSectionKind::BuiltIn => "Built-in",
-            ContextSectionKind::Agents => "AGENTS.md",
-            ContextSectionKind::Skills => "Skills",
-            ContextSectionKind::Runtime => "Runtime context",
+            ContextSectionKind::User => "User",
             ContextSectionKind::Conversation => "Conversation",
         }
     }
@@ -619,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn groups_built_in_agents_skills_runtime_and_conversation_sections() {
+    fn groups_built_in_user_and_conversation_sections() {
         let base_instructions = BaseInstructions {
             text: "Base instructions".to_string(),
         };
@@ -658,11 +646,9 @@ mod tests {
         assert_eq!(
             section_labels,
             vec![
-                "AGENTS.md".to_string(),
                 "Built-in".to_string(),
                 "Conversation".to_string(),
-                "Runtime context".to_string(),
-                "Skills".to_string(),
+                "User".to_string(),
             ]
         );
         assert_eq!(
@@ -766,7 +752,7 @@ mod tests {
                 .iter()
                 .map(|(label, _)| label.clone())
                 .collect::<Vec<_>>(),
-            vec!["Built-in".to_string(), "Skills".to_string()]
+            vec!["Built-in".to_string(), "User".to_string()]
         );
         assert_eq!(
             breakdown.total_tokens,

@@ -298,9 +298,7 @@ fn section_marker(label: &str) -> Span<'static> {
 fn section_style(label: &str) -> Style {
     match label {
         "Conversation" => Style::new().cyan().bold(),
-        "Skills" => Style::new().green().bold(),
-        "AGENTS.md" => Style::new().magenta().bold(),
-        "Runtime context" => Style::new().red().bold(),
+        "User" => Style::new().green().bold(),
         "Built-in" => Style::new().fg(ratatui::style::Color::Yellow).bold(),
         _ => Style::new(),
     }
@@ -402,7 +400,7 @@ mod tests {
             total_tokens: 20_000,
             sections: vec![
                 ThreadContextWindowSection {
-                    label: "Skills".to_string(),
+                    label: "User".to_string(),
                     tokens: 12_000,
                     details: vec![ThreadContextWindowDetail {
                         label: "Implicit skills catalog (42 skills)".to_string(),

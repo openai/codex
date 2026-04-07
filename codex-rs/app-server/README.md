@@ -366,7 +366,7 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 
 ### Example: Read live context-window usage
 
-Use `thread/context/read` to fetch an approximate, sectioned breakdown of the current model-visible context for a loaded thread. The response groups usage into `Built-in`, `AGENTS.md`, `Skills`, `Runtime context`, and `Conversation`, with token counts derived from Codex's current byte-based estimator.
+Use `thread/context/read` to fetch an approximate, sectioned breakdown of the current model-visible context for a loaded thread. The response groups usage into `Built-in`, `User`, and `Conversation`, with token counts derived from Codex's current byte-based estimator. The `User` section includes AGENTS, skills, and configurable connector/plugin instructions; runtime scaffolding is folded into `Built-in`.
 
 ```json
 { "method": "thread/context/read", "id": 24, "params": { "threadId": "thr_123" } }
