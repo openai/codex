@@ -197,11 +197,11 @@ mod tests {
         let canonical_resources_dir = resources_dir.canonicalize()?;
 
         let context = InstallContext::from_exe_with_codex_home(
-            false,
-            Some(&exe_path),
-            false,
-            false,
-            Some(codex_home.path()),
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ Some(codex_home.path()),
         );
         assert_eq!(
             context,
@@ -225,11 +225,11 @@ mod tests {
         fs::write(&exe_path, "")?;
 
         let context = InstallContext::from_exe_with_codex_home(
-            false,
-            Some(&exe_path),
-            false,
-            false,
-            Some(codex_home.path()),
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ Some(codex_home.path()),
         );
         assert_eq!(context.rg_command(), PathBuf::from("rg"));
         Ok(())
@@ -238,20 +238,20 @@ mod tests {
     #[test]
     fn npm_and_bun_take_precedence() {
         let npm_context = InstallContext::from_exe_with_codex_home(
-            false,
-            Some(Path::new("/tmp/codex")),
-            true,
-            false,
-            None,
+            /*is_macos*/ false,
+            /*current_exe*/ Some(Path::new("/tmp/codex")),
+            /*managed_by_npm*/ true,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ None,
         );
         assert_eq!(npm_context, InstallContext::Npm);
 
         let bun_context = InstallContext::from_exe_with_codex_home(
-            false,
-            Some(Path::new("/tmp/codex")),
-            false,
-            true,
-            None,
+            /*is_macos*/ false,
+            /*current_exe*/ Some(Path::new("/tmp/codex")),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ true,
+            /*codex_home*/ None,
         );
         assert_eq!(bun_context, InstallContext::Bun);
     }
@@ -259,11 +259,11 @@ mod tests {
     #[test]
     fn brew_is_detected_on_macos_prefixes() {
         let context = InstallContext::from_exe_with_codex_home(
-            true,
-            Some(Path::new("/opt/homebrew/bin/codex")),
-            false,
-            false,
-            None,
+            /*is_macos*/ true,
+            /*current_exe*/ Some(Path::new("/opt/homebrew/bin/codex")),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ None,
         );
         assert_eq!(context, InstallContext::Brew);
     }
