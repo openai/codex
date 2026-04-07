@@ -142,6 +142,7 @@ model_provider = "role-provider"
             description: Some("Role with model-provider and profile overrides".to_string()),
             config_file: Some(role_config_path),
             nickname_candidates: None,
+            fork_context: None,
         },
     );
     turn.config = Arc::new(config);
