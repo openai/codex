@@ -1,0 +1,3 @@
+PRAGMA auto_vacuum = INCREMENTAL;
+
+DROP TABLE IF EXISTS logs;

@@ -1783,6 +1783,30 @@
             },
             "method": {
               "enum": [
+                "mcpServer/resource/read"
+              ],
+              "title": "McpServer/resource/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/McpResourceReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "McpServer/resource/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "windowsSandbox/setupStart"
               ],
               "title": "WindowsSandbox/setupStartRequestMethod",
@@ -4155,7 +4179,7 @@
           "type": "array"
         },
         "watchId": {
-          "description": "Watch identifier returned by `fs/watch`.",
+          "description": "Watch identifier previously provided to `fs/watch`.",
           "type": "string"
         }
       },
@@ -4425,7 +4449,7 @@
       "description": "Stop filesystem watch notifications for a prior `fs/watch`.",
       "properties": {
         "watchId": {
-          "description": "Watch identifier returned by `fs/watch`.",
+          "description": "Watch identifier previously provided to `fs/watch`.",
           "type": "string"
         }
       },
@@ -4452,25 +4476,6 @@
             }
           ],
           "description": "Absolute file or directory path to watch."
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "title": "FsWatchParams",
-      "type": "object"
-    },
-    "FsWatchResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Created watch handle returned by `fs/watch`.",
-      "properties": {
-        "path": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            }
-          ],
-          "description": "Canonicalized path associated with the watch."
         },
         "watchId": {
           "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
@@ -4480,6 +4485,25 @@
       "required": [
         "path",
         "watchId"
+      ],
+      "title": "FsWatchParams",
+      "type": "object"
+    },
+    "FsWatchResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/watch`.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Canonicalized path associated with the watch."
+        }
+      },
+      "required": [
+        "path"
       ],
       "title": "FsWatchResponse",
       "type": "object"
@@ -4847,6 +4871,176 @@
       ],
       "type": "object"
     },
+    "GuardianApprovalReviewAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/definitions/GuardianCommandSource"
+            },
+            "type": {
+              "enum": [
+                "command"
+              ],
+              "title": "CommandGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "cwd",
+            "source",
+            "type"
+          ],
+          "title": "CommandGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "argv": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "program": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/definitions/GuardianCommandSource"
+            },
+            "type": {
+              "enum": [
+                "execve"
+              ],
+              "title": "ExecveGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "argv",
+            "cwd",
+            "program",
+            "source",
+            "type"
+          ],
+          "title": "ExecveGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cwd": {
+              "type": "string"
+            },
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "applyPatch"
+              ],
+              "title": "ApplyPatchGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cwd",
+            "files",
+            "type"
+          ],
+          "title": "ApplyPatchGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "protocol": {
+              "$ref": "#/definitions/NetworkApprovalProtocol"
+            },
+            "target": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "networkAccess"
+              ],
+              "title": "NetworkAccessGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "host",
+            "port",
+            "protocol",
+            "target",
+            "type"
+          ],
+          "title": "NetworkAccessGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "connectorId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "connectorName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "server": {
+              "type": "string"
+            },
+            "toolName": {
+              "type": "string"
+            },
+            "toolTitle": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "mcpToolCall"
+              ],
+              "title": "McpToolCallGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "server",
+            "toolName",
+            "type"
+          ],
+          "title": "McpToolCallGuardianApprovalReviewAction",
+          "type": "object"
+        }
+      ]
+    },
     "GuardianApprovalReviewStatus": {
       "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
       "enum": [
@@ -4854,6 +5048,13 @@
         "approved",
         "denied",
         "aborted"
+      ],
+      "type": "string"
+    },
+    "GuardianCommandSource": {
+      "enum": [
+        "shell",
+        "unifiedExec"
       ],
       "type": "string"
     },
@@ -5163,7 +5364,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
-        "action": true,
+        "action": {
+          "$ref": "#/definitions/GuardianApprovalReviewAction"
+        },
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
@@ -5178,6 +5381,7 @@
         }
       },
       "required": [
+        "action",
         "review",
         "targetItemId",
         "threadId",
@@ -5190,7 +5394,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
-        "action": true,
+        "action": {
+          "$ref": "#/definitions/GuardianApprovalReviewAction"
+        },
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
@@ -5205,6 +5411,7 @@
         }
       },
       "required": [
+        "action",
         "review",
         "targetItemId",
         "threadId",
@@ -5243,6 +5450,17 @@
             "string",
             "null"
           ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerStatusDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Controls how much MCP inventory data to fetch for each server. Defaults to `Full` when omitted."
         },
         "limit": {
           "description": "Optional page size; defaults to a server-defined value.",
@@ -5569,6 +5787,43 @@
       ],
       "type": "string"
     },
+    "McpResourceReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "threadId",
+        "uri"
+      ],
+      "title": "McpResourceReadParams",
+      "type": "object"
+    },
+    "McpResourceReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "contents": {
+          "items": {
+            "$ref": "#/definitions/ResourceContent"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "contents"
+      ],
+      "title": "McpResourceReadResponse",
+      "type": "object"
+    },
     "McpServerOauthLoginCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5684,6 +5939,13 @@
       ],
       "type": "object"
     },
+    "McpServerStatusDetail": {
+      "enum": [
+        "full",
+        "toolsAndAuthOnly"
+      ],
+      "type": "string"
+    },
     "McpServerStatusUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5745,6 +6007,7 @@
     },
     "McpToolCallResult": {
       "properties": {
+        "_meta": true,
         "content": {
           "items": true,
           "type": "array"
@@ -6063,6 +6326,15 @@
       ],
       "type": "string"
     },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5Tcp",
+        "socks5Udp"
+      ],
+      "type": "string"
+    },
     "NetworkDomainPermission": {
       "enum": [
         "allow",
@@ -6101,6 +6373,12 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "dangerFullAccessDenylistOnly": {
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -7273,6 +7551,57 @@
         "uri"
       ],
       "type": "object"
+    },
+    "ResourceContent": {
+      "anyOf": [
+        {
+          "properties": {
+            "_meta": true,
+            "mimeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "uri": {
+              "description": "The URI of this resource.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "blob": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "uri": {
+              "description": "The URI of this resource.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "blob",
+            "uri"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Contents returned when reading a resource from an MCP server."
     },
     "ResourceTemplate": {
       "description": "A template description for resources available on the server.",
@@ -9849,6 +10178,13 @@
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
         },
+        "forkedFromId": {
+          "description": "Source thread id when this thread was created by forking another thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gitInfo": {
           "anyOf": [
             {
@@ -11985,6 +12321,22 @@
     },
     "Turn": {
       "properties": {
+        "completedAt": {
+          "description": "Unix timestamp (in seconds) when the turn completed.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "description": "Duration between turn start and completion in milliseconds, if known.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "error": {
           "anyOf": [
             {
@@ -12005,6 +12357,14 @@
             "$ref": "#/definitions/ThreadItem"
           },
           "type": "array"
+        },
+        "startedAt": {
+          "description": "Unix timestamp (in seconds) when the turn started.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "status": {
           "$ref": "#/definitions/TurnStatus"

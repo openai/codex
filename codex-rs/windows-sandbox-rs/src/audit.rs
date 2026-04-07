@@ -194,8 +194,7 @@ pub fn audit_everyone_writable(
         }
         crate::logging::log_note(
             &format!(
-                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
-                list
+                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{list}",
             ),
             logs_base_dir,
         );
@@ -229,7 +228,7 @@ pub fn apply_world_writable_scan_and_denies(
         logs_base_dir,
     ) {
         log_note(
-            &format!("AUDIT: failed to apply capability deny ACEs: {}", err),
+            &format!("AUDIT: failed to apply capability deny ACEs: {err}"),
             logs_base_dir,
         );
     }

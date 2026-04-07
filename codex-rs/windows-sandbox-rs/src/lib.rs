@@ -34,7 +34,7 @@ mod conpty;
 
 #[cfg(target_os = "windows")]
 #[path = "elevated/ipc_framed.rs"]
-pub mod ipc_framed;
+pub(crate) mod ipc_framed;
 
 #[cfg(target_os = "windows")]
 #[path = "setup_orchestrator.rs"]
@@ -87,6 +87,30 @@ pub use hide_users::hide_newly_created_users;
 pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]
 pub use identity::sandbox_setup_is_complete;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::ErrorPayload;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::ExitPayload;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::FramedMessage;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::Message;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::OutputPayload;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::OutputStream;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::SpawnReady;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::SpawnRequest;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::decode_bytes;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::encode_bytes;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::read_frame;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::write_frame;
 #[cfg(target_os = "windows")]
 pub use logging::LOG_FILE_NAME;
 #[cfg(target_os = "windows")]
@@ -335,14 +359,20 @@ mod windows_impl {
         let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
             match &policy {
                 SandboxPolicy::ReadOnly { .. } => {
-                    let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
+                    #[allow(clippy::expect_used)]
+                    let psid =
+                        convert_string_sid_to_sid(&caps.readonly).expect("valid readonly SID");
                     let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
                     (h, psid, None)
                 }
                 SandboxPolicy::WorkspaceWrite { .. } => {
-                    let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                    #[allow(clippy::expect_used)]
+                    let psid_generic =
+                        convert_string_sid_to_sid(&caps.workspace).expect("valid workspace SID");
                     let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-                    let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
+                    #[allow(clippy::expect_used)]
+                    let psid_workspace =
+                        convert_string_sid_to_sid(&ws_sid).expect("valid workspace SID");
                     let base = super::token::get_current_token_for_restriction()?;
                     let h_res = create_workspace_write_token_with_caps_from(
                         base,
@@ -363,7 +393,7 @@ mod windows_impl {
                 && let Ok(base) = super::token::get_current_token_for_restriction()
             {
                 if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
-                    let mut tmp = bytes.clone();
+                    let mut tmp = bytes;
                     let psid2 = tmp.as_mut_ptr() as *mut c_void;
                     allow_null_device(psid2);
                 }
@@ -536,7 +566,7 @@ mod windows_impl {
         if exit_code == 0 {
             log_success(&command, logs_base_dir);
         } else {
-            log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+            log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
         }
 
         if !persist_aces {
@@ -569,9 +599,11 @@ mod windows_impl {
 
         ensure_codex_home_exists(codex_home)?;
         let caps = load_or_create_cap_sids(codex_home)?;
+        #[allow(clippy::expect_used)]
         let psid_generic =
             unsafe { convert_string_sid_to_sid(&caps.workspace) }.expect("valid workspace SID");
         let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+        #[allow(clippy::expect_used)]
         let psid_workspace =
             unsafe { convert_string_sid_to_sid(&ws_sid) }.expect("valid workspace SID");
         let current_dir = cwd.to_path_buf();

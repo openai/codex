@@ -1,7 +1,4 @@
-use crate::config::NetworkToml;
-use crate::config::PermissionsToml;
 use crate::config::find_codex_home;
-use crate::config::overlay_network_domain_permissions;
 use crate::config::resolve_permission_profile;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
@@ -16,6 +13,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::permissions_toml::NetworkToml;
+use codex_config::permissions_toml::PermissionsToml;
+use codex_config::permissions_toml::overlay_network_domain_permissions;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxyConfig;
@@ -88,10 +88,12 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
             let path = match &layer.name {
                 ConfigLayerSource::System { file } => Some(file.as_path().to_path_buf()),
                 ConfigLayerSource::User { file } => Some(file.as_path().to_path_buf()),
-                ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
-                    .join(CONFIG_TOML_FILE)
-                    .ok()
-                    .map(|p| p.as_path().to_path_buf()),
+                ConfigLayerSource::Project { dot_codex_folder } => Some(
+                    dot_codex_folder
+                        .join(CONFIG_TOML_FILE)
+                        .as_path()
+                        .to_path_buf(),
+                ),
                 ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
                     Some(file.as_path().to_path_buf())
                 }

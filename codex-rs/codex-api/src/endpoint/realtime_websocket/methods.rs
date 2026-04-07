@@ -625,9 +625,9 @@ fn normalize_realtime_path(url: &mut Url) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::endpoint::realtime_websocket::protocol::RealtimeHandoffRequested;
     use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
     use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
+    use codex_protocol::protocol::RealtimeHandoffRequested;
     use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
     use codex_protocol::protocol::RealtimeResponseCancelled;
     use http::HeaderValue;

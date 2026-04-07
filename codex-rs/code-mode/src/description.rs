@@ -7,15 +7,17 @@ use crate::PUBLIC_TOOL_NAME;
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 const CODE_MODE_ONLY_PREFACE: &str =
     "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly";
-const EXEC_DESCRIPTION_TEMPLATE: &str = r#"## exec
-- Runs raw JavaScript in an isolated context (no Node, no file system, or network access, no console).
-- Send raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
+const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
+- Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
+- All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
+- Nested tool methods take either a string or an object as their input argument.
+- Nested tools return either an object or a string, based on the description.
+- Runs raw JavaScript -- no Node, no file system, no network access, no console.
+- Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
 - You may optionally start the tool input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
 - `yield_time_ms` asks `exec` to yield early after that many milliseconds if the script is still running.
 - `max_output_tokens` sets the token budget for direct `exec` results. By default the result is truncated to 10000 tokens.
-- All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
-- Tool methods take either string or object as parameter.
-- They return either a structured value or a string based on the description above.
+- When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
 
 - Global helpers:
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
@@ -24,6 +26,8 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"## exec
 - `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
 - `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
 - `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
+- `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
+- `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
 - `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
@@ -553,5 +557,12 @@ mod tests {
             /*code_mode_only*/ true,
         );
         assert!(description.contains("### `foo` (`foo`)"));
+    }
+
+    #[test]
+    fn exec_description_mentions_timeout_helpers() {
+        let description = build_exec_tool_description(&[], /*code_mode_only*/ false);
+        assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
+        assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
     }
 }

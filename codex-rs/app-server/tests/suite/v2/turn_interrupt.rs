@@ -50,7 +50,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         "call_sleep",
     )?])
     .await;
-    create_config_toml(&codex_home, &server.uri(), "never")?;
+    create_config_toml(&codex_home, &server.uri(), "never", "danger-full-access")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -124,14 +124,11 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
 
 #[tokio::test]
 async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()> {
-    #[cfg(target_os = "windows")]
     let shell_command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 10".to_string(),
+        "python3".to_string(),
+        "-c".to_string(),
+        "print(42)".to_string(),
     ];
-    #[cfg(not(target_os = "windows"))]
-    let shell_command = vec!["sleep".to_string(), "10".to_string()];
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -143,10 +140,10 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         shell_command.clone(),
         Some(&working_directory),
         Some(10_000),
-        "call_sleep_approval",
+        "call_python_approval",
     )?])
     .await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(&codex_home, &server.uri(), "untrusted", "read-only")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -168,7 +165,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
-                text: "run sleep".to_string(),
+                text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory),
@@ -190,7 +187,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     let ServerRequest::CommandExecutionRequestApproval { request_id, params } = request else {
         panic!("expected CommandExecutionRequestApproval request");
     };
-    assert_eq!(params.item_id, "call_sleep_approval");
+    assert_eq!(params.item_id, "call_python_approval");
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
 
@@ -242,6 +239,7 @@ fn create_config_toml(
     codex_home: &std::path::Path,
     server_uri: &str,
     approval_policy: &str,
+    sandbox_mode: &str,
 ) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
@@ -250,7 +248,7 @@ fn create_config_toml(
             r#"
 model = "mock-model"
 approval_policy = "{approval_policy}"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "{sandbox_mode}"
 
 model_provider = "mock_provider"
 

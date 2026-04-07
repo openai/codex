@@ -1,9 +1,6 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
-use crate::protocol::AskForApproval;
-use crate::protocol::EventMsg;
-use crate::protocol::SandboxPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -14,6 +11,11 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
@@ -25,10 +27,8 @@ fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
     turn.sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
-    turn.file_system_sandbox_policy =
-        crate::protocol::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
-    turn.network_sandbox_policy =
-        crate::protocol::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
+    turn.file_system_sandbox_policy = FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+    turn.network_sandbox_policy = NetworkSandboxPolicy::from(turn.sandbox_policy.get());
 }
 
 #[test]
@@ -1028,7 +1028,7 @@ async fn js_repl_waits_for_unawaited_tool_calls_before_completion() -> anyhow::R
 
     let marker = turn
         .cwd
-        .join(format!("js-repl-unawaited-marker-{}.txt", Uuid::new_v4()))?;
+        .join(format!("js-repl-unawaited-marker-{}.txt", Uuid::new_v4()));
     let marker_json = serde_json::to_string(&marker.to_string_lossy().to_string())?;
     let result = manager
             .execute(
@@ -1073,10 +1073,10 @@ async fn js_repl_persisted_tool_helpers_work_across_cells() -> anyhow::Result<()
 
     let global_marker = turn
         .cwd
-        .join(format!("js-repl-global-helper-{}.txt", Uuid::new_v4()))?;
+        .join(format!("js-repl-global-helper-{}.txt", Uuid::new_v4()));
     let lexical_marker = turn
         .cwd
-        .join(format!("js-repl-lexical-helper-{}.txt", Uuid::new_v4()))?;
+        .join(format!("js-repl-lexical-helper-{}.txt", Uuid::new_v4()));
     let global_marker_json = serde_json::to_string(&global_marker.to_string_lossy().to_string())?;
     let lexical_marker_json = serde_json::to_string(&lexical_marker.to_string_lossy().to_string())?;
 

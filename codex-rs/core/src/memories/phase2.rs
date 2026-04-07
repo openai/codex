@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
+use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
 use crate::memories::memory_root;
 use crate::memories::metrics;
@@ -142,6 +143,26 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
             return;
         }
     };
+
+    if let Some(thread_config) = session
+        .services
+        .agent_control
+        .get_agent_config_snapshot(thread_id)
+        .await
+    {
+        if session.enabled(Feature::GeneralAnalytics) {
+            let client_metadata = session.app_server_client_metadata().await;
+            emit_subagent_session_started(
+                &session.services.analytics_events_client,
+                client_metadata,
+                thread_id,
+                thread_config,
+                SubAgentSource::MemoryConsolidation,
+            );
+        }
+    } else {
+        warn!("failed to load memory consolidation thread config for analytics: {thread_id}");
+    }
 
     // 6. Spawn the agent handler.
     agent::handle(

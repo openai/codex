@@ -23,7 +23,6 @@ async-channel = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bm25 = { workspace = true }
-chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-analytics = { workspace = true }
@@ -37,7 +36,11 @@ codex-config = { workspace = true }
 codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
+codex-feedback = { workspace = true }
 codex-login = { workspace = true }
+codex-mcp = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }
@@ -47,6 +50,7 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-response-debug-context = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-sandboxing = { workspace = true }
@@ -70,7 +74,6 @@ codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-
 csv = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
-encoding_rs = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
@@ -90,7 +93,6 @@ rmcp = { workspace = true, default-features = false, features = [
     "schemars",
     "server",
 ] }
-schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
@@ -114,12 +116,7 @@ tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
-wildmatch = { workspace = true }
 zip = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-landlock = { workspace = true }
-seccompiler = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -146,9 +143,7 @@ codex-shell-escalation = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-otel = { workspace = true, features = [
-    "disable-default-metrics-exporter",
-] }
+codex-otel = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }

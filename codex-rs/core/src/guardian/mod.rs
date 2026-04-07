@@ -38,7 +38,7 @@ const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
 const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
-const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
+const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
 const GUARDIAN_APPROVAL_RISK_THRESHOLD: u8 = 80;
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const TRUNCATION_TAG: &str = "truncated";
@@ -62,7 +62,7 @@ pub(crate) struct GuardianAssessment {
 #[cfg(test)]
 use approval_request::format_guardian_action_pretty;
 #[cfg(test)]
-use approval_request::guardian_assessment_action_value;
+use approval_request::guardian_assessment_action;
 #[cfg(test)]
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]

@@ -3,8 +3,6 @@
 //! This crate defines the feature registry plus the logic used to resolve an
 //! effective feature set from config-like inputs.
 
-use codex_login::AuthManager;
-use codex_login::CodexAuth;
 use codex_otel::SessionTelemetry;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -124,6 +122,8 @@ pub enum Feature {
     CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
+    /// Enable thread lifecycle analytics emitted via the app-server analytics pipeline.
+    GeneralAnalytics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -138,6 +138,8 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
+    /// Hide spawn_agent agent/model override fields from the model-visible tool schema.
+    DebugHideSpawnAgentMetadata,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -174,6 +176,8 @@ pub enum Feature {
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
+    /// Connect app-server to the ChatGPT remote control service.
+    RemoteControl,
     /// Removed compatibility flag. The TUI now always uses the app-server implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
@@ -271,25 +275,8 @@ impl Features {
         self.enabled.contains(&f)
     }
 
-    pub async fn apps_enabled(&self, auth_manager: Option<&AuthManager>) -> bool {
-        if !self.enabled(Feature::Apps) {
-            return false;
-        }
-
-        let auth = match auth_manager {
-            Some(auth_manager) => auth_manager.auth().await,
-            None => None,
-        };
-        self.apps_enabled_for_auth(auth.as_ref())
-    }
-
-    pub fn apps_enabled_cached(&self, auth_manager: Option<&AuthManager>) -> bool {
-        let auth = auth_manager.and_then(AuthManager::auth_cached);
-        self.apps_enabled_for_auth(auth.as_ref())
-    }
-
-    pub fn apps_enabled_for_auth(&self, auth: Option<&CodexAuth>) -> bool {
-        self.enabled(Feature::Apps) && auth.is_some_and(CodexAuth::is_chatgpt_auth)
+    pub fn apps_enabled_for_auth(&self, has_chatgpt_auth: bool) -> bool {
+        self.enabled(Feature::Apps) && has_chatgpt_auth
     }
 
     pub fn use_legacy_landlock(&self) -> bool {
@@ -610,6 +597,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::GeneralAnalytics,
+        key: "general_analytics",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Sqlite,
         key: "sqlite",
         stage: Stage::Removed,
@@ -630,7 +623,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageDetailOriginal,
         key: "image_detail_original",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Original image detail",
+            menu_description: "Let the model inspect tool-emitted images at full resolution on supported models instead of a resized approximation. This affects tool-emitted images such as those produced by `view_image`, not images attached directly in the UI. It is particularly important for localization and precise UI targeting, for reading small text, and for reasoning about precise layout.",
+            announcement: "NEW: Original image detail is now available in /experimental. Enable it to let tools request full-resolution image detail on supported models for CUA and localization tasks.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -708,6 +705,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MultiAgentV2,
         key: "multi_agent_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DebugHideSpawnAgentMetadata,
+        key: "debug_hide_spawn_agent_metadata",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -814,6 +817,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteControl,
+        key: "remote_control",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

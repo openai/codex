@@ -1,4 +1,3 @@
-use crate::client_common::tools::ToolSearchOutputTool;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
@@ -14,6 +13,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
+use codex_tools::ToolSearchOutputTool;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -363,13 +363,6 @@ impl ExecCommandToolOutput {
 
     fn response_text(&self) -> String {
         let mut sections = Vec::new();
-
-        if let Some(command) = &self.session_command {
-            sections.push(format!(
-                "Command: {}",
-                codex_shell_command::parse_command::shlex_join(command)
-            ));
-        }
 
         if !self.chunk_id.is_empty() {
             sections.push(format!("Chunk ID: {}", self.chunk_id));

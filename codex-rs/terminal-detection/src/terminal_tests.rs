@@ -123,6 +123,27 @@ fn detects_term_program() {
 }
 
 #[test]
+fn terminal_info_reports_is_zellij() {
+    let zellij = terminal_info(
+        TerminalName::Unknown,
+        /*term_program*/ None,
+        /*version*/ None,
+        /*term*/ None,
+        Some(Multiplexer::Zellij {}),
+    );
+    assert!(zellij.is_zellij());
+
+    let non_zellij = terminal_info(
+        TerminalName::Unknown,
+        /*term_program*/ None,
+        /*version*/ None,
+        /*term*/ None,
+        Some(Multiplexer::Tmux { version: None }),
+    );
+    assert!(!non_zellij.is_zellij());
+}
+
+#[test]
 fn detects_iterm2() {
     let env = FakeEnvironment::new().with_var("ITERM_SESSION_ID", "w0t1p0");
     let terminal = detect_terminal_info_from_env(&env);

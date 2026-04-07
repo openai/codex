@@ -1,5 +1,5 @@
 use super::*;
-use crate::models_manager::model_info::model_info_from_slug;
+use codex_models_manager::model_info::model_info_from_slug;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use tokio::fs as tokio_fs;

@@ -1,6 +1,6 @@
-use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::run_setup_refresh_with_extra_read_roots;
 use anyhow::Result;
+use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
