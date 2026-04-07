@@ -142,14 +142,25 @@ impl StateRuntime {
 
     /// Checkpoint both runtime SQLite databases so WAL contents are persisted to the main files.
     pub async fn checkpoint_wal(&self) -> anyhow::Result<()> {
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.pool.as_ref())
-            .await?;
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.logs_pool.as_ref())
-            .await?;
+        checkpoint_wal_pool(self.pool.as_ref(), "state").await?;
+        checkpoint_wal_pool(self.logs_pool.as_ref(), "logs").await?;
         Ok(())
     }
+}
+
+async fn checkpoint_wal_pool(pool: &SqlitePool, name: &str) -> anyhow::Result<()> {
+    let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .fetch_one(pool)
+        .await?;
+    let busy: i64 = row.try_get(0)?;
+    let log_pages: i64 = row.try_get(1)?;
+    let checkpointed_pages: i64 = row.try_get(2)?;
+    if busy != 0 {
+        anyhow::bail!(
+            "{name} WAL checkpoint was busy: {checkpointed_pages}/{log_pages} pages checkpointed"
+        );
+    }
+    Ok(())
 }
 
 fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
