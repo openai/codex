@@ -1128,6 +1128,47 @@ async fn interrupt_drops_stream_deltas_until_turn_aborted() {
 }
 
 #[tokio::test]
+async fn app_event_interrupt_prepares_local_stream_cleanup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    let mut controller =
+        crate::streaming::controller::StreamController::new(Some(80), cwd.as_path(), false);
+    assert!(controller.push("stale backlog\n"));
+
+    chat.agent_turn_running = true;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.bottom_pane.hide_status_indicator();
+    chat.stream_controller = Some(controller);
+    chat.active_cell = Some(Box::new(crate::history_cell::StreamingAgentTailCell::new(
+        vec![ratatui::text::Line::from("tail")],
+        true,
+    )));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let command = loop {
+        match rx.try_recv() {
+            Ok(AppEvent::CodexOp(op)) => break AppCommand::from(op),
+            Ok(_) => continue,
+            Err(err) => panic!("expected app-level interrupt event, got {err:?}"),
+        }
+    };
+    chat.prepare_local_op_submission(&command);
+
+    assert!(chat.interrupt_requested_for_turn);
+    assert!(
+        chat.active_cell.is_none(),
+        "interrupt cleanup should clear the active stream tail",
+    );
+    assert_eq!(
+        chat.stream_controller
+            .as_ref()
+            .map(crate::streaming::controller::StreamController::queued_lines),
+        Some(0),
+    );
+}
+
+#[tokio::test]
 async fn interrupt_remains_responsive_during_resized_table_stream() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 

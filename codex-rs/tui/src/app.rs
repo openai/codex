@@ -3356,6 +3356,15 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.schedule_immediate_resize_reflow(tui);
+        self.maybe_run_resize_reflow(tui)?;
+        if self.resize_reflow_pending_until.is_none() {
+            self.reflow_ran_during_stream = false;
+        }
+        Ok(())
+    }
+
     fn handle_draw_size_change(
         &mut self,
         size: ratatui::layout::Size,
@@ -3475,11 +3484,7 @@ impl App {
                 self.maybe_finish_stream_reflow(tui);
             }
             ConsolidationScrollbackReflow::Required => {
-                self.schedule_immediate_resize_reflow(tui);
-                self.maybe_run_resize_reflow(tui)?;
-                if self.resize_reflow_pending_until.is_none() {
-                    self.reflow_ran_during_stream = false;
-                }
+                self.finish_required_stream_reflow(tui)?;
             }
         }
 
@@ -4527,6 +4532,8 @@ impl App {
                         t.consolidate_cells(start..end, consolidated.clone());
                         tui.frame_requester().schedule_frame();
                     }
+
+                    self.finish_required_stream_reflow(tui)?;
                 } else {
                     self.transcript_cells.push(consolidated.clone());
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -4538,9 +4545,9 @@ impl App {
                         consolidated.as_ref(),
                         tui.terminal.last_known_screen_size.width,
                     );
-                }
 
-                self.maybe_finish_stream_reflow(tui);
+                    self.maybe_finish_stream_reflow(tui);
+                }
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -4577,7 +4584,9 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.submit_active_thread_op(app_server, op.into()).await?;
+                let op: AppCommand = op.into();
+                self.chat_widget.prepare_local_op_submission(&op);
+                self.submit_active_thread_op(app_server, op).await?;
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
