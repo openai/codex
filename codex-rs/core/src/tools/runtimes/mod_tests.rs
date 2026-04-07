@@ -147,6 +147,135 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
 }
 
 #[test]
+fn maybe_wrap_shell_lc_with_snapshot_wraps_powershell_without_profile() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.ps1");
+    std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::PowerShell,
+        "pwsh.exe",
+        snapshot_path.clone(),
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "pwsh.exe".to_string(),
+        "-Command".to_string(),
+        "npm --version".to_string(),
+    ];
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(rewritten[0], "pwsh.exe");
+    assert_eq!(rewritten[1], "-NoProfile");
+    assert_eq!(rewritten[2], "-Command");
+    assert!(rewritten[3].contains("Test-Path -LiteralPath $__codexSnapshot"));
+    assert!(rewritten[3].contains("[scriptblock]::Create($__codexScript)"));
+    assert!(rewritten[3].contains("npm --version"));
+    assert!(rewritten[3].contains(&snapshot_path.to_string_lossy().to_string()));
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_escapes_powershell_single_quotes() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot's.ps1");
+    std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::PowerShell,
+        "powershell.exe",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "powershell.exe".to_string(),
+        "-Command".to_string(),
+        "Write-Output 'hello'".to_string(),
+    ];
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(rewritten[1], "-NoProfile");
+    assert!(rewritten[3].contains("snapshot''s.ps1"));
+    assert!(rewritten[3].contains("Write-Output ''hello''"));
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_powershell_explicit_env_overrides() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.ps1");
+    std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::PowerShell,
+        "pwsh.exe",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "pwsh.exe".to_string(),
+        "-Command".to_string(),
+        "Write-Output $env:PATH".to_string(),
+    ];
+    let explicit_env_overrides =
+        HashMap::from([("PATH".to_string(), "C:\\worktree\\bin".to_string())]);
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &explicit_env_overrides,
+        &HashMap::new(),
+    );
+
+    assert!(rewritten[3].contains("Test-Path -LiteralPath 'Env:PATH'"));
+    assert!(rewritten[3].contains("Set-Item -LiteralPath 'Env:PATH'"));
+    assert!(rewritten[3].contains("Remove-Item -LiteralPath 'Env:PATH'"));
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_powershell_thread_id_from_env() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.ps1");
+    std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::PowerShell,
+        "pwsh.exe",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "pwsh.exe".to_string(),
+        "-Command".to_string(),
+        "Write-Output $env:CODEX_THREAD_ID".to_string(),
+    ];
+    let env = HashMap::from([(
+        CODEX_THREAD_ID_ENV_VAR.to_string(),
+        "thread-123".to_string(),
+    )]);
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &env,
+    );
+
+    assert!(rewritten[3].contains("Test-Path -LiteralPath 'Env:CODEX_THREAD_ID'"));
+    assert!(rewritten[3].contains("Set-Item -LiteralPath 'Env:CODEX_THREAD_ID'"));
+}
+
+#[test]
 fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");

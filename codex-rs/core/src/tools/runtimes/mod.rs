@@ -7,6 +7,7 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::path_utils;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -37,18 +38,18 @@ pub(crate) fn build_sandbox_command(
     })
 }
 
-/// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
-/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
-/// to a single non-login shell that sources the snapshot before running
-/// the original script:
+/// For commands produced by `Shell::derive_exec_args`, and when a snapshot is
+/// configured on the session shell, rewrite login-shell argv to a non-login
+/// shell that sources the snapshot before running the original script:
 ///
 ///   shell -lc "<script>"
 ///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
 ///
-/// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
-/// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
-/// not match the snapshot cwd, this is a no-op.
+///   powershell -Command "<script>"
+///   => powershell -NoProfile -Command ". SNAPSHOT; & ([scriptblock]::Create(<script>))"
+///
+/// On non-matching commands, or when command cwd does not match the snapshot
+/// cwd, this is a no-op.
 ///
 /// `explicit_env_overrides` and `env` are intentionally separate inputs.
 /// `explicit_env_overrides` contains policy-driven shell env overrides that
@@ -63,10 +64,6 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
 ) -> Vec<String> {
-    if cfg!(windows) {
-        return command.to_vec();
-    }
-
     let Some(snapshot) = session_shell.shell_snapshot() else {
         return command.to_vec();
     };
@@ -88,6 +85,16 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
 
     if command.len() < 3 {
         return command.to_vec();
+    }
+
+    if session_shell.shell_type == ShellType::PowerShell {
+        return maybe_wrap_powershell_with_snapshot(
+            command,
+            session_shell,
+            snapshot.path.as_path(),
+            explicit_env_overrides,
+            env,
+        );
     }
 
     let flag = command[1].as_str();
@@ -120,6 +127,47 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     };
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
+}
+
+fn maybe_wrap_powershell_with_snapshot(
+    command: &[String],
+    session_shell: &Shell,
+    snapshot_path: &Path,
+    explicit_env_overrides: &HashMap<String, String>,
+    env: &HashMap<String, String>,
+) -> Vec<String> {
+    if command.len() != 3 || !command[1].eq_ignore_ascii_case("-Command") {
+        return command.to_vec();
+    }
+
+    let snapshot_path = powershell_single_quote(&snapshot_path.to_string_lossy());
+    let original_script = powershell_single_quote(&command[2]);
+    let mut override_env = explicit_env_overrides.clone();
+    if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
+        override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+    }
+    let (override_captures, override_restores) = build_powershell_override_restores(&override_env);
+    let restore_block = if override_restores.is_empty() {
+        String::new()
+    } else {
+        format!("\n{override_restores}\n")
+    };
+    let rewritten_script = format!(
+        "{override_captures}\
+$__codexSnapshot = '{snapshot_path}'\n\
+if (Test-Path -LiteralPath $__codexSnapshot) {{ . $__codexSnapshot *> $null }}\n\
+{restore_block}\
+$__codexScript = '{original_script}'\n\
+& ([scriptblock]::Create($__codexScript))\n\
+if ($null -ne $global:LASTEXITCODE) {{ exit $global:LASTEXITCODE }}"
+    );
+
+    vec![
+        session_shell.shell_path.to_string_lossy().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        rewritten_script,
+    ]
 }
 
 fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
@@ -157,6 +205,45 @@ fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (
     (captures, restores)
 }
 
+fn build_powershell_override_restores(
+    explicit_env_overrides: &HashMap<String, String>,
+) -> (String, String) {
+    let mut keys = explicit_env_overrides
+        .keys()
+        .filter(|key| is_valid_shell_variable_name(key))
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+
+    if keys.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    let captures = keys
+        .iter()
+        .enumerate()
+        .map(|(idx, key)| {
+            let key = powershell_single_quote(key);
+            format!(
+                "$__codexSnapshotOverrideSet{idx} = Test-Path -LiteralPath 'Env:{key}'\n$__codexSnapshotOverride{idx} = [Environment]::GetEnvironmentVariable('{key}', 'Process')"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let restores = keys
+        .iter()
+        .enumerate()
+        .map(|(idx, key)| {
+            let key = powershell_single_quote(key);
+            format!(
+                "if ($__codexSnapshotOverrideSet{idx}) {{ Set-Item -LiteralPath 'Env:{key}' -Value $__codexSnapshotOverride{idx} }} else {{ Remove-Item -LiteralPath 'Env:{key}' -ErrorAction SilentlyContinue }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    (format!("{captures}\n\n"), restores)
+}
+
 fn is_valid_shell_variable_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -170,6 +257,10 @@ fn is_valid_shell_variable_name(name: &str) -> bool {
 
 fn shell_single_quote(input: &str) -> String {
     input.replace('\'', r#"'"'"'"#)
+}
+
+fn powershell_single_quote(input: &str) -> String {
+    input.replace('\'', "''")
 }
 
 #[cfg(all(test, unix))]
