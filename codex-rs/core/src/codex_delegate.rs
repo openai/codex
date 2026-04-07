@@ -186,6 +186,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     io.submit(Op::UserInput {
         items: input,
         final_output_json_schema,
+        submission_type: None,
     })
     .await?;
 
