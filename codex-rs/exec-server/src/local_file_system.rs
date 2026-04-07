@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -308,7 +309,8 @@ fn enforce_access(
     };
     let cwd = resolve_sandbox_cwd(sandbox_cwd)?;
     let resolved_path = resolve_path_for_access_check(path.as_path(), path_mode)?;
-    let file_system_policy = FileSystemSandboxPolicy::from(sandbox_policy);
+    let file_system_policy =
+        canonicalize_file_system_policy_paths(FileSystemSandboxPolicy::from(sandbox_policy))?;
     if is_allowed(&file_system_policy, resolved_path.as_path(), cwd.as_path()) {
         Ok(())
     } else {
@@ -395,11 +397,33 @@ fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
 }
 
 fn resolve_sandbox_cwd(sandbox_cwd: Option<&AbsolutePathBuf>) -> io::Result<PathBuf> {
-    match sandbox_cwd {
-        Some(cwd) => Ok(cwd.to_path_buf()),
+    let cwd = match sandbox_cwd {
+        Some(cwd) => cwd.to_path_buf(),
         None => std::env::current_dir()
-            .map_err(|err| io::Error::other(format!("failed to read current dir: {err}"))),
+            .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?,
+    };
+    resolve_existing_path(cwd.as_path())
+}
+
+fn canonicalize_file_system_policy_paths(
+    mut file_system_policy: FileSystemSandboxPolicy,
+) -> io::Result<FileSystemSandboxPolicy> {
+    for entry in &mut file_system_policy.entries {
+        if let FileSystemPath::Path { path } = &mut entry.path {
+            *path = canonicalize_absolute_path(path)?;
+        }
     }
+    Ok(file_system_policy)
+}
+
+fn canonicalize_absolute_path(path: &AbsolutePathBuf) -> io::Result<AbsolutePathBuf> {
+    let resolved = resolve_existing_path(path.as_path())?;
+    AbsolutePathBuf::from_absolute_path(resolved.as_path()).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path must stay absolute after canonicalization: {err}"),
+        )
+    })
 }
 
 fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {

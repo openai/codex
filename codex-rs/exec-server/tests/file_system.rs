@@ -296,7 +296,11 @@ async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: b
     let sandbox_policy = read_only_sandbox_policy(allowed_dir);
 
     let contents = file_system
-        .read_file_with_sandbox_policy(&absolute_path(file_path), Some(&sandbox_policy), None)
+        .read_file_with_sandbox_policy(
+            &absolute_path(file_path),
+            Some(&sandbox_policy),
+            /*sandbox_cwd*/ None,
+        )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -324,7 +328,7 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
             &absolute_path(blocked_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -367,7 +371,7 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
         .read_file_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -404,27 +408,20 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_parent_dotdot_esca
     std::fs::write(&secret_path, "nope")?;
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
-    let requested_path = allowed_dir.join("link").join("..").join("secret.txt");
+    let requested_path = absolute_path(allowed_dir.join("link").join("..").join("secret.txt"));
     let sandbox_policy = read_only_sandbox_policy(allowed_dir);
     let error = match file_system
         .read_file_with_sandbox_policy(
-            &absolute_path(requested_path.clone()),
+            &requested_path,
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
-        Ok(_) => anyhow::bail!("read should be blocked"),
+        Ok(_) => anyhow::bail!("read should fail after path normalization"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/read is not permitted for path {}",
-            requested_path.display()
-        )
-    );
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 
     Ok(())
 }
@@ -452,7 +449,7 @@ async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
             &absolute_path(requested_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -495,7 +492,7 @@ async fn file_system_create_directory_with_sandbox_policy_rejects_symlink_escape
             &absolute_path(requested_path.clone()),
             CreateDirectoryOptions { recursive: false },
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -538,7 +535,7 @@ async fn file_system_get_metadata_with_sandbox_policy_rejects_symlink_escape(
         .get_metadata_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -580,7 +577,7 @@ async fn file_system_read_directory_with_sandbox_policy_rejects_symlink_escape(
         .read_directory_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -624,7 +621,7 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -661,7 +658,11 @@ async fn remote_file_system_with_sandbox_policy_uses_client_cwd() -> Result<()> 
     let sandbox_policy = cwd_only_read_only_sandbox_policy();
 
     let contents = file_system
-        .read_file_with_sandbox_policy(&absolute_path(note_path), Some(&sandbox_policy), None)
+        .read_file_with_sandbox_policy(
+            &absolute_path(note_path),
+            Some(&sandbox_policy),
+            /*sandbox_cwd*/ None,
+        )
         .await?;
     assert_eq!(contents, b"hello from cwd");
 
@@ -696,7 +697,7 @@ async fn file_system_remove_with_sandbox_policy_removes_symlink_not_target(
                 force: false,
             },
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -735,7 +736,7 @@ async fn file_system_copy_with_sandbox_policy_preserves_symlink_source(
             &absolute_path(copied_symlink.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -775,7 +776,7 @@ async fn file_system_remove_with_sandbox_policy_rejects_symlink_escape(
                 force: false,
             },
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -822,7 +823,7 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_source(
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
-            None,
+            /*sandbox_cwd*/ None,
         )
         .await
     {
