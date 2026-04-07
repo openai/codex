@@ -5622,12 +5622,9 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     pretty_assertions::assert_eq!(output, expected);
 }
 
+#[cfg_attr(windows, ignore)]
 #[tokio::test]
 async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io::Result<()> {
-    if cfg!(windows) {
-        return Ok(());
-    }
-
     let temp = tempfile::tempdir()?;
     let codex_home = temp.path().join("home");
     let project_root = temp.path().join("project");
@@ -5660,12 +5657,9 @@ async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io:
     Ok(())
 }
 
+#[cfg_attr(windows, ignore)]
 #[tokio::test]
 async fn session_start_hooks_require_project_trust_without_config_toml() -> std::io::Result<()> {
-    if cfg!(windows) {
-        return Ok(());
-    }
-
     let temp = tempfile::tempdir()?;
     let project_root = temp.path().join("project");
     let nested = project_root.join("nested");
