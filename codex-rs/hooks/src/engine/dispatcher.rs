@@ -405,28 +405,28 @@ mod tests {
                 Some("^Bash$"),
                 "echo system",
                 "/etc/codex/hooks.json",
-                0,
+                /*display_order*/ 0,
             ),
             make_handler_with_source(
                 HookEventName::PreToolUse,
                 Some("^Bash$"),
                 "echo user one",
                 "/tmp/home/.codex/hooks.json",
-                1,
+                /*display_order*/ 1,
             ),
             make_handler_with_source(
                 HookEventName::PreToolUse,
                 Some("^Bash$"),
                 "echo user two",
                 "/tmp/home/.codex/hooks.json",
-                2,
+                /*display_order*/ 2,
             ),
             make_handler_with_source(
                 HookEventName::PreToolUse,
                 Some("^Bash$"),
                 "echo project",
                 "/tmp/project/.codex/hooks.json",
-                3,
+                /*display_order*/ 3,
             ),
         ];
 
