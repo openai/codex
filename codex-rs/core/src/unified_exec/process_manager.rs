@@ -613,8 +613,7 @@ impl UnifiedExecProcessManager {
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            let sandbox_type = started.sandbox_type;
-            return UnifiedExecProcess::from_remote_started(started, sandbox_type).await;
+            return UnifiedExecProcess::from_remote_started(started, env.sandbox).await;
         }
 
         let spawn_result = if tty {
