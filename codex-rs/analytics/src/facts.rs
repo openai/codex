@@ -81,6 +81,33 @@ pub enum TurnStatus {
     Interrupted,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnSteerEvent {
+    pub expected_turn_id: Option<String>,
+    pub accepted_turn_id: Option<String>,
+    pub num_input_images: usize,
+    pub result: TurnSteerResult,
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub started_at: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct SkillInvocation {
     pub skill_name: String,
@@ -142,11 +169,17 @@ pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnSteer(TurnSteerInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
+}
+
+pub(crate) struct TurnSteerInput {
+    pub tracking: TrackEventsContext,
+    pub turn_steer: CodexTurnSteerEvent,
 }
 
 pub(crate) struct SkillInvokedInput {
