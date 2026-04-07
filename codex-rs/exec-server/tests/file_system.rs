@@ -12,7 +12,6 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::FileSystemOperationOptions;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -59,15 +58,13 @@ fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
     }
 }
 
-fn read_only_options(readable_root: std::path::PathBuf) -> FileSystemOperationOptions {
-    FileSystemOperationOptions {
-        sandbox_policy: Some(SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![absolute_path(readable_root)],
-            },
-            network_access: false,
-        }),
+fn read_only_sandbox_policy(readable_root: std::path::PathBuf) -> SandboxPolicy {
+    SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::Restricted {
+            include_platform_defaults: false,
+            readable_roots: vec![absolute_path(readable_root)],
+        },
+        network_access: false,
     }
 }
 
@@ -245,9 +242,10 @@ async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: b
     let file_path = allowed_dir.join("note.txt");
     std::fs::create_dir_all(&allowed_dir)?;
     std::fs::write(&file_path, "sandboxed hello")?;
+    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
 
     let contents = file_system
-        .read_file_with_options(&absolute_path(file_path), &read_only_options(allowed_dir))
+        .read_file_with_sandbox_policy(&absolute_path(file_path), Some(&sandbox_policy))
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -269,11 +267,12 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
     let blocked_path = tmp.path().join("blocked.txt");
     std::fs::create_dir_all(&allowed_dir)?;
 
+    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
     let error = match file_system
-        .write_file_with_options(
+        .write_file_with_sandbox_policy(
             &absolute_path(blocked_path.clone()),
             b"nope".to_vec(),
-            &read_only_options(allowed_dir),
+            Some(&sandbox_policy),
         )
         .await
     {
@@ -284,7 +283,7 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
     assert_eq!(
         error.to_string(),
         format!(
-            "fs/write is not permitted by sandbox policy for path {}",
+            "fs/write is not permitted for path {}",
             blocked_path.display()
         )
     );

@@ -2,29 +2,28 @@ use std::io;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCopyResponse;
-use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsCreateDirectoryResponse;
-use codex_app_server_protocol::FsGetMetadataParams;
 use codex_app_server_protocol::FsGetMetadataResponse;
 use codex_app_server_protocol::FsReadDirectoryEntry;
-use codex_app_server_protocol::FsReadDirectoryParams;
 use codex_app_server_protocol::FsReadDirectoryResponse;
-use codex_app_server_protocol::FsReadFileParams;
 use codex_app_server_protocol::FsReadFileResponse;
-use codex_app_server_protocol::FsRemoveParams;
 use codex_app_server_protocol::FsRemoveResponse;
-use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
-use crate::FileSystemOperationOptions;
 use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
+use crate::protocol::FsCopyParams;
+use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsGetMetadataParams;
+use crate::protocol::FsReadDirectoryParams;
+use crate::protocol::FsReadFileParams;
+use crate::protocol::FsRemoveParams;
+use crate::protocol::FsWriteFileParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
@@ -41,7 +40,7 @@ impl FileSystemHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .read_file_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -59,11 +58,7 @@ impl FileSystemHandler {
             ))
         })?;
         self.file_system
-            .write_file_with_options(
-                &params.path,
-                bytes,
-                &fs_operation_options(params.sandbox_policy),
-            )
+            .write_file_with_sandbox_policy(&params.path, bytes, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -74,12 +69,12 @@ impl FileSystemHandler {
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         self.file_system
-            .create_directory_with_options(
+            .create_directory_with_sandbox_policy(
                 &params.path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
-                &fs_operation_options(params.sandbox_policy),
+                params.sandbox_policy.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
@@ -92,7 +87,7 @@ impl FileSystemHandler {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .get_metadata_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -109,7 +104,7 @@ impl FileSystemHandler {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .read_directory_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -129,13 +124,13 @@ impl FileSystemHandler {
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
         self.file_system
-            .remove_with_options(
+            .remove_with_sandbox_policy(
                 &params.path,
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
                 },
-                &fs_operation_options(params.sandbox_policy),
+                params.sandbox_policy.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
@@ -147,25 +142,17 @@ impl FileSystemHandler {
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.file_system
-            .copy_with_options(
+            .copy_with_sandbox_policy(
                 &params.source_path,
                 &params.destination_path,
                 CopyOptions {
                     recursive: params.recursive,
                 },
-                &fs_operation_options(params.sandbox_policy),
+                params.sandbox_policy.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
         Ok(FsCopyResponse {})
-    }
-}
-
-fn fs_operation_options(
-    sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
-) -> FileSystemOperationOptions {
-    FileSystemOperationOptions {
-        sandbox_policy: sandbox_policy.map(|policy| policy.to_core()),
     }
 }
 

@@ -675,17 +675,6 @@
           "description": "Required for directory copies; ignored for file copies.",
           "type": "boolean"
         },
-        "sandboxPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional sandbox policy for this filesystem copy."
-        },
         "sourcePath": {
           "allOf": [
             {
@@ -718,17 +707,6 @@
             "boolean",
             "null"
           ]
-        },
-        "sandboxPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional sandbox policy for this filesystem mutation."
         }
       },
       "required": [
@@ -746,17 +724,6 @@
             }
           ],
           "description": "Absolute path to inspect."
-        },
-        "sandboxPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional sandbox policy for this filesystem metadata lookup."
         }
       },
       "required": [
@@ -774,17 +741,6 @@
             }
           ],
           "description": "Absolute directory path to read."
-        },
-        "sandboxPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional sandbox policy for this directory read."
         }
       },
       "required": [
@@ -802,17 +758,6 @@
             }
           ],
           "description": "Absolute path to read."
-        },
-        "sandboxPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional sandbox policy for this filesystem read."
         }
       },
       "required": [
@@ -844,17 +789,6 @@
             "boolean",
             "null"
           ]
-        },
-        "sandboxPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional sandbox policy for this filesystem mutation."
         }
       },
       "required": [
@@ -911,17 +845,6 @@
             }
           ],
           "description": "Absolute path to write."
-        },
-        "sandboxPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional sandbox policy for this filesystem write."
         }
       },
       "required": [

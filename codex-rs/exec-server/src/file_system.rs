@@ -19,11 +19,6 @@ pub struct CopyOptions {
     pub recursive: bool,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct FileSystemOperationOptions {
-    pub sandbox_policy: Option<SandboxPolicy>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileMetadata {
     pub is_directory: bool,
@@ -51,21 +46,21 @@ pub trait ExecutorFileSystem: Send + Sync {
         String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
-    async fn read_file_with_options(
+    async fn read_file_with_sandbox_policy(
         &self,
         path: &AbsolutePathBuf,
-        _options: &FileSystemOperationOptions,
+        _sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<Vec<u8>> {
         self.read_file(path).await
     }
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
 
-    async fn write_file_with_options(
+    async fn write_file_with_sandbox_policy(
         &self,
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
-        _options: &FileSystemOperationOptions,
+        _sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<()> {
         self.write_file(path, contents).await
     }
@@ -76,21 +71,21 @@ pub trait ExecutorFileSystem: Send + Sync {
         options: CreateDirectoryOptions,
     ) -> FileSystemResult<()>;
 
-    async fn create_directory_with_options(
+    async fn create_directory_with_sandbox_policy(
         &self,
         path: &AbsolutePathBuf,
         create_directory_options: CreateDirectoryOptions,
-        _options: &FileSystemOperationOptions,
+        _sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<()> {
         self.create_directory(path, create_directory_options).await
     }
 
     async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata>;
 
-    async fn get_metadata_with_options(
+    async fn get_metadata_with_sandbox_policy(
         &self,
         path: &AbsolutePathBuf,
-        _options: &FileSystemOperationOptions,
+        _sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<FileMetadata> {
         self.get_metadata(path).await
     }
@@ -100,21 +95,21 @@ pub trait ExecutorFileSystem: Send + Sync {
         path: &AbsolutePathBuf,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
 
-    async fn read_directory_with_options(
+    async fn read_directory_with_sandbox_policy(
         &self,
         path: &AbsolutePathBuf,
-        _options: &FileSystemOperationOptions,
+        _sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         self.read_directory(path).await
     }
 
     async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()>;
 
-    async fn remove_with_options(
+    async fn remove_with_sandbox_policy(
         &self,
         path: &AbsolutePathBuf,
         remove_options: RemoveOptions,
-        _options: &FileSystemOperationOptions,
+        _sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<()> {
         self.remove(path, remove_options).await
     }
@@ -126,12 +121,12 @@ pub trait ExecutorFileSystem: Send + Sync {
         options: CopyOptions,
     ) -> FileSystemResult<()>;
 
-    async fn copy_with_options(
+    async fn copy_with_sandbox_policy(
         &self,
         source_path: &AbsolutePathBuf,
         destination_path: &AbsolutePathBuf,
         copy_options: CopyOptions,
-        _options: &FileSystemOperationOptions,
+        _sandbox_policy: Option<&SandboxPolicy>,
     ) -> FileSystemResult<()> {
         self.copy(source_path, destination_path, copy_options).await
     }

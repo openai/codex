@@ -22,7 +22,6 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::FileSystemOperationOptions;
 use codex_exec_server::RemoveOptions;
 use std::io;
 use std::sync::Arc;
@@ -47,7 +46,7 @@ impl FsApi {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .read_file(&params.path)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -65,11 +64,7 @@ impl FsApi {
             ))
         })?;
         self.file_system
-            .write_file_with_options(
-                &params.path,
-                bytes,
-                &fs_operation_options(params.sandbox_policy),
-            )
+            .write_file(&params.path, bytes)
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -80,12 +75,11 @@ impl FsApi {
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         self.file_system
-            .create_directory_with_options(
+            .create_directory(
                 &params.path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
-                &fs_operation_options(params.sandbox_policy),
             )
             .await
             .map_err(map_fs_error)?;
@@ -98,7 +92,7 @@ impl FsApi {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .get_metadata(&params.path)
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -115,7 +109,7 @@ impl FsApi {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .read_directory(&params.path)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -135,13 +129,12 @@ impl FsApi {
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
         self.file_system
-            .remove_with_options(
+            .remove(
                 &params.path,
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
                 },
-                &fs_operation_options(params.sandbox_policy),
             )
             .await
             .map_err(map_fs_error)?;
@@ -153,25 +146,16 @@ impl FsApi {
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.file_system
-            .copy_with_options(
+            .copy(
                 &params.source_path,
                 &params.destination_path,
                 CopyOptions {
                     recursive: params.recursive,
                 },
-                &fs_operation_options(params.sandbox_policy),
             )
             .await
             .map_err(map_fs_error)?;
         Ok(FsCopyResponse {})
-    }
-}
-
-fn fs_operation_options(
-    sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
-) -> FileSystemOperationOptions {
-    FileSystemOperationOptions {
-        sandbox_policy: sandbox_policy.map(|policy| policy.to_core()),
     }
 }
 

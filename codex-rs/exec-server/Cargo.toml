@@ -43,7 +43,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

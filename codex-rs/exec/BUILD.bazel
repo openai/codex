@@ -4,8 +4,4 @@ codex_rust_crate(
     name = "exec",
     crate_name = "codex_exec",
     test_tags = ["no-sandbox"],
-    unit_test_target_compatible_with = select({
-        "@platforms//os:windows": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }),
 )
