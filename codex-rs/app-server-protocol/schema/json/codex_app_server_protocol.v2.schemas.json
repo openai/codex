@@ -4179,7 +4179,7 @@
           "type": "array"
         },
         "watchId": {
-          "description": "Watch identifier returned by `fs/watch`.",
+          "description": "Watch identifier previously provided to `fs/watch`.",
           "type": "string"
         }
       },
@@ -4449,7 +4449,7 @@
       "description": "Stop filesystem watch notifications for a prior `fs/watch`.",
       "properties": {
         "watchId": {
-          "description": "Watch identifier returned by `fs/watch`.",
+          "description": "Watch identifier previously provided to `fs/watch`.",
           "type": "string"
         }
       },
@@ -4476,25 +4476,6 @@
             }
           ],
           "description": "Absolute file or directory path to watch."
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "title": "FsWatchParams",
-      "type": "object"
-    },
-    "FsWatchResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Created watch handle returned by `fs/watch`.",
-      "properties": {
-        "path": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            }
-          ],
-          "description": "Canonicalized path associated with the watch."
         },
         "watchId": {
           "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
@@ -4504,6 +4485,25 @@
       "required": [
         "path",
         "watchId"
+      ],
+      "title": "FsWatchParams",
+      "type": "object"
+    },
+    "FsWatchResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/watch`.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Canonicalized path associated with the watch."
+        }
+      },
+      "required": [
+        "path"
       ],
       "title": "FsWatchResponse",
       "type": "object"
