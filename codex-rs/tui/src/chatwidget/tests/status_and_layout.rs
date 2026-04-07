@@ -129,6 +129,7 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        initial_workspace_role: None,
         initial_is_workspace_owner: None,
         initial_plan_type: None,
         model: Some(resolved_model),
@@ -234,6 +235,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
             unlimited: false,
             balance: Some("17.5".to_string()),
         }),
+        spend_control: None,
         plan_type: None,
     }));
     let initial_balance = chat
@@ -253,6 +255,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     }));
 
@@ -291,6 +294,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: None,
         }),
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Plus),
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Plus));
@@ -309,6 +313,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: Some(234),
         }),
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
@@ -327,6 +332,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: Some(567),
         }),
         credits: None,
+        spend_control: None,
         plan_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
@@ -350,6 +356,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
             unlimited: false,
             balance: Some("5.00".to_string()),
         }),
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
     }));
 
@@ -363,6 +370,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
     }));
 
@@ -385,6 +393,96 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
     );
     assert_eq!(other.primary.as_ref().map(|w| w.used_percent), Some(90.0));
     assert!(other.credits.is_none());
+}
+
+#[tokio::test]
+async fn core_usage_limit_error_shows_notify_owner_hint() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        None,
+        None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: None,
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    chat.handle_codex_event(Event {
+        id: "usage-limit".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "The usage limit has been reached".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Your workspace is out of credits."),
+        "expected usage-limit error, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("/notify-owner"),
+        "expected notify-owner hint, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn core_usage_limit_error_shows_spend_cap_hint_when_reached() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        None,
+        None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: Some(codex_protocol::protocol::SpendControlSnapshot { reached: true }),
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    chat.handle_codex_event(Event {
+        id: "usage-limit".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "The usage limit has been reached".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Your workspace has reached its spend cap."),
+        "expected spend-cap hint, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("/notify-owner"),
+        "expected spend-cap hint instead of notify-owner guidance, got {rendered:?}"
+    );
 }
 
 #[tokio::test]
@@ -415,6 +513,7 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     }));
 

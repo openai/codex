@@ -1074,6 +1074,7 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
+            initial_workspace_role: self.chat_widget.current_workspace_role(),
             initial_is_workspace_owner: self.chat_widget.current_is_workspace_owner(),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
@@ -1887,9 +1888,26 @@ impl App {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
+            tracing::info!(request_id, "starting background rate-limit refresh");
             let result = fetch_account_rate_limits(request_handle)
                 .await
                 .map_err(|err| err.to_string());
+            match &result {
+                Ok(snapshots) => {
+                    tracing::info!(
+                        request_id,
+                        snapshot_count = snapshots.len(),
+                        "background rate-limit refresh completed"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        request_id,
+                        error = %err,
+                        "background rate-limit refresh failed"
+                    );
+                }
+            }
             app_event_tx.send(AppEvent::RateLimitsLoaded { request_id, result });
         });
     }
@@ -3570,6 +3588,7 @@ impl App {
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
         let status_account_display = bootstrap.status_account_display.clone();
+        let initial_workspace_role = bootstrap.workspace_role;
         let initial_is_workspace_owner = bootstrap.is_workspace_owner;
         let initial_plan_type = bootstrap.plan_type;
         let startup_rate_limit_snapshots = bootstrap.rate_limit_snapshots;
@@ -3621,6 +3640,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    initial_workspace_role,
                     initial_is_workspace_owner,
                     initial_plan_type,
                     model: Some(model.clone()),
@@ -3656,6 +3676,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    initial_workspace_role,
                     initial_is_workspace_owner,
                     initial_plan_type,
                     model: config.model.clone(),
@@ -3696,6 +3717,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    initial_workspace_role,
                     initial_is_workspace_owner,
                     initial_plan_type,
                     model: config.model.clone(),
@@ -4401,6 +4423,11 @@ impl App {
             }
             AppEvent::RateLimitsLoaded { request_id, result } => match result {
                 Ok(snapshots) => {
+                    tracing::info!(
+                        request_id,
+                        snapshot_count = snapshots.len(),
+                        "applying refreshed rate limits to status UI"
+                    );
                     for snapshot in snapshots {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
@@ -4408,7 +4435,11 @@ impl App {
                         .finish_status_rate_limit_refresh(request_id);
                 }
                 Err(err) => {
-                    tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+                    tracing::warn!(
+                        request_id,
+                        error = %err,
+                        "account/rateLimits/read failed during TUI refresh"
+                    );
                     self.chat_widget
                         .finish_status_rate_limit_refresh(request_id);
                 }
@@ -6013,15 +6044,73 @@ async fn fetch_account_rate_limits(
     request_handle: AppServerRequestHandle,
 ) -> Result<Vec<RateLimitSnapshot>> {
     let request_id = RequestId::String(format!("account-rate-limits-{}", Uuid::new_v4()));
+    tracing::info!(request_id = ?request_id, "sending account/rateLimits/read request");
     let response: GetAccountRateLimitsResponse = request_handle
         .request_typed(ClientRequest::GetAccountRateLimits {
-            request_id,
+            request_id: request_id.clone(),
             params: None,
         })
         .await
         .wrap_err("account/rateLimits/read failed in TUI")?;
+    tracing::info!(request_id = ?request_id, "received account/rateLimits/read response");
+    tracing::info!(
+        request_id = ?request_id,
+        primary_limit_id = ?response.rate_limits.limit_id,
+        primary_limit_name = ?response.rate_limits.limit_name,
+        primary_has_primary = response.rate_limits.primary.is_some(),
+        primary_has_secondary = response.rate_limits.secondary.is_some(),
+        primary_has_credits = response.rate_limits.credits.is_some(),
+        primary_spend_control_reached = response
+            .rate_limits
+            .spend_control
+            .as_ref()
+            .map(|spend_control| spend_control.reached),
+        primary_plan_type = ?response.rate_limits.plan_type,
+        additional_limit_count = response
+            .rate_limits_by_limit_id
+            .as_ref()
+            .map(|by_limit_id| by_limit_id.len())
+            .unwrap_or(0),
+        "received raw account/rateLimits/read payload shape"
+    );
+    if let Some(by_limit_id) = response.rate_limits_by_limit_id.as_ref() {
+        for (limit_id, snapshot) in by_limit_id {
+            tracing::info!(
+                request_id = ?request_id,
+                map_limit_id = %limit_id,
+                snapshot_limit_name = ?snapshot.limit_name,
+                has_primary = snapshot.primary.is_some(),
+                has_secondary = snapshot.secondary.is_some(),
+                has_credits = snapshot.credits.is_some(),
+                spend_control_reached = snapshot
+                    .spend_control
+                    .as_ref()
+                    .map(|spend_control| spend_control.reached),
+                plan_type = ?snapshot.plan_type,
+                "received mapped account/rateLimits/read entry"
+            );
+        }
+    }
 
-    Ok(app_server_rate_limit_snapshots_to_core(response))
+    let snapshots = app_server_rate_limit_snapshots_to_core(response);
+    for snapshot in &snapshots {
+        tracing::info!(
+            request_id = ?request_id,
+            limit_id = ?snapshot.limit_id,
+            limit_name = ?snapshot.limit_name,
+            has_primary = snapshot.primary.is_some(),
+            has_secondary = snapshot.secondary.is_some(),
+            has_credits = snapshot.credits.is_some(),
+            spend_control_reached = snapshot
+                .spend_control
+                .as_ref()
+                .map(|spend_control| spend_control.reached),
+            plan_type = ?snapshot.plan_type,
+            "converted account/rateLimits/read snapshot for TUI"
+        );
+    }
+
+    Ok(snapshots)
 }
 
 async fn notify_workspace_owner(
@@ -6534,6 +6623,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             is_first_run: false,
             status_account_display: None,
+            initial_workspace_role: None,
             initial_is_workspace_owner: None,
             initial_plan_type: None,
             model: Some(model),
@@ -10399,6 +10489,7 @@ guardian_approval = true
             feedback: app.feedback.clone(),
             is_first_run: false,
             status_account_display: app.chat_widget.status_account_display().cloned(),
+            initial_workspace_role: app.chat_widget.current_workspace_role(),
             initial_is_workspace_owner: app.chat_widget.current_is_workspace_owner(),
             initial_plan_type: app.chat_widget.current_plan_type(),
             model: Some(app.chat_widget.current_model().to_string()),

@@ -90,6 +90,7 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WorkspaceRole as AppServerWorkspaceRole;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -189,6 +190,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::SpendControlSnapshot;
 #[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -555,6 +557,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) initial_workspace_role: Option<AppServerWorkspaceRole>,
     pub(crate) initial_is_workspace_owner: Option<bool>,
     pub(crate) initial_plan_type: Option<PlanType>,
     pub(crate) model: Option<String>,
@@ -610,6 +613,12 @@ enum UsageBasedWorkspaceRateLimitState {
     OwnerSpendCapReached,
     MemberCreditsDepleted,
     MemberSpendCapReached,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UsageBasedWorkspaceBlockKind {
+    CreditsDepleted,
+    SpendCapReached,
 }
 
 fn is_usage_based_workspace_plan(plan_type: PlanType) -> bool {
@@ -774,6 +783,7 @@ pub(crate) struct ChatWidget {
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     has_chatgpt_account: bool,
+    workspace_role: Option<AppServerWorkspaceRole>,
     is_workspace_owner: Option<bool>,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
@@ -2655,6 +2665,15 @@ impl ChatWidget {
                         balance: credits.balance.clone(),
                     });
             }
+            if snapshot.spend_control.is_none() {
+                snapshot.spend_control = self
+                    .rate_limit_snapshots_by_limit_id
+                    .get(&limit_id)
+                    .and_then(|display| display.spend_control.as_ref())
+                    .map(|spend_control| SpendControlSnapshot {
+                        reached: spend_control.reached,
+                    });
+            }
 
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
@@ -2766,13 +2785,27 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.on_error_with_hint(message, None);
+    }
+
+    fn on_error_with_hint(&mut self, message: String, hint: Option<String>) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        self.add_to_history(history_cell::new_error_event(message));
+        self.add_to_history(history_cell::new_error_event_with_hint(message, hint));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    fn on_rate_limit_error(&mut self, message: String) {
+        if self.should_prefetch_rate_limits() {
+            self.request_rate_limit_refresh();
+        }
+        let guidance = self.usage_based_workspace_rate_limit_error_guidance();
+        let hint = guidance.as_ref().map(|(_, hint)| hint.clone());
+        let message = guidance.map(|(message, _)| message).unwrap_or(message);
+        self.on_error_with_hint(message, hint);
     }
 
     fn handle_non_retry_error(
@@ -2791,8 +2824,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.on_error(message);
-                    self.maybe_add_usage_limit_follow_up_message();
+                    self.on_rate_limit_error(message);
                 }
             }
         } else {
@@ -4662,6 +4694,7 @@ impl ChatWidget {
             feedback,
             is_first_run,
             status_account_display,
+            initial_workspace_role,
             initial_is_workspace_owner,
             initial_plan_type,
             model,
@@ -4724,6 +4757,7 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
+            workspace_role: initial_workspace_role,
             is_workspace_owner: initial_is_workspace_owner,
             model_catalog,
             session_telemetry,
@@ -5364,12 +5398,8 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_status_refresh_request_id;
-                    self.next_status_refresh_request_id =
-                        self.next_status_refresh_request_id.wrapping_add(1);
+                    let request_id = self.request_rate_limit_refresh();
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
-                    self.app_event_tx
-                        .send(AppEvent::RefreshRateLimits { request_id });
                 } else {
                     self.add_status_output(
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
@@ -6990,7 +7020,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.on_rate_limit_error(message)
                         }
                     }
                 } else {
@@ -7427,13 +7457,28 @@ impl ChatWidget {
             refreshing_rate_limits,
         );
         if let Some(request_id) = request_id {
+            tracing::info!(
+                request_id,
+                prior_pending_status_outputs = self.refreshing_status_outputs.len(),
+                cached_rate_limit_snapshot_count = rate_limit_snapshots.len(),
+                "registering refreshable /status output"
+            );
             self.refreshing_status_outputs.push((request_id, handle));
         }
         self.add_to_history(cell);
     }
 
     pub(crate) fn finish_status_rate_limit_refresh(&mut self, request_id: u64) {
+        tracing::info!(
+            request_id,
+            pending_status_outputs = self.refreshing_status_outputs.len(),
+            "finishing /status rate-limit refresh"
+        );
         if self.refreshing_status_outputs.is_empty() {
+            tracing::warn!(
+                request_id,
+                "rate-limit refresh completed with no pending /status outputs to update"
+            );
             return;
         }
 
@@ -7454,6 +7499,13 @@ impl ChatWidget {
             }
         }
         self.refreshing_status_outputs = remaining;
+        tracing::info!(
+            request_id,
+            updated_any,
+            remaining_pending_status_outputs = self.refreshing_status_outputs.len(),
+            refreshed_rate_limit_snapshot_count = rate_limit_snapshots.len(),
+            "finished /status rate-limit refresh bookkeeping"
+        );
         if updated_any {
             self.request_redraw();
         }
@@ -9568,7 +9620,18 @@ impl ChatWidget {
     }
 
     pub(crate) fn current_is_workspace_owner(&self) -> Option<bool> {
-        self.is_workspace_owner
+        self.workspace_role
+            .map(|role| {
+                matches!(
+                    role,
+                    AppServerWorkspaceRole::AccountOwner | AppServerWorkspaceRole::AccountAdmin
+                )
+            })
+            .or(self.is_workspace_owner)
+    }
+
+    pub(crate) fn current_workspace_role(&self) -> Option<AppServerWorkspaceRole> {
+        self.workspace_role
     }
 
     pub(crate) fn has_chatgpt_account(&self) -> bool {
@@ -9576,55 +9639,107 @@ impl ChatWidget {
     }
 
     fn usage_based_workspace_rate_limit_state(&self) -> Option<UsageBasedWorkspaceRateLimitState> {
+        let block_kind = self.usage_based_workspace_block_kind()?;
+        let is_workspace_owner = self.current_is_workspace_owner()?;
+        Some(match (is_workspace_owner, block_kind) {
+            (true, UsageBasedWorkspaceBlockKind::CreditsDepleted) => {
+                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted
+            }
+            (true, UsageBasedWorkspaceBlockKind::SpendCapReached) => {
+                UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached
+            }
+            (false, UsageBasedWorkspaceBlockKind::CreditsDepleted) => {
+                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted
+            }
+            (false, UsageBasedWorkspaceBlockKind::SpendCapReached) => {
+                UsageBasedWorkspaceRateLimitState::MemberSpendCapReached
+            }
+        })
+    }
+
+    fn usage_based_workspace_block_kind(&self) -> Option<UsageBasedWorkspaceBlockKind> {
         let plan_type = self.plan_type?;
         if !is_usage_based_workspace_plan(plan_type) {
             return None;
         }
 
-        let is_workspace_owner = self.is_workspace_owner?;
         let codex_snapshot = self.rate_limit_snapshots_by_limit_id.get("codex")?;
         let credits_depleted = codex_snapshot
             .credits
             .as_ref()
             .is_some_and(|credits| !credits.has_credits);
+        let spend_control_reached = codex_snapshot
+            .spend_control
+            .as_ref()
+            .map(|spend_control| spend_control.reached);
 
-        Some(match (is_workspace_owner, credits_depleted) {
-            (true, true) => UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted,
-            (true, false) => UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached,
-            (false, true) => UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted,
-            (false, false) => UsageBasedWorkspaceRateLimitState::MemberSpendCapReached,
+        let blocked_state = match (credits_depleted, spend_control_reached) {
+            (true, _) => Some(true),
+            (false, Some(true)) => Some(false),
+            (false, Some(false)) => None,
+            // Older snapshots do not carry spend-control state, so preserve the
+            // historical interpretation for compatibility.
+            (false, None) => Some(false),
+        }?;
+
+        Some(match blocked_state {
+            true => UsageBasedWorkspaceBlockKind::CreditsDepleted,
+            false => UsageBasedWorkspaceBlockKind::SpendCapReached,
         })
     }
 
-    fn maybe_add_usage_limit_follow_up_message(&mut self) {
-        let Some((message, hint)) = self.usage_limit_follow_up_message() else {
-            return;
-        };
-        self.add_info_message(message, hint);
-    }
+    fn usage_based_workspace_rate_limit_error_guidance(&self) -> Option<(String, String)> {
+        if let Some(state) = self.usage_based_workspace_rate_limit_state() {
+            return match state {
+                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted => Some((
+                    "Your workspace is out of credits.".to_string(),
+                    "Run `/usage` to add workspace credits and continue using Codex.".to_string(),
+                )),
+                UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached => Some((
+                    "Your workspace has reached its spend cap.".to_string(),
+                    "Run `/usage` to increase your workspace spend cap and continue using Codex."
+                        .to_string(),
+                )),
+                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => Some((
+                    "Your workspace is out of credits.".to_string(),
+                    "Run `/notify-owner` to ask your workspace owner to add credits and continue using Codex."
+                        .to_string(),
+                )),
+                UsageBasedWorkspaceRateLimitState::MemberSpendCapReached => Some((
+                    "Your workspace has reached its spend cap.".to_string(),
+                    "Ask an admin to increase your workspace spend cap. Run `/usage` to open usage settings in your browser."
+                        .to_string(),
+                )),
+            };
+        }
 
-    fn usage_limit_follow_up_message(&self) -> Option<(String, Option<String>)> {
-        match self.usage_based_workspace_rate_limit_state()? {
-            UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted => Some((
-                "Run `/usage` to add workspace credits and continue using Codex.".to_string(),
-                None,
-            )),
-            UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached => Some((
-                "Run `/usage` to increase your workspace spend cap and continue using Codex."
+        match self.usage_based_workspace_block_kind()? {
+            UsageBasedWorkspaceBlockKind::CreditsDepleted => Some((
+                "Your workspace is out of credits.".to_string(),
+                "If you're the workspace owner, run `/usage` to add credits. Otherwise run `/notify-owner` to ask your workspace owner for help."
                     .to_string(),
-                None,
             )),
-            UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => Some((
-                "Run `/notify-owner` to ask your workspace owner to add credits and continue using Codex."
+            UsageBasedWorkspaceBlockKind::SpendCapReached => Some((
+                "Your workspace has reached its spend cap.".to_string(),
+                "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
                     .to_string(),
-                None,
-            )),
-            UsageBasedWorkspaceRateLimitState::MemberSpendCapReached => Some((
-                "Ask an admin to increase your workspace spend cap. Run `/usage` to open usage settings in your browser."
-                    .to_string(),
-                None,
             )),
         }
+    }
+
+    fn request_rate_limit_refresh(&mut self) -> u64 {
+        let request_id = self.next_status_refresh_request_id;
+        self.next_status_refresh_request_id = self.next_status_refresh_request_id.wrapping_add(1);
+        self.app_event_tx
+            .send(AppEvent::RefreshRateLimits { request_id });
+        request_id
+    }
+
+    fn missing_usage_based_workspace_rate_limit_snapshot(&self) -> bool {
+        self.should_prefetch_rate_limits()
+            && self.plan_type.is_some()
+            && self.current_is_workspace_owner().is_some()
+            && !self.rate_limit_snapshots_by_limit_id.contains_key("codex")
     }
 
     fn notify_workspace_owner_from_ui(&mut self) {
@@ -9662,11 +9777,43 @@ impl ChatWidget {
                 );
             }
             None => {
-                self.add_info_message(
-                    "`/notify-owner` is only available when a usage-based workspace member is blocked because the workspace is out of credits."
-                        .to_string(),
-                    Some("Run `/status` for current rate-limit details.".to_string()),
-                );
+                if let Some(block_kind) = self.usage_based_workspace_block_kind() {
+                    match block_kind {
+                        UsageBasedWorkspaceBlockKind::CreditsDepleted => {
+                            self.add_info_message(
+                                "`/notify-owner` needs workspace role information before it can decide whether to send the request."
+                                    .to_string(),
+                                Some(
+                                    "Your workspace is out of credits. If you're not the workspace owner, restart Codex and try `/notify-owner` again. If you are the owner, run `/usage`."
+                                        .to_string(),
+                                ),
+                            );
+                        }
+                        UsageBasedWorkspaceBlockKind::SpendCapReached => {
+                            self.add_info_message(
+                                "`/notify-owner` is unavailable because your workspace has reached its spend cap."
+                                    .to_string(),
+                                Some(
+                                    "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
+                                        .to_string(),
+                                ),
+                            );
+                        }
+                    }
+                } else if self.missing_usage_based_workspace_rate_limit_snapshot() {
+                    self.request_rate_limit_refresh();
+                    self.add_info_message(
+                        "Refreshing workspace rate limits. Wait a moment, then try `/notify-owner` again."
+                            .to_string(),
+                        Some("Run `/status` if you want to monitor the refresh.".to_string()),
+                    );
+                } else {
+                    self.add_info_message(
+                        "`/notify-owner` is only available when a usage-based workspace member is blocked because the workspace is out of credits."
+                            .to_string(),
+                        Some("Run `/status` for current rate-limit details.".to_string()),
+                    );
+                }
             }
         }
     }
@@ -9697,11 +9844,13 @@ impl ChatWidget {
     pub(crate) fn update_account_state(
         &mut self,
         status_account_display: Option<StatusAccountDisplay>,
+        workspace_role: Option<AppServerWorkspaceRole>,
         is_workspace_owner: Option<bool>,
         plan_type: Option<PlanType>,
         has_chatgpt_account: bool,
     ) {
         self.status_account_display = status_account_display;
+        self.workspace_role = workspace_role;
         self.is_workspace_owner = is_workspace_owner;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;

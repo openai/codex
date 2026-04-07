@@ -178,9 +178,11 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
+use codex_app_server_protocol::WorkspaceRole;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::WorkspaceRole as BackendWorkspaceRole;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AnalyticsEventsClient;
@@ -473,6 +475,56 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
 }
 
+async fn resolve_workspace_role_and_owner_for_auth(
+    chatgpt_base_url: &str,
+    auth: Option<&CodexAuth>,
+) -> (Option<WorkspaceRole>, Option<bool>) {
+    let token_is_workspace_owner = auth.and_then(CodexAuth::is_workspace_owner);
+    let Some(auth) = auth else {
+        return (None, None);
+    };
+
+    let workspace_role = fetch_current_workspace_role_for_auth(chatgpt_base_url, auth).await;
+    let is_workspace_owner = workspace_role
+        .map(|role| {
+            matches!(
+                role,
+                WorkspaceRole::AccountOwner | WorkspaceRole::AccountAdmin
+            )
+        })
+        .or(token_is_workspace_owner);
+    (workspace_role, is_workspace_owner)
+}
+
+async fn fetch_current_workspace_role_for_auth(
+    chatgpt_base_url: &str,
+    auth: &CodexAuth,
+) -> Option<WorkspaceRole> {
+    if !auth.is_chatgpt_auth() || auth.get_account_id().is_none() {
+        return None;
+    }
+
+    let client = match BackendClient::from_auth(chatgpt_base_url.to_string(), auth) {
+        Ok(client) => client,
+        Err(err) => {
+            warn!("failed to construct backend client for workspace role fetch: {err}");
+            return None;
+        }
+    };
+
+    match client.get_current_workspace_role().await {
+        Ok(role) => role.map(|role| match role {
+            BackendWorkspaceRole::AccountOwner => WorkspaceRole::AccountOwner,
+            BackendWorkspaceRole::AccountAdmin => WorkspaceRole::AccountAdmin,
+            BackendWorkspaceRole::StandardUser => WorkspaceRole::StandardUser,
+        }),
+        Err(err) => {
+            warn!("failed to fetch current workspace role from backend: {err}");
+            None
+        }
+    }
+}
+
 impl CodexMessageProcessor {
     pub(crate) fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
@@ -492,13 +544,23 @@ impl CodexMessageProcessor {
         }
     }
 
-    fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
+    async fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
+        let (workspace_role, is_workspace_owner) =
+            self.resolve_workspace_role_and_owner(auth.as_ref()).await;
         AccountUpdatedNotification {
             auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-            is_workspace_owner: auth.as_ref().and_then(CodexAuth::is_workspace_owner),
+            workspace_role,
+            is_workspace_owner,
         }
+    }
+
+    async fn resolve_workspace_role_and_owner(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> (Option<WorkspaceRole>, Option<bool>) {
+        resolve_workspace_role_and_owner_for_auth(&self.config.chatgpt_base_url, auth).await
     }
 
     async fn load_thread(
@@ -1097,7 +1159,7 @@ impl CodexMessageProcessor {
 
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(
-                        self.current_account_updated_notification(),
+                        self.current_account_updated_notification().await,
                     ))
                     .await;
             }
@@ -1220,7 +1282,7 @@ impl CodexMessageProcessor {
                             replace_cloud_requirements_loader(
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
-                                chatgpt_base_url,
+                                chatgpt_base_url.clone(),
                                 codex_home,
                             );
                             sync_default_client_residency_requirement(
@@ -1231,12 +1293,17 @@ impl CodexMessageProcessor {
 
                             // Notify clients with the actual current auth mode.
                             let auth = auth_manager.auth_cached();
+                            let (workspace_role, is_workspace_owner) =
+                                resolve_workspace_role_and_owner_for_auth(
+                                    &chatgpt_base_url,
+                                    auth.as_ref(),
+                                )
+                                .await;
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                                is_workspace_owner: auth
-                                    .as_ref()
-                                    .and_then(CodexAuth::is_workspace_owner),
+                                workspace_role,
+                                is_workspace_owner,
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1337,7 +1404,7 @@ impl CodexMessageProcessor {
                             replace_cloud_requirements_loader(
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
-                                chatgpt_base_url,
+                                chatgpt_base_url.clone(),
                                 codex_home,
                             );
                             sync_default_client_residency_requirement(
@@ -1347,12 +1414,17 @@ impl CodexMessageProcessor {
                             .await;
 
                             let auth = auth_manager.auth_cached();
+                            let (workspace_role, is_workspace_owner) =
+                                resolve_workspace_role_and_owner_for_auth(
+                                    &chatgpt_base_url,
+                                    auth.as_ref(),
+                                )
+                                .await;
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                                is_workspace_owner: auth
-                                    .as_ref()
-                                    .and_then(CodexAuth::is_workspace_owner),
+                                workspace_role,
+                                is_workspace_owner,
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1504,7 +1576,7 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
+                self.current_account_updated_notification().await,
             ))
             .await;
     }
@@ -1544,6 +1616,7 @@ impl CodexMessageProcessor {
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
                     plan_type: None,
+                    workspace_role: None,
                     is_workspace_owner: None,
                 };
                 self.outgoing
@@ -1643,6 +1716,7 @@ impl CodexMessageProcessor {
         if !requires_openai_auth {
             let response = GetAccountResponse {
                 account: None,
+                workspace_role: None,
                 is_workspace_owner: None,
                 requires_openai_auth,
             };
@@ -1650,7 +1724,8 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let account = match self.auth_manager.auth_cached() {
+        let auth = self.auth_manager.auth_cached();
+        let account = match auth.as_ref() {
             Some(auth) => match auth.auth_mode() {
                 CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
                 CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
@@ -1677,22 +1752,27 @@ impl CodexMessageProcessor {
             },
             None => None,
         };
+        let (workspace_role, is_workspace_owner) =
+            self.resolve_workspace_role_and_owner(auth.as_ref()).await;
 
         let response = GetAccountResponse {
             account,
-            is_workspace_owner: self
-                .auth_manager
-                .auth_cached()
-                .as_ref()
-                .and_then(CodexAuth::is_workspace_owner),
+            workspace_role,
+            is_workspace_owner,
             requires_openai_auth,
         };
         self.outgoing.send_response(request_id, response).await;
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
+        tracing::info!(?request_id, "handling account/rateLimits/read request");
         match self.fetch_account_rate_limits().await {
             Ok((rate_limits, rate_limits_by_limit_id)) => {
+                tracing::info!(
+                    ?request_id,
+                    snapshot_count = rate_limits_by_limit_id.len(),
+                    "account/rateLimits/read request succeeded"
+                );
                 let response = GetAccountRateLimitsResponse {
                     rate_limits: rate_limits.into(),
                     rate_limits_by_limit_id: Some(
@@ -1705,6 +1785,11 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => {
+                tracing::warn!(
+                    ?request_id,
+                    error = %error.message,
+                    "account/rateLimits/read request failed"
+                );
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -1808,6 +1893,11 @@ impl CodexMessageProcessor {
             });
         }
 
+        tracing::info!(
+            base_url = %self.config.chatgpt_base_url,
+            has_account_id = auth.get_account_id().is_some(),
+            "fetching account rate limits from backend"
+        );
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -1815,6 +1905,7 @@ impl CodexMessageProcessor {
                 data: None,
             })?;
 
+        tracing::info!("awaiting backend usage response for account rate limits");
         let snapshots = client
             .get_rate_limits_many()
             .await
@@ -1823,6 +1914,25 @@ impl CodexMessageProcessor {
                 message: format!("failed to fetch codex rate limits: {err}"),
                 data: None,
             })?;
+        tracing::info!(
+            snapshot_count = snapshots.len(),
+            "backend rate-limit fetch completed"
+        );
+        for snapshot in &snapshots {
+            tracing::info!(
+                limit_id = ?snapshot.limit_id,
+                limit_name = ?snapshot.limit_name,
+                has_primary = snapshot.primary.is_some(),
+                has_secondary = snapshot.secondary.is_some(),
+                has_credits = snapshot.credits.is_some(),
+                spend_control_reached = snapshot
+                    .spend_control
+                    .as_ref()
+                    .map(|spend_control| spend_control.reached),
+                plan_type = ?snapshot.plan_type,
+                "backend rate-limit snapshot shape"
+            );
+        }
         if snapshots.is_empty() {
             return Err(JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,

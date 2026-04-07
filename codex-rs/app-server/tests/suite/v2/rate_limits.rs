@@ -133,7 +133,10 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                     }
                 }
             }
-        ]
+        ],
+        "spend_control": {
+            "reached": true
+        }
     });
 
     Mock::given(method("GET"))
@@ -172,6 +175,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 resets_at: Some(secondary_reset_timestamp),
             }),
             credits: None,
+            spend_control: Some(codex_app_server_protocol::SpendControlSnapshot { reached: true }),
             plan_type: Some(AccountPlanType::Pro),
         },
         rate_limits_by_limit_id: Some(
@@ -192,6 +196,9 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                             resets_at: Some(secondary_reset_timestamp),
                         }),
                         credits: None,
+                        spend_control: Some(codex_app_server_protocol::SpendControlSnapshot {
+                            reached: true,
+                        }),
                         plan_type: Some(AccountPlanType::Pro),
                     },
                 ),
@@ -207,6 +214,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         }),
                         secondary: None,
                         credits: None,
+                        spend_control: None,
                         plan_type: Some(AccountPlanType::Pro),
                     },
                 ),

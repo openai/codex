@@ -124,3 +124,69 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
         "expected second status cell to refresh once its own request completed, got: {second_after_success}"
     );
 }
+
+#[tokio::test]
+async fn usage_limit_error_requests_background_rate_limit_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.update_account_state(
+        None,
+        None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+
+    chat.handle_codex_event(Event {
+        id: "usage-limit".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "The usage limit has been reached".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::RefreshRateLimits { .. })),
+        "expected usage-limit errors to trigger a background rate-limit refresh; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn notify_owner_refreshes_rate_limits_when_snapshot_is_missing() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.update_account_state(
+        None,
+        None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+
+    chat.dispatch_command(SlashCommand::NotifyOwner);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::RefreshRateLimits { .. })),
+        "expected /notify-owner to request a refresh when rate limits are missing; events: {events:?}"
+    );
+
+    let rendered = events
+        .iter()
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .expect("expected informational history cell");
+    assert!(
+        rendered.contains("Refreshing workspace rate limits"),
+        "expected missing-snapshot guidance, got: {rendered}"
+    );
+}

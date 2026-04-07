@@ -229,6 +229,9 @@ fn merge_rate_limit_fields(
     if snapshot.credits.is_none() {
         snapshot.credits = previous.and_then(|prior| prior.credits.clone());
     }
+    if snapshot.spend_control.is_none() {
+        snapshot.spend_control = previous.and_then(|prior| prior.spend_control.clone());
+    }
     if snapshot.plan_type.is_none() {
         snapshot.plan_type = previous.and_then(|prior| prior.plan_type);
     }

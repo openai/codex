@@ -1967,6 +1967,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub spend_control: Option<SpendControlSnapshot>,
     pub plan_type: Option<crate::account::PlanType>,
 }
 
@@ -1987,6 +1988,11 @@ pub struct CreditsSnapshot {
     pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpendControlSnapshot {
+    pub reached: bool,
 }
 
 // Includes prompts, tools and space to call compact.

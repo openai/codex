@@ -735,6 +735,7 @@ mod tests {
                     }),
                     secondary: None,
                     credits: None,
+                    spend_control: None,
                     plan_type: Some(PlanType::Plus),
                 },
             });
@@ -754,6 +755,7 @@ mod tests {
                         },
                         "secondary": null,
                         "credits": null,
+                        "spendControl": null,
                         "planType": "plus"
                     }
                 },
@@ -769,6 +771,7 @@ mod tests {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
             auth_mode: Some(AuthMode::ApiKey),
             plan_type: None,
+            workspace_role: None,
             is_workspace_owner: None,
         });
 
@@ -779,6 +782,7 @@ mod tests {
                 "params": {
                     "authMode": "apikey",
                     "planType": null,
+                    "workspaceRole": null,
                     "isWorkspaceOwner": null
                 },
             }),

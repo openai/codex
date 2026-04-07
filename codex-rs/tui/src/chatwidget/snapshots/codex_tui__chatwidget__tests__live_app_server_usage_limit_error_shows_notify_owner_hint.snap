@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 601
+expression: rendered
+---
+■ The usage limit has been reached
+  Run `/notify-owner` to ask your workspace owner to add credits and continue using Codex.

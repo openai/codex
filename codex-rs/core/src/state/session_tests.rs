@@ -47,6 +47,7 @@ async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     });
 
@@ -74,6 +75,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     });
     state.set_rate_limits(RateLimitSnapshot {
@@ -86,6 +88,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     });
 
@@ -117,6 +120,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
             unlimited: false,
             balance: Some("50".to_string()),
         }),
+        spend_control: None,
         plan_type: Some(codex_protocol::account::PlanType::Plus),
     });
 
@@ -130,6 +134,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     });
 
@@ -149,6 +154,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
                 unlimited: false,
                 balance: Some("50".to_string()),
             }),
+            spend_control: None,
             plan_type: Some(codex_protocol::account::PlanType::Plus),
         })
     );

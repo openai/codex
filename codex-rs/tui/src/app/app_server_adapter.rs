@@ -176,6 +176,7 @@ impl App {
                         notification.auth_mode,
                         notification.plan_type,
                     ),
+                    notification.workspace_role,
                     notification.is_workspace_owner,
                     notification.plan_type,
                     matches!(

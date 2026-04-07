@@ -115,6 +115,16 @@
               "type": "null"
             }
           ]
+        },
+        "workspaceRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "title": "AccountUpdatedNotification",
@@ -4790,6 +4800,16 @@
         },
         "requiresOpenaiAuth": {
           "type": "boolean"
+        },
+        "workspaceRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -6938,6 +6958,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/RateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spendControl": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlSnapshot"
             },
             {
               "type": "null"
@@ -9705,6 +9735,17 @@
         "data"
       ],
       "title": "SkillsListResponse",
+      "type": "object"
+    },
+    "SpendControlSnapshot": {
+      "properties": {
+        "reached": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reached"
+      ],
       "type": "object"
     },
     "SubAgentSource": {
@@ -12814,6 +12855,14 @@
       ],
       "title": "WindowsWorldWritableWarningNotification",
       "type": "object"
+    },
+    "WorkspaceRole": {
+      "enum": [
+        "account-owner",
+        "account-admin",
+        "standard-user"
+      ],
+      "type": "string"
     },
     "WriteStatus": {
       "enum": [

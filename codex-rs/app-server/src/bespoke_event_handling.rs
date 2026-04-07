@@ -3488,6 +3488,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
+            spend_control: None,
             plan_type: None,
         };
 

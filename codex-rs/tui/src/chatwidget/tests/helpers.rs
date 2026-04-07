@@ -104,6 +104,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     }
 }
@@ -189,6 +190,7 @@ pub(super) async fn make_chatwidget_manual(
         current_collaboration_mode,
         active_collaboration_mask,
         has_chatgpt_account: false,
+        workspace_role: None,
         is_workspace_owner: None,
         model_catalog,
         session_telemetry,

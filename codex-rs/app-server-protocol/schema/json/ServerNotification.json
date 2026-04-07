@@ -66,6 +66,16 @@
               "type": "null"
             }
           ]
+        },
+        "workspaceRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -1845,6 +1855,16 @@
               "type": "null"
             }
           ]
+        },
+        "spendControl": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -2042,6 +2062,17 @@
     },
     "SkillsChangedNotification": {
       "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "type": "object"
+    },
+    "SpendControlSnapshot": {
+      "properties": {
+        "reached": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reached"
+      ],
       "type": "object"
     },
     "SubAgentSource": {
@@ -3781,6 +3812,14 @@
         "samplePaths"
       ],
       "type": "object"
+    },
+    "WorkspaceRole": {
+      "enum": [
+        "account-owner",
+        "account-admin",
+        "standard-user"
+      ],
+      "type": "string"
     }
   },
   "description": "Notification sent from the server to the client.",

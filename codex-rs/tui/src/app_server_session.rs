@@ -93,6 +93,7 @@ pub(crate) struct AppServerBootstrap {
     pub(crate) account_email: Option<String>,
     pub(crate) auth_mode: Option<TelemetryAuthMode>,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) workspace_role: Option<codex_app_server_protocol::WorkspaceRole>,
     pub(crate) is_workspace_owner: Option<bool>,
     pub(crate) plan_type: Option<codex_protocol::account::PlanType>,
     pub(crate) default_model: String,
@@ -205,6 +206,7 @@ impl AppServerSession {
             account_email,
             auth_mode,
             status_account_display,
+            workspace_role,
             is_workspace_owner,
             plan_type,
             feedback_audience,
@@ -215,6 +217,7 @@ impl AppServerSession {
                 None,
                 Some(TelemetryAuthMode::ApiKey),
                 Some(StatusAccountDisplay::ApiKey),
+                None,
                 None,
                 None,
                 FeedbackAudience::External,
@@ -234,6 +237,7 @@ impl AppServerSession {
                         email: Some(email),
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
+                    account.workspace_role,
                     account.is_workspace_owner,
                     Some(plan_type),
                     feedback_audience,
@@ -241,6 +245,7 @@ impl AppServerSession {
                 )
             }
             None => (
+                None,
                 None,
                 None,
                 None,
@@ -276,6 +281,7 @@ impl AppServerSession {
             account_email,
             auth_mode,
             status_account_display,
+            workspace_role,
             is_workspace_owner,
             plan_type,
             default_model,
@@ -1093,6 +1099,9 @@ pub(crate) fn app_server_rate_limit_snapshot_to_core(
         primary: snapshot.primary.map(app_server_rate_limit_window_to_core),
         secondary: snapshot.secondary.map(app_server_rate_limit_window_to_core),
         credits: snapshot.credits.map(app_server_credits_snapshot_to_core),
+        spend_control: snapshot
+            .spend_control
+            .map(app_server_spend_control_snapshot_to_core),
         plan_type: snapshot.plan_type,
     }
 }
@@ -1114,6 +1123,14 @@ fn app_server_credits_snapshot_to_core(
         has_credits: snapshot.has_credits,
         unlimited: snapshot.unlimited,
         balance: snapshot.balance,
+    }
+}
+
+fn app_server_spend_control_snapshot_to_core(
+    snapshot: codex_app_server_protocol::SpendControlSnapshot,
+) -> codex_protocol::protocol::SpendControlSnapshot {
+    codex_protocol::protocol::SpendControlSnapshot {
+        reached: snapshot.reached,
     }
 }
 
