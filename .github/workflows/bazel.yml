@@ -108,6 +108,7 @@ jobs:
             "${bazel_wrapper_args[@]}" \
             -- \
             test \
+            --test_output=errors \
             --test_tag_filters=-argument-comment-lint \
             --test_verbose_timeout_warnings \
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
