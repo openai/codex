@@ -44,20 +44,20 @@ impl AccountsCheckV4Response {
         &self,
         current_account_id: Option<&str>,
     ) -> Option<WorkspaceRole> {
-        let account = current_account_id
-            .and_then(|account_id| self.accounts.get(account_id))
-            .or_else(|| {
-                self.account_ordering
-                    .iter()
-                    .find_map(|account_id| self.accounts.get(account_id))
-            })
-            .or_else(|| {
-                if self.accounts.len() == 1 {
-                    self.accounts.values().next()
-                } else {
-                    None
-                }
-            })?;
+        let account = if let Some(account_id) = current_account_id {
+            self.accounts.get(account_id)?
+        } else {
+            self.account_ordering
+                .iter()
+                .find_map(|account_id| self.accounts.get(account_id))
+                .or_else(|| {
+                    if self.accounts.len() == 1 {
+                        self.accounts.values().next()
+                    } else {
+                        None
+                    }
+                })?
+        };
         account
             .account
             .as_ref()
@@ -387,6 +387,23 @@ mod tests {
             response.current_workspace_role(None),
             Some(WorkspaceRole::AccountAdmin)
         );
+    }
+
+    #[test]
+    fn current_workspace_role_does_not_fall_back_when_current_account_missing() {
+        let response = AccountsCheckV4Response {
+            accounts: HashMap::from([(
+                "workspace-a".to_string(),
+                AccountsCheckV4AccountItem {
+                    account: Some(AccountsCheckV4Account {
+                        account_user_role: Some("account-owner".to_string()),
+                    }),
+                },
+            )]),
+            account_ordering: vec!["workspace-a".to_string()],
+        };
+
+        assert_eq!(response.current_workspace_role(Some("workspace-b")), None);
     }
 }
 

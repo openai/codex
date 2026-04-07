@@ -608,6 +608,7 @@ enum RateLimitErrorKind {
 pub(crate) const CODEX_USAGE_SETTINGS_URL: &str = "https://chatgpt.com/codex/settings/usage";
 const WORKSPACE_OWNER_NOTIFICATION_PROMPT: &str =
     "Your workspace is out of credits. Request more from your workspace owner? [y/N]";
+const WORKSPACE_OWNER_NOTIFICATION_TITLE: &str = "Request more credits from your workspace owner?";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UsageBasedWorkspaceRateLimitState {
@@ -5401,11 +5402,6 @@ impl ChatWidget {
             SlashCommand::Skills => {
                 self.open_skills_menu();
             }
-            SlashCommand::Usage => {
-                self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
-                    url: CODEX_USAGE_SETTINGS_URL.to_string(),
-                });
-            }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
                     let request_id = self.request_rate_limit_refresh();
@@ -9700,25 +9696,24 @@ impl ChatWidget {
             return match state {
                 UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted => Some((
                     "Your workspace is out of credits.".to_string(),
-                    Some("Run `/usage` to add workspace credits and continue using Codex.".to_string()),
+                    Some(format!(
+                        "Visit {CODEX_USAGE_SETTINGS_URL} to add workspace credits and continue using Codex."
+                    )),
                 )),
                 UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached => Some((
                     "Your workspace has reached its spend cap.".to_string(),
-                    Some(
-                        "Run `/usage` to increase your workspace spend cap and continue using Codex."
-                            .to_string(),
-                    ),
+                    Some(format!(
+                        "Visit {CODEX_USAGE_SETTINGS_URL} to increase your workspace spend cap and continue using Codex."
+                    )),
                 )),
-                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => Some((
-                    WORKSPACE_OWNER_NOTIFICATION_PROMPT.to_string(),
-                    None,
-                )),
+                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => {
+                    Some((WORKSPACE_OWNER_NOTIFICATION_PROMPT.to_string(), None))
+                }
                 UsageBasedWorkspaceRateLimitState::MemberSpendCapReached => Some((
                     "Your workspace has reached its spend cap.".to_string(),
-                    Some(
-                        "Ask an admin to increase your workspace spend cap. Run `/usage` to open usage settings in your browser."
-                            .to_string(),
-                    ),
+                    Some(format!(
+                        "Ask an admin to increase your workspace spend cap. Visit {CODEX_USAGE_SETTINGS_URL} for usage settings."
+                    )),
                 )),
             };
         }
@@ -9726,17 +9721,15 @@ impl ChatWidget {
         match self.usage_based_workspace_block_kind()? {
             UsageBasedWorkspaceBlockKind::CreditsDepleted => Some((
                 "Your workspace is out of credits.".to_string(),
-                Some(
-                    "If you're the workspace owner, run `/usage` to add credits. Otherwise wait a moment while Codex refreshes your workspace status."
-                        .to_string(),
-                ),
+                Some(format!(
+                    "If you're the workspace owner, visit {CODEX_USAGE_SETTINGS_URL} to add credits. Otherwise wait a moment while Codex refreshes your workspace status."
+                )),
             )),
             UsageBasedWorkspaceBlockKind::SpendCapReached => Some((
                 "Your workspace has reached its spend cap.".to_string(),
-                Some(
-                    "Ask an admin to increase the workspace spend cap, or run `/usage` to open usage settings."
-                        .to_string(),
-                ),
+                Some(format!(
+                    "Ask an admin to increase the workspace spend cap, or visit {CODEX_USAGE_SETTINGS_URL} for usage settings."
+                )),
             )),
         }
     }
@@ -9820,7 +9813,7 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(WORKSPACE_OWNER_NOTIFICATION_PROMPT.to_string()),
+            title: Some(WORKSPACE_OWNER_NOTIFICATION_TITLE.to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx: Some(1),

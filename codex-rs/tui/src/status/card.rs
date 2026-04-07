@@ -605,7 +605,7 @@ impl HistoryCell for StatusHistoryCell {
         let value_width = formatter.value_width(available_inner_width);
 
         let note_first_line = Line::from(vec![
-            Span::from("Run `/usage` or visit ").cyan(),
+            Span::from("Visit ").cyan(),
             "https://chatgpt.com/codex/settings/usage"
                 .cyan()
                 .underlined(),

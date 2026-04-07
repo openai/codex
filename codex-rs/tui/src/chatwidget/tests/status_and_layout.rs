@@ -440,7 +440,7 @@ async fn core_usage_limit_error_shows_notify_owner_hint() {
     );
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Request more from your workspace owner? [y/N]"),
+        popup.contains("Request more credits from your workspace owner?"),
         "expected workspace-owner confirmation popup, got {popup:?}"
     );
 }

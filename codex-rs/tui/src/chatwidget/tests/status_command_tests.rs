@@ -198,7 +198,7 @@ async fn usage_limit_error_opens_workspace_owner_prompt_after_rate_limits_refres
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Request more from your workspace owner? [y/N]"),
+        popup.contains("Request more credits from your workspace owner?"),
         "expected workspace-owner prompt after refresh, got: {popup}"
     );
 

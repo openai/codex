@@ -9,6 +9,7 @@ use app_test_support::encode_id_token;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
@@ -24,6 +25,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -141,6 +143,14 @@ async fn mock_accounts_check_role(server: &MockServer, account_id: &str, role: &
             },
             "account_ordering": [account_id],
         })))
+        .mount(server)
+        .await;
+}
+
+async fn mock_send_add_credits_nudge_email(server: &MockServer, status: u16) {
+    Mock::given(method("POST"))
+        .and(path("/backend-api/accounts/send_add_credits_nudge_email"))
+        .respond_with(ResponseTemplate::new(status))
         .mount(server)
         .await;
 }
@@ -1678,6 +1688,57 @@ async fn get_account_with_chatgpt_fetches_workspace_role_from_accounts_check() -
 }
 
 #[tokio::test]
+async fn get_account_with_chatgpt_does_not_guess_workspace_role_from_other_accounts() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    mock_accounts_check_role(&mock_server, "org-other", "account-owner").await;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt")
+            .email("user@example.com")
+            .plan_type("pro")
+            .chatgpt_account_id("org-current"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let params = GetAccountParams {
+        refresh_token: false,
+    };
+    let request_id = mcp.send_get_account_request(params).await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::Chatgpt {
+            email: "user@example.com".to_string(),
+            plan_type: AccountPlanType::Pro,
+        }),
+        workspace_role: None,
+        is_workspace_owner: None,
+        requires_openai_auth: true,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
@@ -1718,5 +1779,122 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_add_credits_nudge_email_returns_sent() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    mock_send_add_credits_nudge_email(&mock_server, 200).await;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt").chatgpt_account_id("org-current"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_add_credits_nudge_email_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: SendAddCreditsNudgeEmailResponse = to_response(resp)?;
+
+    assert_eq!(
+        response,
+        SendAddCreditsNudgeEmailResponse {
+            status: AddCreditsNudgeEmailStatus::Sent,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_add_credits_nudge_email_returns_cooldown_active_for_429() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    mock_send_add_credits_nudge_email(&mock_server, 429).await;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt").chatgpt_account_id("org-current"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_add_credits_nudge_email_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: SendAddCreditsNudgeEmailResponse = to_response(resp)?;
+
+    assert_eq!(
+        response,
+        SendAddCreditsNudgeEmailResponse {
+            status: AddCreditsNudgeEmailStatus::CooldownActive,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_add_credits_nudge_email_returns_jsonrpc_error_for_backend_failures() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    mock_send_add_credits_nudge_email(&mock_server, 500).await;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt").chatgpt_account_id("org-current"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_add_credits_nudge_email_request().await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert!(
+        err.error
+            .message
+            .contains("failed to notify workspace owner"),
+        "unexpected error: {:?}",
+        err.error.message
+    );
     Ok(())
 }
