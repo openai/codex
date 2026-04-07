@@ -53,6 +53,7 @@ use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnResolvedConfigFact;
+use codex_analytics::TurnSubmissionType;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -119,6 +120,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -885,6 +887,7 @@ pub(crate) struct TurnContext {
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) submission_type: Option<SubmissionType>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
@@ -1003,6 +1006,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
+            submission_type: self.submission_type,
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -1085,6 +1089,13 @@ impl TurnContext {
                 .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
                 .unwrap_or_default(),
         })
+    }
+}
+
+fn turn_submission_type(submission_type: SubmissionType) -> TurnSubmissionType {
+    match submission_type {
+        SubmissionType::Prompt => TurnSubmissionType::Default,
+        SubmissionType::PromptQueued => TurnSubmissionType::Queued,
     }
 }
 
@@ -1265,6 +1276,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) submission_type: Option<SubmissionType>,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -1433,6 +1445,7 @@ impl Session {
         network: Option<NetworkProxy>,
         environment: Option<Arc<Environment>>,
         sub_id: String,
+        submission_type: Option<SubmissionType>,
         js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
     ) -> TurnContext {
@@ -1497,6 +1510,7 @@ impl Session {
             current_date: Some(current_date),
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
+            submission_type,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
@@ -2512,6 +2526,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                updates.submission_type,
                 sandbox_policy_changed,
             )
             .await)
@@ -2522,6 +2537,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        submission_type: Option<SubmissionType>,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
@@ -2587,6 +2603,7 @@ impl Session {
                 .map(StartedNetworkProxy::proxy),
             self.services.environment.clone(),
             sub_id,
+            submission_type,
             Arc::clone(&self.js_repl),
             skills_outcome,
         );
@@ -2699,6 +2716,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*submission_type*/ None,
             /*sandbox_policy_changed*/ false,
         )
         .await
@@ -4633,7 +4651,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. } | Op::UserInputWithMetadata { .. } | Op::UserTurn { .. } => {
                     handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
@@ -4891,6 +4909,7 @@ mod handlers {
                 items,
                 collaboration_mode,
                 personality,
+                submission_type,
             } => {
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
@@ -4917,9 +4936,22 @@ mod handlers {
                         personality,
                         app_server_client_name: None,
                         app_server_client_version: None,
+                        submission_type,
                     },
                 )
             }
+            Op::UserInputWithMetadata {
+                items,
+                final_output_json_schema,
+                submission_type,
+            } => (
+                items,
+                SessionSettingsUpdate {
+                    final_output_json_schema: Some(final_output_json_schema),
+                    submission_type,
+                    ..Default::default()
+                },
+            ),
             Op::UserInput {
                 items,
                 final_output_json_schema,
@@ -5733,6 +5765,7 @@ async fn spawn_review_thread(
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
+        submission_type: None,
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
@@ -6371,7 +6404,12 @@ async fn track_turn_resolved_config_analytics(
                     matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
                 })
                 .count(),
-            submission_type: None,
+            submission_type: Some(
+                turn_context
+                    .submission_type
+                    .map(turn_submission_type)
+                    .unwrap_or(TurnSubmissionType::Default),
+            ),
             model: turn_context.model_info.slug.clone(),
             model_provider: turn_context.config.model_provider_id.clone(),
             sandbox_policy: turn_context.sandbox_policy.get().clone(),

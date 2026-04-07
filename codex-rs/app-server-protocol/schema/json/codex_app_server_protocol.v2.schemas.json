@@ -10057,6 +10057,13 @@
         }
       ]
     },
+    "SubmissionType": {
+      "enum": [
+        "prompt",
+        "prompt_queued"
+      ],
+      "type": "string"
+    },
     "TerminalInteractionNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -12617,6 +12624,17 @@
             }
           ],
           "description": "Override the service tier for this turn and subsequent turns."
+        },
+        "submissionType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SubmissionType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Metadata describing how the prompt was submitted."
         },
         "summary": {
           "anyOf": [
