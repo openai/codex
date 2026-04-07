@@ -16,7 +16,7 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::error::Result;
+use codex_protocol::error::Result;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 

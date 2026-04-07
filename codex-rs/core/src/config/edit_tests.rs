@@ -1,7 +1,7 @@
 use super::*;
-use crate::config::types::AppToolApproval;
-use crate::config::types::McpServerToolConfig;
-use crate::config::types::McpServerTransportConfig;
+use codex_config::types::AppToolApproval;
+use codex_config::types::McpServerToolConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]

@@ -2,9 +2,10 @@ use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
-use crate::token_data::KnownPlan as InternalKnownPlan;
-use crate::token_data::PlanType as InternalPlanType;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::KnownPlan as InternalKnownPlan;
+use codex_protocol::auth::PlanType as InternalPlanType;
 
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -107,7 +108,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
     .unwrap()
     .unwrap();
     assert_eq!(None, auth.api_key());
-    assert_eq!(crate::AuthMode::Chatgpt, auth.auth_mode());
+    assert_eq!(AuthMode::Chatgpt, auth.auth_mode());
     assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-12345"));
 
     let auth_dot_json = auth
@@ -157,7 +158,7 @@ async fn loads_api_key_from_auth_json() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(auth.auth_mode(), crate::AuthMode::ApiKey);
+    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
 
     assert!(auth.get_token_data().is_err());
@@ -283,8 +284,28 @@ async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
 
     assert_eq!(first.as_deref(), Some("provider-token"));
     assert_eq!(second.as_deref(), Some("provider-token"));
-    assert_eq!(manager.auth_mode(), Some(crate::AuthMode::ApiKey));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
     assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ApiKey));
+}
+
+#[tokio::test]
+async fn external_bearer_only_auth_manager_disables_auto_refresh_when_interval_is_zero() {
+    let script = ProviderAuthScript::new(&["provider-token", "next-token"]).unwrap();
+    let mut auth_config = script.auth_config();
+    auth_config.refresh_interval_ms = 0;
+    let manager = AuthManager::external_bearer_only(auth_config);
+
+    let first = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+    let second = manager
+        .auth()
+        .await
+        .and_then(|auth| auth.api_key().map(str::to_string));
+
+    assert_eq!(first.as_deref(), Some("provider-token"));
+    assert_eq!(second.as_deref(), Some("provider-token"));
 }
 
 #[tokio::test]
@@ -298,7 +319,9 @@ async fn external_bearer_only_auth_manager_returns_none_when_command_fails() {
 #[tokio::test]
 async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
     let script = ProviderAuthScript::new(&["provider-token", "refreshed-provider-token"]).unwrap();
-    let manager = AuthManager::external_bearer_only(script.auth_config());
+    let mut auth_config = script.auth_config();
+    auth_config.refresh_interval_ms = 0;
+    let manager = AuthManager::external_bearer_only(auth_config);
     let initial_token = manager
         .auth()
         .await
@@ -333,10 +356,12 @@ impl ProviderAuthScript {
     fn new(tokens: &[&str]) -> std::io::Result<Self> {
         let tempdir = tempfile::tempdir()?;
         let token_file = tempdir.path().join("tokens.txt");
+        // `cmd.exe`'s `set /p` treats LF-only input as one line, so use CRLF on Windows.
+        let token_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
         let mut token_file_contents = String::new();
         for token in tokens {
             token_file_contents.push_str(token);
-            token_file_contents.push('\n');
+            token_file_contents.push_str(token_line_ending);
         }
         std::fs::write(&token_file, token_file_contents)?;
 
@@ -363,23 +388,28 @@ mv tokens.next tokens.txt
 
         #[cfg(windows)]
         let (command, args) = {
-            let script_path = tempdir.path().join("print-token.ps1");
+            let script_path = tempdir.path().join("print-token.cmd");
             std::fs::write(
                 &script_path,
-                r#"$lines = @(Get-Content -Path tokens.txt)
-if ($lines.Count -eq 0) { exit 1 }
-Write-Output $lines[0]
-$lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
+                r#"@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+set "first_line="
+<tokens.txt set /p "first_line="
+if not defined first_line exit /b 1
+setlocal EnableDelayedExpansion
+echo(!first_line!
+endlocal
+more +1 tokens.txt > tokens.next
+move /y tokens.next tokens.txt >nul
 "#,
             )?;
             (
-                "powershell".to_string(),
+                "cmd.exe".to_string(),
                 vec![
-                    "-NoProfile".to_string(),
-                    "-ExecutionPolicy".to_string(),
-                    "Bypass".to_string(),
-                    "-File".to_string(),
-                    ".\\print-token.ps1".to_string(),
+                    "/d".to_string(),
+                    "/s".to_string(),
+                    "/c".to_string(),
+                    ".\\print-token.cmd".to_string(),
                 ],
             )
         };
@@ -414,13 +444,12 @@ exit 1
 
         #[cfg(windows)]
         let (command, args) = (
-            "powershell".to_string(),
+            "cmd.exe".to_string(),
             vec![
-                "-NoProfile".to_string(),
-                "-ExecutionPolicy".to_string(),
-                "Bypass".to_string(),
-                "-Command".to_string(),
-                "exit 1".to_string(),
+                "/d".to_string(),
+                "/s".to_string(),
+                "/c".to_string(),
+                "exit /b 1".to_string(),
             ],
         );
 
@@ -435,7 +464,9 @@ exit 1
         serde_json::from_value(json!({
             "command": self.command,
             "args": self.args,
-            "timeout_ms": 1000,
+            // Process startup can be slow on loaded Windows CI workers, so leave enough slack to
+            // avoid turning these auth-cache assertions into a process-launch timing test.
+            "timeout_ms": 10_000,
             "refresh_interval_ms": 60000,
             "cwd": self.tempdir.path(),
         }))

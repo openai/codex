@@ -6,8 +6,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Result;
-use codex_core::CodexAuth;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -400,7 +400,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     );
     assert_eq!(
         event["event_params"]["product_client_id"],
-        serde_json::json!(codex_core::default_client::originator().value)
+        serde_json::json!(codex_login::default_client::originator().value)
     );
     assert_eq!(event["event_params"]["model_slug"], "gpt-5");
     assert!(event["event_params"]["thread_id"].as_str().is_some());

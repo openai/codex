@@ -11,6 +11,7 @@ use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
+use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientResponse;
@@ -142,6 +143,12 @@ impl AnalyticsEventsClient {
             runtime: current_runtime_metadata(),
             rpc_transport,
         });
+    }
+
+    pub fn track_subagent_thread_started(&self, input: SubAgentThreadStartedInput) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::SubAgentThreadStarted(input),
+        ));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {

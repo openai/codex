@@ -1042,6 +1042,17 @@
             "null"
           ]
         },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerStatusDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Controls how much MCP inventory data to fetch for each server. Defaults to `Full` when omitted."
+        },
         "limit": {
           "description": "Optional page size; defaults to a server-defined value.",
           "format": "uint32",
@@ -1253,6 +1264,13 @@
         "name"
       ],
       "type": "object"
+    },
+    "McpServerStatusDetail": {
+      "enum": [
+        "full",
+        "toolsAndAuthOnly"
+      ],
+      "type": "string"
     },
     "MergeStrategy": {
       "enum": [
@@ -4446,9 +4464,9 @@
         },
         "method": {
           "enum": [
-            "mcpResource/read"
+            "mcpServer/resource/read"
           ],
-          "title": "McpResource/readRequestMethod",
+          "title": "McpServer/resource/readRequestMethod",
           "type": "string"
         },
         "params": {
@@ -4460,7 +4478,7 @@
         "method",
         "params"
       ],
-      "title": "McpResource/readRequest",
+      "title": "McpServer/resource/readRequest",
       "type": "object"
     },
     {

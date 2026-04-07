@@ -17,6 +17,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::resolve_relative_paths_in_config_toml;
 use anyhow::anyhow;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::config_toml::ConfigToml;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -221,7 +222,7 @@ mod reload {
     fn deserialize_effective_config(
         config: &Config,
         config_layer_stack: &ConfigLayerStack,
-    ) -> anyhow::Result<crate::config::ConfigToml> {
+    ) -> anyhow::Result<ConfigToml> {
         Ok(deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             &config.codex_home,

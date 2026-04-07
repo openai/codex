@@ -6,21 +6,21 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
 use codex_core::mcp::McpManager;
-use codex_core::mcp::auth::McpOAuthLoginSupport;
-use codex_core::mcp::auth::ResolvedMcpOAuthScopes;
-use codex_core::mcp::auth::compute_auth_statuses;
-use codex_core::mcp::auth::discover_supported_scopes;
-use codex_core::mcp::auth::oauth_login_support;
-use codex_core::mcp::auth::resolve_oauth_scopes;
-use codex_core::mcp::auth::should_retry_without_scopes;
 use codex_core::plugins::PluginsManager;
+use codex_mcp::mcp::auth::McpOAuthLoginSupport;
+use codex_mcp::mcp::auth::ResolvedMcpOAuthScopes;
+use codex_mcp::mcp::auth::compute_auth_statuses;
+use codex_mcp::mcp::auth::discover_supported_scopes;
+use codex_mcp::mcp::auth::oauth_login_support;
+use codex_mcp::mcp::auth::resolve_oauth_scopes;
+use codex_mcp::mcp::auth::should_retry_without_scopes;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
@@ -194,7 +194,7 @@ impl McpCli {
 async fn perform_oauth_login_retry_without_scopes(
     name: &str,
     url: &str,
-    store_mode: codex_rmcp_client::OAuthCredentialsStoreMode,
+    store_mode: codex_config::types::OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     resolved_scopes: &ResolvedMcpOAuthScopes,

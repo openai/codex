@@ -13,6 +13,7 @@ use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
+use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
@@ -24,6 +25,7 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
+use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
@@ -47,6 +49,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -58,6 +61,7 @@ use tokio::sync::mpsc;
 fn sample_thread(thread_id: &str, ephemeral: bool) -> Thread {
     Thread {
         id: thread_id.to_string(),
+        forked_from_id: None,
         preview: "first prompt".to_string(),
         ephemeral,
         model_provider: "openai".to_string(),
@@ -443,6 +447,155 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(payload[0]["event_params"]["thread_source"], "user");
     assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
     assert_eq!(payload[0]["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[test]
+fn subagent_thread_started_review_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
+        SubAgentThreadStartedInput {
+            thread_id: "thread-review".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            client_name: "codex-tui".to_string(),
+            client_version: "1.0.0".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: false,
+            subagent_source: SubAgentSource::Review,
+            created_at: 123,
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize review subagent event");
+    assert_eq!(payload["event_params"]["thread_source"], "subagent");
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["product_client_id"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["client_name"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["client_version"],
+        "1.0.0"
+    );
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["rpc_transport"],
+        "in_process"
+    );
+    assert_eq!(payload["event_params"]["created_at"], 123);
+    assert_eq!(payload["event_params"]["initialization_mode"], "new");
+    assert_eq!(payload["event_params"]["subagent_source"], "review");
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[test]
+fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
+            .expect("valid thread id");
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
+        SubAgentThreadStartedInput {
+            thread_id: "thread-spawn".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            client_name: "codex-tui".to_string(),
+            client_version: "1.0.0".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: true,
+            subagent_source: SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            },
+            created_at: 124,
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize thread spawn subagent event");
+    assert_eq!(payload["event_params"]["thread_source"], "subagent");
+    assert_eq!(payload["event_params"]["subagent_source"], "thread_spawn");
+    assert_eq!(
+        payload["event_params"]["parent_thread_id"],
+        "11111111-1111-1111-1111-111111111111"
+    );
+}
+
+#[test]
+fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
+        SubAgentThreadStartedInput {
+            thread_id: "thread-memory".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            client_name: "codex-tui".to_string(),
+            client_version: "1.0.0".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: false,
+            subagent_source: SubAgentSource::MemoryConsolidation,
+            created_at: 125,
+        },
+    ));
+
+    let payload =
+        serde_json::to_value(&event).expect("serialize memory consolidation subagent event");
+    assert_eq!(
+        payload["event_params"]["subagent_source"],
+        "memory_consolidation"
+    );
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[test]
+fn subagent_thread_started_other_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
+        SubAgentThreadStartedInput {
+            thread_id: "thread-guardian".to_string(),
+            product_client_id: "codex-tui".to_string(),
+            client_name: "codex-tui".to_string(),
+            client_version: "1.0.0".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: false,
+            subagent_source: SubAgentSource::Other("guardian".to_string()),
+            created_at: 126,
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize other subagent event");
+    assert_eq!(payload["event_params"]["subagent_source"], "guardian");
+}
+
+#[tokio::test]
+async fn subagent_thread_started_publishes_without_initialize() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
+                SubAgentThreadStartedInput {
+                    thread_id: "thread-review".to_string(),
+                    product_client_id: "codex-tui".to_string(),
+                    client_name: "codex-tui".to_string(),
+                    client_version: "1.0.0".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: false,
+                    subagent_source: SubAgentSource::Review,
+                    created_at: 127,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        "codex-tui"
+    );
+    assert_eq!(payload[0]["event_params"]["thread_source"], "subagent");
+    assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
 }
 
 #[test]

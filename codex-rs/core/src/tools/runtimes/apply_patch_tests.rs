@@ -63,7 +63,6 @@ fn guardian_review_request_includes_patch_context() {
             id: "call-1".to_string(),
             cwd: expected_cwd,
             files: request.file_paths,
-            change_count: 1usize,
             patch: expected_patch,
         }
     );

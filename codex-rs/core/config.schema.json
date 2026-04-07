@@ -437,6 +437,9 @@
             "realtime_conversation": {
               "type": "boolean"
             },
+            "remote_control": {
+              "type": "boolean"
+            },
             "remote_models": {
               "type": "boolean"
             },
@@ -519,6 +522,15 @@
           "type": "object"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "include_apps_instructions": {
+          "type": "boolean"
+        },
+        "include_environment_context": {
+          "type": "boolean"
+        },
+        "include_permissions_instructions": {
           "type": "boolean"
         },
         "js_repl_node_module_dirs": {
@@ -845,9 +857,9 @@
         },
         "refresh_interval_ms": {
           "default": 300000,
-          "description": "Maximum age for the cached token before rerunning the command.",
+          "description": "Maximum age for the cached token before rerunning the command. Set to `0` to disable proactive refresh and only rerun after a 401 retry path.",
           "format": "uint64",
-          "minimum": 1.0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "timeout_ms": {
@@ -1319,6 +1331,7 @@
     },
     "RawMcpServerConfig": {
       "additionalProperties": false,
+      "description": "Raw MCP config shape used for deserialization and JSON Schema generation.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
       "properties": {
         "args": {
           "default": null,
@@ -2134,6 +2147,9 @@
         "realtime_conversation": {
           "type": "boolean"
         },
+        "remote_control": {
+          "type": "boolean"
+        },
         "remote_models": {
           "type": "boolean"
         },
@@ -2267,6 +2283,18 @@
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
     },
+    "include_apps_instructions": {
+      "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_environment_context": {
+      "description": "Whether to inject the `<environment_context>` user block.",
+      "type": "boolean"
+    },
+    "include_permissions_instructions": {
+      "description": "Whether to inject the `<permissions instructions>` developer block.",
+      "type": "boolean"
+    },
     "instructions": {
       "description": "System instructions.",
       "type": "string"
@@ -2395,7 +2423,7 @@
           "$ref": "#/definitions/Notice"
         }
       ],
-      "description": "Collection of in-product notices (different from notifications) See [`crate::config::types::Notices`] for more details"
+      "description": "Collection of in-product notices (different from notifications) See [`crate::types::Notice`] for more details"
     },
     "notify": {
       "default": null,

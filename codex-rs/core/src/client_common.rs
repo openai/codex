@@ -1,6 +1,6 @@
-use crate::config::types::Personality;
-use crate::error::Result;
 pub use codex_api::common::ResponseEvent;
+use codex_config::types::Personality;
+use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
@@ -23,7 +23,7 @@ pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
 
 /// API request payload for a single model turn
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
@@ -35,13 +35,26 @@ pub struct Prompt {
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
 
-    pub base_instructions: BaseInstructions,
+    pub base_instructions: Option<BaseInstructions>,
 
     /// Optionally specify the personality of the model.
     pub personality: Option<Personality>,
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+}
+
+impl Default for Prompt {
+    fn default() -> Self {
+        Self {
+            input: Vec::new(),
+            tools: Vec::new(),
+            parallel_tool_calls: false,
+            base_instructions: Some(BaseInstructions::default()),
+            personality: None,
+            output_schema: None,
+        }
+    }
 }
 
 impl Prompt {
@@ -154,14 +167,6 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
     let total_lines = total_segment.parse::<u32>().ok()?;
     let remainder = remainder.strip_prefix('\n').unwrap_or(remainder);
     Some((remainder, total_lines))
-}
-
-pub(crate) mod tools {
-    pub(crate) use codex_tools::FreeformTool;
-    pub(crate) use codex_tools::FreeformToolFormat;
-    pub(crate) use codex_tools::ResponsesApiTool;
-    pub(crate) use codex_tools::ToolSearchOutputTool;
-    pub(crate) use codex_tools::ToolSpec;
 }
 
 pub struct ResponseStream {

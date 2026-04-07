@@ -1,27 +1,22 @@
 use crate::function_tool::FunctionCallError;
-use crate::mcp_connection_manager::ToolInfo;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
-use codex_tools::ResponsesApiNamespace;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ToolSearchOutputTool;
-use codex_tools::mcp_tool_to_deferred_responses_api_tool;
-use std::collections::BTreeMap;
+use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
+use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::ToolSearchResultSource;
+use codex_tools::collect_tool_search_output_tools;
 use std::collections::HashMap;
 
 pub struct ToolSearchHandler {
     tools: HashMap<String, ToolInfo>,
 }
-
-pub(crate) const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-pub(crate) const DEFAULT_LIMIT: usize = 8;
 
 impl ToolSearchHandler {
     pub fn new(tools: HashMap<String, ToolInfo>) -> Self {
@@ -29,7 +24,6 @@ impl ToolSearchHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for ToolSearchHandler {
     type Output = ToolSearchOutput;
 
@@ -58,7 +52,7 @@ impl ToolHandler for ToolSearchHandler {
                 "query must not be empty".to_string(),
             ));
         }
-        let limit = args.limit.unwrap_or(DEFAULT_LIMIT);
+        let limit = args.limit.unwrap_or(TOOL_SEARCH_DEFAULT_LIMIT);
 
         if limit == 0 {
             return Err(FunctionCallError::RespondToModel(
@@ -82,63 +76,26 @@ impl ToolHandler for ToolSearchHandler {
             SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
         let results = search_engine.search(query, limit);
 
-        let matched_entries = results
-            .into_iter()
-            .filter_map(|result| entries.get(result.document.id))
-            .collect::<Vec<_>>();
-        let tools = serialize_tool_search_output_tools(&matched_entries).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to encode tool_search output: {err}"))
+        let tools = collect_tool_search_output_tools(
+            results
+                .into_iter()
+                .filter_map(|result| entries.get(result.document.id))
+                .map(|(_name, tool)| ToolSearchResultSource {
+                    tool_namespace: tool.tool_namespace.as_str(),
+                    tool_name: tool.tool_name.as_str(),
+                    tool: &tool.tool,
+                    connector_name: tool.connector_name.as_deref(),
+                    connector_description: tool.connector_description.as_deref(),
+                }),
+        )
+        .map_err(|err| {
+            FunctionCallError::Fatal(format!(
+                "failed to encode {TOOL_SEARCH_TOOL_NAME} output: {err}"
+            ))
         })?;
 
         Ok(ToolSearchOutput { tools })
     }
-}
-
-fn serialize_tool_search_output_tools(
-    matched_entries: &[&(String, ToolInfo)],
-) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
-    let grouped: BTreeMap<String, Vec<ToolInfo>> =
-        matched_entries
-            .iter()
-            .fold(BTreeMap::new(), |mut acc, (_name, tool)| {
-                acc.entry(tool.tool_namespace.clone())
-                    .or_default()
-                    .push(tool.clone());
-
-                acc
-            });
-
-    let mut results = Vec::with_capacity(grouped.len());
-    for (namespace, tools) in grouped {
-        let Some(first_tool) = tools.first() else {
-            continue;
-        };
-
-        let description = first_tool.connector_description.clone().or_else(|| {
-            first_tool
-                .connector_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|connector_name| !connector_name.is_empty())
-                .map(|connector_name| format!("Tools for working with {connector_name}."))
-        });
-
-        let tools = tools
-            .iter()
-            .map(|tool| {
-                mcp_tool_to_deferred_responses_api_tool(tool.tool_name.clone(), &tool.tool)
-                    .map(ResponsesApiNamespaceTool::Function)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        results.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
-            name: namespace,
-            description: description.unwrap_or_default(),
-            tools,
-        }));
-    }
-
-    Ok(results)
 }
 
 fn build_search_text(name: &str, info: &ToolInfo) -> String {
@@ -183,7 +140,3 @@ fn build_search_text(name: &str, info: &ToolInfo) -> String {
 
     parts.join(" ")
 }
-
-#[cfg(test)]
-#[path = "tool_search_tests.rs"]
-mod tests;
