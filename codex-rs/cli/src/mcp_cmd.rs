@@ -194,7 +194,7 @@ impl McpCli {
 async fn perform_oauth_login_retry_without_scopes(
     name: &str,
     url: &str,
-    store_mode: codex_rmcp_client::OAuthCredentialsStoreMode,
+    store_mode: codex_config::types::OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     resolved_scopes: &ResolvedMcpOAuthScopes,

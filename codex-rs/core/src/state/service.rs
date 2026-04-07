@@ -57,5 +57,5 @@ pub(crate) struct SessionServices {
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
-    pub(crate) environment: Arc<Environment>,
+    pub(crate) environment: Option<Arc<Environment>>,
 }

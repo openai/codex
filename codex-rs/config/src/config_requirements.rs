@@ -1,3 +1,4 @@
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -78,6 +79,7 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
+    pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
@@ -92,6 +94,10 @@ impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
             approval_policy: ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                /*source*/ None,
+            ),
+            approvals_reviewer: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
                 /*source*/ None,
             ),
@@ -487,6 +493,7 @@ pub(crate) fn merge_enablement_settings_descending(
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     #[serde(rename = "features", alias = "feature_requirements")]
@@ -525,6 +532,7 @@ impl<T> std::ops::Deref for Sourced<T> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
+    pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
@@ -556,6 +564,7 @@ impl ConfigRequirementsWithSources {
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
             allowed_approval_policies: _,
+            allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
             allowed_web_search_modes: _,
             feature_requirements: _,
@@ -581,6 +590,7 @@ impl ConfigRequirementsWithSources {
             source,
             {
                 allowed_approval_policies,
+                allowed_approvals_reviewers,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
                 feature_requirements,
@@ -604,6 +614,7 @@ impl ConfigRequirementsWithSources {
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
+            allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
@@ -616,6 +627,7 @@ impl ConfigRequirementsWithSources {
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
+            allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
@@ -666,6 +678,7 @@ pub enum ResidencyRequirement {
 impl ConfigRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_approval_policies.is_none()
+            && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_web_search_modes.is_none()
             && self
@@ -693,6 +706,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
+            allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
@@ -722,6 +736,36 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                             field_name: "approval_policy",
                             candidate: format!("{candidate:?}"),
                             allowed: format!("{policies:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        })
+                    }
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                /*source*/ None,
+            ),
+        };
+
+        let approvals_reviewer = match allowed_approvals_reviewers {
+            Some(Sourced {
+                value: reviewers,
+                source: requirement_source,
+            }) => {
+                let Some(initial_value) = reviewers.first().copied() else {
+                    return Err(ConstraintError::empty_field("allowed_approvals_reviewers"));
+                };
+
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(initial_value, move |candidate| {
+                    if reviewers.contains(candidate) {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "approvals_reviewer",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{reviewers:?}"),
                             requirement_source: requirement_source_for_error.clone(),
                         })
                     }
@@ -878,6 +922,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         });
         Ok(ConfigRequirements {
             approval_policy,
+            approvals_reviewer,
             sandbox_policy,
             web_search_mode,
             feature_requirements,
@@ -914,6 +959,7 @@ mod tests {
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_approval_policies,
+            allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
@@ -926,6 +972,8 @@ mod tests {
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_approvals_reviewers: allowed_approvals_reviewers
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -950,6 +998,8 @@ mod tests {
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
 
         let allowed_approval_policies = vec![AskForApproval::UnlessTrusted, AskForApproval::Never];
+        let allowed_approvals_reviewers =
+            vec![ApprovalsReviewer::GuardianSubagent, ApprovalsReviewer::User];
         let allowed_sandbox_modes = vec![
             SandboxModeRequirement::WorkspaceWrite,
             SandboxModeRequirement::DangerFullAccess,
@@ -970,6 +1020,7 @@ mod tests {
         // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
+            allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
@@ -989,6 +1040,10 @@ mod tests {
                 allowed_approval_policies: Some(Sourced::new(
                     allowed_approval_policies,
                     source.clone()
+                )),
+                allowed_approvals_reviewers: Some(Sourced::new(
+                    allowed_approvals_reviewers,
+                    source.clone(),
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
@@ -1034,6 +1089,7 @@ mod tests {
                     vec![AskForApproval::OnRequest],
                     source_location,
                 )),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
@@ -1077,6 +1133,7 @@ mod tests {
                     vec![AskForApproval::Never],
                     existing_source,
                 )),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
@@ -1154,6 +1211,18 @@ guardian_developer_instructions = """
         )?;
 
         assert!(requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_approvals_reviewers_is_not_empty() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+allowed_approvals_reviewers = ["user"]
+"#,
+        )?;
+
+        assert!(!requirements.is_empty());
         Ok(())
     }
 
@@ -1330,6 +1399,7 @@ guardian_developer_instructions = """
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
+                allowed_approvals_reviewers = ["guardian_subagent"]
                 allowed_sandbox_modes = ["read-only"]
             "#,
         )?;
@@ -1360,6 +1430,17 @@ guardian_developer_instructions = """
                 field_name: "sandbox_mode",
                 candidate: "DangerFullAccess".into(),
                 allowed: "[ReadOnly]".into(),
+                requirement_source: source_location.clone(),
+            })
+        );
+        assert_eq!(
+            requirements
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::User),
+            Err(ConstraintError::InvalidValue {
+                field_name: "approvals_reviewer",
+                candidate: "User".into(),
+                allowed: "[GuardianSubagent]".into(),
                 requirement_source: source_location,
             })
         );
@@ -1399,6 +1480,7 @@ guardian_developer_instructions = """
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
+                allowed_approvals_reviewers = ["guardian_subagent"]
                 allowed_sandbox_modes = ["read-only"]
                 allowed_web_search_modes = ["cached"]
                 enforce_residency = "us"
@@ -1414,6 +1496,10 @@ guardian_developer_instructions = """
 
         assert_eq!(
             requirements.approval_policy.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(
+            requirements.approvals_reviewer.source,
             Some(source_location.clone())
         );
         assert_eq!(
@@ -1486,6 +1572,54 @@ guardian_developer_instructions = """
                 .sandbox_policy
                 .can_set(&SandboxPolicy::new_read_only_policy())
                 .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_allowed_approvals_reviewers() -> Result<()> {
+        let toml_str = r#"
+            allowed_approvals_reviewers = ["guardian_subagent", "user"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.approvals_reviewer.value(),
+            ApprovalsReviewer::GuardianSubagent,
+            "currently, there is no way to specify the default value for approvals reviewer in the toml, so it picks the first allowed value"
+        );
+        assert!(
+            requirements
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::GuardianSubagent)
+                .is_ok()
+        );
+        assert!(
+            requirements
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::User)
+                .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_allowed_approvals_reviewers_is_rejected() -> Result<()> {
+        let toml_str = r#"
+            allowed_approvals_reviewers = []
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let err = ConfigRequirements::try_from(with_unknown_source(config))
+            .expect_err("empty approvals reviewer allow-list should be rejected");
+
+        assert_eq!(
+            err,
+            ConstraintError::EmptyField {
+                field_name: "allowed_approvals_reviewers".to_string(),
+            }
         );
 
         Ok(())

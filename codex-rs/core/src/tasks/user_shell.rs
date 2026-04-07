@@ -111,6 +111,7 @@ pub(crate) async fn execute_user_shell_command(
         // freshly reinjected context before the summary/replacement history is applied.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_context.sub_id.clone(),
+            started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
             model_context_window: turn_context.model_context_window(),
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
