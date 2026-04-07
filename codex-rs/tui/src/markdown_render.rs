@@ -16,8 +16,8 @@
 //! accumulates header and body rows into a `TableState`, then hands it to
 //! `render_table_lines` which runs this pipeline:
 //!
-//! 1. **Filter spillover rows** -- heuristic extraction of single-cell rows
-//!    that are artifacts of pulldown-cmark's lenient parsing.
+//! 1. **Filter spillover rows** -- heuristic extraction of rows that are
+//!    artifacts of pulldown-cmark's lenient parsing.
 //! 2. **Normalize column counts** -- pad or truncate so every row matches the
 //!    alignment count.
 //! 3. **Compute column widths** -- allocate widths with Narrative/Structured
@@ -59,6 +59,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use regex_lite::Regex;
+use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -174,11 +175,18 @@ impl TableCell {
 /// flushed into `current_row` on `TagEnd::TableCell`, then into `header`/`rows` on row/head end
 /// events.
 #[derive(Debug)]
+struct TableBodyRow {
+    cells: Vec<TableCell>,
+    has_table_pipe_syntax: bool,
+}
+
+#[derive(Debug)]
 struct TableState {
     alignments: Vec<Alignment>,
     header: Option<Vec<TableCell>>,
-    rows: Vec<Vec<TableCell>>,
+    rows: Vec<TableBodyRow>,
     current_row: Option<Vec<TableCell>>,
+    current_row_has_table_pipe_syntax: bool,
     current_cell: Option<TableCell>,
     in_header: bool,
 }
@@ -190,6 +198,7 @@ impl TableState {
             header: None,
             rows: Vec::new(),
             current_row: None,
+            current_row_has_table_pipe_syntax: false,
             current_cell: None,
             in_header: false,
         }
@@ -279,8 +288,8 @@ pub(crate) fn render_markdown_text_with_width_and_cwd(
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width, cwd);
+    let parser = Parser::new_ext(input, options).into_offset_iter();
+    let mut w = Writer::new(input, parser, width, cwd);
     w.run();
     w.text
 }
@@ -323,8 +332,9 @@ static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
 /// allocation; when `None`, lines keep their intrinsic width.
 struct Writer<'a, I>
 where
-    I: Iterator<Item = Event<'a>>,
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
+    input: &'a str,
     iter: I,
     text: Text<'static>,
     styles: MarkdownStyles,
@@ -352,10 +362,11 @@ where
 
 impl<'a, I> Writer<'a, I>
 where
-    I: Iterator<Item = Event<'a>>,
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
-    fn new(iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
+    fn new(input: &'a str, iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
         Self {
+            input,
             iter,
             text: Text::default(),
             styles: MarkdownStyles::default(),
@@ -383,16 +394,16 @@ where
     }
 
     fn run(&mut self) {
-        while let Some(ev) = self.iter.next() {
-            self.handle_event(ev);
+        while let Some((ev, range)) = self.iter.next() {
+            self.handle_event(ev, range);
         }
         self.flush_current_line();
     }
 
-    fn handle_event(&mut self, event: Event<'a>) {
+    fn handle_event(&mut self, event: Event<'a>, range: Range<usize>) {
         self.prepare_for_event(&event);
         match event {
-            Event::Start(tag) => self.start_tag(tag),
+            Event::Start(tag) => self.start_tag(tag, range),
             Event::End(tag) => self.end_tag(tag),
             Event::Text(text) => self.text(text),
             Event::Code(code) => self.code(code),
@@ -430,7 +441,7 @@ where
         self.push_line(Line::default());
     }
 
-    fn start_tag(&mut self, tag: Tag<'a>) {
+    fn start_tag(&mut self, tag: Tag<'a>, range: Range<usize>) {
         match tag {
             Tag::Paragraph => self.start_paragraph(),
             Tag::Heading { level, .. } => self.start_heading(level),
@@ -454,7 +465,7 @@ where
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
             Tag::Table(alignments) => self.start_table(alignments),
             Tag::TableHead => self.start_table_head(),
-            Tag::TableRow => self.start_table_row(),
+            Tag::TableRow => self.start_table_row(range),
             Tag::TableCell => self.start_table_cell(),
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
@@ -859,10 +870,20 @@ where
         table_state.in_header = false;
     }
 
-    fn start_table_row(&mut self) {
+    fn start_table_row(&mut self, source_range: Range<usize>) {
+        let has_table_pipe_syntax = self.has_table_row_boundary_pipe(source_range);
         if let Some(table_state) = self.table_state.as_mut() {
             table_state.current_row = Some(Vec::new());
+            table_state.current_row_has_table_pipe_syntax = has_table_pipe_syntax;
         }
+    }
+
+    fn has_table_row_boundary_pipe(&self, source_range: Range<usize>) -> bool {
+        let Some(source) = self.input.get(source_range) else {
+            return false;
+        };
+        let source = source.trim();
+        source.starts_with('|') || source.ends_with('|')
     }
 
     fn end_table_row(&mut self) {
@@ -884,8 +905,12 @@ where
         if table_state.in_header {
             table_state.header = Some(row);
         } else {
-            table_state.rows.push(row);
+            table_state.rows.push(TableBodyRow {
+                cells: row,
+                has_table_pipe_syntax: table_state.current_row_has_table_pipe_syntax,
+            });
         }
+        table_state.current_row_has_table_pipe_syntax = false;
     }
 
     fn start_table_cell(&mut self) {
@@ -969,11 +994,11 @@ where
             // into a one-cell table row. For multi-column tables, treat those as spillover text
             // rendered after the table.
             if column_count > 1 && Self::is_spillover_row(row, next_row) {
-                if let Some(cell) = row.first().cloned() {
+                if let Some(cell) = row.cells.first().cloned() {
                     spillover_rows.push(cell);
                 }
             } else {
-                rows.push(row.clone());
+                rows.push(row.cells.clone());
             }
         }
 
@@ -1392,14 +1417,15 @@ where
     /// grid so they don't appear as malformed table content.
     ///
     /// Heuristic: a row is spillover if its only non-empty cell is the first one
-    /// AND (the row has only one cell, or the content looks like HTML, or it's a
-    /// label line followed by HTML content, or a trailing HTML-intro label line).
-    fn is_spillover_row(row: &[TableCell], next_row: Option<&Vec<TableCell>>) -> bool {
-        let Some(first_text) = Self::first_non_empty_only_text(row) else {
+    /// AND (a single-cell row lacked table pipe syntax, the content looks like
+    /// HTML, it's a label line followed by HTML content, or a trailing
+    /// HTML-intro label line).
+    fn is_spillover_row(row: &TableBodyRow, next_row: Option<&TableBodyRow>) -> bool {
+        let Some(first_text) = Self::first_non_empty_only_text(&row.cells) else {
             return false;
         };
 
-        if row.len() == 1 {
+        if row.cells.len() == 1 && !row.has_table_pipe_syntax {
             return true;
         }
 
@@ -1411,7 +1437,7 @@ where
         // "HTML block:" followed by "<div ...>".
         if first_text.trim_end().ends_with(':') {
             if next_row
-                .and_then(|row| Self::first_non_empty_only_text(row))
+                .and_then(|row| Self::first_non_empty_only_text(&row.cells))
                 .is_some_and(|text| Self::looks_like_html_content(&text))
             {
                 return true;
@@ -2113,7 +2139,7 @@ mod tests {
         cell.hard_break();
         cell.push_span("second line".into());
 
-        let writer = W::new(std::iter::empty(), Some(80), None);
+        let writer = W::new("", std::iter::empty(), Some(80), None);
         let wrapped = writer.wrap_cell(&cell, 40);
         let rendered = wrapped
             .iter()
@@ -2134,13 +2160,20 @@ mod tests {
     // ---------------------------------------------------------------
     // Type alias for calling private associated functions on Writer.
     // ---------------------------------------------------------------
-    type W<'a> = Writer<'a, std::iter::Empty<Event<'a>>>;
+    type W<'a> = Writer<'a, std::iter::Empty<(Event<'a>, Range<usize>)>>;
 
     /// Build a single-line `TableCell` from plain text.
     fn make_cell(text: &str) -> TableCell {
         let mut cell = TableCell::default();
         cell.push_span(Span::raw(text.to_string()));
         cell
+    }
+
+    fn make_body_row(cells: Vec<TableCell>, has_table_pipe_syntax: bool) -> TableBodyRow {
+        TableBodyRow {
+            cells,
+            has_table_pipe_syntax,
+        }
     }
 
     // ===== Column-metrics unit tests =====
@@ -2270,48 +2303,72 @@ mod tests {
 
     #[test]
     fn spillover_detects_single_cell_row() {
-        let row = vec![make_cell("some trailing text")];
+        let row = make_body_row(vec![make_cell("some trailing text")], false);
         assert!(W::is_spillover_row(&row, None));
+    }
+
+    #[test]
+    fn spillover_keeps_single_cell_row_with_table_pipe_syntax() {
+        let row = make_body_row(vec![make_cell("some sparse value")], true);
+        assert!(!W::is_spillover_row(&row, None));
     }
 
     #[test]
     fn spillover_detects_html_content() {
         // 3-cell row where only cell 0 has HTML content
-        let row = vec![
-            make_cell("<div>content</div>"),
-            make_cell(""),
-            make_cell(""),
-        ];
+        let row = make_body_row(
+            vec![
+                make_cell("<div>content</div>"),
+                make_cell(""),
+                make_cell(""),
+            ],
+            false,
+        );
         assert!(W::is_spillover_row(&row, None));
     }
 
     #[test]
     fn spillover_detects_label_followed_by_html() {
         // cell 0 = "HTML block:" and next_row cell 0 = "<div>x</div>"
-        let row = vec![make_cell("HTML block:"), make_cell(""), make_cell("")];
-        let next = vec![make_cell("<div>x</div>"), make_cell(""), make_cell("")];
+        let row = make_body_row(
+            vec![make_cell("HTML block:"), make_cell(""), make_cell("")],
+            false,
+        );
+        let next = make_body_row(
+            vec![make_cell("<div>x</div>"), make_cell(""), make_cell("")],
+            false,
+        );
         assert!(W::is_spillover_row(&row, Some(&next)));
     }
 
     #[test]
     fn spillover_detects_trailing_html_label() {
         // "HTML block:" with no next_row → trailing HTML label spillover
-        let row = vec![make_cell("HTML block:"), make_cell(""), make_cell("")];
+        let row = make_body_row(
+            vec![make_cell("HTML block:"), make_cell(""), make_cell("")],
+            false,
+        );
         assert!(W::is_spillover_row(&row, None));
     }
 
     #[test]
     fn spillover_keeps_normal_multi_cell_row() {
         // 3 cells all non-empty → not spillover
-        let row = vec![make_cell("one"), make_cell("two"), make_cell("three")];
+        let row = make_body_row(
+            vec![make_cell("one"), make_cell("two"), make_cell("three")],
+            true,
+        );
         assert!(!W::is_spillover_row(&row, None));
     }
 
     #[test]
     fn spillover_keeps_label_when_next_is_not_html() {
         // cell 0 = "Status:" and next_row cell 0 = "ok" → not spillover (not HTML)
-        let row = vec![make_cell("Status:"), make_cell(""), make_cell("")];
-        let next = vec![make_cell("ok"), make_cell(""), make_cell("")];
+        let row = make_body_row(
+            vec![make_cell("Status:"), make_cell(""), make_cell("")],
+            true,
+        );
+        let next = make_body_row(vec![make_cell("ok"), make_cell(""), make_cell("")], true);
         assert!(!W::is_spillover_row(&row, Some(&next)));
     }
 }

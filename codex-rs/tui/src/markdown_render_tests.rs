@@ -1609,6 +1609,50 @@ fn table_keeps_sparse_rows_with_empty_trailing_cells() {
 }
 
 #[test]
+fn table_keeps_single_cell_pipe_row_inside_grid() {
+    let md = "| A | B |\n|---|---|\n| value |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ value") && line.ends_with('│')),
+        "expected single-cell pipe row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "value"),
+        "did not expect single-cell pipe row to spill outside the table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_single_cell_row_with_leading_pipe_inside_grid() {
+    let md = "| A | B |\n|---|---|\n| value\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ value") && line.ends_with('│')),
+        "expected leading-pipe sparse row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "value"),
+        "did not expect leading-pipe sparse row to spill outside the table: {lines:?}"
+    );
+}
+
+#[test]
 fn table_normalizes_uneven_row_column_counts() {
     let md = "| A | B | C |\n|---|---|---|\n| 1 | 2 |\n| 3 | 4 | 5 | 6 |\n";
     let text = render_markdown_text(md);
