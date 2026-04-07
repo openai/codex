@@ -105,7 +105,7 @@ mod tests {
     async fn build_prompt_input_includes_context_and_user_message() {
         let codex_home = tempfile::tempdir().expect("create codex home");
         let cwd = tempfile::tempdir().expect("create cwd");
-        let mut config = test_config();
+        let mut config = test_config().await;
         config.codex_home = codex_home.path().to_path_buf();
         config.cwd = AbsolutePathBuf::try_from(cwd.path().to_path_buf()).expect("absolute cwd");
         config.user_instructions = Some("Project-specific test instructions".to_string());
