@@ -66,7 +66,6 @@ impl ToolHandler for Handler {
             .fork_context
             .unwrap_or_else(|| default_fork_context_for_role(&turn.config, role_name));
         if !fork_context {
-
             apply_requested_spawn_agent_model_overrides(
                 &session,
                 turn.as_ref(),
