@@ -1075,7 +1075,10 @@ mod tests {
                     allowed_web_search_modes,
                     enforce_source.clone(),
                 )),
-                allow_managed_hooks_only: Some(Sourced::new(true, enforce_source.clone())),
+                allow_managed_hooks_only: Some(Sourced::new(
+                    /*value*/ true,
+                    enforce_source.clone(),
+                )),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
                     enforce_source.clone(),
