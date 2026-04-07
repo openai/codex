@@ -240,9 +240,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         }
     };
 
-    let resolved_cwd = cwd.clone();
-    let config_cwd = match resolved_cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+    let resolved_cwd = cwd
+        .as_deref()
+        .map(|path| AbsolutePathBuf::from_absolute_path(path.canonicalize()?))
+        .transpose()?;
+    let config_cwd = match resolved_cwd.as_ref() {
+        Some(path) => path.clone(),
         None => AbsolutePathBuf::current_dir()?,
     };
 

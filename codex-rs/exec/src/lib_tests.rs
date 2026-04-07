@@ -1,6 +1,7 @@
 use super::*;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry::trace::TracerProvider as _;
@@ -210,7 +211,9 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
     let cwd = tempdir().expect("create temp cwd");
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .fallback_cwd(Some(
+            AbsolutePathBuf::try_from(cwd.path()).expect("temp cwd should be absolute"),
+        ))
         .build()
         .await
         .expect("build default config");
@@ -348,7 +351,9 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
             approvals_reviewer: Some(ApprovalsReviewer::User),
             ..Default::default()
         })
-        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .fallback_cwd(Some(
+            AbsolutePathBuf::try_from(cwd.path()).expect("temp cwd should be absolute"),
+        ))
         .build()
         .await
         .expect("build config with manual-only review policy");
@@ -371,7 +376,9 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             ..Default::default()
         })
-        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .fallback_cwd(Some(
+            AbsolutePathBuf::try_from(cwd.path()).expect("temp cwd should be absolute"),
+        ))
         .build()
         .await
         .expect("build config with guardian review policy");

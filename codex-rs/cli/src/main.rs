@@ -28,6 +28,7 @@ use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
@@ -1143,12 +1144,17 @@ async fn run_debug_prompt_input_command(
     } else {
         interactive.sandbox_mode.map(Into::into)
     };
+    let cwd = interactive
+        .cwd
+        .as_deref()
+        .map(AbsolutePathBuf::relative_to_current_dir)
+        .transpose()?;
     let overrides = ConfigOverrides {
         model: interactive.model,
         config_profile: interactive.config_profile,
         approval_policy,
         sandbox_mode,
-        cwd: interactive.cwd,
+        cwd,
         codex_self_exe: arg0_paths.codex_self_exe,
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe,
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe,

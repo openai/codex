@@ -1101,8 +1101,9 @@ impl App {
 
     async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
-        overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
+        let cwd = AbsolutePathBuf::relative_to_current_dir(&cwd)?;
+        overrides.cwd = Some(cwd);
         ConfigBuilder::default()
             .codex_home(self.config.codex_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
