@@ -106,20 +106,41 @@ impl AbsolutePathBuf {
 ///
 /// Top-level system aliases such as macOS `/var -> /private/var` still remain
 /// canonicalized so existing runtime expectations around those paths stay
-/// stable.
+/// stable. If the full path cannot be canonicalized, this returns the logical
+/// absolute path; use [`canonicalize_existing_preserving_symlinks`] for paths
+/// that must exist.
 pub fn canonicalize_preserving_symlinks(path: &Path) -> std::io::Result<PathBuf> {
     let logical = AbsolutePathBuf::from_absolute_path(path)?.into_path_buf();
-    let preserve_logical_path = logical.ancestors().any(|ancestor| {
-        let Ok(metadata) = std::fs::symlink_metadata(ancestor) else {
-            return false;
-        };
-        metadata.file_type().is_symlink() && ancestor.parent().and_then(Path::parent).is_some()
-    });
+    let preserve_logical_path = should_preserve_logical_path(&logical);
     match dunce::canonicalize(path) {
         Ok(canonical) if preserve_logical_path && canonical != logical => Ok(logical),
         Ok(canonical) => Ok(canonical),
         Err(_) => Ok(logical),
     }
+}
+
+/// Canonicalize an existing path while preserving the logical absolute path
+/// whenever canonicalization would rewrite it through a nested symlink.
+///
+/// Unlike [`canonicalize_preserving_symlinks`], canonicalization failures are
+/// propagated so callers can reject invalid working directories early.
+pub fn canonicalize_existing_preserving_symlinks(path: &Path) -> std::io::Result<PathBuf> {
+    let logical = AbsolutePathBuf::from_absolute_path(path)?.into_path_buf();
+    let canonical = dunce::canonicalize(path)?;
+    if should_preserve_logical_path(&logical) && canonical != logical {
+        Ok(logical)
+    } else {
+        Ok(canonical)
+    }
+}
+
+fn should_preserve_logical_path(logical: &Path) -> bool {
+    logical.ancestors().any(|ancestor| {
+        let Ok(metadata) = std::fs::symlink_metadata(ancestor) else {
+            return false;
+        };
+        metadata.file_type().is_symlink() && ancestor.parent().and_then(Path::parent).is_some()
+    })
 }
 
 impl AsRef<Path> for AbsolutePathBuf {
@@ -343,6 +364,32 @@ mod tests {
             canonicalize_preserving_symlinks(&missing).expect("canonicalize preserving symlinks");
 
         assert_eq!(canonicalized, missing);
+    }
+
+    #[test]
+    fn canonicalize_existing_preserving_symlinks_errors_for_missing_path() {
+        let temp_dir = tempdir().expect("temp dir");
+        let missing = temp_dir.path().join("missing");
+
+        let err = canonicalize_existing_preserving_symlinks(&missing)
+            .expect_err("missing path should fail canonicalization");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonicalize_existing_preserving_symlinks_keeps_logical_symlink_path() {
+        let temp_dir = tempdir().expect("temp dir");
+        let real = temp_dir.path().join("real");
+        let link = temp_dir.path().join("link");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        std::os::unix::fs::symlink(&real, &link).expect("create symlink");
+
+        let canonicalized =
+            canonicalize_existing_preserving_symlinks(&link).expect("canonicalize symlink");
+
+        assert_eq!(canonicalized, link);
     }
 
     #[cfg(target_os = "windows")]
