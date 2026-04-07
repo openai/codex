@@ -66,7 +66,7 @@ async fn apply_role_to_config_inner(
     let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
     if role_layer_toml
         .as_table()
-        .is_some_and(|table| table.is_empty())
+        .is_some_and(toml::map::Map::is_empty)
     {
         return Ok(());
     }
