@@ -168,12 +168,11 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri(), "never", &BTreeMap::new())?;
     let config_path = codex_home.path().join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
-    let provider_table = "\n[model_providers.mock_provider]";
-    let provider_table_index = config_toml
-        .find(provider_table)
-        .expect("test config must include mock provider table");
+    let first_table_index = config_toml
+        .find("\n[")
+        .expect("test config must include a table header");
     config_toml.insert_str(
-        provider_table_index,
+        first_table_index,
         "\ndeveloper_instructions = \"Config developer instructions sentinel\"\n",
     );
     std::fs::write(config_path, config_toml)?;
