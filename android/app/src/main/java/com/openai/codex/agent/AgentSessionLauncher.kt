@@ -259,20 +259,12 @@ object AgentSessionLauncher {
             }
 
             else -> {
-                val targetPackage = checkNotNull(selectedSession.targetPackage) {
-                    "Select a target child session to continue"
-                }
-                sessionController.continueDirectSessionInPlace(
+                sessionController.continueDirectSessionWithPlanner(
                     parentSessionId = sourceTopLevelSession.sessionId,
-                    target = AgentDelegationTarget(
-                        packageName = targetPackage,
-                        objective = SessionContinuationPromptBuilder.build(
-                            sourceTopLevelSession = sourceTopLevelSession,
-                            selectedSession = selectedSession,
-                            prompt = prompt,
-                        ),
-                        finalPresentationPolicy = selectedSession.requiredFinalPresentationPolicy
-                            ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
+                    objective = SessionContinuationPromptBuilder.build(
+                        sourceTopLevelSession = sourceTopLevelSession,
+                        selectedSession = selectedSession,
+                        prompt = prompt,
                     ),
                     executionSettings = executionSettings,
                 )

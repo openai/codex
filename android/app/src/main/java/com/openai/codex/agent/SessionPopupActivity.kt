@@ -406,21 +406,15 @@ class SessionPopupActivity : Activity() {
             )
             return
         }
-        val childSession = if (selectedSession.parentSessionId == topLevelSession.sessionId) {
-            selectedSession
-        } else {
-            snapshot.sessions.lastOrNull { candidate ->
-                candidate.parentSessionId == topLevelSession.sessionId
-            } ?: selectedSession
+        val continuationSession = when {
+            session.sessionId == topLevelSession.sessionId -> topLevelSession
+            selectedSession.parentSessionId == topLevelSession.sessionId -> selectedSession
+            else -> topLevelSession
         }
         AgentSessionLauncher.continueSessionInPlace(
             sourceTopLevelSession = topLevelSession,
-            selectedSession = childSession,
-            prompt = SessionContinuationPromptBuilder.build(
-                sourceTopLevelSession = topLevelSession,
-                selectedSession = childSession,
-                prompt = prompt,
-            ),
+            selectedSession = continuationSession,
+            prompt = prompt,
             sessionController = sessionController,
         )
     }

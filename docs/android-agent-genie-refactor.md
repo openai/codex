@@ -112,7 +112,9 @@ The current repo now contains these implementation slices:
     target app directly
   - pressing Send on a HOME result starts a fresh app-scoped continuation session
     with previous-result context, then consumes the completed HOME presentation
-  - pressing Send on an AGENT result continues the direct parent session in place
+  - pressing Send on a completed AGENT result resumes the same direct parent
+    planner session with previous-result context, preserving the parent HOME
+    icon identity instead of sending the prompt directly to a prior child Genie
 - Direct `ANCHOR_AGENT` parent sessions can now surface on HOME through the
   framework-derived parent-session icon surface:
   - Codex exposes two launcher entrypoints: `Codex Manager` for the

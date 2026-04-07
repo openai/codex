@@ -153,7 +153,13 @@ class CodexAgentService : AgentService() {
         if (!isDirectParentSession(parentSession)) {
             return
         }
-        val childSessions = sessions.filter { it.parentSessionId == parentSessionId }
+        val childSessions = sessions.filter { childSession ->
+            childSession.parentSessionId == parentSessionId &&
+                (
+                    parentSession.continuationGeneration == AgentSessionInfo.CONTINUATION_GENERATION_NONE ||
+                        childSession.continuationGeneration == parentSession.continuationGeneration
+                    )
+        }
         if (childSessions.isEmpty()) {
             return
         }

@@ -161,8 +161,10 @@ stub SDK docs and the local refactor doc:
   - pressing Send in the final result popup for a HOME session should launch a
     fresh HOME continuation with previous-result context, then consume the old
     result presentation
-  - pressing Send in the final result popup for an AGENT session should continue
-    the direct parent session in place
+  - pressing Send in the final result popup for a completed AGENT session should
+    resume the same direct parent session with previous-result context, keeping
+    the same parent HOME icon identity; the prompt must not be routed directly
+    to one of the child Genies the planner previously created
   - Codex Agent is an AGENT-role app, not a HOME-role surface, so its
     user-driven cancellation flows should still call `cancelSession(sessionId)`;
     `cancelHomeSession(sessionId)` is for Launcher/HOME callers

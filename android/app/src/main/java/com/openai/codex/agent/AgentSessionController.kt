@@ -14,6 +14,7 @@ import com.openai.codex.bridge.FrameworkSessionTransportCompat
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.File
 import java.util.concurrent.Executor
+import kotlin.concurrent.thread
 
 class AgentSessionController(context: Context) {
     companion object {
@@ -98,6 +99,7 @@ class AgentSessionController(context: Context) {
                 targetRuntime = targetRuntime.value,
                 targetRuntimeLabel = targetRuntime.label,
                 targetDetached = session.isTargetDetached,
+                continuationGeneration = session.continuationGeneration,
                 requiredFinalPresentationPolicy = presentationPolicyStore.getPolicy(session.sessionId),
                 latestQuestion = null,
                 latestResult = null,
@@ -229,6 +231,35 @@ class AgentSessionController(context: Context) {
             "Planning Codex direct session for objective: $objective",
         )
         manager.updateSessionState(sessionId, AgentSessionInfo.STATE_RUNNING)
+        return PendingDirectSessionStart(
+            parentSessionId = sessionId,
+            geniePackage = geniePackage,
+        )
+    }
+
+    private fun prepareDirectSessionForContinuation(
+        sessionId: String,
+        objective: String,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): PendingDirectSessionStart {
+        val manager = requireAgentManager()
+        val session = manager.getSessions(currentUserId()).firstOrNull { it.sessionId == sessionId }
+            ?: throw IllegalArgumentException("Unknown direct session: $sessionId")
+        check(isDirectParentSession(session)) {
+            "Session $sessionId is not an AGENT parent session"
+        }
+        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
+            ?: throw IllegalStateException("No GENIE role holder configured")
+        executionSettingsStore.saveSettings(sessionId, executionSettings)
+        if (isTerminalState(session.state)) {
+            manager.resumeDirectSession(sessionId)
+        } else {
+            manager.updateSessionState(sessionId, AgentSessionInfo.STATE_RUNNING)
+        }
+        manager.publishTrace(
+            sessionId,
+            "Planning Codex direct follow-up for objective: $objective",
+        )
         return PendingDirectSessionStart(
             parentSessionId = sessionId,
             geniePackage = geniePackage,
@@ -491,47 +522,66 @@ class AgentSessionController(context: Context) {
         }
     }
 
-    fun continueDirectSessionInPlace(
+    fun continueDirectSessionWithPlanner(
         parentSessionId: String,
-        target: AgentDelegationTarget,
+        objective: String,
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
     ): SessionStartResult {
-        val manager = requireAgentManager()
-        val childLaunchMode = childSessionLaunchMode(parentSessionId)
-        check(canStartSessionForTarget(target.packageName)) {
-            "Target package ${target.packageName} is not eligible for session continuation"
-        }
-        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
-            ?: throw IllegalStateException("No GENIE role holder configured")
-        executionSettingsStore.saveSettings(parentSessionId, executionSettings)
-        Log.i(TAG, "Continuing AGENT session $parentSessionId with target ${target.packageName}")
-        manager.publishTrace(
-            parentSessionId,
-            "Continuing Codex direct session for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
+        val pendingSession = prepareDirectSessionForContinuation(
+            sessionId = parentSessionId,
+            objective = objective,
+            executionSettings = executionSettings,
         )
-        val childSession = manager.createChildSession(parentSessionId, target.packageName)
-        AgentSessionBridgeServer.ensureStarted(appContext, manager, childSession.sessionId)
-        presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
-        executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
-        provisionSessionNetworkConfig(childSession.sessionId)
-        if (childLaunchMode == ChildSessionLaunchMode.IDLE_ATTACH) {
-            DesktopInspectionRegistry.holdChildrenForAttachedPlanner(parentSessionId, listOf(childSession.sessionId))
-            manager.publishTrace(
-                childSession.sessionId,
-                "Planner launched this Genie in idle desktop-attach mode. The delegated objective is staged, but the first turn will wait until the attached client sends a prompt or the planner detaches.",
-            )
+        thread(name = "CodexAgentPlannerContinuation-${pendingSession.parentSessionId}") {
+            runCatching {
+                AgentTaskPlanner.planSession(
+                    context = appContext,
+                    userObjective = objective,
+                    executionSettings = executionSettings,
+                    sessionController = this,
+                    requestUserInputHandler = { questions ->
+                        AgentPlannerQuestionRegistry.requestUserInput(
+                            context = appContext,
+                            sessionController = this,
+                            sessionId = pendingSession.parentSessionId,
+                            questions = questions,
+                        )
+                    },
+                    frameworkSessionId = pendingSession.parentSessionId,
+                )
+            }.onFailure { err ->
+                if (!isTerminalSession(pendingSession.parentSessionId)) {
+                    failDirectSession(
+                        pendingSession.parentSessionId,
+                        "Planning follow-up failed: ${err.message ?: err::class.java.simpleName}",
+                    )
+                }
+            }.onSuccess { plannedRequest ->
+                if (!isTerminalSession(pendingSession.parentSessionId)) {
+                    runCatching {
+                        startDirectSessionChildren(
+                            parentSessionId = pendingSession.parentSessionId,
+                            geniePackage = pendingSession.geniePackage,
+                            plan = plannedRequest.plan,
+                            allowDetachedMode = plannedRequest.allowDetachedMode,
+                            executionSettings = executionSettings,
+                        )
+                    }.onFailure { err ->
+                        if (!isTerminalSession(pendingSession.parentSessionId)) {
+                            failDirectSession(
+                                pendingSession.parentSessionId,
+                                "Failed to start planned follow-up child session: ${err.message ?: err::class.java.simpleName}",
+                            )
+                        }
+                    }
+                }
+            }
         }
-        manager.startGenieSession(
-            childSession.sessionId,
-            geniePackage,
-            childSessionStartupPrompt(target, childLaunchMode),
-            /* allowDetachedMode = */ true,
-        )
         return SessionStartResult(
-            parentSessionId = parentSessionId,
-            childSessionIds = listOf(childSession.sessionId),
-            plannedTargets = listOf(target.packageName),
-            geniePackage = geniePackage,
+            parentSessionId = pendingSession.parentSessionId,
+            childSessionIds = emptyList(),
+            plannedTargets = emptyList(),
+            geniePackage = pendingSession.geniePackage,
             anchor = AgentSessionInfo.ANCHOR_AGENT,
         )
     }
@@ -870,7 +920,10 @@ class AgentSessionController(context: Context) {
             if (!session.latestQuestion.isNullOrBlank()) {
                 return@map session
             }
-            val childSessions = childrenByParent[session.sessionId].orEmpty()
+            val childSessions = childrenByParent[session.sessionId].orEmpty().filter { childSession ->
+                session.continuationGeneration == AgentSessionInfo.CONTINUATION_GENERATION_NONE ||
+                    childSession.continuationGeneration == session.continuationGeneration
+            }
             if (childSessions.isEmpty()) {
                 return@map session
             }
@@ -1085,6 +1138,7 @@ data class AgentSessionDetails(
     val targetRuntime: Int?,
     val targetRuntimeLabel: String,
     val targetDetached: Boolean,
+    val continuationGeneration: Int,
     val requiredFinalPresentationPolicy: SessionFinalPresentationPolicy?,
     val latestQuestion: String?,
     val latestResult: String?,
