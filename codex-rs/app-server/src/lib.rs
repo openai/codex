@@ -564,24 +564,25 @@ pub async fn run_main_with_transport(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
 
-    if config.features.enabled(Feature::RemoteControl) {
-        let accept_handle = start_remote_control(
-            config.chatgpt_base_url.clone(),
-            state_db.clone(),
-            auth_manager.clone(),
-            transport_event_tx.clone(),
-            transport_shutdown_token.clone(),
-            app_server_client_name_rx,
-        )
-        .await?;
-        transport_accept_handles.push(accept_handle);
-    }
-    if transport_accept_handles.is_empty() {
+    let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
+    if transport_accept_handles.is_empty() && !remote_control_enabled {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
             "no transport configured; use --listen or enable remote control",
         ));
     }
+
+    let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
+        config.chatgpt_base_url.clone(),
+        state_db.clone(),
+        auth_manager.clone(),
+        transport_event_tx.clone(),
+        transport_shutdown_token.clone(),
+        app_server_client_name_rx,
+        remote_control_enabled,
+    )
+    .await?;
+    transport_accept_handles.push(remote_control_accept_handle);
 
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
@@ -659,6 +660,7 @@ pub async fn run_main_with_transport(
             session_source,
             auth_manager,
             rpc_transport: analytics_rpc_transport(transport),
+            remote_control_handle: Some(remote_control_handle),
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
