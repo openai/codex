@@ -27,6 +27,7 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use core_test_support::context_snapshot;
@@ -126,6 +127,18 @@ fn guardian_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
         .strip_capability_instructions()
         .strip_agents_md_user_context()
+}
+
+fn guardian_repo_cwd() -> AbsolutePathBuf {
+    core_test_support::test_absolute_path("/repo/codex-rs/core")
+}
+
+fn normalize_guardian_repo_cwd_snapshot(snapshot: String) -> String {
+    let cwd = guardian_repo_cwd().to_string_lossy().into_owned();
+    let escaped_cwd = cwd.replace('\\', "\\\\");
+    snapshot
+        .replace(&cwd, "/repo/codex-rs/core")
+        .replace(&escaped_cwd, "/repo/codex-rs/core")
 }
 
 #[test]
@@ -536,7 +549,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
                 "origin".to_string(),
                 "guardian-approval-mvp".to_string(),
             ],
-            cwd: PathBuf::from("/repo/codex-rs/core").abs(),
+            cwd: guardian_repo_cwd(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some(
@@ -566,10 +579,12 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     settings.bind(|| {
         assert_snapshot!(
             "codex_core__guardian__tests__guardian_review_request_layout",
-            context_snapshot::format_labeled_requests_snapshot(
-                "Guardian review request layout",
-                &[("Guardian Review Request", &request)],
-                &guardian_snapshot_options(),
+            normalize_guardian_repo_cwd_snapshot(
+                context_snapshot::format_labeled_requests_snapshot(
+                    "Guardian review request layout",
+                    &[("Guardian Review Request", &request)],
+                    &guardian_snapshot_options(),
+                )
             )
         );
     });
@@ -617,7 +632,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
-            cwd: PathBuf::from("/repo/codex-rs/core").abs(),
+            cwd: guardian_repo_cwd(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the first docs fix.".to_string()),
@@ -642,7 +657,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 "push".to_string(),
                 "--force-with-lease".to_string(),
             ],
-            cwd: PathBuf::from("/repo/codex-rs/core").abs(),
+            cwd: guardian_repo_cwd(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the second docs fix.".to_string()),
@@ -699,13 +714,15 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             "codex_core__guardian__tests__guardian_followup_review_request_layout",
             format!(
                 "{}\n\nshared_prompt_cache_key: {}\nfollowup_contains_first_rationale: {}",
-                context_snapshot::format_labeled_requests_snapshot(
-                    "Guardian follow-up review request layout",
-                    &[
-                        ("Initial Guardian Review Request", &requests[0]),
-                        ("Follow-up Guardian Review Request", &requests[1]),
-                    ],
-                    &guardian_snapshot_options(),
+                normalize_guardian_repo_cwd_snapshot(
+                    context_snapshot::format_labeled_requests_snapshot(
+                        "Guardian follow-up review request layout",
+                        &[
+                            ("Initial Guardian Review Request", &requests[0]),
+                            ("Follow-up Guardian Review Request", &requests[1]),
+                        ],
+                        &guardian_snapshot_options(),
+                    )
                 ),
                 first_body["prompt_cache_key"] == second_body["prompt_cache_key"],
                 second_body.to_string().contains(first_rationale),
@@ -762,7 +779,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         GuardianApprovalRequest::Shell {
             id: "shell-guardian-error".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
-            cwd: PathBuf::from("/repo/codex-rs/core").abs(),
+            cwd: guardian_repo_cwd(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the reviewed docs fix.".to_string()),
@@ -873,7 +890,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     let initial_request = GuardianApprovalRequest::Shell {
         id: "shell-guardian-1".to_string(),
         command: vec!["git".to_string(), "status".to_string()],
-        cwd: PathBuf::from("/repo/codex-rs/core").abs(),
+        cwd: guardian_repo_cwd(),
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Inspect repo state before proceeding.".to_string()),
@@ -886,7 +903,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     let second_request = GuardianApprovalRequest::Shell {
         id: "shell-guardian-2".to_string(),
         command: vec!["git".to_string(), "diff".to_string()],
-        cwd: PathBuf::from("/repo/codex-rs/core").abs(),
+        cwd: guardian_repo_cwd(),
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Inspect pending changes before proceeding.".to_string()),
@@ -894,7 +911,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     let third_request = GuardianApprovalRequest::Shell {
         id: "shell-guardian-3".to_string(),
         command: vec!["git".to_string(), "push".to_string()],
-        cwd: PathBuf::from("/repo/codex-rs/core").abs(),
+        cwd: guardian_repo_cwd(),
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Inspect whether pushing is safe before proceeding.".to_string()),
