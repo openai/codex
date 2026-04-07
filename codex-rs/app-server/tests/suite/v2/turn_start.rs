@@ -43,7 +43,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::config::ConfigToml;
+use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -147,6 +147,120 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .get("originator")
             .expect("originator header missing");
         assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_sequence(&server, vec![body.clone(), body]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never", &BTreeMap::new())?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    let first_table_index = config_toml
+        .find("\n[")
+        .expect("test config must include a table header");
+    config_toml.insert_str(
+        first_table_index,
+        "\ndeveloper_instructions = \"Config developer instructions sentinel\"\n",
+    );
+    std::fs::write(config_path, config_toml)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let disabled_instruction_config = json!({
+        "include_permissions_instructions": false,
+        "include_apps_instructions": false,
+        "include_environment_context": false,
+        "features.apps": false,
+        "features.plugins": false,
+        "features.codex_hooks": false,
+        "skills.bundled.enabled": false,
+    });
+
+    let thread_start_params = [
+        (
+            json!({
+                "model": "mock-model",
+                "config": disabled_instruction_config.clone(),
+            }),
+            /*expect_instructions*/ true,
+        ),
+        (
+            json!({
+                "model": "mock-model",
+                "config": disabled_instruction_config.clone(),
+                "baseInstructions": null,
+                "developerInstructions": null,
+            }),
+            /*expect_instructions*/ false,
+        ),
+    ];
+
+    for (params, _expect_instructions) in thread_start_params {
+        let thread_req = mcp.send_raw_request("thread/start", Some(params)).await?;
+        let thread_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+        )
+        .await??;
+        let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+        let turn_req = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id,
+                input: vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+    }
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    for (request, expect_instructions) in requests.into_iter().zip([true, false]) {
+        let payload = request.body_json();
+        assert_eq!(
+            payload.get("instructions").is_some(),
+            expect_instructions,
+            "unexpected instructions field in payload: {payload:?}"
+        );
+        let developer_texts = request.message_input_texts("developer");
+        assert_eq!(
+            developer_texts
+                .iter()
+                .any(|text| { text.contains("Config developer instructions sentinel") }),
+            expect_instructions,
+            "unexpected config developer instruction presence: {developer_texts:?}"
+        );
+        assert!(
+            developer_texts.iter().all(|text| !text.is_empty()),
+            "did not expect empty developer instruction messages: {developer_texts:?}"
+        );
     }
 
     Ok(())

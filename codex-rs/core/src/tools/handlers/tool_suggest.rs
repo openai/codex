@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use codex_app_server_protocol::AppInfo;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;

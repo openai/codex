@@ -27,7 +27,7 @@ use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
 use codex_git_utils::GhostCommit;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_image::error::ImageProcessingError;
+use codex_utils_image::ImageProcessingError;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;

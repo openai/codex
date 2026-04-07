@@ -1,13 +1,13 @@
 use super::message_tool::FollowupTaskArgs;
 use super::message_tool::MessageDeliveryMode;
-use super::message_tool::MessageToolResult;
 use super::message_tool::handle_message_string_tool;
 use super::*;
+use crate::tools::context::FunctionToolOutput;
 
 pub(crate) struct Handler;
 
 impl ToolHandler for Handler {
-    type Output = MessageToolResult;
+    type Output = FunctionToolOutput;
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

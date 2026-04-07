@@ -24,6 +24,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
+use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -54,6 +55,7 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_features::FEATURES;
@@ -69,11 +71,11 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
-use codex_mcp::mcp_connection_manager::McpConnectionManager;
-use codex_mcp::mcp_connection_manager::SandboxState;
-use codex_mcp::mcp_connection_manager::ToolInfo as McpToolInfo;
-use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
-use codex_mcp::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+use codex_mcp::McpConnectionManager;
+use codex_mcp::SandboxState;
+use codex_mcp::ToolInfo as McpToolInfo;
+use codex_mcp::codex_apps_tools_cache_key;
+use codex_mcp::filter_non_codex_apps_mcp_tools_only;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
@@ -128,7 +130,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
@@ -149,7 +150,6 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
-use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -322,12 +322,12 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::mcp::auth::compute_auth_statuses;
-use codex_mcp::mcp::with_codex_apps_mcp;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::compute_auth_statuses;
+use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
+use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
-use codex_otel::metrics::names::THREAD_STARTED_METRIC;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -407,8 +407,6 @@ pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
-    #[deprecated(note = "use thread_id")]
-    pub conversation_id: ThreadId,
 }
 
 pub(crate) struct CodexSpawnArgs {
@@ -536,7 +534,11 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config).await;
+        let environment = environment_manager
+            .current()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -577,11 +579,15 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = match config.base_instructions.clone() {
+            Some(base_instructions) => base_instructions,
+            None => conversation_history
+                .get_base_instructions()
+                .map(|base_instructions| {
+                    base_instructions.map(|base_instructions| base_instructions.text)
+                })
+                .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+        };
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -610,6 +616,14 @@ impl Codex {
             dynamic_tools
         };
 
+        let developer_instructions_override = config
+            .developer_instructions_override
+            .clone()
+            .or_else(|| conversation_history.get_developer_instructions());
+        let developer_instructions = developer_instructions_override
+            .clone()
+            .unwrap_or_else(|| config.developer_instructions.clone());
+
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode {
@@ -625,7 +639,8 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
-            developer_instructions: config.developer_instructions.clone(),
+            developer_instructions,
+            developer_instructions_override,
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -664,12 +679,12 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
-            environment_manager,
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
+            environment,
         )
         .await
         .map_err(|e| {
@@ -693,12 +708,7 @@ impl Codex {
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
         };
 
-        #[allow(deprecated)]
-        Ok(CodexSpawnOk {
-            codex,
-            thread_id,
-            conversation_id: thread_id,
-        })
+        Ok(CodexSpawnOk { codex, thread_id })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -862,7 +872,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
-    pub(crate) environment: Arc<Environment>,
+    pub(crate) environment: Option<Arc<Environment>>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -905,8 +915,13 @@ impl TurnContext {
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
-        self.features
-            .apps_enabled_cached(self.auth_manager.as_deref())
+        let is_chatgpt_auth = self
+            .auth_manager
+            .as_deref()
+            .and_then(AuthManager::auth_cached)
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth);
+        self.features.apps_enabled_for_auth(is_chatgpt_auth)
     }
 
     pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
@@ -958,6 +973,7 @@ impl TurnContext {
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
+        .with_has_environment(self.tools_config.has_environment)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
@@ -977,7 +993,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
-            environment: Arc::clone(&self.environment),
+            environment: self.environment.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -1089,6 +1105,10 @@ pub(crate) struct SessionConfiguration {
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
 
+    /// Explicit developer instructions override, preserving `null` as distinct
+    /// from a missing override.
+    developer_instructions_override: Option<Option<String>>,
+
     /// Model instructions that are appended to the base instructions.
     user_instructions: Option<String>,
 
@@ -1096,7 +1116,7 @@ pub(crate) struct SessionConfiguration {
     personality: Option<Personality>,
 
     /// Base instructions for the session.
-    base_instructions: String,
+    base_instructions: Option<String>,
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
@@ -1406,7 +1426,7 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
-        environment: Arc<Environment>,
+        environment: Option<Arc<Environment>>,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -1439,6 +1459,7 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
+        .with_has_environment(environment.is_some())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -1511,12 +1532,12 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
-        environment_manager: Arc<EnvironmentManager>,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
+        environment: Option<Arc<Environment>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1534,9 +1555,13 @@ impl Session {
                         conversation_id,
                         forked_from_id,
                         session_source,
-                        BaseInstructions {
-                            text: session_configuration.base_instructions.clone(),
-                        },
+                        session_configuration
+                            .base_instructions
+                            .clone()
+                            .map(|text| BaseInstructions { text }),
+                        session_configuration
+                            .developer_instructions_override
+                            .clone(),
                         session_configuration.dynamic_tools.clone(),
                         if session_configuration.persist_extended_history {
                             EventPersistenceMode::Extended
@@ -1903,6 +1928,7 @@ impl Session {
             });
         }
 
+        let installation_id = resolve_installation_id(&config.codex_home).await?;
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1946,6 +1972,7 @@ impl Session {
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
+                installation_id,
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
@@ -1956,7 +1983,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: environment_manager.current().await?,
+            environment,
         };
         services
             .model_client
@@ -2098,8 +2125,9 @@ impl Session {
                 ));
             }
         }
-        sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
-            .await;
+        if let Some(base_instructions) = session_configuration.base_instructions.clone() {
+            sess.schedule_startup_prewarm(base_instructions).await;
+        }
         let session_start_source = match &initial_history {
             InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -2201,11 +2229,13 @@ impl Session {
         state.history.estimate_token_count(turn_context)
     }
 
-    pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
+    pub(crate) async fn get_base_instructions(&self) -> Option<BaseInstructions> {
         let state = self.state.lock().await;
-        BaseInstructions {
-            text: state.session_configuration.base_instructions.clone(),
-        }
+        state
+            .session_configuration
+            .base_instructions
+            .clone()
+            .map(|text| BaseInstructions { text })
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
@@ -2542,7 +2572,7 @@ impl Session {
                 .network_proxy
                 .as_ref()
                 .map(StartedNetworkProxy::proxy),
-            Arc::clone(&self.services.environment),
+            self.services.environment.clone(),
             sub_id,
             Arc::clone(&self.js_repl),
             skills_outcome,
@@ -3609,7 +3639,11 @@ impl Session {
                 state.reference_context_item(),
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
-                state.session_configuration.base_instructions.clone(),
+                state
+                    .session_configuration
+                    .base_instructions
+                    .clone()
+                    .unwrap_or_default(),
                 state.session_configuration.session_source.clone(),
             )
         };
@@ -3850,7 +3884,13 @@ impl Session {
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let history = self.clone_history().await;
-        let base_instructions = self.get_base_instructions().await;
+        let empty_base_instructions = BaseInstructions {
+            text: String::new(),
+        };
+        let base_instructions = self
+            .get_base_instructions()
+            .await
+            .unwrap_or(empty_base_instructions);
         let Some(estimated_total_tokens) =
             history.estimate_token_count_with_base_instructions(&base_instructions)
         else {
@@ -4762,8 +4802,8 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_mcp::mcp::auth::compute_auth_statuses;
-    use codex_mcp::mcp::collect_mcp_snapshot_from_manager;
+    use codex_mcp::collect_mcp_snapshot_from_manager;
+    use codex_mcp::compute_auth_statuses;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -5614,6 +5654,7 @@ async fn spawn_review_thread(
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
+    .with_has_environment(parent_turn_context.environment.is_some())
     .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         &config.agent_roles,
     ));
@@ -5672,7 +5713,7 @@ async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
-        environment: Arc::clone(&parent_turn_context.environment),
+        environment: parent_turn_context.environment.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
@@ -6543,7 +6584,7 @@ pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
     turn_context: &TurnContext,
-    base_instructions: BaseInstructions,
+    base_instructions: Option<BaseInstructions>,
 ) -> Prompt {
     let deferred_dynamic_tools = turn_context
         .dynamic_tools

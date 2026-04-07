@@ -80,6 +80,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
+use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -379,6 +380,8 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         });
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
+        let auth_manager =
+            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
             let mut processor = MessageProcessor::new(MessageProcessorArgs {
@@ -393,8 +396,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 log_db: None,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
-                enable_codex_api_key_env: args.enable_codex_api_key_env,
+                auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
+                remote_control_handle: None,
             });
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();
@@ -823,6 +827,9 @@ mod tests {
                     items: Vec::new(),
                     status: TurnStatus::Completed,
                     error: None,
+                    started_at: None,
+                    completed_at: Some(0),
+                    duration_ms: None,
                 },
             })
         ));

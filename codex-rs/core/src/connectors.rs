@@ -40,14 +40,14 @@ use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_login::default_client::is_first_party_chat_originator;
 use codex_login::default_client::originator;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::mcp::ToolPluginProvenance;
-use codex_mcp::mcp::auth::compute_auth_statuses;
-use codex_mcp::mcp::with_codex_apps_mcp;
-use codex_mcp::mcp_connection_manager::McpConnectionManager;
-use codex_mcp::mcp_connection_manager::SandboxState;
-use codex_mcp::mcp_connection_manager::ToolInfo;
-use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpConnectionManager;
+use codex_mcp::SandboxState;
+use codex_mcp::ToolInfo;
+use codex_mcp::ToolPluginProvenance;
+use codex_mcp::codex_apps_tools_cache_key;
+use codex_mcp::compute_auth_statuses;
+use codex_mcp::with_codex_apps_mcp;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -143,9 +143,13 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
-    let auth_manager = auth_manager_from_config(config);
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
-    if !config.features.apps_enabled_for_auth(auth.as_ref()) {
+    if !config
+        .features
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+    {
         return Some(Vec::new());
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
@@ -182,9 +186,13 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
-    let auth_manager = auth_manager_from_config(config);
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
-    if !config.features.apps_enabled_for_auth(auth.as_ref()) {
+    if !config
+        .features
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+    {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
             codex_apps_ready: true,
@@ -417,7 +425,8 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     let token_data = if let Some(auth) = auth {
         auth.get_token_data().ok()
     } else {
-        let auth_manager = auth_manager_from_config(config);
+        let auth_manager =
+            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
         auth_manager
             .auth()
             .await
@@ -490,14 +499,6 @@ async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
         let body = response.text().await.unwrap_or_default();
         anyhow::bail!("request failed with status {status}: {body}");
     }
-}
-
-fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
-    AuthManager::shared(
-        config.codex_home.clone(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-    )
 }
 
 pub fn connector_display_label(connector: &AppInfo) -> String {

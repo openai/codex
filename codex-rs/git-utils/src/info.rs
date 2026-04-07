@@ -632,9 +632,7 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
     }
 
     let git_dir_path = canonicalize_or_raw(
-        AbsolutePathBuf::resolve_path_against_base(git_dir_rel, &repo_root)
-            .ok()?
-            .into_path_buf(),
+        AbsolutePathBuf::resolve_path_against_base(git_dir_rel, &repo_root).into_path_buf(),
     );
     let worktrees_dir = git_dir_path.parent()?;
     if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {

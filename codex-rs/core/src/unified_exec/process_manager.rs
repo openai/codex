@@ -582,18 +582,18 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn open_session_with_exec_env(
         &self,
         process_id: i32,
-        env: &ExecRequest,
+        request: &ExecRequest,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let (program, args) = env
+        let (program, args) = request
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
-        if environment.exec_server_url().is_some() {
+        if environment.is_remote() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(
                     "remote exec-server does not support inherited file descriptors".to_string(),
@@ -604,25 +604,25 @@ impl UnifiedExecProcessManager {
                 .get_exec_backend()
                 .start(codex_exec_server::ExecParams {
                     process_id: exec_server_process_id(process_id).into(),
-                    argv: env.command.clone(),
-                    cwd: env.cwd.clone(),
-                    env: env.env.clone(),
+                    argv: request.command.clone(),
+                    cwd: request.cwd.clone(),
+                    env: request.env.clone(),
                     tty,
                     arg0: env.arg0.clone(),
                     sandbox: codex_sandboxing::SandboxLaunchConfig::no_sandbox(env.cwd.clone()),
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            return UnifiedExecProcess::from_remote_started(started, env.sandbox).await;
+            return UnifiedExecProcess::from_remote_started(started, request.sandbox).await;
         }
 
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,
                 args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
+                request.cwd.as_path(),
+                &request.env,
+                &request.arg0,
                 codex_utils_pty::TerminalSize::default(),
                 &inherited_fds,
             )
@@ -631,9 +631,9 @@ impl UnifiedExecProcessManager {
             codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
                 program,
                 args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
+                request.cwd.as_path(),
+                &request.env,
+                &request.arg0,
                 &inherited_fds,
             )
             .await
@@ -641,7 +641,7 @@ impl UnifiedExecProcessManager {
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
         spawn_lifecycle.after_spawn();
-        UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
+        UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
     }
 
     pub(crate) async fn open_session_with_remote_exec(

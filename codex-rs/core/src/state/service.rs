@@ -17,7 +17,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_exec_server::Environment;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
-use codex_mcp::mcp_connection_manager::McpConnectionManager;
+use codex_mcp::McpConnectionManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_rollout::state_db::StateDbHandle;
@@ -57,5 +57,5 @@ pub(crate) struct SessionServices {
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
-    pub(crate) environment: Arc<Environment>,
+    pub(crate) environment: Option<Arc<Environment>>,
 }

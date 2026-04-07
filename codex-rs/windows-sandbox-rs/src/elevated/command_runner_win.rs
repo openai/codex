@@ -12,31 +12,33 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_windows_sandbox::ErrorPayload;
+use codex_windows_sandbox::ExitPayload;
+use codex_windows_sandbox::FramedMessage;
+use codex_windows_sandbox::Message;
+use codex_windows_sandbox::OutputPayload;
+use codex_windows_sandbox::OutputStream;
 use codex_windows_sandbox::PipeSpawnHandles;
 use codex_windows_sandbox::SandboxPolicy;
+use codex_windows_sandbox::SpawnReady;
+use codex_windows_sandbox::SpawnRequest;
 use codex_windows_sandbox::StderrMode;
 use codex_windows_sandbox::StdinMode;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::create_readonly_token_with_caps_from;
 use codex_windows_sandbox::create_workspace_write_token_with_caps_from;
+use codex_windows_sandbox::decode_bytes;
+use codex_windows_sandbox::encode_bytes;
 use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
-use codex_windows_sandbox::ipc_framed::ErrorPayload;
-use codex_windows_sandbox::ipc_framed::ExitPayload;
-use codex_windows_sandbox::ipc_framed::FramedMessage;
-use codex_windows_sandbox::ipc_framed::Message;
-use codex_windows_sandbox::ipc_framed::OutputPayload;
-use codex_windows_sandbox::ipc_framed::OutputStream;
-use codex_windows_sandbox::ipc_framed::decode_bytes;
-use codex_windows_sandbox::ipc_framed::encode_bytes;
-use codex_windows_sandbox::ipc_framed::read_frame;
-use codex_windows_sandbox::ipc_framed::write_frame;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::parse_policy;
+use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
+use codex_windows_sandbox::write_frame;
 use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
@@ -144,9 +146,7 @@ fn send_error(writer: &Arc<StdMutex<File>>, code: &str, message: String) -> Resu
 }
 
 /// Read and validate the initial spawn request frame.
-fn read_spawn_request(
-    reader: &mut File,
-) -> Result<codex_windows_sandbox::ipc_framed::SpawnRequest> {
+fn read_spawn_request(reader: &mut File) -> Result<SpawnRequest> {
     let Some(msg) = read_frame(reader)? else {
         anyhow::bail!("runner: pipe closed before spawn_request");
     };
@@ -184,9 +184,7 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
     }
 }
 
-fn spawn_ipc_process(
-    req: &codex_windows_sandbox::ipc_framed::SpawnRequest,
-) -> Result<IpcSpawnedProcess> {
+fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
     log_note(
@@ -466,7 +464,7 @@ pub fn main() -> Result<()> {
     let msg = FramedMessage {
         version: 1,
         message: Message::SpawnReady {
-            payload: codex_windows_sandbox::ipc_framed::SpawnReady {
+            payload: SpawnReady {
                 process_id: unsafe { GetProcessId(pi.hProcess) },
             },
         },

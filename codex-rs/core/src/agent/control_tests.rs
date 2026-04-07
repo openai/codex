@@ -256,6 +256,7 @@ async fn get_status_returns_not_found_without_manager() {
 async fn on_event_updates_status_from_task_started() {
     let status = agent_status_from_event(&EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: "turn-1".to_string(),
+        started_at: None,
         model_context_window: None,
         collaboration_mode_kind: ModeKind::Default,
     }));
@@ -267,6 +268,8 @@ async fn on_event_updates_status_from_task_complete() {
     let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
         last_agent_message: Some("done".to_string()),
+        completed_at: None,
+        duration_ms: None,
     }));
     let expected = AgentStatus::Completed(Some("done".to_string()));
     assert_eq!(status, Some(expected));
@@ -288,6 +291,8 @@ async fn on_event_updates_status_from_turn_aborted() {
     let status = agent_status_from_event(&EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id: Some("turn-1".to_string()),
         reason: TurnAbortReason::Interrupted,
+        completed_at: None,
+        duration_ms: None,
     }));
 
     let expected = AgentStatus::Interrupted;
@@ -1200,6 +1205,8 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
             }),
         )
         .await;
@@ -1284,6 +1291,8 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
             }),
         )
         .await;
@@ -1676,6 +1685,132 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
         .shutdown_live_agent(child_thread_id)
         .await
         .expect("resumed child shutdown should succeed");
+}
+
+#[tokio::test]
+async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("worker").expect("worker path");
+    let reviewer_path = AgentPath::root().join("reviewer").expect("reviewer path");
+
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello worker"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let worker_child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello worker child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(
+                    worker_path
+                        .join("child")
+                        .expect("worker child path should be valid"),
+                ),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker child spawn should succeed");
+    let no_path_child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello anonymous child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("no-path child spawn should succeed");
+    let no_path_grandchild_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello anonymous grandchild"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: no_path_child_thread_id,
+                depth: 3,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("no-path grandchild spawn should succeed");
+    let _reviewer_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello reviewer"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(reviewer_path),
+                agent_nickname: None,
+                agent_role: Some("reviewer".to_string()),
+            })),
+        )
+        .await
+        .expect("reviewer spawn should succeed");
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(no_path_grandchild_thread_id)
+        .await
+        .expect("no-path grandchild shutdown should succeed");
+
+    let mut worker_subtree_thread_ids = harness
+        .manager
+        .list_agent_subtree_thread_ids(worker_thread_id)
+        .await
+        .expect("worker subtree thread ids should load");
+    worker_subtree_thread_ids.sort_by_key(ToString::to_string);
+    let mut expected_worker_subtree_thread_ids = vec![
+        worker_thread_id,
+        worker_child_thread_id,
+        no_path_child_thread_id,
+        no_path_grandchild_thread_id,
+    ];
+    expected_worker_subtree_thread_ids.sort_by_key(ToString::to_string);
+    assert_eq!(
+        worker_subtree_thread_ids,
+        expected_worker_subtree_thread_ids
+    );
+
+    let mut no_path_child_subtree_thread_ids = harness
+        .manager
+        .list_agent_subtree_thread_ids(no_path_child_thread_id)
+        .await
+        .expect("no-path subtree thread ids should load");
+    no_path_child_subtree_thread_ids.sort_by_key(ToString::to_string);
+    let mut expected_no_path_child_subtree_thread_ids =
+        vec![no_path_child_thread_id, no_path_grandchild_thread_id];
+    expected_no_path_child_subtree_thread_ids.sort_by_key(ToString::to_string);
+    assert_eq!(
+        no_path_child_subtree_thread_ids,
+        expected_no_path_child_subtree_thread_ids
+    );
 }
 
 #[tokio::test]

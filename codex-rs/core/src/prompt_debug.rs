@@ -26,12 +26,8 @@ pub async fn build_prompt_input(
 ) -> CodexResult<Vec<ResponseItem>> {
     config.ephemeral = true;
 
-    let auth_manager = AuthManager::shared(
-        config.codex_home.clone(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-    );
-    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
 
     let thread_manager = ThreadManager::new(
         &config,
