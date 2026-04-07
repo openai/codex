@@ -251,9 +251,8 @@ use codex_login::run_login_server;
 use codex_mcp::mcp::McpSnapshotDetail;
 use codex_mcp::mcp::auth::discover_supported_scopes;
 use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::collect_mcp_snapshot_with_detail;
+use codex_mcp::mcp::collect_mcp_server_status_snapshot_with_detail;
 use codex_mcp::mcp::effective_mcp_servers;
-use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -5183,55 +5182,14 @@ impl CodexMessageProcessor {
             McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
         };
 
-        let snapshot = collect_mcp_snapshot_with_detail(
+        let snapshot = collect_mcp_server_status_snapshot_with_detail(
             &mcp_config,
             auth.as_ref(),
             request_id.request_id.to_string(),
             detail,
         )
         .await;
-
-        // Rebuild the tool list per original server name instead of using
-        // `group_tools_by_server()`: qualified tool names are sanitized for the
-        // Responses API, so a config key like `some-server` is encoded as the
-        // `mcp__some_server__` prefix. Matching with the original server name's
-        // sanitized prefix preserves `/mcp` output for hyphenated names.
         let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-        let mut sanitized_prefix_counts = HashMap::<String, usize>::new();
-        for name in effective_servers.keys() {
-            let prefix = qualified_mcp_tool_name_prefix(name);
-            *sanitized_prefix_counts.entry(prefix).or_default() += 1;
-        }
-        let tools_by_server = effective_servers
-            .keys()
-            .map(|name| {
-                let prefix = qualified_mcp_tool_name_prefix(name);
-                // If multiple server names normalize to the same prefix, the
-                // qualified tool namespace is ambiguous (for example
-                // `some-server` and `some_server` both become
-                // `mcp__some_server__`). In that case, avoid attributing the
-                // same tools to multiple servers.
-                let tools = if sanitized_prefix_counts
-                    .get(&prefix)
-                    .copied()
-                    .unwrap_or_default()
-                    == 1
-                {
-                    snapshot
-                        .tools
-                        .iter()
-                        .filter_map(|(qualified_name, tool)| {
-                            qualified_name
-                                .strip_prefix(&prefix)
-                                .map(|tool_name| (tool_name.to_string(), tool.clone()))
-                        })
-                        .collect::<HashMap<_, _>>()
-                } else {
-                    HashMap::new()
-                };
-                (name.clone(), tools)
-            })
-            .collect::<HashMap<_, _>>();
 
         let mut server_names: Vec<String> = config
             .mcp_servers
@@ -5283,7 +5241,11 @@ impl CodexMessageProcessor {
             .iter()
             .map(|name| McpServerStatus {
                 name: name.clone(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                tools: snapshot
+                    .tools_by_server
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default(),
                 resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
                 resource_templates: snapshot
                     .resource_templates
