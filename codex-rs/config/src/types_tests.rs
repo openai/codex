@@ -41,3 +41,8 @@ fn deserialize_skill_config_with_path_selector() {
         }
     );
 }
+
+#[test]
+fn preview_failed_log_from_config() {
+    panic!("intentional preview failure: config test log");
+}

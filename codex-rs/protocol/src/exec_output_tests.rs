@@ -67,6 +67,11 @@ fn test_invalid_bytes_still_fall_back_to_lossy() {
     assert_eq!(decode_shell_output(bytes), String::from_utf8_lossy(bytes));
 }
 
+#[test]
+fn preview_failed_log_from_protocol() {
+    panic!("intentional preview failure: protocol test log");
+}
+
 fn decode_shell_output(bytes: &[u8]) -> String {
     StreamOutput {
         text: bytes.to_vec(),
