@@ -84,7 +84,10 @@ pub struct UnifiedExecRuntime<'a> {
     shell_mode: UnifiedExecShellMode,
 }
 
-fn build_remote_exec_sandbox_config(attempt: &SandboxAttempt<'_>) -> Option<SandboxLaunchConfig> {
+fn build_remote_exec_sandbox_config(
+    attempt: &SandboxAttempt<'_>,
+    additional_permissions: Option<PermissionProfile>,
+) -> Option<SandboxLaunchConfig> {
     if matches!(attempt.sandbox, codex_sandboxing::SandboxType::None) {
         return None;
     }
@@ -95,18 +98,12 @@ fn build_remote_exec_sandbox_config(attempt: &SandboxAttempt<'_>) -> Option<Sand
         file_system_policy: attempt.file_system_policy.clone(),
         network_policy: attempt.network_policy,
         sandbox_policy_cwd: attempt.sandbox_cwd.to_path_buf(),
+        additional_permissions,
         enforce_managed_network: attempt.enforce_managed_network,
         windows_sandbox_level: attempt.windows_sandbox_level,
         windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
         use_legacy_landlock: attempt.use_legacy_landlock,
     })
-}
-
-fn should_remote_exec_server_build_sandbox(
-    has_additional_permissions: bool,
-    has_network_proxy: bool,
-) -> bool {
-    !has_additional_permissions && !has_network_proxy
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -246,36 +243,40 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
-        // Remote exec-server now owns sandbox argv construction, so this branch
-        // keeps sending raw command data until we collapse the launch APIs.
-        if ctx.turn.environment.exec_server_url().is_some()
-            && should_remote_exec_server_build_sandbox(
-                req.additional_permissions.is_some(),
-                req.network.is_some(),
-            )
-        {
-            let exec_params = codex_exec_server::ExecParams {
-                process_id: req.process_id.to_string().into(),
-                argv: command,
-                cwd: req.cwd.clone(),
-                env,
-                tty: req.tty,
-                arg0: None,
-                sandbox: build_remote_exec_sandbox_config(attempt),
-            };
-            return self
-                .manager
-                .open_session_with_remote_exec(exec_params, ctx.turn.environment.as_ref())
-                .await
-                .map_err(|err| match err {
-                    UnifiedExecError::SandboxDenied { output, .. } => {
-                        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                            output: Box::new(output),
-                            network_policy_decision: None,
-                        }))
-                    }
-                    other => ToolError::Rejected(other.to_string()),
-                });
+        if ctx.turn.environment.exec_server_url().is_some() {
+            if let UnifiedExecShellMode::ZshFork(_) = &self.shell_mode {
+                return Err(ToolError::Rejected(
+                    "unified_exec zsh-fork is not supported when exec_server_url is configured"
+                        .to_string(),
+                ));
+            }
+            if req.network.is_none() {
+                let exec_params = codex_exec_server::ExecParams {
+                    process_id: req.process_id.to_string().into(),
+                    argv: command,
+                    cwd: req.cwd.clone(),
+                    env,
+                    tty: req.tty,
+                    arg0: None,
+                    sandbox: build_remote_exec_sandbox_config(
+                        attempt,
+                        req.additional_permissions.clone(),
+                    ),
+                };
+                return self
+                    .manager
+                    .open_session_with_remote_exec(exec_params, ctx.turn.environment.as_ref())
+                    .await
+                    .map_err(|err| match err {
+                        UnifiedExecError::SandboxDenied { output, .. } => {
+                            ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                                output: Box::new(output),
+                                network_policy_decision: None,
+                            }))
+                        }
+                        other => ToolError::Rejected(other.to_string()),
+                    });
+            }
         }
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
@@ -368,31 +369,5 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
                 other => ToolError::Rejected(other.to_string()),
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::should_remote_exec_server_build_sandbox;
-
-    #[test]
-    fn remote_exec_server_builds_sandbox_for_simple_requests() {
-        assert!(should_remote_exec_server_build_sandbox(
-            /*has_additional_permissions*/ false, /*has_network_proxy*/ false,
-        ));
-    }
-
-    #[test]
-    fn remote_exec_server_falls_back_for_requests_with_additional_permissions() {
-        assert!(!should_remote_exec_server_build_sandbox(
-            /*has_additional_permissions*/ true, /*has_network_proxy*/ false,
-        ));
-    }
-
-    #[test]
-    fn remote_exec_server_falls_back_for_requests_with_network_proxy() {
-        assert!(!should_remote_exec_server_build_sandbox(
-            /*has_additional_permissions*/ false, /*has_network_proxy*/ true,
-        ));
     }
 }

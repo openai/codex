@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_sandboxing::SandboxType;
 use tokio::sync::watch;
 use tracing::trace;
 
@@ -34,18 +35,22 @@ impl RemoteProcess {
 impl ExecBackend for RemoteProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let process_id = params.process_id.clone();
+        let sandbox_type = params
+            .sandbox
+            .as_ref()
+            .map_or(SandboxType::None, |sandbox| sandbox.sandbox_type());
         let session = self.client.register_session(&process_id).await?;
-        let response = match self.client.exec(params).await {
-            Ok(response) => response,
+        match self.client.exec(params).await {
+            Ok(_) => {}
             Err(err) => {
                 session.unregister().await;
                 return Err(err);
             }
-        };
+        }
 
         Ok(StartedExecProcess {
             process: Arc::new(RemoteExecProcess { session }),
-            sandbox_type: response.sandbox_type,
+            sandbox_type,
         })
     }
 }

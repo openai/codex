@@ -3,13 +3,19 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_pty::ExecCommandSession;
@@ -48,6 +54,7 @@ use crate::rpc::invalid_request;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
+static CONFIGURED_CODEX_LINUX_SANDBOX_EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
 #[cfg(test)]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
 #[cfg(not(test))]
@@ -104,6 +111,11 @@ struct ExecServerRuntimeConfig {
 
 impl ExecServerRuntimeConfig {
     fn detect() -> Self {
+        if let Some(codex_linux_sandbox_exe) = CONFIGURED_CODEX_LINUX_SANDBOX_EXE.get().cloned() {
+            return Self {
+                codex_linux_sandbox_exe,
+            };
+        }
         let env_path = std::env::var_os("CODEX_LINUX_SANDBOX_EXE").map(PathBuf::from);
         let sibling_path = std::env::current_exe().ok().and_then(|current_exe| {
             current_exe
@@ -117,11 +129,14 @@ impl ExecServerRuntimeConfig {
     }
 }
 
-struct PreparedExecLaunch {
-    argv: Vec<String>,
-    env: HashMap<String, String>,
-    arg0: Option<String>,
+struct StartedProcess {
+    process_id: ProcessId,
     sandbox_type: SandboxType,
+    wake_tx: watch::Sender<u64>,
+}
+
+pub(crate) fn configure_codex_linux_sandbox_exe(codex_linux_sandbox_exe: Option<PathBuf>) {
+    let _ = CONFIGURED_CODEX_LINUX_SANDBOX_EXE.set(codex_linux_sandbox_exe);
 }
 
 impl Default for LocalProcess {
@@ -196,15 +211,12 @@ impl LocalProcess {
         Ok(())
     }
 
-    async fn start_process(
-        &self,
-        params: ExecParams,
-    ) -> Result<(ExecResponse, watch::Sender<u64>), JSONRPCErrorError> {
+    async fn start_process(&self, params: ExecParams) -> Result<StartedProcess, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
         let launch = prepare_exec_launch(&params, &self.inner.runtime)?;
         let (program, args) = launch
-            .argv
+            .command
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
 
@@ -299,19 +311,19 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok((
-            ExecResponse {
-                process_id,
-                sandbox_type: launch.sandbox_type,
-            },
+        Ok(StartedProcess {
+            process_id,
+            sandbox_type: launch.sandbox,
             wake_tx,
-        ))
+        })
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         self.start_process(params)
             .await
-            .map(|(response, _)| response)
+            .map(|started| ExecResponse {
+                process_id: started.process_id,
+            })
     }
 
     pub(crate) async fn exec_read(
@@ -455,17 +467,17 @@ impl LocalProcess {
 #[async_trait]
 impl ExecBackend for LocalProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
-        let (response, wake_tx) = self
+        let started = self
             .start_process(params)
             .await
             .map_err(map_handler_error)?;
         Ok(StartedExecProcess {
             process: Arc::new(LocalExecProcess {
-                process_id: response.process_id,
+                process_id: started.process_id,
                 backend: self.clone(),
-                wake_tx,
+                wake_tx: started.wake_tx,
             }),
-            sandbox_type: response.sandbox_type,
+            sandbox_type: started.sandbox_type,
         })
     }
 }
@@ -504,6 +516,7 @@ fn build_sandbox_command(
     argv: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
+    additional_permissions: Option<codex_protocol::models::PermissionProfile>,
 ) -> Result<SandboxCommand, JSONRPCErrorError> {
     let (program, args) = argv
         .split_first()
@@ -513,25 +526,37 @@ fn build_sandbox_command(
         args: args.to_vec(),
         cwd: cwd.to_path_buf(),
         env: env.clone(),
-        additional_permissions: None,
+        additional_permissions,
     })
 }
 
 fn prepare_exec_launch(
     params: &ExecParams,
     runtime: &ExecServerRuntimeConfig,
-) -> Result<PreparedExecLaunch, JSONRPCErrorError> {
+) -> Result<SandboxExecRequest, JSONRPCErrorError> {
     let Some(sandbox) = params.sandbox.as_ref() else {
-        return Ok(PreparedExecLaunch {
-            argv: params.argv.clone(),
+        return Ok(SandboxExecRequest {
+            command: params.argv.clone(),
+            cwd: params.cwd.clone(),
             env: params.env.clone(),
             arg0: params.arg0.clone(),
-            sandbox_type: SandboxType::None,
+            network: None,
+            sandbox: SandboxType::None,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: FileSystemSandboxPolicy::unrestricted(),
+            network_sandbox_policy: NetworkSandboxPolicy::Enabled,
         });
     };
 
-    let command = build_sandbox_command(&params.argv, params.cwd.as_path(), &params.env)?;
-    let transformed = sandbox
+    let command = build_sandbox_command(
+        &params.argv,
+        params.cwd.as_path(),
+        &params.env,
+        sandbox.additional_permissions.clone(),
+    )?;
+    sandbox
         .transform(
             command,
             // TODO: Thread managed-network proxy state across exec-server so
@@ -540,14 +565,7 @@ fn prepare_exec_launch(
             None,
             runtime.codex_linux_sandbox_exe.as_ref(),
         )
-        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))?;
-
-    Ok(PreparedExecLaunch {
-        argv: transformed.command,
-        env: transformed.env,
-        arg0: transformed.arg0,
-        sandbox_type: transformed.sandbox,
-    })
+        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))
 }
 
 impl LocalProcess {

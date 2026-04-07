@@ -53,8 +53,9 @@ pub enum SandboxablePreference {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxLaunchMode {
-    Disabled,
+    /// Choose the platform sandbox only when the policy requires it.
     Auto,
+    /// Always launch with the platform sandbox when one is available.
     Require,
 }
 
@@ -66,6 +67,7 @@ pub struct SandboxLaunchConfig {
     pub file_system_policy: FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
     pub sandbox_policy_cwd: PathBuf,
+    pub additional_permissions: Option<PermissionProfile>,
     pub enforce_managed_network: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -75,7 +77,6 @@ pub struct SandboxLaunchConfig {
 impl SandboxLaunchConfig {
     pub fn sandbox_type(&self) -> SandboxType {
         let preference = match self.mode {
-            SandboxLaunchMode::Disabled => return SandboxType::None,
             SandboxLaunchMode::Auto => SandboxablePreference::Auto,
             SandboxLaunchMode::Require => SandboxablePreference::Require,
         };

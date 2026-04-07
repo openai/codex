@@ -13,6 +13,8 @@ mod remote_process;
 mod rpc;
 mod server;
 
+use codex_arg0::Arg0DispatchPaths;
+
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
 pub use client_api::ExecServerClientConnectOptions;
@@ -66,3 +68,7 @@ pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
 pub use server::run_main;
 pub use server::run_main_with_listen_url;
+
+pub fn configure_arg0_paths(arg0_paths: Arg0DispatchPaths) {
+    local_process::configure_codex_linux_sandbox_exe(arg0_paths.codex_linux_sandbox_exe);
+}
