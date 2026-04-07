@@ -565,4 +565,14 @@ mod tests {
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
     }
+
+    #[test]
+    fn preview_failed_log_from_code_mode() {
+        let actual = "code-mode actual preview value";
+        let expected = "code-mode expected preview value";
+        assert_eq!(
+            actual, expected,
+            "intentional preview failure: code-mode assertion diff"
+        );
+    }
 }

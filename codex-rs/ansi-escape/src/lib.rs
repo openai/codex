@@ -56,3 +56,11 @@ pub fn ansi_escape(s: &str) -> Text<'static> {
         },
     }
 }
+
+#[cfg(test)]
+mod preview_bazel_failed_logs_tests {
+    #[test]
+    fn preview_failed_log_from_ansi_escape() {
+        panic!("intentional preview failure: ansi-escape test log");
+    }
+}
