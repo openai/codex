@@ -448,6 +448,7 @@ Rules:
 - For relative timing like "in 30 seconds", use a delay trigger with seconds set to the relative delay and repeat true unless the user clearly asked for one-shot behavior.
 - For interval timing like "every 5 minutes", use a delay trigger with seconds set to the interval and repeat true.
 - For absolute wall-clock timing like "at 9pm", "tomorrow at 8am", or "at 10:57", use a one-shot schedule trigger with dtstart set to the next matching local datetime in YYYY-MM-DDTHH:MM:SS and rrule null unless the user explicitly asks for recurrence with words like "every", "daily", "weekly", "hourly", "each", "repeat", or "recurring".
+- For ambiguous wall-clock times without AM/PM, choose the soonest future local occurrence. Example: if the current local datetime is 2026-04-06T23:28:00 and the spec says "at 11:30", return 2026-04-06T23:30:00, not 2026-04-07T11:30:00.
 - For recurring calendar timing, use a schedule trigger with rrule set to an RFC 5545 RRULE string and dtstart set when the user supplies a start datetime; otherwise null.
 - For schedule triggers, use floating local wall-clock datetimes without timezone suffixes.
 "#;
@@ -559,6 +560,8 @@ mod tests {
         );
         assert!(PARSE_ALARM_SYSTEM_PROMPT.contains("A bare absolute date/time is a single run"));
         assert!(PARSE_ALARM_SYSTEM_PROMPT.contains("For absolute wall-clock timing like"));
+        assert!(PARSE_ALARM_SYSTEM_PROMPT.contains("choose the soonest future local occurrence"));
+        assert!(PARSE_ALARM_SYSTEM_PROMPT.contains("2026-04-06T23:30:00"));
     }
 
     #[test]
