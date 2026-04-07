@@ -7896,19 +7896,13 @@ impl CodexMessageProcessor {
             return Some(rollout_path);
         }
 
-        let Some(state_db_ctx) = state_db_ctx else {
-            return None;
-        };
-        match state_db_ctx
+        let state_db_ctx = state_db_ctx?;
+        state_db_ctx
             .find_rollout_path_by_id(conversation_id, /*archived_only*/ None)
-            .await
-        {
-            Ok(rollout_path) => rollout_path,
-            Err(err) => {
-                warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
-                None
-            }
-        }
+            .await.unwrap_or_else(|err| {
+            warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
+            None
+        })
     }
 }
 
