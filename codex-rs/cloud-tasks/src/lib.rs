@@ -1,10 +1,10 @@
 mod app;
 mod cli;
-pub mod env_detect;
+pub(crate) mod env_detect;
 mod new_task;
-pub mod scrollable_diff;
+pub(crate) mod scrollable_diff;
 mod ui;
-pub mod util;
+pub(crate) mod util;
 pub use cli::Cli;
 
 use anyhow::anyhow;
@@ -12,6 +12,7 @@ use chrono::Utc;
 use codex_cloud_tasks_client::TaskStatus;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::default_branch_name;
+use codex_login::default_client::get_codex_user_agent;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -40,6 +41,7 @@ struct BackendContext {
 }
 
 async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext> {
+    #[cfg(debug_assertions)]
     let use_mock = matches!(
         std::env::var("CODEX_CLOUD_TASKS_MODE").ok().as_deref(),
         Some("mock") | Some("MOCK")
@@ -49,14 +51,15 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     set_user_agent_suffix(user_agent_suffix);
 
+    #[cfg(debug_assertions)]
     if use_mock {
         return Ok(BackendContext {
-            backend: Arc::new(codex_cloud_tasks_client::MockClient),
+            backend: Arc::new(codex_cloud_tasks_mock_client::MockClient),
             base_url,
         });
     }
 
-    let ua = codex_core::default_client::get_codex_user_agent();
+    let ua = get_codex_user_agent();
     let mut http = codex_cloud_tasks_client::HttpClient::new(base_url.clone())?.with_user_agent(ua);
     let style = if base_url.contains("/backend-api") {
         "wham"
@@ -802,7 +805,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     append_error_log(format!(
         "startup: wham_force_internal={} ua={}",
         force_internal,
-        codex_core::default_client::get_codex_user_agent()
+        get_codex_user_agent()
     ));
     // Non-blocking initial load so the in-box spinner can animate
     app.status = "Loading tasks…".to_string();
@@ -1593,7 +1596,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let total = ov.attempt_display_total();
                                         let current = ov.selected_attempt + 1;
                                         app.status = format!("Viewing attempt {current} of {total}");
-                                        ov.sd.to_top();
+                                        ov.sd.scroll_to_top();
                                         needs_redraw = true;
                                     }
                             };
@@ -1669,7 +1672,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let has_diff = ov.current_attempt().is_some_and(app::AttemptView::has_diff) || ov.base_can_apply;
                                         if has_text && has_diff {
                                             ov.set_view(app::DetailView::Prompt);
-                                            ov.sd.to_top();
+                                            ov.sd.scroll_to_top();
                                             needs_redraw = true;
                                         }
                                     }
@@ -1680,7 +1683,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let has_diff = ov.current_attempt().is_some_and(app::AttemptView::has_diff) || ov.base_can_apply;
                                         if has_text && has_diff {
                                             ov.set_view(app::DetailView::Diff);
-                                            ov.sd.to_top();
+                                            ov.sd.scroll_to_top();
                                             needs_redraw = true;
                                         }
                                     }
@@ -1711,8 +1714,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     if let Some(ov) = &mut app.diff_overlay { let step = ov.sd.state.viewport_h.saturating_sub(1) as i16; ov.sd.page_by(-step); }
                                     needs_redraw = true;
                                 }
-                                KeyCode::Home => { if let Some(ov) = &mut app.diff_overlay { ov.sd.to_top(); } needs_redraw = true; }
-                                KeyCode::End  => { if let Some(ov) = &mut app.diff_overlay { ov.sd.to_bottom(); } needs_redraw = true; }
+                                KeyCode::Home => { if let Some(ov) = &mut app.diff_overlay { ov.sd.scroll_to_top(); } needs_redraw = true; }
+                                KeyCode::End  => { if let Some(ov) = &mut app.diff_overlay { ov.sd.scroll_to_bottom(); } needs_redraw = true; }
                                 _ => {}
                             }
                         } else if app.env_modal.is_some() {
@@ -2132,10 +2135,10 @@ mod tests {
     use super::*;
     use crate::resolve_git_ref_with_git_info;
     use codex_cloud_tasks_client::DiffSummary;
-    use codex_cloud_tasks_client::MockClient;
     use codex_cloud_tasks_client::TaskId;
     use codex_cloud_tasks_client::TaskStatus;
     use codex_cloud_tasks_client::TaskSummary;
+    use codex_cloud_tasks_mock_client::MockClient;
     use codex_tui::ComposerAction;
     use codex_tui::ComposerInput;
     use crossterm::event::KeyCode;

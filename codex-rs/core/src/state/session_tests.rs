@@ -1,6 +1,7 @@
 use super::*;
 use crate::codex::make_session_configuration_for_tests;
-use crate::protocol::RateLimitWindow;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -115,7 +116,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
             resets_at: Some(100),
         }),
         secondary: None,
-        credits: Some(crate::protocol::CreditsSnapshot {
+        credits: Some(CreditsSnapshot {
             has_credits: true,
             unlimited: false,
             balance: Some("50".to_string()),
@@ -149,7 +150,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
                 resets_at: Some(200),
             }),
             secondary: None,
-            credits: Some(crate::protocol::CreditsSnapshot {
+            credits: Some(CreditsSnapshot {
                 has_credits: true,
                 unlimited: false,
                 balance: Some("50".to_string()),

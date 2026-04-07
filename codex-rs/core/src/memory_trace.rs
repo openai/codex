@@ -2,11 +2,11 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::ModelClient;
-use crate::error::CodexErr;
-use crate::error::Result;
 use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RawMemoryMetadata as ApiRawMemoryMetadata;
 use codex_otel::SessionTelemetry;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde_json::Map;

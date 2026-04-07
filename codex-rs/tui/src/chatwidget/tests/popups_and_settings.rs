@@ -1763,12 +1763,11 @@ async fn feedback_upload_consent_popup_snapshot() {
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
-        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
-            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
-                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                details: vec!["OPENAI_BASE_URL = hello".to_string()],
-            },
-        ]),
+        &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTPS_PROXY = hello".to_string()],
+        }]),
     ));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -1783,12 +1782,11 @@ async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_fi
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::GoodResult,
         chat.current_rollout_path.clone(),
-        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
-            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
-                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                details: vec!["OPENAI_BASE_URL = hello".to_string()],
-            },
-        ]),
+        &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTPS_PROXY = hello".to_string()],
+        }]),
     ));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);

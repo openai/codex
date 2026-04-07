@@ -8,8 +8,9 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::content_items_to_text;
-use crate::default_client::build_reqwest_client;
 use crate::event_mapping::is_contextual_user_message_content;
+use codex_login::CodexAuth;
+use codex_login::default_client::build_reqwest_client;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 
@@ -147,10 +148,7 @@ pub(crate) async fn monitor_action(
         .timeout(ARC_MONITOR_TIMEOUT)
         .json(&body)
         .bearer_auth(token);
-    if let Some(account_id) = auth
-        .as_ref()
-        .and_then(crate::auth::CodexAuth::get_account_id)
-    {
+    if let Some(account_id) = auth.as_ref().and_then(CodexAuth::get_account_id) {
         request = request.header("chatgpt-account-id", account_id);
     }
 

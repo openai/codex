@@ -1,7 +1,7 @@
-use crate::error::CodexErr;
-use crate::error::Result;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use rand::prelude::IndexedRandom;
@@ -220,7 +220,7 @@ impl AgentRegistry {
             } else {
                 active_agents.used_agent_nicknames.clear();
                 active_agents.nickname_reset_count += 1;
-                if let Some(metrics) = codex_otel::metrics::global() {
+                if let Some(metrics) = codex_otel::global() {
                     let _ = metrics.counter(
                         "codex.multi_agent.nickname_pool_reset",
                         /*inc*/ 1,

@@ -618,6 +618,8 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -1040,6 +1042,8 @@ async fn interrupt_restores_queued_messages_into_composer() {
         msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -1079,6 +1083,8 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 

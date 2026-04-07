@@ -1,5 +1,5 @@
-use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::config::Config;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use std::io;
 use std::path::Path;
 

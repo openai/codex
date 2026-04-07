@@ -1,26 +1,23 @@
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 
-use async_trait::async_trait;
 use codex_app_server_protocol::AppInfo;
-use codex_app_server_protocol::McpElicitationObjectType;
-use codex_app_server_protocol::McpElicitationSchema;
-use codex_app_server_protocol::McpServerElicitationRequest;
-use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
+use codex_tools::TOOL_SUGGEST_TOOL_NAME;
+use codex_tools::ToolSuggestArgs;
+use codex_tools::ToolSuggestResult;
+use codex_tools::all_suggested_connectors_picked_up;
+use codex_tools::build_tool_suggestion_elicitation_request;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
+use codex_tools::verified_connector_suggestion_completed;
 use rmcp::model::RequestId;
-use serde::Deserialize;
-use serde::Serialize;
-use serde_json::json;
 use tracing::warn;
 
 use crate::connectors;
 use crate::function_tool::FunctionCallError;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -30,41 +27,6 @@ use crate::tools::registry::ToolKind;
 
 pub struct ToolSuggestHandler;
 
-pub(crate) const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
-const TOOL_SUGGEST_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
-
-#[derive(Debug, Deserialize)]
-struct ToolSuggestArgs {
-    tool_type: DiscoverableToolType,
-    action_type: DiscoverableToolAction,
-    tool_id: String,
-    suggest_reason: String,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct ToolSuggestResult {
-    completed: bool,
-    user_confirmed: bool,
-    tool_type: DiscoverableToolType,
-    action_type: DiscoverableToolAction,
-    tool_id: String,
-    tool_name: String,
-    suggest_reason: String,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct ToolSuggestMeta<'a> {
-    codex_approval_kind: &'static str,
-    tool_type: DiscoverableToolType,
-    suggest_type: DiscoverableToolAction,
-    suggest_reason: &'a str,
-    tool_id: &'a str,
-    tool_name: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    install_url: Option<&'a str>,
-}
-
-#[async_trait]
 impl ToolHandler for ToolSuggestHandler {
     type Output = FunctionToolOutput;
 
@@ -147,6 +109,7 @@ impl ToolHandler for ToolSuggestHandler {
 
         let request_id = RequestId::String(format!("tool_suggestion_{call_id}").into());
         let params = build_tool_suggestion_elicitation_request(
+            CODEX_APPS_MCP_SERVER_NAME,
             session.conversation_id.to_string(),
             turn.sub_id.clone(),
             &args,
@@ -191,65 +154,11 @@ impl ToolHandler for ToolSuggestHandler {
     }
 }
 
-fn build_tool_suggestion_elicitation_request(
-    thread_id: String,
-    turn_id: String,
-    args: &ToolSuggestArgs,
-    suggest_reason: &str,
-    tool: &DiscoverableTool,
-) -> McpServerElicitationRequestParams {
-    let tool_name = tool.name().to_string();
-    let install_url = tool.install_url().map(ToString::to_string);
-    let message = suggest_reason.to_string();
-
-    McpServerElicitationRequestParams {
-        thread_id,
-        turn_id: Some(turn_id),
-        server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        request: McpServerElicitationRequest::Form {
-            meta: Some(json!(build_tool_suggestion_meta(
-                args.tool_type,
-                args.action_type,
-                suggest_reason,
-                tool.id(),
-                tool_name.as_str(),
-                install_url.as_deref(),
-            ))),
-            message,
-            requested_schema: McpElicitationSchema {
-                schema_uri: None,
-                type_: McpElicitationObjectType::Object,
-                properties: BTreeMap::new(),
-                required: None,
-            },
-        },
-    }
-}
-
-fn build_tool_suggestion_meta<'a>(
-    tool_type: DiscoverableToolType,
-    action_type: DiscoverableToolAction,
-    suggest_reason: &'a str,
-    tool_id: &'a str,
-    tool_name: &'a str,
-    install_url: Option<&'a str>,
-) -> ToolSuggestMeta<'a> {
-    ToolSuggestMeta {
-        codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-        tool_type,
-        suggest_type: action_type,
-        suggest_reason,
-        tool_id,
-        tool_name,
-        install_url,
-    }
-}
-
 async fn verify_tool_suggestion_completed(
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
     tool: &DiscoverableTool,
-    auth: Option<&crate::CodexAuth>,
+    auth: Option<&codex_login::CodexAuth>,
 ) -> bool {
     match tool {
         DiscoverableTool::Connector(connector) => refresh_missing_suggested_connectors(
@@ -287,7 +196,7 @@ async fn verify_tool_suggestion_completed(
 async fn refresh_missing_suggested_connectors(
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
-    auth: Option<&crate::CodexAuth>,
+    auth: Option<&codex_login::CodexAuth>,
     expected_connector_ids: &[String],
     tool_id: &str,
 ) -> Option<Vec<AppInfo>> {
@@ -325,25 +234,6 @@ async fn refresh_missing_suggested_connectors(
             None
         }
     }
-}
-
-fn all_suggested_connectors_picked_up(
-    expected_connector_ids: &[String],
-    accessible_connectors: &[AppInfo],
-) -> bool {
-    expected_connector_ids.iter().all(|connector_id| {
-        verified_connector_suggestion_completed(connector_id, accessible_connectors)
-    })
-}
-
-fn verified_connector_suggestion_completed(
-    tool_id: &str,
-    accessible_connectors: &[AppInfo],
-) -> bool {
-    accessible_connectors
-        .iter()
-        .find(|connector| connector.id == tool_id)
-        .is_some_and(|connector| connector.is_accessible)
 }
 
 fn verified_plugin_suggestion_completed(

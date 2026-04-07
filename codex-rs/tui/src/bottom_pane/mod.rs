@@ -76,7 +76,7 @@ pub(crate) struct MentionBinding {
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
-pub mod custom_prompt_view;
+pub(crate) mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
@@ -108,7 +108,7 @@ pub(crate) use title_setup::TerminalTitleSetupView;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
-pub mod popup_consts;
+pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
@@ -479,9 +479,14 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if let Some(view) = self.view_stack.last_mut() {
-            let needs_redraw = view.handle_paste(pasted);
-            if view.is_complete() {
+        if !self.view_stack.is_empty() {
+            let (needs_redraw, view_complete) = {
+                let last_index = self.view_stack.len() - 1;
+                let view = &mut self.view_stack[last_index];
+                (view.handle_paste(pasted), view.is_complete())
+            };
+            if view_complete {
+                self.view_stack.clear();
                 self.on_active_view_complete();
             }
             if needs_redraw {
@@ -1282,7 +1287,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
-            disable_paste_burst: false,
+            disable_paste_burst: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -1960,5 +1965,86 @@ mod tests {
         ));
 
         assert_eq!(handle_calls.get(), 1);
+    }
+
+    #[test]
+    fn paste_completion_clears_stacked_views_and_restores_composer_input() {
+        #[derive(Default)]
+        struct BlockingView {
+            handle_calls: Rc<Cell<usize>>,
+        }
+
+        impl Renderable for BlockingView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for BlockingView {
+            fn handle_key_event(&mut self, _key_event: KeyEvent) {
+                self.handle_calls
+                    .set(self.handle_calls.get().saturating_add(1));
+            }
+        }
+
+        #[derive(Default)]
+        struct PasteCompletesView {
+            complete: bool,
+        }
+
+        impl Renderable for PasteCompletesView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for PasteCompletesView {
+            fn handle_paste(&mut self, _pasted: String) -> bool {
+                self.complete = true;
+                true
+            }
+
+            fn is_complete(&self) -> bool {
+                self.complete
+            }
+        }
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_composer_input_enabled(/*enabled*/ false, /*placeholder*/ None);
+
+        let lower_view_handle_calls = Rc::new(Cell::new(0));
+        pane.push_view(Box::new(BlockingView {
+            handle_calls: Rc::clone(&lower_view_handle_calls),
+        }));
+        pane.push_view(Box::new(PasteCompletesView::default()));
+
+        pane.handle_paste("hello".to_string());
+
+        assert!(
+            pane.view_stack.is_empty(),
+            "paste completion should tear down the active modal flow"
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        let area = Rect::new(0, 0, 40, pane.desired_height(/*width*/ 40).max(2));
+        assert!(pane.cursor_pos(area).is_some());
+        assert_eq!(lower_view_handle_calls.get(), 0);
     }
 }

@@ -10,7 +10,7 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
-use codex_core::auth::AuthCredentialsStoreMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
 use serde_json::json;

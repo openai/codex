@@ -104,18 +104,6 @@ pub struct RateLimitStatusPayload {
     pub spend_control: Option<Box<SpendControlStatusDetails>>,
 }
 
-impl RateLimitStatusPayload {
-    pub fn new(plan_type: PlanType) -> Self {
-        Self {
-            plan_type,
-            rate_limit: None,
-            credits: None,
-            additional_rate_limits: None,
-            spend_control: None,
-        }
-    }
-}
-
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendControlStatusDetails {
     #[serde(rename = "reached")]
@@ -384,7 +372,7 @@ mod accounts_check_tests {
         };
 
         assert_eq!(
-            response.current_workspace_role(None),
+            response.current_workspace_role(/*current_account_id*/ None),
             Some(WorkspaceRole::AccountAdmin)
         );
     }

@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
 use codex_utils_cargo_bin::CargoBinError;
 use futures::FutureExt as _;

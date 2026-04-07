@@ -95,6 +95,7 @@ pub struct Cli {
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
     /// Tell the agent to use the specified directory as its working root.
+    /// In remote mode, the path is forwarded to the server and resolved there.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 

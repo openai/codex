@@ -537,7 +537,6 @@ mod tests {
     use crate::LogQuery;
     use crate::logs_db_path;
     use crate::migrations::LOGS_MIGRATOR;
-    use crate::state_db_path;
     use chrono::Utc;
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
@@ -590,10 +589,8 @@ mod tests {
             .await
             .expect("insert test logs");
 
-        let state_count = log_row_count(state_db_path(codex_home.as_path()).as_path()).await;
         let logs_count = log_row_count(logs_db_path(codex_home.as_path()).as_path()).await;
 
-        assert_eq!(state_count, 0);
         assert_eq!(logs_count, 1);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

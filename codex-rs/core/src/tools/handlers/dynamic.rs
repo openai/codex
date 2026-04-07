@@ -7,7 +7,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -20,7 +19,6 @@ use tracing::warn;
 
 pub struct DynamicToolHandler;
 
-#[async_trait]
 impl ToolHandler for DynamicToolHandler {
     type Output = FunctionToolOutput;
 

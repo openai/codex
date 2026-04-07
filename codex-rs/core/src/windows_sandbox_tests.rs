@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::types::WindowsToml;
+use codex_config::types::WindowsToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use pretty_assertions::assert_eq;

@@ -1,5 +1,5 @@
 use super::grant_read_root_non_elevated;
-use crate::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;

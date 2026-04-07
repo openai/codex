@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
     type Output = ResumeAgentResult;
 

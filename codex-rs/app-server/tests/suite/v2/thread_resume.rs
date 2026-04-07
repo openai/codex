@@ -38,8 +38,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
@@ -377,6 +377,7 @@ stream_max_retries = 0
         agent_role: None,
         model_provider: Some("mock_provider".to_string()),
         base_instructions: None,
+        developer_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
     };
@@ -492,6 +493,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }))?,

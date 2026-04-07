@@ -318,6 +318,11 @@ pub fn create_request_permissions_tool(description: String) -> ToolSpec {
     })
 }
 
+pub fn request_permissions_tool_description() -> String {
+    "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope."
+        .to_string()
+}
+
 fn unified_exec_output_schema() -> Value {
     json!({
         "type": "object",

@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use codex_config::CONFIG_TOML_FILE;
-use codex_core::CodexAuth;
 use codex_core::NewThread;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::WarningEvent;

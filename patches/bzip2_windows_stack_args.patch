@@ -1,0 +1,23 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -28,4 +28,11 @@ cc_library(
+     defines = [
+         "_FILE_OFFSET_BITS=64",
+     ],
++    copts = select({
++        "@platforms//os:windows": [
++            "-fno-stack-protector",
++            "-mno-stack-arg-probe",
++        ],
++        "//conditions:default": [],
++    }),
+     includes = ["."],
+diff --git a/MODULE.bazel b/MODULE.bazel
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -4,3 +4,4 @@ module(
+ )
+ 
+ bazel_dep(name = "rules_cc", version = "0.0.10")
++bazel_dep(name = "platforms", version = "1.0.0")

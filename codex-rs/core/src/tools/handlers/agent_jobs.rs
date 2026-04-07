@@ -4,7 +4,6 @@ use crate::agent::status::is_final;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -13,8 +12,8 @@ use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -178,7 +177,6 @@ impl JobProgressEmitter {
     }
 }
 
-#[async_trait]
 impl ToolHandler for BatchJobHandler {
     type Output = FunctionToolOutput;
 
@@ -537,7 +535,7 @@ async fn build_runner_options(
     let max_concurrency =
         normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
-    let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
+    let spawn_config = build_agent_spawn_config(base_instructions.as_ref(), turn.as_ref())?;
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
