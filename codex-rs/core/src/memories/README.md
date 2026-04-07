@@ -13,10 +13,8 @@ Memory prompt templates live under `codex-rs/core/templates/memories/`.
   - `read_path.md`
 - In `codex`, edit those undated template files in place.
 - The dated snapshot-copy workflow is used in the separate `openai/project/agent_memory/write` harness repo, not here.
-- The Phase 2 prompt includes a generic optional-extension rule. Extension-specific
-  instructions live outside the memory root, under
-  `~/.codex/memories_extensions/<extension-name>/instruction.md`, with optional
-  `resources/` files used only as that instruction directs.
+- The Phase 2 prompt includes a feature for memory extensions. Extension-specific instructions live outside the memory root, under
+  `$CODEX_HOME/memories_extensions/<extension-name>/instruction.md`.
 
 ## When it runs
 
