@@ -9,9 +9,13 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ManagedNetworkConfig;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
+use codex_network_proxy::NetworkProxyAuditMetadata;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::NetworkProxyConstraints;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -63,6 +67,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             tty: false,
             arg0: None,
             sandbox: SandboxLaunchConfig::no_sandbox(cwd),
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -141,6 +146,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             tty: false,
             arg0: None,
             sandbox: SandboxLaunchConfig::no_sandbox(cwd),
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -172,6 +178,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             tty: true,
             arg0: None,
             sandbox: SandboxLaunchConfig::no_sandbox(cwd),
+            managed_network: None,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -210,6 +217,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             tty: false,
             arg0: None,
             sandbox: SandboxLaunchConfig::no_sandbox(cwd),
+            managed_network: None,
         })
         .await?;
 
@@ -262,13 +270,32 @@ fn write_outside_workspace_sandbox(workspace_root: &std::path::Path) -> SandboxL
     }
 }
 
+fn managed_network_config() -> ManagedNetworkConfig {
+    let mut config = NetworkProxyConfig::default();
+    config.network.enabled = true;
+    ManagedNetworkConfig {
+        config,
+        constraints: NetworkProxyConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        },
+        audit_metadata: NetworkProxyAuditMetadata {
+            conversation_id: Some("exec-server-smoke".to_string()),
+            ..Default::default()
+        },
+    }
+}
+
 async fn assert_exec_process_sandbox_denies_write_outside_workspace(
     use_remote: bool,
 ) -> Result<()> {
     let temp_dir = TempDir::new()?;
     let workspace_root = temp_dir.path().join("workspace");
     std::fs::create_dir(&workspace_root)?;
-    let blocked_path = temp_dir.path().join("blocked.txt");
+    let blocked_dir = tempfile::Builder::new()
+        .prefix("exec-server-sandbox-blocked-")
+        .tempdir_in(std::env::current_dir()?)?;
+    let blocked_path = blocked_dir.path().join("blocked.txt");
     let context = create_process_context(use_remote).await?;
     let session = context
         .backend
@@ -286,6 +313,7 @@ async fn assert_exec_process_sandbox_denies_write_outside_workspace(
             tty: false,
             arg0: None,
             sandbox: write_outside_workspace_sandbox(&workspace_root),
+            managed_network: None,
         })
         .await?;
 
@@ -300,6 +328,44 @@ async fn assert_exec_process_sandbox_denies_write_outside_workspace(
         !blocked_path.exists(),
         "sandboxed process unexpectedly wrote outside the workspace root"
     );
+    Ok(())
+}
+
+async fn assert_remote_exec_process_applies_managed_network_proxy_env() -> Result<()> {
+    let context = create_process_context(/*use_remote*/ true).await?;
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-managed-network"),
+            argv: vec![
+                "/usr/bin/python3".to_string(),
+                "-c".to_string(),
+                "import os; print('HTTP_PROXY=' + os.environ['HTTP_PROXY']); print('HTTPS_PROXY=' + os.environ['HTTPS_PROXY'])"
+                    .to_string(),
+            ],
+            cwd: std::env::current_dir()?,
+            env: Default::default(),
+            tty: false,
+            arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(std::env::current_dir()?),
+            managed_network: Some(managed_network_config()),
+        })
+        .await?;
+
+    let StartedExecProcess { process, .. } = session;
+    let wake_rx = process.subscribe_wake();
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+
+    assert!(
+        output.contains("HTTP_PROXY=http://127.0.0.1:"),
+        "expected HTTP proxy env from managed network runtime, got {output:?}"
+    );
+    assert!(
+        output.contains("HTTPS_PROXY=http://127.0.0.1:"),
+        "expected HTTPS proxy env from managed network runtime, got {output:?}"
+    );
+    assert_eq!(exit_code, Some(0));
+    assert!(closed);
     Ok(())
 }
 
@@ -322,6 +388,7 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
             sandbox: SandboxLaunchConfig::no_sandbox(
                 std::env::current_dir().expect("read current dir"),
             ),
+            managed_network: None,
         })
         .await?;
 
@@ -380,4 +447,9 @@ async fn exec_process_preserves_queued_events_before_subscribe(use_remote: bool)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_exec_process_sandbox_denies_write_outside_workspace() -> Result<()> {
     assert_exec_process_sandbox_denies_write_outside_workspace(/*use_remote*/ true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_exec_process_applies_managed_network_proxy_env() -> Result<()> {
+    assert_remote_exec_process_applies_managed_network_proxy_env().await
 }

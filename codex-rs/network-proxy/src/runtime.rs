@@ -19,6 +19,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
+use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -39,7 +40,7 @@ const MAX_BLOCKED_EVENTS: usize = 200;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const NETWORK_POLICY_VIOLATION_PREFIX: &str = "CODEX_NETWORK_POLICY_VIOLATION";
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkProxyAuditMetadata {
     pub conversation_id: Option<String>,
     pub app_version: Option<String>,

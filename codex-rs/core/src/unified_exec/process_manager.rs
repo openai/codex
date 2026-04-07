@@ -610,6 +610,7 @@ impl UnifiedExecProcessManager {
                     tty,
                     arg0: request.arg0.clone(),
                     sandbox: codex_sandboxing::SandboxLaunchConfig::no_sandbox(request.cwd.clone()),
+                    managed_network: None,
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;

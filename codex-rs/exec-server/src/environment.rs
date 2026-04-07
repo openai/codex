@@ -280,6 +280,7 @@ mod tests {
                 sandbox: SandboxLaunchConfig::no_sandbox(
                     std::env::current_dir().expect("read current dir"),
                 ),
+                managed_network: None,
             })
             .await
             .expect("start process");

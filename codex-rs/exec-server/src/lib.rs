@@ -54,6 +54,7 @@ pub use protocol::ExecParams;
 pub use protocol::ExecResponse;
 pub use protocol::InitializeParams;
 pub use protocol::InitializeResponse;
+pub use protocol::ManagedNetworkConfig;
 pub use protocol::ReadParams;
 pub use protocol::ReadResponse;
 pub use protocol::TerminateParams;

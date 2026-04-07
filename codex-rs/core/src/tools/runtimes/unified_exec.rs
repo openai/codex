@@ -33,7 +33,9 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_exec_server::ManagedNetworkConfig;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
@@ -83,6 +85,11 @@ pub struct UnifiedExecRuntime<'a> {
     shell_mode: UnifiedExecShellMode,
 }
 
+struct RemoteManagedNetworkLaunch {
+    config: ManagedNetworkConfig,
+    requires_approval_callbacks: bool,
+}
+
 fn build_remote_exec_sandbox_config(
     attempt: &SandboxAttempt<'_>,
     additional_permissions: Option<PermissionProfile>,
@@ -103,6 +110,35 @@ fn build_remote_exec_sandbox_config(
         windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
         use_legacy_landlock: attempt.use_legacy_landlock,
     }
+}
+
+async fn build_remote_exec_managed_network_launch(
+    session: &crate::codex::Session,
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+) -> Option<RemoteManagedNetworkLaunch> {
+    let spec = session.managed_network_proxy_spec().await?;
+    let spec = spec
+        .with_exec_policy_network_rules(session.services.exec_policy.current().as_ref())
+        .map_err(|err| {
+            tracing::warn!(
+                "failed to apply execpolicy network rules to remote managed proxy; continuing with configured network policy: {err}"
+            );
+            err
+        })
+        .unwrap_or_else(|_| spec.clone());
+
+    Some(RemoteManagedNetworkLaunch {
+        config: ManagedNetworkConfig {
+            config: spec.config().clone(),
+            constraints: spec.constraints().clone(),
+            audit_metadata: NetworkProxyAuditMetadata {
+                conversation_id: Some(session.conversation_id.to_string()),
+                app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                ..NetworkProxyAuditMetadata::default()
+            },
+        },
+        requires_approval_callbacks: spec.requires_remote_approval_callbacks(sandbox_policy),
+    })
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -238,10 +274,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             command
         };
 
-        let mut env = req.env.clone();
-        if let Some(network) = req.network.as_ref() {
-            network.apply_to_env(&mut env);
-        }
+        let base_env = req.env.clone();
         if let Some(environment) = ctx
             .turn
             .environment
@@ -254,17 +287,38 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                         .to_string(),
                 ));
             }
+            let managed_network = if req.network.is_some() {
+                let managed_network =
+                    build_remote_exec_managed_network_launch(ctx.session.as_ref(), attempt.policy)
+                        .await
+                        .ok_or_else(|| {
+                            ToolError::Rejected(
+                                "remote unified_exec is missing managed-network proxy configuration"
+                                    .to_string(),
+                            )
+                        })?;
+                if managed_network.requires_approval_callbacks {
+                    return Err(ToolError::Rejected(
+                        "remote unified_exec does not yet support managed-network approval callbacks"
+                            .to_string(),
+                    ));
+                }
+                Some(managed_network.config)
+            } else {
+                None
+            };
             let exec_params = codex_exec_server::ExecParams {
                 process_id: req.process_id.to_string().into(),
                 argv: command,
                 cwd: req.cwd.clone(),
-                env,
+                env: base_env.clone(),
                 tty: req.tty,
                 arg0: None,
                 sandbox: build_remote_exec_sandbox_config(
                     attempt,
                     req.additional_permissions.clone(),
                 ),
+                managed_network,
             };
             return self
                 .manager
@@ -279,6 +333,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                     }
                     other => ToolError::Rejected(other.to_string()),
                 });
+        }
+        let mut env = base_env;
+        if let Some(network) = req.network.as_ref() {
+            network.apply_to_env(&mut env);
         }
         let Some(environment) = ctx.turn.environment.as_ref() else {
             return Err(ToolError::Rejected(

@@ -1279,6 +1279,18 @@ impl Session {
         }
     }
 
+    pub(crate) async fn managed_network_proxy_spec(
+        &self,
+    ) -> Option<crate::config::NetworkProxySpec> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .permissions
+            .network
+            .clone()
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so

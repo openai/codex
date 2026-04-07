@@ -31,6 +31,7 @@ fn exec_params(process_id: &str) -> ExecParams {
         tty: false,
         arg0: None,
         sandbox: SandboxLaunchConfig::no_sandbox(std::env::current_dir().expect("cwd")),
+        managed_network: None,
     }
 }
 

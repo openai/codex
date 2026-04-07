@@ -9,6 +9,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigState;
+use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyHandle;
+use codex_network_proxy::NetworkProxyState;
+use codex_network_proxy::build_config_state;
+use codex_network_proxy::validate_policy_against_constraints;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
@@ -62,6 +69,7 @@ struct RetainedOutputChunk {
 
 struct RunningProcess {
     session: ExecCommandSession,
+    _managed_network: Option<ManagedNetworkRuntime>,
     tty: bool,
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
@@ -120,6 +128,36 @@ struct StartedProcess {
     process_id: ProcessId,
     sandbox_type: SandboxType,
     wake_tx: watch::Sender<u64>,
+}
+
+struct ManagedNetworkRuntime {
+    proxy: NetworkProxy,
+    _handle: NetworkProxyHandle,
+}
+
+#[derive(Clone)]
+struct StaticNetworkProxyReloader {
+    state: ConfigState,
+}
+
+#[async_trait]
+impl ConfigReloader for StaticNetworkProxyReloader {
+    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
+        Ok(None)
+    }
+
+    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
+        Ok(self.state.clone())
+    }
+
+    fn source_label(&self) -> String {
+        "ExecServerStaticNetworkProxyReloader".to_string()
+    }
+}
+
+struct PreparedExecLaunch {
+    request: SandboxExecRequest,
+    managed_network: Option<ManagedNetworkRuntime>,
 }
 
 impl Default for LocalProcess {
@@ -197,8 +235,9 @@ impl LocalProcess {
     async fn start_process(&self, params: ExecParams) -> Result<StartedProcess, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
-        let launch = prepare_exec_launch(&params, &self.inner.runtime)?;
+        let launch = prepare_exec_launch(&params, &self.inner.runtime).await?;
         let (program, args) = launch
+            .request
             .command
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
@@ -218,8 +257,8 @@ impl LocalProcess {
                 program,
                 args,
                 params.cwd.as_path(),
-                &launch.env,
-                &launch.arg0,
+                &launch.request.env,
+                &launch.request.arg0,
                 TerminalSize::default(),
             )
             .await
@@ -228,8 +267,8 @@ impl LocalProcess {
                 program,
                 args,
                 params.cwd.as_path(),
-                &launch.env,
-                &launch.arg0,
+                &launch.request.env,
+                &launch.request.arg0,
             )
             .await
         };
@@ -252,6 +291,7 @@ impl LocalProcess {
                 process_id.clone(),
                 ProcessEntry::Running(Box::new(RunningProcess {
                     session: spawned.session,
+                    _managed_network: launch.managed_network,
                     tty: params.tty,
                     output: VecDeque::new(),
                     retained_bytes: 0,
@@ -296,7 +336,7 @@ impl LocalProcess {
 
         Ok(StartedProcess {
             process_id,
-            sandbox_type: launch.sandbox,
+            sandbox_type: launch.request.sandbox,
             wake_tx,
         })
     }
@@ -513,27 +553,70 @@ fn build_sandbox_command(
     })
 }
 
-fn prepare_exec_launch(
+async fn start_managed_network_runtime(
+    config: &crate::protocol::ManagedNetworkConfig,
+) -> Result<ManagedNetworkRuntime, JSONRPCErrorError> {
+    validate_policy_against_constraints(&config.config, &config.constraints)
+        .map_err(|err| internal_error(format!("invalid managed network config: {err}")))?;
+    let state =
+        build_config_state(config.config.clone(), config.constraints.clone()).map_err(|err| {
+            internal_error(format!(
+                "failed to build managed network proxy state: {err}"
+            ))
+        })?;
+    let reloader_state = state.clone();
+    let state = NetworkProxyState::with_reloader_and_audit_metadata(
+        state,
+        Arc::new(StaticNetworkProxyReloader {
+            state: reloader_state,
+        }),
+        config.audit_metadata.clone(),
+    );
+    let proxy = NetworkProxy::builder()
+        .state(Arc::new(state))
+        .build()
+        .await
+        .map_err(|err| internal_error(format!("failed to build managed network proxy: {err}")))?;
+    let handle = proxy
+        .run()
+        .await
+        .map_err(|err| internal_error(format!("failed to run managed network proxy: {err}")))?;
+    Ok(ManagedNetworkRuntime {
+        proxy,
+        _handle: handle,
+    })
+}
+
+async fn prepare_exec_launch(
     params: &ExecParams,
     runtime: &ExecServerRuntimeConfig,
-) -> Result<SandboxExecRequest, JSONRPCErrorError> {
+) -> Result<PreparedExecLaunch, JSONRPCErrorError> {
+    let managed_network = match params.managed_network.as_ref() {
+        Some(config) => Some(start_managed_network_runtime(config).await?),
+        None => None,
+    };
+    let mut env = params.env.clone();
+    if let Some(network) = managed_network.as_ref() {
+        network.proxy.apply_to_env(&mut env);
+    }
     let command = build_sandbox_command(
         &params.argv,
         params.cwd.as_path(),
-        &params.env,
+        &env,
         params.sandbox.additional_permissions.clone(),
     )?;
-    params
+    let request = params
         .sandbox
         .transform(
             command,
-            // TODO: Thread managed-network proxy state across exec-server so
-            // sandbox profile generation preserves proxy-specific allowances.
-            /*network*/
-            None,
+            managed_network.as_ref().map(|network| &network.proxy),
             runtime.codex_linux_sandbox_exe.as_ref(),
         )
-        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))
+        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))?;
+    Ok(PreparedExecLaunch {
+        request,
+        managed_network,
+    })
 }
 
 impl LocalProcess {
