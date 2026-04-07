@@ -243,7 +243,8 @@ pub async fn apply_hunks(
 
 /// Applies each parsed patch hunk to the filesystem.
 /// Returns an error if any of the changes could not be applied.
-/// Tracks file paths affected by applying a patch.
+/// Tracks file paths affected by applying a patch, preserving the path spelling
+/// from the patch for user-facing summaries.
 pub struct AffectedPaths {
     pub added: Vec<PathBuf>,
     pub modified: Vec<PathBuf>,
@@ -265,6 +266,7 @@ async fn apply_hunks_to_files(
     let mut modified: Vec<PathBuf> = Vec::new();
     let mut deleted: Vec<PathBuf> = Vec::new();
     for hunk in hunks {
+        let affected_path = hunk.path().to_path_buf();
         let path_abs = hunk.resolve_path(cwd);
         match hunk {
             Hunk::AddFile { contents, .. } => {
@@ -281,7 +283,7 @@ async fn apply_hunks_to_files(
                 fs.write_file(&path_abs, contents.clone().into_bytes())
                     .await
                     .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
-                added.push(path_abs.into_path_buf());
+                added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
                 let result: io::Result<()> = async {
@@ -303,7 +305,7 @@ async fn apply_hunks_to_files(
                 }
                 .await;
                 result.with_context(|| format!("Failed to delete file {}", path_abs.display()))?;
-                deleted.push(path_abs.into_path_buf());
+                deleted.push(affected_path);
             }
             Hunk::UpdateFile {
                 move_path, chunks, ..
@@ -349,12 +351,12 @@ async fn apply_hunks_to_files(
                     result.with_context(|| {
                         format!("Failed to remove original {}", path_abs.display())
                     })?;
-                    modified.push(dest_abs.into_path_buf());
+                    modified.push(affected_path);
                 } else {
                     fs.write_file(&path_abs, new_contents.into_bytes())
                         .await
                         .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
-                    modified.push(path_abs.into_path_buf());
+                    modified.push(affected_path);
                 }
             }
         }
@@ -690,12 +692,9 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!(
-                "Success. Updated the following files:\nA {}\nA {}\nM {}\nM {}\nD {}\nD {}\n",
-                relative_add.display(),
+                "Success. Updated the following files:\nA relative-add.txt\nA {}\nM relative-update.txt\nM {}\nD relative-delete.txt\nD {}\n",
                 absolute_add.display(),
-                relative_update.display(),
                 absolute_update.display(),
-                relative_delete.display(),
                 absolute_delete.display(),
             )
         );

@@ -26,6 +26,7 @@ use crate::ApplyPatchArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_absolute_path::test_support::PathBufExt;
+use std::path::Path;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -79,10 +80,27 @@ pub enum Hunk {
 
 impl Hunk {
     pub fn resolve_path(&self, cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
+        let path = match self {
+            Hunk::UpdateFile { path, .. } => path,
+            Hunk::AddFile { .. } | Hunk::DeleteFile { .. } => self.path(),
+        };
+        AbsolutePathBuf::resolve_path_against_base(path, cwd)
+    }
+
+    /// Returns the path affected by this hunk, using the move destination for rename hunks.
+    pub fn path(&self) -> &Path {
         match self {
-            Hunk::AddFile { path, .. } => AbsolutePathBuf::resolve_path_against_base(path, cwd),
-            Hunk::DeleteFile { path } => AbsolutePathBuf::resolve_path_against_base(path, cwd),
-            Hunk::UpdateFile { path, .. } => AbsolutePathBuf::resolve_path_against_base(path, cwd),
+            Hunk::AddFile { path, .. } => path,
+            Hunk::DeleteFile { path } => path,
+            Hunk::UpdateFile {
+                move_path: Some(path),
+                ..
+            } => path,
+            Hunk::UpdateFile {
+                path,
+                move_path: None,
+                ..
+            } => path,
         }
     }
 }

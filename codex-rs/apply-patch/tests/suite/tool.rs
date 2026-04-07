@@ -27,23 +27,15 @@ fn test_apply_patch_cli_applies_multiple_operations() -> anyhow::Result<()> {
     let add_path = tmp.path().join("nested/new.txt");
     let modify_path = tmp.path().join("modify.txt");
     let delete_path = tmp.path().join("delete.txt");
-    let expected_add_path = resolved_under(tmp.path(), "nested/new.txt")?;
-    let expected_modify_path = resolved_under(tmp.path(), "modify.txt")?;
-    let expected_delete_path = resolved_under(tmp.path(), "delete.txt")?;
 
     fs::write(&modify_path, "line1\nline2\n")?;
     fs::write(&delete_path, "obsolete\n")?;
 
     let patch = "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** End Patch";
 
-    run_apply_patch_in_dir(tmp.path(), patch)?
-        .success()
-        .stdout(format!(
-            "Success. Updated the following files:\nA {}\nM {}\nD {}\n",
-            expected_add_path.display(),
-            expected_modify_path.display(),
-            expected_delete_path.display()
-        ));
+    run_apply_patch_in_dir(tmp.path(), patch)?.success().stdout(
+        "Success. Updated the following files:\nA nested/new.txt\nM modify.txt\nD delete.txt\n",
+    );
 
     assert_eq!(fs::read_to_string(add_path)?, "created\n");
     assert_eq!(fs::read_to_string(&modify_path)?, "line1\nchanged\n");
@@ -56,17 +48,13 @@ fn test_apply_patch_cli_applies_multiple_operations() -> anyhow::Result<()> {
 fn test_apply_patch_cli_applies_multiple_chunks() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let target_path = tmp.path().join("multi.txt");
-    let expected_target_path = resolved_under(tmp.path(), "multi.txt")?;
     fs::write(&target_path, "line1\nline2\nline3\nline4\n")?;
 
     let patch = "*** Begin Patch\n*** Update File: multi.txt\n@@\n-line2\n+changed2\n@@\n-line4\n+changed4\n*** End Patch";
 
     run_apply_patch_in_dir(tmp.path(), patch)?
         .success()
-        .stdout(format!(
-            "Success. Updated the following files:\nM {}\n",
-            expected_target_path.display()
-        ));
+        .stdout("Success. Updated the following files:\nM multi.txt\n");
 
     assert_eq!(
         fs::read_to_string(&target_path)?,
@@ -81,7 +69,6 @@ fn test_apply_patch_cli_moves_file_to_new_directory() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let original_path = tmp.path().join("old/name.txt");
     let new_path = tmp.path().join("renamed/dir/name.txt");
-    let expected_new_path = resolved_under(tmp.path(), "renamed/dir/name.txt")?;
     fs::create_dir_all(original_path.parent().expect("parent should exist"))?;
     fs::write(&original_path, "old content\n")?;
 
@@ -89,10 +76,7 @@ fn test_apply_patch_cli_moves_file_to_new_directory() -> anyhow::Result<()> {
 
     run_apply_patch_in_dir(tmp.path(), patch)?
         .success()
-        .stdout(format!(
-            "Success. Updated the following files:\nM {}\n",
-            expected_new_path.display()
-        ));
+        .stdout("Success. Updated the following files:\nM renamed/dir/name.txt\n");
 
     assert!(!original_path.exists());
     assert_eq!(fs::read_to_string(&new_path)?, "new content\n");
@@ -185,7 +169,6 @@ fn test_apply_patch_cli_move_overwrites_existing_destination() -> anyhow::Result
     let tmp = tempdir()?;
     let original_path = tmp.path().join("old/name.txt");
     let destination = tmp.path().join("renamed/dir/name.txt");
-    let expected_destination = resolved_under(tmp.path(), "renamed/dir/name.txt")?;
     fs::create_dir_all(original_path.parent().expect("parent should exist"))?;
     fs::create_dir_all(destination.parent().expect("parent should exist"))?;
     fs::write(&original_path, "from\n")?;
@@ -196,10 +179,7 @@ fn test_apply_patch_cli_move_overwrites_existing_destination() -> anyhow::Result
         "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-from\n+new\n*** End Patch",
     )?
     .success()
-    .stdout(format!(
-        "Success. Updated the following files:\nM {}\n",
-        expected_destination.display()
-    ));
+    .stdout("Success. Updated the following files:\nM renamed/dir/name.txt\n");
 
     assert!(!original_path.exists());
     assert_eq!(fs::read_to_string(&destination)?, "new\n");
@@ -211,7 +191,6 @@ fn test_apply_patch_cli_move_overwrites_existing_destination() -> anyhow::Result
 fn test_apply_patch_cli_add_overwrites_existing_file() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let path = tmp.path().join("duplicate.txt");
-    let expected_path = resolved_under(tmp.path(), "duplicate.txt")?;
     fs::write(&path, "old content\n")?;
 
     run_apply_patch_in_dir(
@@ -219,10 +198,7 @@ fn test_apply_patch_cli_add_overwrites_existing_file() -> anyhow::Result<()> {
         "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch",
     )?
     .success()
-    .stdout(format!(
-        "Success. Updated the following files:\nA {}\n",
-        expected_path.display()
-    ));
+    .stdout("Success. Updated the following files:\nA duplicate.txt\n");
 
     assert_eq!(fs::read_to_string(&path)?, "new content\n");
 
@@ -265,7 +241,6 @@ fn test_apply_patch_cli_rejects_invalid_hunk_header() -> anyhow::Result<()> {
 fn test_apply_patch_cli_updates_file_appends_trailing_newline() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let target_path = tmp.path().join("no_newline.txt");
-    let expected_target_path = resolved_under(tmp.path(), "no_newline.txt")?;
     fs::write(&target_path, "no newline at end")?;
 
     run_apply_patch_in_dir(
@@ -273,10 +248,7 @@ fn test_apply_patch_cli_updates_file_appends_trailing_newline() -> anyhow::Resul
         "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch",
     )?
     .success()
-    .stdout(format!(
-        "Success. Updated the following files:\nM {}\n",
-        expected_target_path.display()
-    ));
+    .stdout("Success. Updated the following files:\nM no_newline.txt\n");
 
     let contents = fs::read_to_string(&target_path)?;
     assert!(contents.ends_with('\n'));
