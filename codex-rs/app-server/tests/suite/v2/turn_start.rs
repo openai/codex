@@ -252,17 +252,22 @@ async fn turn_start_honors_explicit_null_thread_instructions() -> Result<()> {
             expect_instructions,
             "unexpected instructions field in payload: {payload:?}"
         );
+        let developer_texts = request.message_input_texts("developer");
         if index == 2 {
             assert_eq!(
                 payload.get("instructions"),
                 Some(&Value::String(String::new()))
             );
+            assert!(
+                developer_texts.iter().any(|text| text.is_empty()),
+                "expected explicit empty developerInstructions to produce an empty developer instruction message: {developer_texts:?}"
+            );
+        } else {
+            assert!(
+                developer_texts.iter().all(|text| !text.is_empty()),
+                "did not expect empty developer instruction messages: {developer_texts:?}"
+            );
         }
-        let developer_texts = request.message_input_texts("developer");
-        assert!(
-            developer_texts.iter().all(|text| !text.is_empty()),
-            "did not expect empty developer instruction messages: {developer_texts:?}"
-        );
     }
 
     Ok(())

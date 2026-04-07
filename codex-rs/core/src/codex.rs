@@ -3664,7 +3664,6 @@ impl Session {
         // stays isolated as its own top-level developer message for guardian subagents.
         if !separate_guardian_developer_message
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
-            && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
         }
@@ -3779,7 +3778,6 @@ impl Session {
         // subagent sees a distinct, easy-to-audit instruction block.
         if separate_guardian_developer_message
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
-            && !developer_instructions.is_empty()
             && let Some(guardian_developer_message) =
                 crate::context_manager::updates::build_developer_update_item(vec![
                     developer_instructions.to_string(),
