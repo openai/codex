@@ -566,6 +566,8 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
+        completed_at: None,
+        duration_ms: None,
     })]);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -590,6 +592,8 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
+        completed_at: None,
+        duration_ms: None,
     })]);
     let replay_popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
@@ -602,6 +606,8 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Plan details".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -623,6 +629,8 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Plan details".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
     let duplicate_popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -850,6 +858,9 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
             },
         }),
         /*replay_kind*/ None,
@@ -893,6 +904,9 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 items: Vec::new(),
                 status: AppServerTurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         }),
         /*replay_kind*/ None,

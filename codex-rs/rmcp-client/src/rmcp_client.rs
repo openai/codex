@@ -69,13 +69,13 @@ use tracing::warn;
 
 use crate::load_oauth_tokens;
 use crate::logging_client_handler::LoggingClientHandler;
-use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::create_env_for_mcp_server;
+use codex_config::types::OAuthCredentialsStoreMode;
 
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const JSON_MIME_TYPE: &str = "application/json";
