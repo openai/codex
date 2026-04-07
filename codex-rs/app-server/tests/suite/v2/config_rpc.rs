@@ -348,7 +348,7 @@ model_reasoning_effort = "high"
 "#,
     )?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
-    let project_config = AbsolutePathBuf::try_from(project_config_dir)?;
+    let project_config = AbsolutePathBuf::try_from(project_config_dir.canonicalize()?)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
