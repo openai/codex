@@ -477,6 +477,10 @@ pub(crate) struct CodexMessageProcessorArgs {
 
 impl CodexMessageProcessor {
     pub(crate) fn handle_config_mutation(&self) {
+        self.clear_plugin_related_caches();
+    }
+
+    fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
     }
