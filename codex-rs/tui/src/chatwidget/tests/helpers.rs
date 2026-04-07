@@ -382,8 +382,14 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
 pub(crate) fn set_fast_mode_test_catalog(chat: &mut ChatWidget) {
     let models: Vec<ModelPreset> = ModelsResponse {
         models: vec![
-            test_model_info("gpt-5.4", 0, true),
-            test_model_info("gpt-5.3-codex", 1, false),
+            test_model_info(
+                "gpt-5.4", /*priority*/ 0, /*supports_fast_mode*/ true,
+            ),
+            test_model_info(
+                "gpt-5.3-codex",
+                /*priority*/ 1,
+                /*supports_fast_mode*/ false,
+            ),
         ],
     }
     .models
