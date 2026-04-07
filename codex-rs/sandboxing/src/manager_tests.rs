@@ -293,3 +293,31 @@ fn transform_linux_seccomp_uses_helper_alias_when_launcher_is_not_helper_path() 
 
     assert_eq!(exec_request.arg0, Some("codex-linux-sandbox".to_string()));
 }
+
+#[test]
+fn usable_linux_sandbox_exe_falls_back_when_helper_alias_disappears() -> std::io::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let missing_helper = temp_dir.path().join("codex-linux-sandbox");
+
+    assert_eq!(
+        super::usable_linux_sandbox_exe(&missing_helper),
+        std::env::current_exe()?
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn transform_linux_seccomp_falls_back_when_helper_alias_disappears() -> std::io::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let missing_helper = temp_dir.path().join("codex-linux-sandbox");
+    let exec_request = transform_linux_seccomp_request(&missing_helper);
+    let current_exe = std::env::current_exe()?;
+
+    assert_eq!(
+        exec_request.command.first(),
+        Some(&current_exe.to_string_lossy().into_owned())
+    );
+    assert_eq!(exec_request.arg0, Some("codex-linux-sandbox".to_string()));
+    Ok(())
+}

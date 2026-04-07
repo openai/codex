@@ -218,6 +218,7 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
+                let exe = usable_linux_sandbox_exe(exe);
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args_for_policies(
                     os_argv_to_strings(argv),
@@ -232,10 +233,7 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));
                 full_command.append(&mut args);
-                (
-                    full_command,
-                    Some(linux_sandbox_arg0_override(exe.as_path())),
-                )
+                (full_command, Some(linux_sandbox_arg0_override(&exe)))
             }
             #[cfg(target_os = "windows")]
             SandboxType::WindowsRestrictedToken => (os_argv_to_strings(argv), None),
@@ -276,6 +274,29 @@ fn linux_sandbox_arg0_override(exe: &Path) -> String {
         os_string_to_command_component(exe.as_os_str().to_owned())
     } else {
         CODEX_LINUX_SANDBOX_ARG0.to_string()
+    }
+}
+
+fn usable_linux_sandbox_exe(exe: &Path) -> PathBuf {
+    if exe.exists()
+        || exe.file_name().and_then(|name| name.to_str()) != Some(CODEX_LINUX_SANDBOX_ARG0)
+    {
+        return exe.to_path_buf();
+    }
+
+    match std::env::current_exe() {
+        Ok(current_exe) => {
+            tracing::warn!(
+                "codex-linux-sandbox helper alias disappeared; falling back to current executable: {exe:?}"
+            );
+            current_exe
+        }
+        Err(err) => {
+            tracing::warn!(
+                "codex-linux-sandbox helper alias disappeared and current executable could not be resolved: {err}"
+            );
+            exe.to_path_buf()
+        }
     }
 }
 
