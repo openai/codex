@@ -1963,6 +1963,10 @@ impl ChatWidget {
         if message.is_empty() {
             return;
         }
+        // `completed_turn_count` is bumped when the *user* message that starts the
+        // turn is submitted, so it reflects the turn we are currently inside. Before
+        // the first user message it is zero; in that case (e.g. a system-initiated
+        // agent message during replay) synthesise a monotonically increasing ordinal.
         let turn_ordinal = if self.completed_turn_count == 0 {
             self.agent_turn_markdowns
                 .last()
@@ -2384,6 +2388,10 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
+        // Use `last_agent_message` from the turn-complete notification as the copy
+        // source only when no earlier item-level event (AgentMessageItem, plan
+        // commit, review output) already recorded markdown for this turn. This
+        // prevents the final summary from overwriting a more specific source.
         if let Some(message) = last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
@@ -2391,6 +2399,8 @@ impl ChatWidget {
         {
             self.record_agent_markdown(message);
         }
+        // For desktop notifications: prefer the notification payload, fall back to
+        // the item-level copy source if present, otherwise send an empty string.
         let notification_response = last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
@@ -5106,6 +5116,7 @@ impl ChatWidget {
         self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
+    /// Inner implementation with an injectable clipboard backend for testing.
     fn copy_last_agent_markdown_with(
         &mut self,
         copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
