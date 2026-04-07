@@ -114,6 +114,7 @@ pub async fn run_codex_tool_session(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         },
         trace: None,
     };
@@ -161,6 +162,7 @@ pub async fn run_codex_tool_session_reply(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await
     {

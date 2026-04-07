@@ -904,6 +904,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            submission_type: None,
         })
         .await?;
 
@@ -920,6 +921,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                submission_type: None,
             })
             .await?;
     }

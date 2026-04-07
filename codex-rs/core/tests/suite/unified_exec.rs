@@ -179,6 +179,7 @@ async fn submit_unified_exec_turn(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -259,6 +260,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1747,6 +1749,7 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1840,6 +1843,7 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -2312,6 +2316,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 
@@ -2421,6 +2426,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            submission_type: None,
         })
         .await?;
 

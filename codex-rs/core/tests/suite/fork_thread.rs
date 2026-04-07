@@ -53,6 +53,7 @@ async fn fork_thread_twice_drops_to_first_message() {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                submission_type: None,
             })
             .await
             .unwrap();
