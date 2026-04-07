@@ -48,6 +48,8 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::serde_helpers::deserialize_double_option;
+use crate::serde_helpers::serialize_double_option;
 use crate::user_input::UserInput;
 use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -2542,8 +2544,8 @@ pub struct SessionMeta {
     /// from ModelsManager.
     #[serde(
         default,
-        deserialize_with = "serde_with::rust::double_option::deserialize",
-        serialize_with = "serde_with::rust::double_option::serialize",
+        deserialize_with = "deserialize_double_option",
+        serialize_with = "serialize_double_option",
         skip_serializing_if = "Option::is_none"
     )]
     pub base_instructions: Option<Option<BaseInstructions>>,

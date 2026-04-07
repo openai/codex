@@ -3871,12 +3871,13 @@ impl Session {
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let history = self.clone_history().await;
-        let base_instructions =
-            self.get_base_instructions()
-                .await
-                .unwrap_or_else(|| BaseInstructions {
-                    text: String::new(),
-                });
+        let empty_base_instructions = BaseInstructions {
+            text: String::new(),
+        };
+        let base_instructions = self
+            .get_base_instructions()
+            .await
+            .unwrap_or(empty_base_instructions);
         let Some(estimated_total_tokens) =
             history.estimate_token_count_with_base_instructions(&base_instructions)
         else {
