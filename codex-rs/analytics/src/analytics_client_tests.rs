@@ -27,6 +27,15 @@ use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::GuardianReviewDecision;
+use crate::facts::GuardianReviewEventParams;
+use crate::facts::GuardianReviewFailureKind;
+use crate::facts::GuardianReviewRiskLevel;
+use crate::facts::GuardianReviewSessionKind;
+use crate::facts::GuardianReviewTerminalStatus;
+use crate::facts::GuardianReviewTrigger;
+use crate::facts::GuardianReviewedAction;
+use crate::facts::GuardianToolCallCounts;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
@@ -1082,6 +1091,127 @@ async fn reducer_ingests_plugin_state_changed_fact() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_guardian_review_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tool_counts = GuardianToolCallCounts {
+        shell: 1,
+        mcp: 2,
+        ..Default::default()
+    };
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(Box::new(
+                GuardianReviewEventParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    review_id: "review-1".to_string(),
+                    target_item_id: "tool-1".to_string(),
+                    product_client_id: Some("codex_app".to_string()),
+                    trigger: GuardianReviewTrigger::McpToolCall,
+                    retry_reason: Some("requires approval".to_string()),
+                    delegated_review: true,
+                    reviewed_action: GuardianReviewedAction::McpToolCall {
+                        server: "github".to_string(),
+                        tool_name: "create_pr".to_string(),
+                        arguments: Some(json!({"title": "Guardian analytics"})),
+                        connector_id: Some("github".to_string()),
+                        connector_name: Some("GitHub".to_string()),
+                        tool_title: Some("Create PR".to_string()),
+                    },
+                    reviewed_action_truncated: false,
+                    decision: GuardianReviewDecision::Denied,
+                    terminal_status: GuardianReviewTerminalStatus::FailedClosed,
+                    failure_kind: Some(GuardianReviewFailureKind::ParseError),
+                    risk_score: Some(100),
+                    risk_level: Some(GuardianReviewRiskLevel::High),
+                    rationale: Some("Automatic approval review failed".to_string()),
+                    guardian_thread_id: Some("guardian-thread-1".to_string()),
+                    guardian_session_kind: Some(GuardianReviewSessionKind::EphemeralForked),
+                    guardian_model: Some("gpt-5.4".to_string()),
+                    guardian_reasoning_effort: Some("low".to_string()),
+                    had_prior_review_context: Some(true),
+                    review_timeout_ms: 90_000,
+                    guardian_tool_call_count: tool_counts.total(),
+                    guardian_tool_call_counts: tool_counts,
+                    guardian_time_to_first_token_ms: Some(123),
+                    guardian_completion_latency_ms: Some(456),
+                    started_at: 1_716_000_000,
+                    completed_at: Some(1_716_000_001),
+                    input_tokens: Some(10),
+                    cached_input_tokens: Some(2),
+                    output_tokens: Some(3),
+                    reasoning_output_tokens: Some(1),
+                    total_tokens: Some(13),
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize guardian review event");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_guardian_review",
+            "event_params": {
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "review_id": "review-1",
+                "target_item_id": "tool-1",
+                "product_client_id": "codex_app",
+                "trigger": "mcp_tool_call",
+                "retry_reason": "requires approval",
+                "delegated_review": true,
+                "reviewed_action": {
+                    "type": "mcp_tool_call",
+                    "server": "github",
+                    "tool_name": "create_pr",
+                    "arguments": {"title": "Guardian analytics"},
+                    "connector_id": "github",
+                    "connector_name": "GitHub",
+                    "tool_title": "Create PR"
+                },
+                "reviewed_action_truncated": false,
+                "decision": "denied",
+                "terminal_status": "failed_closed",
+                "failure_kind": "parse_error",
+                "risk_score": 100,
+                "risk_level": "high",
+                "rationale": "Automatic approval review failed",
+                "guardian_thread_id": "guardian-thread-1",
+                "guardian_session_kind": "ephemeral_forked",
+                "guardian_model": "gpt-5.4",
+                "guardian_reasoning_effort": "low",
+                "had_prior_review_context": true,
+                "review_timeout_ms": 90000,
+                "guardian_tool_call_count": 3,
+                "guardian_tool_call_counts": {
+                    "shell": 1,
+                    "unified_exec": 0,
+                    "mcp": 2,
+                    "dynamic": 0,
+                    "apply_patch": 0,
+                    "web_search": 0,
+                    "image_generation": 0,
+                    "view_image": 0
+                },
+                "guardian_time_to_first_token_ms": 123,
+                "guardian_completion_latency_ms": 456,
+                "started_at": 1716000000,
+                "completed_at": 1716000001,
+                "input_tokens": 10,
+                "cached_input_tokens": 2,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 13
             }
         }])
     );

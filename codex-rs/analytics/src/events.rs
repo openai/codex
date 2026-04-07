@@ -1,5 +1,6 @@
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::GuardianReviewEventParams;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
@@ -36,6 +37,7 @@ pub(crate) struct TrackEventsRequest {
 pub(crate) enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     ThreadInitialized(ThreadInitializedEvent),
+    GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
@@ -99,6 +101,12 @@ pub(crate) struct ThreadInitializedEventParams {
 pub(crate) struct ThreadInitializedEvent {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: ThreadInitializedEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct GuardianReviewEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: GuardianReviewEventParams,
 }
 
 #[derive(Serialize)]
