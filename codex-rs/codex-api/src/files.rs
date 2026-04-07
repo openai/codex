@@ -2,7 +2,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_login::default_client::build_reqwest_client;
+use codex_client::build_reqwest_client_with_custom_ca;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::fs::File;
@@ -253,6 +253,13 @@ fn authorized_request(
         request = request.header("chatgpt-account-id", account_id);
     }
     request
+}
+
+fn build_reqwest_client() -> reqwest::Client {
+    build_reqwest_client_with_custom_ca(reqwest::Client::builder()).unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "failed to build OpenAI file upload client");
+        reqwest::Client::new()
+    })
 }
 
 #[cfg(test)]

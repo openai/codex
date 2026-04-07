@@ -16,7 +16,9 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::openai_files::upload_local_file;
+use codex_api::OpenAiFileUploadAuth;
+use codex_api::upload_local_file;
+use codex_login::CodexAuth;
 use serde_json::Map;
 use serde_json::Value as JsonValue;
 
@@ -117,7 +119,7 @@ fn declared_field_names(meta: Option<&Map<String, JsonValue>>, key: &str) -> Vec
 
 async fn rewrite_argument_value_for_openai_files(
     turn_context: &TurnContext,
-    auth: Option<&crate::CodexAuth>,
+    auth: Option<&CodexAuth>,
     field_name: &str,
     value: &JsonValue,
 ) -> Result<Option<JsonValue>, String> {
@@ -157,20 +159,36 @@ async fn rewrite_argument_value_for_openai_files(
 
 async fn build_uploaded_local_argument_value(
     turn_context: &TurnContext,
-    auth: Option<&crate::CodexAuth>,
+    auth: Option<&CodexAuth>,
     field_name: &str,
     index: Option<usize>,
     file_path: &str,
 ) -> Result<JsonValue, String> {
     let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
-    let uploaded = upload_local_file(turn_context.config.as_ref(), auth, &resolved_path)
-        .await
-        .map_err(|error| match index {
-            Some(index) => {
-                format!("failed to upload `{file_path}` for `{field_name}[{index}]`: {error}")
-            }
-            None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
-        })?;
+    let Some(auth) = auth else {
+        return Err(
+            "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
+        );
+    };
+    let token_data = auth
+        .get_token_data()
+        .map_err(|error| format!("failed to read ChatGPT auth for file upload: {error}"))?;
+    let upload_auth = OpenAiFileUploadAuth {
+        access_token: token_data.access_token,
+        account_id: token_data.account_id,
+    };
+    let uploaded = upload_local_file(
+        turn_context.config.chatgpt_base_url.trim_end_matches('/'),
+        &upload_auth,
+        &resolved_path,
+    )
+    .await
+    .map_err(|error| match index {
+        Some(index) => {
+            format!("failed to upload `{file_path}` for `{field_name}[{index}]`: {error}")
+        }
+        None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
+    })?;
     Ok(serde_json::json!({
         "downloadUrl": uploaded.download_url,
         "fileId": uploaded.file_id,
@@ -321,7 +339,7 @@ mod tests {
             &session,
             &Arc::new(turn_context),
             arguments.clone(),
-            None,
+            /*openai_file_input_params*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -375,7 +393,7 @@ mod tests {
             .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
-        let auth = crate::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let local_path = dir.path().join("file_report.csv");
         tokio::fs::write(&local_path, b"hello")
@@ -456,7 +474,7 @@ mod tests {
             .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
-        let auth = crate::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         let local_path = dir.path().join("file_report.csv");
         tokio::fs::write(&local_path, b"hello")
@@ -568,7 +586,7 @@ mod tests {
             .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
-        let auth = crate::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
         tokio::fs::write(dir.path().join("one.csv"), b"one")
             .await
@@ -615,7 +633,10 @@ mod tests {
 
     #[tokio::test]
     async fn rewrite_mcp_tool_arguments_for_openai_files_surfaces_upload_failures() {
-        let (session, turn_context) = make_session_and_context().await;
+        let (mut session, turn_context) = make_session_and_context().await;
+        session.services.auth_manager = crate::test_support::auth_manager_from_auth(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        );
         let error = rewrite_mcp_tool_arguments_for_openai_files(
             &session,
             &turn_context,

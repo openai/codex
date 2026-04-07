@@ -36,6 +36,7 @@ use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::ToolInfo;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
@@ -1033,7 +1034,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
 async fn mcp_tool_approval_metadata_from_tool_info(
     turn_context: &TurnContext,
     server: &str,
-    tool_info: crate::mcp_connection_manager::ToolInfo,
+    tool_info: ToolInfo,
 ) -> Option<McpToolApprovalMetadata> {
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
