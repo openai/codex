@@ -746,18 +746,10 @@ async fn rollout_writer(
     while let Some(cmd) = rx.recv().await {
         match cmd {
             RolloutCmd::AddItems(items) => {
-                if items.is_empty() {
-                    continue;
-                }
-
-                if writer.is_none() {
-                    buffered_items.extend(items);
-                    continue;
-                }
-
-                write_and_reconcile_items(
-                    writer.as_mut(),
-                    items.as_slice(),
+                write_or_buffer_rollout_items(
+                    &mut writer,
+                    &mut buffered_items,
+                    items,
                     &rollout_path,
                     state_db_ctx.as_deref(),
                     state_builder.as_ref(),
@@ -809,7 +801,30 @@ async fn rollout_writer(
                 }
             }
             RolloutCmd::Shutdown { ack } => {
+                rx.close();
+                let mut shutdown_acks = vec![ack];
                 let result = async {
+                    while let Some(cmd) = rx.recv().await {
+                        match cmd {
+                            RolloutCmd::AddItems(items) => {
+                                write_or_buffer_rollout_items(
+                                    &mut writer,
+                                    &mut buffered_items,
+                                    items,
+                                    &rollout_path,
+                                    state_db_ctx.as_deref(),
+                                    state_builder.as_ref(),
+                                    default_provider.as_str(),
+                                )
+                                .await?;
+                            }
+                            RolloutCmd::Persist { ack }
+                            | RolloutCmd::Flush { ack }
+                            | RolloutCmd::Shutdown { ack } => {
+                                shutdown_acks.push(ack);
+                            }
+                        }
+                    }
                     materialize_writer_if_needed(
                         &mut writer,
                         &mut deferred_log_file_info,
@@ -828,12 +843,16 @@ async fn rollout_writer(
                 .await;
                 match result {
                     Ok(()) => {
-                        let _ = ack.send(Ok(()));
+                        for ack in shutdown_acks {
+                            let _ = ack.send(Ok(()));
+                        }
                         break;
                     }
                     Err(err) => {
                         let return_err = clone_io_error(&err);
-                        let _ = ack.send(Err(err));
+                        for ack in shutdown_acks {
+                            let _ = ack.send(Err(clone_io_error(&err)));
+                        }
                         return Err(return_err);
                     }
                 }
@@ -842,6 +861,35 @@ async fn rollout_writer(
     }
 
     Ok(())
+}
+
+async fn write_or_buffer_rollout_items(
+    writer: &mut Option<JsonlWriter>,
+    buffered_items: &mut Vec<RolloutItem>,
+    items: Vec<RolloutItem>,
+    rollout_path: &Path,
+    state_db_ctx: Option<&StateRuntime>,
+    state_builder: Option<&ThreadMetadataBuilder>,
+    default_provider: &str,
+) -> std::io::Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    if writer.is_none() {
+        buffered_items.extend(items);
+        return Ok(());
+    }
+
+    write_and_reconcile_items(
+        writer.as_mut(),
+        items.as_slice(),
+        rollout_path,
+        state_db_ctx,
+        state_builder,
+        default_provider,
+    )
+    .await
 }
 
 fn clone_io_error(err: &IoError) -> IoError {
