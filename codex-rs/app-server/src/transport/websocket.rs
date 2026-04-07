@@ -4,6 +4,7 @@ use super::auth::WebsocketAuthPolicy;
 use super::auth::authorize_upgrade;
 use super::auth::should_warn_about_unauthenticated_non_loopback_listener;
 use super::forward_incoming_message;
+use super::next_connection_id;
 use super::serialize_outgoing_message;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::QueuedOutgoingMessage;
@@ -32,8 +33,6 @@ use owo_colors::Style;
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -75,7 +74,6 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
 #[derive(Clone)]
 struct WebSocketListenerState {
     transport_event_tx: mpsc::Sender<TransportEvent>,
-    connection_counter: Arc<AtomicU64>,
     auth_policy: Arc<WebsocketAuthPolicy>,
 }
 
@@ -113,7 +111,7 @@ async fn websocket_upgrade_handler(
         );
         return (err.status_code(), err.message()).into_response();
     }
-    let connection_id = ConnectionId(state.connection_counter.fetch_add(1, Ordering::Relaxed));
+    let connection_id = next_connection_id();
     info!(%peer_addr, "websocket client connected");
     websocket
         .on_upgrade(move |stream| async move {
@@ -146,7 +144,6 @@ pub(crate) async fn start_websocket_acceptor(
         .layer(middleware::from_fn(reject_requests_with_origin_header))
         .with_state(WebSocketListenerState {
             transport_event_tx,
-            connection_counter: Arc::new(AtomicU64::new(1)),
             auth_policy: Arc::new(auth_policy),
         });
     let server = axum::serve(

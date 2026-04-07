@@ -81,6 +81,7 @@ use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
@@ -245,9 +246,10 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_mcp::mcp::McpSnapshotDetail;
 use codex_mcp::mcp::auth::discover_supported_scopes;
 use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::collect_mcp_snapshot;
+use codex_mcp::mcp::collect_mcp_snapshot_with_detail;
 use codex_mcp::mcp::effective_mcp_servers;
 use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -477,19 +479,6 @@ impl CodexMessageProcessor {
     pub(crate) fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
-    }
-
-    pub(crate) async fn maybe_start_plugin_startup_tasks_for_latest_config(&self) {
-        match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => self
-                .thread_manager
-                .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(
-                    &config,
-                    self.thread_manager.auth_manager(),
-                ),
-            Err(err) => warn!("failed to load latest config for plugin startup tasks: {err:?}"),
-        }
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -5172,10 +5161,16 @@ impl CodexMessageProcessor {
         mcp_config: codex_mcp::mcp::McpConfig,
         auth: Option<CodexAuth>,
     ) {
-        let snapshot = collect_mcp_snapshot(
+        let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
+            McpServerStatusDetail::Full => McpSnapshotDetail::Full,
+            McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
+        };
+
+        let snapshot = collect_mcp_snapshot_with_detail(
             &mcp_config,
             auth.as_ref(),
             request_id.request_id.to_string(),
+            detail,
         )
         .await;
 
@@ -5964,6 +5959,7 @@ impl CodexMessageProcessor {
             force_remote_sync,
         } = params;
         let roots = cwds.unwrap_or_default();
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
@@ -6593,6 +6589,9 @@ impl CodexMessageProcessor {
                     items: vec![],
                     error: None,
                     status: TurnStatus::InProgress,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
                 };
 
                 let response = TurnStartResponse { turn };
@@ -6929,6 +6928,9 @@ impl CodexMessageProcessor {
             items,
             error: None,
             status: TurnStatus::InProgress,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         }
     }
 
@@ -9578,6 +9580,7 @@ mod tests {
             state.track_current_turn_event(&EventMsg::TurnStarted(
                 codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
                 },
