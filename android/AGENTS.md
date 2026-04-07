@@ -155,9 +155,12 @@ stub SDK docs and the local refactor doc:
   The full `SessionDetailActivity` remains the fallback inspector for non-popup
   states and Agent-app initiated navigation.
 - HOME completion and cancellation are AGENT-owned policy decisions:
-  - pressing OK in the final result popup should call
-    `consumeHomeSessionPresentation(sessionId)` and close a still-detached
+  - pressing Done in a completed HOME result popup should call
+    `consumeCompletedHomeSession(sessionId)`, then close a still-detached
     target instead of relying on Launcher to consume/open the target directly
+  - pressing Done in a non-completed terminal HOME result popup should call
+    `consumeHomeSessionPresentation(sessionId)` and close a still-detached
+    target
   - pressing Send in the final result popup for a HOME session should launch a
     fresh HOME continuation with previous-result context, then consume the old
     result presentation

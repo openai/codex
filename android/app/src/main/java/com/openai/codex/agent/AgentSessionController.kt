@@ -694,6 +694,10 @@ class AgentSessionController(context: Context) {
         requireAgentManager().consumeHomeSessionPresentation(sessionId)
     }
 
+    fun consumeCompletedHomeSession(sessionId: String) {
+        requireAgentManager().consumeCompletedHomeSession(sessionId)
+    }
+
     fun closeDetachedTarget(sessionId: String) {
         requireAgentManager().closeDetachedTarget(sessionId)
     }

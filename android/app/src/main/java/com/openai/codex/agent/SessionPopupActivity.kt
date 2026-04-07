@@ -459,17 +459,7 @@ class SessionPopupActivity : Activity() {
         topLevelSession: AgentSessionDetails,
     ) {
         runCatching {
-            sessionController.consumeHomeSessionPresentation(topLevelSession.sessionId)
-        }.onFailure { err ->
-            if (!isUnknownSessionError(err)) {
-                throw err
-            }
-        }
-        if (!topLevelSession.targetDetached) {
-            return
-        }
-        runCatching {
-            sessionController.closeDetachedTarget(topLevelSession.sessionId)
+            consumeTerminalHomeSessionPresentation(topLevelSession)
         }.onFailure { err ->
             if (!isUnknownSessionError(err)) {
                 throw err
@@ -486,10 +476,7 @@ class SessionPopupActivity : Activity() {
         sendButton.isEnabled = false
         thread(name = "CodexSessionPopupConsume-${session.sessionId}") {
             runCatching {
-                sessionController.consumeHomeSessionPresentation(session.sessionId)
-                if (session.targetDetached) {
-                    sessionController.closeDetachedTarget(session.sessionId)
-                }
+                consumeTerminalHomeSessionPresentation(session)
             }.onFailure { err ->
                 runOnUiThread {
                     okButton.isEnabled = true
@@ -515,6 +502,17 @@ class SessionPopupActivity : Activity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun consumeTerminalHomeSessionPresentation(session: AgentSessionDetails) {
+        if (session.state == AgentSessionInfo.STATE_COMPLETED) {
+            sessionController.consumeCompletedHomeSession(session.sessionId)
+        } else {
+            sessionController.consumeHomeSessionPresentation(session.sessionId)
+        }
+        if (session.targetDetached) {
+            sessionController.closeDetachedTarget(session.sessionId)
         }
     }
 
