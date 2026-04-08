@@ -4498,6 +4498,15 @@ impl App {
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
             }
+            AppEvent::RealtimeWebrtcOfferCreated { result } => {
+                self.chat_widget.on_realtime_webrtc_offer_created(result);
+            }
+            AppEvent::RealtimeWebrtcEvent(event) => {
+                self.chat_widget.on_realtime_webrtc_event(event);
+            }
+            AppEvent::RealtimeWebrtcLocalAudioLevel(peak) => {
+                self.chat_widget.on_realtime_webrtc_local_audio_level(peak);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
