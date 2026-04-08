@@ -2,6 +2,7 @@ use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
+use crate::runtime::ConfigState;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
 use crate::state::NetworkProxyState;
@@ -13,6 +14,7 @@ use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -219,11 +221,9 @@ impl NetworkProxyBuilder {
             http_addr,
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
-            allow_local_binding: current_cfg.network.allow_local_binding,
-            allow_unix_sockets: current_cfg.network.allow_unix_sockets(),
-            dangerously_allow_all_unix_sockets: current_cfg
-                .network
-                .dangerously_allow_all_unix_sockets,
+            runtime_settings: Arc::new(RwLock::new(NetworkProxyRuntimeSettings::from_config(
+                &current_cfg,
+            ))),
             reserved_listeners,
             policy_decider: self.policy_decider,
         })
@@ -294,15 +294,30 @@ fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
         .context("bind loopback ephemeral port")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NetworkProxyRuntimeSettings {
+    allow_local_binding: bool,
+    allow_unix_sockets: Arc<[String]>,
+    dangerously_allow_all_unix_sockets: bool,
+}
+
+impl NetworkProxyRuntimeSettings {
+    fn from_config(config: &config::NetworkProxyConfig) -> Self {
+        Self {
+            allow_local_binding: config.network.allow_local_binding,
+            allow_unix_sockets: config.network.allow_unix_sockets().into(),
+            dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct NetworkProxy {
     state: Arc<NetworkProxyState>,
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     socks_enabled: bool,
-    allow_local_binding: bool,
-    allow_unix_sockets: Vec<String>,
-    dangerously_allow_all_unix_sockets: bool,
+    runtime_settings: Arc<RwLock<NetworkProxyRuntimeSettings>>,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
@@ -322,7 +337,7 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr == other.socks_addr
-            && self.allow_local_binding == other.allow_local_binding
+            && self.runtime_settings() == other.runtime_settings()
     }
 }
 
@@ -488,18 +503,19 @@ impl NetworkProxy {
     }
 
     pub fn allow_local_binding(&self) -> bool {
-        self.allow_local_binding
+        self.runtime_settings().allow_local_binding
     }
 
-    pub fn allow_unix_sockets(&self) -> &[String] {
-        &self.allow_unix_sockets
+    pub fn allow_unix_sockets(&self) -> Arc<[String]> {
+        self.runtime_settings().allow_unix_sockets
     }
 
     pub fn dangerously_allow_all_unix_sockets(&self) -> bool {
-        self.dangerously_allow_all_unix_sockets
+        self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        let allow_local_binding = self.allow_local_binding();
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -507,8 +523,48 @@ impl NetworkProxy {
             self.http_addr,
             self.socks_addr,
             self.socks_enabled,
-            self.allow_local_binding,
+            allow_local_binding,
         );
+    }
+
+    pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
+        let current_cfg = self.state.current_cfg().await?;
+        anyhow::ensure!(
+            new_state.config.network.enabled == current_cfg.network.enabled,
+            "cannot update network.enabled on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.proxy_url == current_cfg.network.proxy_url,
+            "cannot update network.proxy_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.socks_url == current_cfg.network.socks_url,
+            "cannot update network.socks_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.enable_socks5 == current_cfg.network.enable_socks5,
+            "cannot update network.enable_socks5 on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.enable_socks5_udp == current_cfg.network.enable_socks5_udp,
+            "cannot update network.enable_socks5_udp on a running proxy"
+        );
+
+        let settings = NetworkProxyRuntimeSettings::from_config(&new_state.config);
+        self.state.replace_config_state(new_state).await?;
+        let mut guard = self
+            .runtime_settings
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = settings;
+        Ok(())
+    }
+
+    fn runtime_settings(&self) -> NetworkProxyRuntimeSettings {
+        self.runtime_settings
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {

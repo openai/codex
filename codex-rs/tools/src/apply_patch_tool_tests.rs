@@ -1,4 +1,5 @@
 use super::*;
+use crate::JsonSchema;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -29,18 +30,16 @@ fn create_apply_patch_json_tool_matches_expected_spec() {
             description: APPLY_PATCH_JSON_TOOL_DESCRIPTION.to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
                     "input".to_string(),
-                    JsonSchema::String {
-                        description: Some(
-                            "The entire contents of the apply_patch command".to_string(),
-                        ),
-                    },
+                    JsonSchema::string(Some(
+                        "The entire contents of the apply_patch command".to_string(),
+                    ),),
                 )]),
-                required: Some(vec!["input".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                Some(vec!["input".to_string()]),
+                Some(false.into())
+            ),
             output_schema: None,
         })
     );

@@ -89,7 +89,7 @@ pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &Confi
 }
 
 fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool {
-    let Some(entries) = features.map(|features| &features.entries) else {
+    let Some(entries) = features.map(FeaturesToml::entries) else {
         return false;
     };
     entries.contains_key(Feature::WindowsSandboxElevated.key())
@@ -100,8 +100,8 @@ fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool 
 pub fn legacy_windows_sandbox_mode(
     features: Option<&FeaturesToml>,
 ) -> Option<WindowsSandboxModeToml> {
-    let entries = features.map(|features| &features.entries)?;
-    legacy_windows_sandbox_mode_from_entries(entries)
+    let entries = features.map(FeaturesToml::entries)?;
+    legacy_windows_sandbox_mode_from_entries(&entries)
 }
 
 pub fn legacy_windows_sandbox_mode_from_entries(

@@ -21,6 +21,8 @@ fn domain_permissions(
 #[test]
 fn build_state_with_audit_metadata_threads_metadata_to_state() {
     let spec = NetworkProxySpec {
+        base_config: NetworkProxyConfig::default(),
+        requirements: None,
         config: NetworkProxyConfig::default(),
         constraints: NetworkProxyConstraints::default(),
         hard_deny_allowlist_misses: false,
@@ -320,6 +322,55 @@ fn danger_full_access_denylist_only_does_not_change_workspace_write_behavior() {
         Some(vec!["managed-blocked.example.com".to_string()])
     );
     assert_eq!(spec.constraints.denylist_expansion_enabled, Some(true));
+}
+
+#[test]
+fn recompute_for_sandbox_policy_rebuilds_denylist_only_full_access_policy() {
+    let requirements = NetworkConstraints {
+        domains: Some(domain_permissions([(
+            "blocked.example.com",
+            NetworkDomainPermissionToml::Deny,
+        )])),
+        danger_full_access_denylist_only: Some(true),
+        ..Default::default()
+    };
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(requirements),
+        &SandboxPolicy::new_workspace_write_policy(),
+    )
+    .expect("workspace-write policy should load");
+
+    assert_eq!(spec.config.network.allowed_domains(), None);
+    assert_eq!(
+        spec.config.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+
+    let spec = spec
+        .recompute_for_sandbox_policy(&SandboxPolicy::DangerFullAccess)
+        .expect("full-access policy should load");
+
+    assert_eq!(
+        spec.config.network.allowed_domains(),
+        Some(vec!["*".to_string()])
+    );
+    assert_eq!(
+        spec.config.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+    assert!(spec.config.network.allow_local_binding);
+
+    let spec = spec
+        .recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())
+        .expect("workspace-write policy should reload");
+
+    assert_eq!(spec.config.network.allowed_domains(), None);
+    assert_eq!(
+        spec.config.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+    assert!(!spec.config.network.allow_local_binding);
 }
 
 #[test]

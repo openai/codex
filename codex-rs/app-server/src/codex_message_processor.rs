@@ -9139,6 +9139,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_accepts_nullable_field_schema() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "my_tool".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": ["string", "null"]}
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            defer_loading: false,
+        }];
+        validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
     fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::Auth,
