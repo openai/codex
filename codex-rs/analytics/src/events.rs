@@ -128,8 +128,6 @@ pub(crate) struct CodexAppUsedEventRequest {
 pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
-    pub(crate) app_server_client: CodexAppServerClientMetadata,
-    pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) trigger: crate::facts::CompactionTrigger,
     pub(crate) mode: crate::facts::CompactionMode,
     pub(crate) status: crate::facts::CompactionStatus,
@@ -225,15 +223,11 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
 }
 
 pub(crate) fn codex_compaction_event_params(
-    app_server_client: CodexAppServerClientMetadata,
-    runtime: CodexRuntimeMetadata,
     input: CodexCompactionEvent,
 ) -> CodexCompactionEventParams {
     CodexCompactionEventParams {
         thread_id: input.thread_id,
         turn_id: input.turn_id,
-        app_server_client,
-        runtime,
         trigger: input.trigger,
         mode: input.mode,
         status: input.status,

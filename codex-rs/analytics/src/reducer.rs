@@ -43,7 +43,6 @@ use std::path::Path;
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
     connections: HashMap<u64, ConnectionState>,
-    thread_connections: HashMap<String, u64>,
 }
 
 struct ConnectionState {
@@ -262,8 +261,6 @@ impl AnalyticsReducer {
         };
         let thread_source: SessionSource = thread.source.into();
         let thread_id = thread.id;
-        self.thread_connections
-            .insert(thread_id.clone(), connection_id);
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
@@ -287,23 +284,10 @@ impl AnalyticsReducer {
     }
 
     fn ingest_compaction(&mut self, input: CodexCompactionEvent, out: &mut Vec<TrackEventRequest>) {
-        let connection_metadata = self
-            .thread_connections
-            .get(&input.thread_id)
-            .and_then(|connection_id| self.connections.get(connection_id))
-            .map(|connection_state| {
-                (
-                    connection_state.app_server_client.clone(),
-                    connection_state.runtime.clone(),
-                )
-            });
-        let Some((app_server_client, runtime)) = connection_metadata else {
-            return;
-        };
         out.push(TrackEventRequest::Compaction(Box::new(
             CodexCompactionEventRequest {
                 event_type: "codex_compaction_event",
-                event_params: codex_compaction_event_params(app_server_client, runtime, input),
+                event_params: codex_compaction_event_params(input),
             },
         )));
     }

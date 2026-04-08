@@ -263,32 +263,17 @@ fn app_used_event_serializes_expected_shape() {
 fn compaction_event_serializes_expected_shape() {
     let event = TrackEventRequest::Compaction(Box::new(CodexCompactionEventRequest {
         event_type: "codex_compaction_event",
-        event_params: crate::events::codex_compaction_event_params(
-            CodexAppServerClientMetadata {
-                product_client_id: "CODEX_CLI".to_string(),
-                client_name: Some("codex-tui".to_string()),
-                client_version: Some("1.2.3".to_string()),
-                rpc_transport: AppServerRpcTransport::InProcess,
-                experimental_api_enabled: Some(true),
-            },
-            CodexRuntimeMetadata {
-                codex_rs_version: "0.1.0".to_string(),
-                runtime_os: "macos".to_string(),
-                runtime_os_version: "15.3.1".to_string(),
-                runtime_arch: "aarch64".to_string(),
-            },
-            CodexCompactionEvent {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                trigger: CompactionTrigger::AutoMidTurn,
-                mode: CompactionMode::Remote,
-                status: CompactionStatus::Completed,
-                error: None,
-                started_at: 100,
-                completed_at: 106,
-                duration_ms: Some(6543),
-            },
-        ),
+        event_params: crate::events::codex_compaction_event_params(CodexCompactionEvent {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            trigger: CompactionTrigger::AutoMidTurn,
+            mode: CompactionMode::Remote,
+            status: CompactionStatus::Completed,
+            error: None,
+            started_at: 100,
+            completed_at: 106,
+            duration_ms: Some(6543),
+        }),
     }));
 
     let payload = serde_json::to_value(&event).expect("serialize compaction event");
@@ -300,19 +285,6 @@ fn compaction_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
-                "app_server_client": {
-                    "product_client_id": "CODEX_CLI",
-                    "client_name": "codex-tui",
-                    "client_version": "1.2.3",
-                    "rpc_transport": "in_process",
-                    "experimental_api_enabled": true
-                },
-                "runtime": {
-                    "codex_rs_version": "0.1.0",
-                    "runtime_os": "macos",
-                    "runtime_os_version": "15.3.1",
-                    "runtime_arch": "aarch64"
-                },
                 "trigger": "auto_mid_turn",
                 "mode": "remote",
                 "status": "completed",
@@ -521,95 +493,37 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 }
 
 #[tokio::test]
-async fn compaction_event_uses_existing_thread_connection_metadata() {
+async fn compaction_event_ingests_custom_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
-    let input = || CodexCompactionEvent {
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-compact".to_string(),
-        trigger: CompactionTrigger::Manual,
-        mode: CompactionMode::Local,
-        status: CompactionStatus::Failed,
-        error: Some("context limit exceeded".to_string()),
-        started_at: 100,
-        completed_at: 101,
-        duration_ms: Some(1200),
-    };
 
     reducer
         .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(input()))),
-            &mut events,
-        )
-        .await;
-    assert!(
-        events.is_empty(),
-        "compaction events need existing client/runtime metadata"
-    );
-
-    reducer
-        .ingest(
-            AnalyticsFact::Initialize {
-                connection_id: 7,
-                params: InitializeParams {
-                    client_info: ClientInfo {
-                        name: "codex-tui".to_string(),
-                        title: None,
-                        version: "1.0.0".to_string(),
-                    },
-                    capabilities: Some(InitializeCapabilities {
-                        experimental_api: false,
-                        opt_out_notification_methods: None,
-                    }),
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
+                CodexCompactionEvent {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-compact".to_string(),
+                    trigger: CompactionTrigger::Manual,
+                    mode: CompactionMode::Local,
+                    status: CompactionStatus::Failed,
+                    error: Some("context limit exceeded".to_string()),
+                    started_at: 100,
+                    completed_at: 101,
+                    duration_ms: Some(1200),
                 },
-                product_client_id: DEFAULT_ORIGINATOR.to_string(),
-                runtime: CodexRuntimeMetadata {
-                    codex_rs_version: "0.99.0".to_string(),
-                    runtime_os: "linux".to_string(),
-                    runtime_os_version: "24.04".to_string(),
-                    runtime_arch: "x86_64".to_string(),
-                },
-                rpc_transport: AppServerRpcTransport::Websocket,
-            },
-            &mut events,
-        )
-        .await;
-    reducer
-        .ingest(
-            AnalyticsFact::Response {
-                connection_id: 7,
-                response: Box::new(sample_thread_start_response(
-                    "thread-1", /*ephemeral*/ false, "gpt-5",
-                )),
-            },
-            &mut events,
-        )
-        .await;
-
-    reducer
-        .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(input()))),
+            ))),
             &mut events,
         )
         .await;
 
     let payload = serde_json::to_value(&events).expect("serialize events");
-    assert_eq!(payload.as_array().expect("events array").len(), 2);
-    assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
-    assert_eq!(payload[1]["event_type"], "codex_compaction_event");
-    assert_eq!(payload[1]["event_params"]["thread_id"], "thread-1");
-    assert_eq!(payload[1]["event_params"]["turn_id"], "turn-compact");
-    assert_eq!(payload[1]["event_params"]["trigger"], "manual");
-    assert_eq!(payload[1]["event_params"]["mode"], "local");
-    assert_eq!(payload[1]["event_params"]["status"], "failed");
-    assert_eq!(
-        payload[1]["event_params"]["app_server_client"]["product_client_id"],
-        DEFAULT_ORIGINATOR
-    );
-    assert_eq!(
-        payload[1]["event_params"]["runtime"]["codex_rs_version"],
-        "0.99.0"
-    );
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_compaction_event");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
+    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-compact");
+    assert_eq!(payload[0]["event_params"]["trigger"], "manual");
+    assert_eq!(payload[0]["event_params"]["mode"], "local");
+    assert_eq!(payload[0]["event_params"]["status"], "failed");
 }
 
 #[test]
