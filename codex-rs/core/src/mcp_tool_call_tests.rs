@@ -803,19 +803,48 @@ fn prepare_arc_request_action_serializes_mcp_tool_call_shape() {
     );
 }
 
-#[test]
-fn guardian_review_decision_maps_to_mcp_tool_decision() {
+#[tokio::test(flavor = "current_thread")]
+async fn guardian_review_decision_maps_to_mcp_tool_decision() {
+    let (session, _) = make_session_and_context().await;
+    let session = Arc::new(session);
+
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Approved),
+        mcp_tool_approval_decision_from_guardian(
+            session.as_ref(),
+            "approval-id",
+            ReviewDecision::Approved
+        )
+        .await,
         McpToolApprovalDecision::Accept
     );
+    session
+        .services
+        .guardian_rejection_rationales
+        .lock()
+        .await
+        .insert("approval-id".to_string(), "too risky".to_string());
+    let denial = mcp_tool_approval_decision_from_guardian(
+        session.as_ref(),
+        "approval-id",
+        ReviewDecision::Denied,
+    )
+    .await;
+    let McpToolApprovalDecision::Decline {
+        message: Some(message),
+    } = denial
+    else {
+        panic!("guardian denial should carry a rejection message");
+    };
+    assert!(message.contains("Reason: too risky"));
+    assert!(message.contains("The agent must not attempt to achieve the same outcome"));
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Denied),
-        McpToolApprovalDecision::Decline
-    );
-    assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Abort),
-        McpToolApprovalDecision::Decline
+        mcp_tool_approval_decision_from_guardian(
+            session.as_ref(),
+            "approval-id",
+            ReviewDecision::Abort
+        )
+        .await,
+        McpToolApprovalDecision::Decline { message: None }
     );
 }
 
@@ -924,7 +953,7 @@ fn declined_elicitation_response_stays_decline() {
         "approval",
     );
 
-    assert_eq!(response, McpToolApprovalDecision::Decline);
+    assert_eq!(response, McpToolApprovalDecision::Decline { message: None });
 }
 
 #[test]
@@ -941,7 +970,7 @@ fn synthetic_decline_request_user_input_response_stays_decline() {
         "approval",
     );
 
-    assert_eq!(response, McpToolApprovalDecision::Decline);
+    assert_eq!(response, McpToolApprovalDecision::Decline { message: None });
 }
 
 #[test]
@@ -1306,6 +1335,87 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
 }
 
 #[tokio::test]
+async fn guardian_mode_mcp_denial_returns_rationale_message() {
+    let server = start_mock_server().await;
+    let guardian_request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                &serde_json::json!({
+                    "risk_level": "high",
+                    "user_authorization": "low",
+                    "outcome": "deny",
+                    "rationale": "The tool call would expose private calendar data without clear user authorization.",
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    turn_context
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    let mut config = (*turn_context.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    let config = Arc::new(config);
+    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    session.services.models_manager = models_manager;
+    turn_context.config = Arc::clone(&config);
+    turn_context.provider = config.model_provider.clone();
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "dangerous_tool".to_string(),
+        arguments: Some(serde_json::json!({ "calendar_id": "primary" })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        tool_title: Some("Dangerous Tool".to_string()),
+        tool_description: Some("Reads calendar data.".to_string()),
+        codex_apps_meta: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-guardian-deny",
+        &invocation,
+        Some(&metadata),
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    let Some(McpToolApprovalDecision::Decline {
+        message: Some(message),
+    }) = decision
+    else {
+        panic!("guardian-denied MCP approval should carry a rejection message");
+    };
+    assert!(message.contains("Reason: The tool call would expose private calendar data"));
+    assert!(message.contains("policy circumvention"));
+    assert_eq!(
+        guardian_request_log.single_request().path(),
+        "/v1/responses"
+    );
+}
+
+#[tokio::test]
 async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_rx().await;
     {
@@ -1657,12 +1767,9 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
                 "msg-guardian",
                 &serde_json::json!({
                     "risk_level": "low",
-                    "risk_score": 12,
+                    "user_authorization": "high",
+                    "outcome": "allow",
                     "rationale": "The user already configured guardian to review escalated approvals for this session.",
-                    "evidence": [{
-                        "message": "ARC requested escalation instead of blocking outright.",
-                        "why": "Guardian can adjudicate the approval without surfacing a manual prompt.",
-                    }],
                 })
                 .to_string(),
             ),

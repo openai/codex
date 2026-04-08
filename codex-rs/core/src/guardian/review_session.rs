@@ -42,13 +42,14 @@ use codex_model_provider_info::ModelProviderInfo;
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::prompt::guardian_policy_prompt;
+use super::prompt::guardian_policy_prompt_with_config;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
     "Use prior reviews as context, not binding precedent. ",
     "Follow the Workspace Policy. ",
     "If the user explicitly approves a previously rejected action after being informed of the ",
-    "concrete risks, treat the action as authorized and assign low/medium risk."
+    "concrete risks, set user_authorization to high and derive outcome from policy."
 );
 
 #[derive(Debug)]
@@ -645,7 +646,8 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.developer_instructions = Some(
         parent_config
             .guardian_developer_instructions
-            .clone()
+            .as_deref()
+            .map(guardian_policy_prompt_with_config)
             .unwrap_or_else(guardian_policy_prompt),
     );
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);

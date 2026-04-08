@@ -254,7 +254,13 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
-    /// Guardian-specific developer instructions override from requirements.toml.
+    /// Explicit developer instructions override, preserving `null` as distinct
+    /// from a missing override.
+    pub developer_instructions_override: Option<Option<String>>,
+
+    /// Guardian-specific tenant policy config override from requirements.toml.
+    /// This is inserted into the fixed guardian prompt template rather than
+    /// replacing the whole guardian developer prompt.
     pub guardian_developer_instructions: Option<String>,
 
     /// Whether to inject the `<permissions instructions>` developer block.
