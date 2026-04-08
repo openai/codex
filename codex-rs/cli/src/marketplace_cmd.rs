@@ -5,6 +5,7 @@ use clap::Parser;
 use codex_core::config::find_codex_home;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::marketplace_install_root;
+use codex_core::plugins::record_installed_marketplace_root;
 use codex_core::plugins::validate_marketplace_root;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs;
@@ -162,6 +163,8 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     ensure_marketplace_destination_is_inside_install_root(&install_root, &destination)?;
     replace_marketplace_root(&staged_root, &destination)
         .with_context(|| format!("failed to install marketplace at {}", destination.display()))?;
+    record_installed_marketplace_root(&codex_home, &marketplace_name, &destination)
+        .with_context(|| format!("failed to record marketplace `{marketplace_name}`"))?;
 
     println!(
         "Added marketplace `{marketplace_name}` from {}.",

@@ -58,6 +58,7 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -79,7 +80,8 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
-pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/plugins/marketplaces";
+pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
+const KNOWN_MARKETPLACES_FILE: &str = "known_marketplaces.json";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -1240,7 +1242,37 @@ pub fn marketplace_install_root(codex_home: &Path) -> PathBuf {
     codex_home.join(INSTALLED_MARKETPLACES_DIR)
 }
 
+pub fn record_installed_marketplace_root(
+    codex_home: &Path,
+    marketplace_name: &str,
+    install_location: &Path,
+) -> std::io::Result<()> {
+    let registry_path = marketplace_registry_path(codex_home);
+    let mut registry = if registry_path.is_file() {
+        read_marketplace_registry(&registry_path)?
+    } else {
+        KnownMarketplacesRegistry::default()
+    };
+
+    registry
+        .marketplaces
+        .retain(|marketplace| marketplace.name != marketplace_name);
+    registry.marketplaces.push(KnownMarketplaceRegistryEntry {
+        name: marketplace_name.to_string(),
+        install_location: install_location.to_path_buf(),
+    });
+    registry
+        .marketplaces
+        .sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    write_marketplace_registry(&registry_path, &registry)
+}
+
 fn installed_marketplace_roots(codex_home: &Path) -> Vec<AbsolutePathBuf> {
+    let registry_path = marketplace_registry_path(codex_home);
+    if registry_path.is_file() {
+        return installed_marketplace_roots_from_registry(&registry_path);
+    }
+
     let install_root = marketplace_install_root(codex_home);
     let Ok(entries) = fs::read_dir(&install_root) else {
         return Vec::new();
@@ -1258,6 +1290,86 @@ fn installed_marketplace_roots(codex_home: &Path) -> Vec<AbsolutePathBuf> {
         .collect::<Vec<_>>();
     roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
     roots
+}
+
+fn marketplace_registry_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(".tmp").join(KNOWN_MARKETPLACES_FILE)
+}
+
+fn installed_marketplace_roots_from_registry(registry_path: &Path) -> Vec<AbsolutePathBuf> {
+    let registry = match read_marketplace_registry(registry_path) {
+        Ok(registry) => registry,
+        Err(err) => {
+            warn!(
+                path = %registry_path.display(),
+                error = %err,
+                "failed to read installed marketplace registry"
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut roots = registry
+        .marketplaces
+        .into_iter()
+        .filter_map(|marketplace| {
+            let path = marketplace.install_location;
+            if path.join(".agents/plugins/marketplace.json").is_file() {
+                AbsolutePathBuf::try_from(path).ok()
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+    roots
+}
+
+fn read_marketplace_registry(path: &Path) -> std::io::Result<KnownMarketplacesRegistry> {
+    let contents = fs::read_to_string(path)?;
+    serde_json::from_str(&contents).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "failed to parse marketplace registry {}: {err}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn write_marketplace_registry(
+    path: &Path,
+    registry: &KnownMarketplacesRegistry,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let contents = serde_json::to_vec_pretty(registry).map_err(std::io::Error::other)?;
+    fs::write(path, contents)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnownMarketplacesRegistry {
+    version: u32,
+    marketplaces: Vec<KnownMarketplaceRegistryEntry>,
+}
+
+impl Default for KnownMarketplacesRegistry {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            marketplaces: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnownMarketplaceRegistryEntry {
+    name: String,
+    install_location: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]

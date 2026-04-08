@@ -1539,6 +1539,8 @@ plugins = true
         r#"{"name":"sample"}"#,
     )
     .unwrap();
+    record_installed_marketplace_root(tmp.path(), "debug", &marketplace_root)
+        .expect("record installed marketplace");
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())

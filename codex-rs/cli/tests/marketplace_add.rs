@@ -53,6 +53,9 @@ async fn marketplace_add_local_directory_installs_valid_marketplace_root() -> Re
 
     let installed_root = marketplace_install_root(codex_home.path()).join("debug");
     assert_eq!(validate_marketplace_root(&installed_root)?, "debug");
+    let registry = std::fs::read_to_string(codex_home.path().join(".tmp/known_marketplaces.json"))?;
+    assert!(registry.contains(r#""name": "debug""#));
+    assert!(registry.contains(r#""installLocation""#));
     assert!(
         installed_root
             .join("plugins/sample/.codex-plugin/plugin.json")
