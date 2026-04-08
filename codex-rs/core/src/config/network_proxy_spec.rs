@@ -78,6 +78,25 @@ impl NetworkProxySpec {
         self.config.network.enabled
     }
 
+    pub(crate) fn config(&self) -> &NetworkProxyConfig {
+        &self.config
+    }
+
+    pub(crate) fn constraints(&self) -> &NetworkProxyConstraints {
+        &self.constraints
+    }
+
+    pub(crate) fn requires_remote_approval_callbacks(
+        &self,
+        sandbox_policy: &SandboxPolicy,
+    ) -> bool {
+        !self.hard_deny_allowlist_misses
+            && matches!(
+                sandbox_policy,
+                SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+            )
+    }
+
     pub fn proxy_host_and_port(&self) -> String {
         host_and_port_from_network_addr(&self.config.network.proxy_url, /*default_port*/ 3128)
     }

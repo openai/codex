@@ -55,6 +55,7 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
                 tty: false,
                 arg0: None,
                 sandbox: SandboxLaunchConfig::no_sandbox(std::env::current_dir()?),
+                managed_network: None,
             })?,
         )
         .await?;

@@ -39,6 +39,32 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
 }
 
 #[test]
+fn requires_remote_approval_callbacks_only_for_restricted_expandable_managed_network() {
+    let expandable_spec = NetworkProxySpec {
+        config: NetworkProxyConfig::default(),
+        constraints: NetworkProxyConstraints::default(),
+        hard_deny_allowlist_misses: false,
+    };
+    assert!(
+        expandable_spec.requires_remote_approval_callbacks(&SandboxPolicy::new_read_only_policy())
+    );
+    assert!(
+        expandable_spec
+            .requires_remote_approval_callbacks(&SandboxPolicy::new_workspace_write_policy())
+    );
+    assert!(!expandable_spec.requires_remote_approval_callbacks(&SandboxPolicy::DangerFullAccess));
+
+    let hard_deny_spec = NetworkProxySpec {
+        config: NetworkProxyConfig::default(),
+        constraints: NetworkProxyConstraints::default(),
+        hard_deny_allowlist_misses: true,
+    };
+    assert!(
+        !hard_deny_spec.requires_remote_approval_callbacks(&SandboxPolicy::new_read_only_policy())
+    );
+}
+
+#[test]
 fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
     let mut config = NetworkProxyConfig::default();
     config

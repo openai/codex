@@ -2064,6 +2064,7 @@ dependencies = [
  "clap",
  "codex-app-server-protocol",
  "codex-linux-sandbox",
+ "codex-network-proxy",
  "codex-protocol",
  "codex-sandboxing",
  "codex-utils-absolute-path",

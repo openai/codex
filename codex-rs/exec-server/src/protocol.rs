@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_network_proxy::NetworkProxyAuditMetadata;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::NetworkProxyConstraints;
 use codex_sandboxing::SandboxLaunchConfig;
 use serde::Deserialize;
 use serde::Serialize;
@@ -53,6 +56,14 @@ pub struct InitializeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManagedNetworkConfig {
+    pub config: NetworkProxyConfig,
+    pub constraints: NetworkProxyConstraints,
+    pub audit_metadata: NetworkProxyAuditMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecParams {
     /// Client-chosen logical process handle scoped to this connection/session.
     /// This is a protocol key, not an OS pid.
@@ -63,6 +74,7 @@ pub struct ExecParams {
     pub tty: bool,
     pub arg0: Option<String>,
     pub sandbox: SandboxLaunchConfig,
+    pub managed_network: Option<ManagedNetworkConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
