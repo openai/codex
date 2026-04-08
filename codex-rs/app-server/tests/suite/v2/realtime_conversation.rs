@@ -936,7 +936,7 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
     )?;
     assert_eq!(
         harness.realtime_server.single_handshake().uri(),
-        "/v1/realtime?call_id=rtc_e2e"
+        "/v1/realtime?intent=quicksilver&call_id=rtc_e2e"
     );
 
     let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
