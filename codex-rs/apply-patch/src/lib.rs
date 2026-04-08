@@ -39,6 +39,11 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// dispatcher.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
+/// Variant of [`CODEX_CORE_APPLY_PATCH_ARG1`] where argv[2] is a UTF-8 path to
+/// the patch payload. This avoids Windows command-line length limits for large
+/// patches while keeping the hidden self-invocation contract explicit.
+pub const CODEX_CORE_APPLY_PATCH_FILE_ARG1: &str = "--codex-run-as-apply-patch-file";
+
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]

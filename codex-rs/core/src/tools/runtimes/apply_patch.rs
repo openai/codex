@@ -22,6 +22,8 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+#[cfg(target_os = "windows")]
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_FILE_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
@@ -33,8 +35,19 @@ use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
+use tempfile::NamedTempFile;
+
+#[cfg(target_os = "windows")]
+const APPLY_PATCH_INLINE_ARG_MAX_BYTES: usize = 16 * 1024;
+
+struct BuiltApplyPatchCommand {
+    command: SandboxCommand,
+    _payload_file: Option<NamedTempFile>,
+}
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -71,20 +84,20 @@ impl ApplyPatchRuntime {
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
         codex_home: &std::path::Path,
-    ) -> Result<SandboxCommand, ToolError> {
-        Ok(Self::build_sandbox_command_with_program(
+    ) -> Result<BuiltApplyPatchCommand, ToolError> {
+        Self::build_sandbox_command_with_program(
             req,
             codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
-        ))
+        )
     }
 
     #[cfg(not(target_os = "windows"))]
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
         codex_self_exe: Option<&PathBuf>,
-    ) -> Result<SandboxCommand, ToolError> {
+    ) -> Result<BuiltApplyPatchCommand, ToolError> {
         let exe = Self::resolve_apply_patch_program(codex_self_exe)?;
-        Ok(Self::build_sandbox_command_with_program(req, exe))
+        Self::build_sandbox_command_with_program(req, exe)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -97,18 +110,57 @@ impl ApplyPatchRuntime {
             .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
     }
 
-    fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
-        SandboxCommand {
+    fn build_sandbox_command_with_program(
+        req: &ApplyPatchRequest,
+        exe: PathBuf,
+    ) -> Result<BuiltApplyPatchCommand, ToolError> {
+        let (arg1, patch_arg, payload_file) = Self::apply_patch_payload_arg(req)?;
+        let command = SandboxCommand {
             program: exe.into_os_string(),
-            args: vec![
-                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
-                req.action.patch.clone(),
-            ],
+            args: vec![arg1.to_string(), patch_arg],
             cwd: req.action.cwd.to_path_buf(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),
+        };
+        Ok(BuiltApplyPatchCommand {
+            command,
+            _payload_file: payload_file,
+        })
+    }
+
+    fn apply_patch_payload_arg(
+        req: &ApplyPatchRequest,
+    ) -> Result<(&'static str, String, Option<NamedTempFile>), ToolError> {
+        #[cfg(target_os = "windows")]
+        if req.action.patch.len() > APPLY_PATCH_INLINE_ARG_MAX_BYTES {
+            let mut file = tempfile::Builder::new()
+                .prefix(".codex-apply-patch-")
+                .suffix(".patch")
+                .tempfile_in(req.action.cwd.as_path())
+                .map_err(|err| {
+                    ToolError::Rejected(format!(
+                        "failed to create temporary apply_patch payload file: {err}"
+                    ))
+                })?;
+            file.write_all(req.action.patch.as_bytes()).map_err(|err| {
+                ToolError::Rejected(format!(
+                    "failed to write temporary apply_patch payload file: {err}"
+                ))
+            })?;
+            file.flush().map_err(|err| {
+                ToolError::Rejected(format!(
+                    "failed to flush temporary apply_patch payload file: {err}"
+                ))
+            })?;
+            return Ok((
+                CODEX_CORE_APPLY_PATCH_FILE_ARG1,
+                file.path().to_string_lossy().into_owned(),
+                Some(file),
+            ));
         }
+
+        Ok((CODEX_CORE_APPLY_PATCH_ARG1, req.action.patch.clone(), None))
     }
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
@@ -241,9 +293,13 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         }
 
         #[cfg(target_os = "windows")]
-        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        let built_command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
         #[cfg(not(target_os = "windows"))]
-        let command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
+        let built_command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
+        let BuiltApplyPatchCommand {
+            command,
+            _payload_file,
+        } = built_command;
         let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
