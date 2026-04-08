@@ -1505,6 +1505,68 @@ plugins = true
 }
 
 #[tokio::test]
+async fn list_marketplaces_includes_installed_marketplace_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marketplace_root = marketplace_install_root(tmp.path()).join("debug");
+    let plugin_root = marketplace_root.join("plugins/sample");
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    fs::create_dir_all(marketplace_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .unwrap();
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[])
+        .unwrap()
+        .marketplaces;
+
+    let marketplace = marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "debug")
+        .expect("installed marketplace should be listed");
+
+    assert_eq!(
+        marketplace.path,
+        AbsolutePathBuf::try_from(marketplace_root.join(".agents/plugins/marketplace.json"))
+            .unwrap()
+    );
+    assert_eq!(marketplace.plugins.len(), 1);
+    assert_eq!(marketplace.plugins[0].id, "sample@debug");
+    assert_eq!(
+        marketplace.plugins[0].source,
+        MarketplacePluginSource::Local {
+            path: AbsolutePathBuf::try_from(plugin_root).unwrap(),
+        }
+    );
+}
+
+#[tokio::test]
 async fn list_marketplaces_uses_first_duplicate_plugin_entry() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_a_root = tmp.path().join("repo-a");

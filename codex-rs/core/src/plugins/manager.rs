@@ -79,6 +79,7 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
+pub const INSTALLED_MARKETPLACES_DIR: &str = "marketplaces";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -1222,6 +1223,7 @@ impl PluginsManager {
         // Treat the curated catalog as an extra marketplace root so plugin listing can surface it
         // without requiring every caller to know where it is stored.
         let mut roots = additional_roots.to_vec();
+        roots.extend(installed_marketplace_roots(self.codex_home.as_path()));
         let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
         if curated_repo_root.is_dir()
             && let Ok(curated_repo_root) = AbsolutePathBuf::try_from(curated_repo_root)
@@ -1232,6 +1234,30 @@ impl PluginsManager {
         roots.dedup();
         roots
     }
+}
+
+pub fn marketplace_install_root(codex_home: &Path) -> PathBuf {
+    codex_home.join(INSTALLED_MARKETPLACES_DIR)
+}
+
+fn installed_marketplace_roots(codex_home: &Path) -> Vec<AbsolutePathBuf> {
+    let install_root = marketplace_install_root(codex_home);
+    let Ok(entries) = fs::read_dir(&install_root) else {
+        return Vec::new();
+    };
+
+    let mut roots = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file_type = entry.file_type().ok()?;
+            (file_type.is_dir() && path.join(".agents/plugins/marketplace.json").is_file())
+                .then_some(path)
+        })
+        .filter_map(|path| AbsolutePathBuf::try_from(path).ok())
+        .collect::<Vec<_>>();
+    roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+    roots
 }
 
 #[derive(Debug, thiserror::Error)]
