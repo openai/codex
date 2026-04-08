@@ -44,7 +44,6 @@ use std::path::Path;
 pub(crate) struct AnalyticsReducer {
     connections: HashMap<u64, ConnectionState>,
     thread_connections: HashMap<String, u64>,
-    pending_compactions: HashMap<String, Vec<CodexCompactionEvent>>,
 }
 
 struct ConnectionState {
@@ -285,45 +284,9 @@ impl AnalyticsReducer {
                 },
             },
         ));
-        self.maybe_emit_pending_compactions(&thread_id, out);
     }
 
     fn ingest_compaction(&mut self, input: CodexCompactionEvent, out: &mut Vec<TrackEventRequest>) {
-        let thread_id = input.thread_id.clone();
-        if self.try_emit_compaction(input.clone(), out) {
-            return;
-        }
-        self.pending_compactions
-            .entry(thread_id)
-            .or_default()
-            .push(input);
-    }
-
-    fn maybe_emit_pending_compactions(
-        &mut self,
-        thread_id: &str,
-        out: &mut Vec<TrackEventRequest>,
-    ) {
-        let Some(pending) = self.pending_compactions.remove(thread_id) else {
-            return;
-        };
-        let mut still_pending = Vec::new();
-        for input in pending {
-            if !self.try_emit_compaction(input.clone(), out) {
-                still_pending.push(input);
-            }
-        }
-        if !still_pending.is_empty() {
-            self.pending_compactions
-                .insert(thread_id.to_string(), still_pending);
-        }
-    }
-
-    fn try_emit_compaction(
-        &mut self,
-        input: CodexCompactionEvent,
-        out: &mut Vec<TrackEventRequest>,
-    ) -> bool {
         let connection_metadata = self
             .thread_connections
             .get(&input.thread_id)
@@ -335,7 +298,7 @@ impl AnalyticsReducer {
                 )
             });
         let Some((app_server_client, runtime)) = connection_metadata else {
-            return false;
+            return;
         };
         out.push(TrackEventRequest::Compaction(Box::new(
             CodexCompactionEventRequest {
@@ -343,7 +306,6 @@ impl AnalyticsReducer {
                 event_params: codex_compaction_event_params(app_server_client, runtime, input),
             },
         )));
-        true
     }
 }
 

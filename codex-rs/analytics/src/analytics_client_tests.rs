@@ -521,31 +521,30 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 }
 
 #[tokio::test]
-async fn compaction_event_waits_for_thread_connection_metadata() {
+async fn compaction_event_uses_existing_thread_connection_metadata() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
+    let input = || CodexCompactionEvent {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-compact".to_string(),
+        trigger: CompactionTrigger::Manual,
+        mode: CompactionMode::Local,
+        status: CompactionStatus::Failed,
+        error: Some("context limit exceeded".to_string()),
+        started_at: 100,
+        completed_at: 101,
+        duration_ms: Some(1200),
+    };
 
     reducer
         .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
-                CodexCompactionEvent {
-                    thread_id: "thread-1".to_string(),
-                    turn_id: "turn-compact".to_string(),
-                    trigger: CompactionTrigger::Manual,
-                    mode: CompactionMode::Local,
-                    status: CompactionStatus::Failed,
-                    error: Some("context limit exceeded".to_string()),
-                    started_at: 100,
-                    completed_at: 101,
-                    duration_ms: Some(1200),
-                },
-            ))),
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(input()))),
             &mut events,
         )
         .await;
     assert!(
         events.is_empty(),
-        "compaction events should wait for client/runtime metadata"
+        "compaction events need existing client/runtime metadata"
     );
 
     reducer
@@ -583,6 +582,13 @@ async fn compaction_event_waits_for_thread_connection_metadata() {
                     "thread-1", /*ephemeral*/ false, "gpt-5",
                 )),
             },
+            &mut events,
+        )
+        .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(input()))),
             &mut events,
         )
         .await;
