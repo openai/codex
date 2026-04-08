@@ -36,7 +36,9 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::powershell::ensure_powershell_no_profile;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -228,7 +230,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.explicit_env_overrides,
             &req.env,
         );
-        let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
+        let command = if session_shell.shell_type == ShellType::PowerShell
+            && attempt.sandbox == SandboxType::WindowsRestrictedToken
+        {
+            prefix_powershell_script_with_utf8(&ensure_powershell_no_profile(&command))
+        } else if session_shell.shell_type == ShellType::PowerShell {
             prefix_powershell_script_with_utf8(&command)
         } else {
             command

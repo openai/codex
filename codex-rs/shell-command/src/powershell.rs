@@ -30,6 +30,38 @@ pub fn prefix_powershell_script_with_utf8(command: &[String]) -> Vec<String> {
     command
 }
 
+pub fn ensure_powershell_no_profile(command: &[String]) -> Vec<String> {
+    if command.len() < 3 {
+        return command.to_vec();
+    }
+
+    if !matches!(
+        detect_shell_type(&PathBuf::from(&command[0])),
+        Some(ShellType::PowerShell)
+    ) {
+        return command.to_vec();
+    }
+
+    let mut i = 1usize;
+    while i + 1 < command.len() {
+        let flag = &command[i];
+        if !POWERSHELL_FLAGS.contains(&flag.to_ascii_lowercase().as_str()) {
+            return command.to_vec();
+        }
+        if flag.eq_ignore_ascii_case("-NoProfile") {
+            return command.to_vec();
+        }
+        if flag.eq_ignore_ascii_case("-Command") || flag.eq_ignore_ascii_case("-c") {
+            let mut command = command.to_vec();
+            command.insert(i, "-NoProfile".to_string());
+            return command;
+        }
+        i += 1;
+    }
+
+    command.to_vec()
+}
+
 /// Extract the PowerShell script body from an invocation such as:
 ///
 /// - ["pwsh", "-NoProfile", "-Command", "Get-ChildItem -Recurse | Select-String foo"]
@@ -151,6 +183,7 @@ fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Pat
 
 #[cfg(test)]
 mod tests {
+    use super::ensure_powershell_no_profile;
     use super::extract_powershell_command;
 
     #[test]
@@ -198,5 +231,54 @@ mod tests {
         ];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
         assert_eq!(script, "Get-ChildItem | Select-String foo");
+    }
+
+    #[test]
+    fn inserts_noprofile_before_command() {
+        let cmd = vec![
+            "powershell.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Host hi".to_string(),
+        ];
+        assert_eq!(
+            ensure_powershell_no_profile(&cmd),
+            vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Write-Host hi".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn inserts_noprofile_after_other_known_flags() {
+        let cmd = vec![
+            "pwsh".to_string(),
+            "-NoLogo".to_string(),
+            "-c".to_string(),
+            "Write-Host hi".to_string(),
+        ];
+        assert_eq!(
+            ensure_powershell_no_profile(&cmd),
+            vec![
+                "pwsh".to_string(),
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-c".to_string(),
+                "Write-Host hi".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn leaves_existing_noprofile_unchanged() {
+        let cmd = vec![
+            "pwsh".to_string(),
+            "-NoProfile".to_string(),
+            "-c".to_string(),
+            "Write-Host hi".to_string(),
+        ];
+        assert_eq!(ensure_powershell_no_profile(&cmd), cmd);
     }
 }
