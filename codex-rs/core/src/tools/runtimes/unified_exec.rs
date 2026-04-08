@@ -253,7 +253,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let exec_params = codex_exec_server::ExecParams {
                 process_id: req.process_id.to_string().into(),
                 argv: command,
-                cwd: req.cwd.clone(),
+                cwd: req.cwd.to_path_buf(),
                 env,
                 tty: req.tty,
                 arg0: None,
