@@ -11,28 +11,57 @@ use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::ReadParams;
+use crate::protocol::ReadResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::rpc::RpcNotificationSender;
 use crate::server::session_registry::SessionRegistry;
 
 fn exec_params(process_id: &str) -> ExecParams {
+    exec_params_with_argv(process_id, sleep_argv())
+}
+
+fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
+    ExecParams {
+        process_id: ProcessId::from(process_id),
+        argv,
+        cwd: std::env::current_dir().expect("cwd"),
+        env: inherited_path_env(),
+        tty: false,
+        arg0: None,
+    }
+}
+
+fn inherited_path_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
     if let Some(path) = std::env::var_os("PATH") {
         env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
     }
-    ExecParams {
-        process_id: ProcessId::from(process_id),
-        argv: vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "sleep 0.1".to_string(),
-        ],
-        cwd: std::env::current_dir().expect("cwd"),
-        env,
-        tty: false,
-        arg0: None,
+    env
+}
+
+fn sleep_argv() -> Vec<String> {
+    shell_argv("sleep 0.1", "ping -n 2 127.0.0.1 >NUL")
+}
+
+fn shell_argv(unix_script: &str, windows_script: &str) -> Vec<String> {
+    if cfg!(windows) {
+        vec![
+            windows_command_processor(),
+            "/C".to_string(),
+            windows_script.to_string(),
+        ]
+    } else {
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            unix_script.to_string(),
+        ]
     }
+}
+
+fn windows_command_processor() -> String {
+    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
 }
 
 async fn initialized_handler() -> Arc<ExecServerHandler> {
@@ -129,18 +158,13 @@ async fn long_poll_read_fails_after_session_resume() {
     first_handler.initialized().expect("initialized");
 
     first_handler
-        .exec(ExecParams {
-            process_id: ProcessId::from("proc-long-poll"),
-            argv: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "sleep 0.1; printf resumed".to_string(),
-            ],
-            cwd: std::env::current_dir().expect("cwd"),
-            env: HashMap::new(),
-            tty: false,
-            arg0: None,
-        })
+        .exec(exec_params_with_argv(
+            "proc-long-poll",
+            shell_argv(
+                "sleep 0.1; printf resumed",
+                "ping -n 2 127.0.0.1 >NUL && echo resumed",
+            ),
+        ))
         .await
         .expect("start process");
 
@@ -227,4 +251,85 @@ async fn active_session_resume_is_rejected() {
     );
 
     first_handler.shutdown().await;
+}
+
+#[tokio::test]
+async fn output_and_exit_are_retained_after_notification_receiver_closes() {
+    let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
+    let handler = Arc::new(ExecServerHandler::new(
+        SessionRegistry::new(),
+        RpcNotificationSender::new(outgoing_tx),
+    ));
+    handler
+        .initialize(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+            resume_session_id: None,
+        })
+        .await
+        .expect("initialize");
+    handler.initialized().expect("initialized");
+
+    let process_id = ProcessId::from("proc-notification-fail");
+    handler
+        .exec(exec_params_with_argv(
+            process_id.as_str(),
+            shell_argv(
+                "sleep 0.05; printf 'first\\n'; sleep 0.05; printf 'second\\n'",
+                "echo first && ping -n 2 127.0.0.1 >NUL && echo second",
+            ),
+        ))
+        .await
+        .expect("start process");
+
+    drop(outgoing_rx);
+
+    let (output, exit_code) = read_process_until_closed(&handler, process_id.clone()).await;
+    assert_eq!(output.replace("\r\n", "\n"), "first\nsecond\n");
+    assert_eq!(exit_code, Some(0));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    handler
+        .exec(exec_params(process_id.as_str()))
+        .await
+        .expect("process id should be reusable after exit retention");
+
+    handler.shutdown().await;
+}
+
+async fn read_process_until_closed(
+    handler: &ExecServerHandler,
+    process_id: ProcessId,
+) -> (String, Option<i32>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut output = String::new();
+    let mut exit_code = None;
+    let mut after_seq = None;
+
+    loop {
+        let response: ReadResponse = handler
+            .exec_read(ReadParams {
+                process_id: process_id.clone(),
+                after_seq,
+                max_bytes: None,
+                wait_ms: Some(500),
+            })
+            .await
+            .expect("read process");
+
+        for chunk in response.chunks {
+            output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+            after_seq = Some(chunk.seq);
+        }
+        if response.exited {
+            exit_code = response.exit_code;
+        }
+        if response.closed {
+            return (output, exit_code);
+        }
+        after_seq = response.next_seq.checked_sub(1).or(after_seq);
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "process should close within 2s"
+        );
+    }
 }

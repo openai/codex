@@ -510,13 +510,10 @@ async fn stream_output(
             }
         };
         output_notify.notify_waiters();
-        if let Some(notifications) = notification_sender(&inner)
-            && notifications
+        if let Some(notifications) = notification_sender(&inner) {
+            let _ = notifications
                 .notify(crate::protocol::EXEC_OUTPUT_DELTA_METHOD, &notification)
-                .await
-                .is_err()
-        {
-            break;
+                .await;
         }
     }
 
@@ -549,12 +546,10 @@ async fn watch_exit(
     output_notify.notify_waiters();
     if let Some(notification) = notification
         && let Some(notifications) = notification_sender(&inner)
-        && notifications
-            .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
-            .await
-            .is_err()
     {
-        return;
+        let _ = notifications
+            .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
+            .await;
     }
 
     maybe_emit_closed(process_id.clone(), Arc::clone(&inner)).await;
