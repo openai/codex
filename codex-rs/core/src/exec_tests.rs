@@ -693,7 +693,7 @@ fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() 
             NetworkSandboxPolicy::Restricted,
             codex_sandboxing::SandboxablePreference::Auto,
             codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-            /*enforce_managed_network*/ false,
+            /*has_managed_network_requirements*/ false,
         ),
         expected
     );
