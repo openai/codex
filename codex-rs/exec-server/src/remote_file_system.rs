@@ -47,7 +47,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
                 sandbox_policy: None,
-                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -63,16 +62,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
+        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<u8>> {
         trace!("remote fs read_file_with_sandbox_policy");
-        let cwd = request_cwd(sandbox_cwd)?;
         let response = self
             .client
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
                 sandbox_policy: sandbox_policy.cloned(),
-                cwd: Some(cwd),
             })
             .await
             .map_err(map_remote_error)?;
@@ -91,7 +88,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 sandbox_policy: None,
-                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -103,16 +99,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
+        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs write_file_with_sandbox_policy");
-        let cwd = request_cwd(sandbox_cwd)?;
         self.client
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 sandbox_policy: sandbox_policy.cloned(),
-                cwd: Some(cwd),
             })
             .await
             .map_err(map_remote_error)?;
@@ -130,7 +124,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 sandbox_policy: None,
-                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -142,16 +135,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         path: &AbsolutePathBuf,
         create_directory_options: CreateDirectoryOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
+        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs create_directory_with_sandbox_policy");
-        let cwd = request_cwd(sandbox_cwd)?;
         self.client
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(create_directory_options.recursive),
                 sandbox_policy: sandbox_policy.cloned(),
-                cwd: Some(cwd),
             })
             .await
             .map_err(map_remote_error)?;
@@ -165,7 +156,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
                 sandbox_policy: None,
-                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -181,16 +171,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
+        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata_with_sandbox_policy");
-        let cwd = request_cwd(sandbox_cwd)?;
         let response = self
             .client
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
                 sandbox_policy: sandbox_policy.cloned(),
-                cwd: Some(cwd),
             })
             .await
             .map_err(map_remote_error)?;
@@ -212,7 +200,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_read_directory(FsReadDirectoryParams {
                 path: path.clone(),
                 sandbox_policy: None,
-                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -231,16 +218,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
+        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         trace!("remote fs read_directory_with_sandbox_policy");
-        let cwd = request_cwd(sandbox_cwd)?;
         let response = self
             .client
             .fs_read_directory(FsReadDirectoryParams {
                 path: path.clone(),
                 sandbox_policy: sandbox_policy.cloned(),
-                cwd: Some(cwd),
             })
             .await
             .map_err(map_remote_error)?;
@@ -263,7 +248,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 recursive: Some(options.recursive),
                 force: Some(options.force),
                 sandbox_policy: None,
-                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -275,17 +259,15 @@ impl ExecutorFileSystem for RemoteFileSystem {
         path: &AbsolutePathBuf,
         remove_options: RemoveOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
+        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs remove_with_sandbox_policy");
-        let cwd = request_cwd(sandbox_cwd)?;
         self.client
             .fs_remove(FsRemoveParams {
                 path: path.clone(),
                 recursive: Some(remove_options.recursive),
                 force: Some(remove_options.force),
                 sandbox_policy: sandbox_policy.cloned(),
-                cwd: Some(cwd),
             })
             .await
             .map_err(map_remote_error)?;
@@ -305,7 +287,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
                 sandbox_policy: None,
-                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -318,39 +299,19 @@ impl ExecutorFileSystem for RemoteFileSystem {
         destination_path: &AbsolutePathBuf,
         copy_options: CopyOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
+        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs copy_with_sandbox_policy");
-        let cwd = request_cwd(sandbox_cwd)?;
         self.client
             .fs_copy(FsCopyParams {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: copy_options.recursive,
                 sandbox_policy: sandbox_policy.cloned(),
-                cwd: Some(cwd),
             })
             .await
             .map_err(map_remote_error)?;
         Ok(())
-    }
-}
-
-fn current_working_directory() -> FileSystemResult<AbsolutePathBuf> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
-    AbsolutePathBuf::from_absolute_path(&cwd).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("current dir must be absolute: {err}"),
-        )
-    })
-}
-
-fn request_cwd(sandbox_cwd: Option<&AbsolutePathBuf>) -> FileSystemResult<AbsolutePathBuf> {
-    match sandbox_cwd {
-        Some(cwd) => Ok(cwd.clone()),
-        None => current_working_directory(),
     }
 }
 

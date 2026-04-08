@@ -43,7 +43,7 @@ impl FileSystemHandler {
             .read_file_with_sandbox_policy(
                 &params.path,
                 params.sandbox_policy.as_ref(),
-                params.cwd.as_ref(),
+                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -66,7 +66,7 @@ impl FileSystemHandler {
                 &params.path,
                 bytes,
                 params.sandbox_policy.as_ref(),
-                params.cwd.as_ref(),
+                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -84,7 +84,7 @@ impl FileSystemHandler {
                     recursive: params.recursive.unwrap_or(true),
                 },
                 params.sandbox_policy.as_ref(),
-                params.cwd.as_ref(),
+                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -100,7 +100,7 @@ impl FileSystemHandler {
             .get_metadata_with_sandbox_policy(
                 &params.path,
                 params.sandbox_policy.as_ref(),
-                params.cwd.as_ref(),
+                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -121,7 +121,7 @@ impl FileSystemHandler {
             .read_directory_with_sandbox_policy(
                 &params.path,
                 params.sandbox_policy.as_ref(),
-                params.cwd.as_ref(),
+                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -149,7 +149,7 @@ impl FileSystemHandler {
                     force: params.force.unwrap_or(true),
                 },
                 params.sandbox_policy.as_ref(),
-                params.cwd.as_ref(),
+                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -168,7 +168,7 @@ impl FileSystemHandler {
                     recursive: params.recursive,
                 },
                 params.sandbox_policy.as_ref(),
-                params.cwd.as_ref(),
+                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;

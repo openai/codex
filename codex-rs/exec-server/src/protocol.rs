@@ -138,7 +138,6 @@ pub struct TerminateResponse {
 pub struct FsReadFileParams {
     pub path: AbsolutePathBuf,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,7 +152,6 @@ pub struct FsWriteFileParams {
     pub path: AbsolutePathBuf,
     pub data_base64: String,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,7 +164,6 @@ pub struct FsCreateDirectoryParams {
     pub path: AbsolutePathBuf,
     pub recursive: Option<bool>,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,7 +175,6 @@ pub struct FsCreateDirectoryResponse {}
 pub struct FsGetMetadataParams {
     pub path: AbsolutePathBuf,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,7 +191,6 @@ pub struct FsGetMetadataResponse {
 pub struct FsReadDirectoryParams {
     pub path: AbsolutePathBuf,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,7 +214,6 @@ pub struct FsRemoveParams {
     pub recursive: Option<bool>,
     pub force: Option<bool>,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,7 +227,6 @@ pub struct FsCopyParams {
     pub destination_path: AbsolutePathBuf,
     pub recursive: bool,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

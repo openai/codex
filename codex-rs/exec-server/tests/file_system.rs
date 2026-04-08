@@ -3,11 +3,9 @@
 mod common;
 
 use std::os::unix::fs::symlink;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -23,7 +21,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
-use tokio::sync::Mutex;
 
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
@@ -31,32 +28,6 @@ use common::exec_server::exec_server;
 struct FileSystemContext {
     file_system: Arc<dyn ExecutorFileSystem>,
     _server: Option<ExecServerHarness>,
-}
-
-static CWD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn cwd_lock() -> &'static Mutex<()> {
-    CWD_LOCK.get_or_init(|| Mutex::new(()))
-}
-
-struct CurrentDirGuard {
-    original: PathBuf,
-}
-
-impl CurrentDirGuard {
-    fn change_to(path: &Path) -> Result<Self> {
-        let original = std::env::current_dir()?;
-        std::env::set_current_dir(path)?;
-        Ok(Self { original })
-    }
-}
-
-impl Drop for CurrentDirGuard {
-    fn drop(&mut self) {
-        if let Err(err) = std::env::set_current_dir(&self.original) {
-            panic!("restore cwd: {err}");
-        }
-    }
 }
 
 async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContext> {
@@ -93,16 +64,6 @@ fn read_only_sandbox_policy(readable_root: std::path::PathBuf) -> SandboxPolicy 
         access: ReadOnlyAccess::Restricted {
             include_platform_defaults: false,
             readable_roots: vec![absolute_path(readable_root)],
-        },
-        network_access: false,
-    }
-}
-
-fn cwd_only_read_only_sandbox_policy() -> SandboxPolicy {
-    SandboxPolicy::ReadOnly {
-        access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![],
         },
         network_access: false,
     }
@@ -639,34 +600,6 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
         )
     );
     assert!(!outside_dir.join("copied.txt").exists());
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn remote_file_system_with_sandbox_policy_uses_client_cwd() -> Result<()> {
-    let _cwd_lock = cwd_lock().lock().await;
-    let server = exec_server().await?;
-
-    let tmp = TempDir::new()?;
-    let client_workspace = tmp.path().join("client-workspace");
-    let note_path = client_workspace.join("note.txt");
-    std::fs::create_dir_all(&client_workspace)?;
-    std::fs::write(&note_path, "hello from cwd")?;
-
-    let _cwd_guard = CurrentDirGuard::change_to(&client_workspace)?;
-    let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
-    let file_system = environment.get_filesystem();
-    let sandbox_policy = cwd_only_read_only_sandbox_policy();
-
-    let contents = file_system
-        .read_file_with_sandbox_policy(
-            &absolute_path(note_path),
-            Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
-        )
-        .await?;
-    assert_eq!(contents, b"hello from cwd");
 
     Ok(())
 }
