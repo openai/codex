@@ -12,8 +12,12 @@ path = "src/lib.rs"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
+[features]
+default = []
+native-webrtc = ["dep:libwebrtc"]
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-libwebrtc = { version = "0.3.26", git = "https://github.com/livekit/rust-sdks", rev = "e2d1d1d230c6fc9df171ccb181423f957bb3c1f0" }
+libwebrtc = { version = "0.3.26", git = "https://github.com/livekit/rust-sdks", rev = "e2d1d1d230c6fc9df171ccb181423f957bb3c1f0", optional = true }
 
 [lints]
 workspace = true

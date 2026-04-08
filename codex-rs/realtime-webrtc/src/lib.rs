@@ -1,4 +1,7 @@
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(all(
+    feature = "native-webrtc",
+    any(target_os = "macos", target_os = "windows")
+))]
 mod native;
 
 use std::fmt;
@@ -31,7 +34,10 @@ pub struct StartedRealtimeWebrtcSession {
 }
 
 pub struct RealtimeWebrtcSessionHandle {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(all(
+        feature = "native-webrtc",
+        any(target_os = "macos", target_os = "windows")
+    ))]
     inner: native::SessionHandle,
     local_audio_peak: Arc<AtomicU16>,
 }
@@ -45,11 +51,17 @@ impl fmt::Debug for RealtimeWebrtcSessionHandle {
 
 impl RealtimeWebrtcSessionHandle {
     pub fn apply_answer_sdp(&self, answer_sdp: String) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(all(
+            feature = "native-webrtc",
+            any(target_os = "macos", target_os = "windows")
+        ))]
         {
             self.inner.apply_answer_sdp(answer_sdp)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(all(
+            feature = "native-webrtc",
+            any(target_os = "macos", target_os = "windows")
+        )))]
         {
             let _ = answer_sdp;
             Err(RealtimeWebrtcError::UnsupportedPlatform)
@@ -57,7 +69,10 @@ impl RealtimeWebrtcSessionHandle {
     }
 
     pub fn close(&self) {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(all(
+            feature = "native-webrtc",
+            any(target_os = "macos", target_os = "windows")
+        ))]
         self.inner.close();
     }
 
@@ -70,7 +85,10 @@ pub struct RealtimeWebrtcSession;
 
 impl RealtimeWebrtcSession {
     pub fn start() -> Result<StartedRealtimeWebrtcSession> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(all(
+            feature = "native-webrtc",
+            any(target_os = "macos", target_os = "windows")
+        ))]
         {
             let started = native::start()?;
             Ok(StartedRealtimeWebrtcSession {
@@ -82,7 +100,10 @@ impl RealtimeWebrtcSession {
                 events: started.events,
             })
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(all(
+            feature = "native-webrtc",
+            any(target_os = "macos", target_os = "windows")
+        )))]
         {
             Err(RealtimeWebrtcError::UnsupportedPlatform)
         }
