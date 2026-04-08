@@ -451,7 +451,10 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
             .contains("startup context")
     );
     let handshake = realtime_server.single_handshake();
-    assert_eq!(handshake.uri(), "/v1/realtime?call_id=rtc_core_test");
+    assert_eq!(
+        handshake.uri(),
+        "/v1/realtime?intent=quicksilver&call_id=rtc_core_test"
+    );
     assert_eq!(
         handshake.header("authorization").as_deref(),
         Some("Bearer dummy")
