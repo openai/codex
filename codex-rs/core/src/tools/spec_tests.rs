@@ -32,6 +32,7 @@ use codex_tools::ZshForkConfig;
 use codex_tools::mcp_call_tool_result_output_schema;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -594,6 +595,49 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         } else {
             UnifiedExecShellMode::Direct
         }
+    );
+}
+
+#[test]
+fn spawn_agent_description_omits_usage_hint_when_disabled() {
+    let config = test_config();
+    let model_info = construct_model_info_offline("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_spawn_agent_usage_hint(false);
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    let spawn_agent = find_tool(&tools, "spawn_agent");
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &spawn_agent.spec else {
+        panic!("spawn_agent should be a function tool");
+    };
+
+    assert_regex_match(
+        r#"(?sx)
+            ^\s*
+            No\ picker-visible\ models\ are\ currently\ loaded\.
+            \s+Spawn\ a\ sub-agent\ for\ a\ well-scoped\ task\.
+            \s+Returns\ the\ canonical\ task\ name\ for\ the\ spawned\ agent,\ plus\ the\ user-facing\ nickname\ when\ available\.
+            \s*$
+        "#,
+        description,
     );
 }
 

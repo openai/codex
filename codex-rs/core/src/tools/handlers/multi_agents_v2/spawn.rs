@@ -5,7 +5,6 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
-use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -207,10 +206,7 @@ impl ToolHandler for Handler {
             )
         })?;
 
-        let hide_agent_metadata = turn
-            .config
-            .features
-            .enabled(Feature::DebugHideSpawnAgentMetadata);
+        let hide_agent_metadata = turn.config.multi_agent_v2.debug_hide_spawn_agent_metadata;
         if hide_agent_metadata {
             Ok(SpawnAgentResult::HiddenMetadata { task_name })
         } else {

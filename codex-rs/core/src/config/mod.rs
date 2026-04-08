@@ -52,7 +52,10 @@ use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
+use codex_features::FeatureToml;
 use codex_features::Features;
+use codex_features::FeaturesToml;
+use codex_features::MultiAgentV2ConfigToml;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -520,6 +523,9 @@ pub struct Config {
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
 
+    /// Settings specific to the task-path-based multi-agent tool surface.
+    pub multi_agent_v2: MultiAgentV2Config,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
 
@@ -562,6 +568,21 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultiAgentV2Config {
+    pub usage_hint: bool,
+    pub debug_hide_spawn_agent_metadata: bool,
+}
+
+impl Default for MultiAgentV2Config {
+    fn default() -> Self {
+        Self {
+            usage_hint: true,
+            debug_hide_spawn_agent_metadata: false,
+        }
+    }
 }
 
 impl AuthManagerConfig for Config {
@@ -1279,6 +1300,36 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_multi_agent_v2_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> MultiAgentV2Config {
+    let base = multi_agent_v2_toml_config(config_toml.features.as_ref());
+    let profile = multi_agent_v2_toml_config(config_profile.features.as_ref());
+    let default = MultiAgentV2Config::default();
+
+    let usage_hint = profile
+        .and_then(|config| config.usage_hint)
+        .or_else(|| base.and_then(|config| config.usage_hint))
+        .unwrap_or(default.usage_hint);
+    let debug_hide_spawn_agent_metadata = profile
+        .and_then(|config| config.debug_hide_spawn_agent_metadata)
+        .or_else(|| base.and_then(|config| config.debug_hide_spawn_agent_metadata))
+        .unwrap_or(default.debug_hide_spawn_agent_metadata);
+
+    MultiAgentV2Config {
+        usage_hint,
+        debug_hide_spawn_agent_metadata,
+    }
+}
+
+fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
+    match features?.multi_agent_v2.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -1607,6 +1658,7 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -2040,6 +2092,7 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
+            multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning

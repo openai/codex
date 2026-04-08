@@ -1866,6 +1866,7 @@ fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
         available_models: &config.available_models,
         agent_type_description: agent_type_description(config, DEFAULT_AGENT_TYPE_DESCRIPTION),
         hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
+        include_usage_hint: config.spawn_agent_usage_hint,
     }
 }
 
