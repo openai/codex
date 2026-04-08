@@ -546,7 +546,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-i".to_string()],
-        turn.cwd.clone(),
+        remote_test_env.cwd().clone(),
         shell_env(),
     );
 
