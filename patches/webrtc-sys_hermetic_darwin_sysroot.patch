@@ -2,7 +2,7 @@ diff --git a/webrtc-sys/build.rs b/webrtc-sys/build.rs
 index 3b4a24a..e6fb056 100644
 --- a/webrtc-sys/build.rs
 +++ b/webrtc-sys/build.rs
-@@ -375,8 +375,15 @@ fn configure_darwin_sysroot(builder: &mut cc::Build) {
+@@ -375,9 +375,15 @@ fn configure_darwin_sysroot(builder: &mut cc::Build) {
      println!("cargo:rustc-link-lib={}", clang_rt);
      println!("cargo:rustc-link-arg=-ObjC");
  
