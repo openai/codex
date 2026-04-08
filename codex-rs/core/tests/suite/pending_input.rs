@@ -11,6 +11,7 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
@@ -422,6 +423,101 @@ async fn user_input_does_not_preempt_after_reasoning_item() {
     assert_two_responses_input_snapshot(
         "pending_input_user_input_no_preempt_after_reasoning",
         &requests,
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steered_user_input_waits_for_model_continuation_after_mid_turn_compact() {
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_function_call("call-1", "test_tool", "{}")),
+        chunk(ev_completed_with_tokens(
+            "resp-1", /*total_tokens*/ 500,
+        )),
+    ];
+
+    let compact_chunks = vec![
+        chunk(ev_response_created("resp-compact")),
+        chunk(ev_message_item_done("msg-compact", "AUTO_COMPACT_SUMMARY")),
+        chunk(ev_completed_with_tokens(
+            "resp-compact",
+            /*total_tokens*/ 50,
+        )),
+    ];
+
+    let post_compact_continuation_chunks = vec![
+        chunk(ev_response_created("resp-post-compact")),
+        chunk(ev_message_item_added("msg-post-compact", "")),
+        chunk(ev_output_text_delta("resumed old task")),
+        chunk(ev_message_item_done("msg-post-compact", "resumed old task")),
+        chunk(ev_completed_with_tokens(
+            "resp-post-compact",
+            /*total_tokens*/ 60,
+        )),
+    ];
+
+    let steered_follow_up_chunks = vec![
+        chunk(ev_response_created("resp-steered")),
+        chunk(ev_message_item_done(
+            "msg-steered",
+            "processed steered prompt",
+        )),
+        chunk(ev_completed_with_tokens(
+            "resp-steered",
+            /*total_tokens*/ 70,
+        )),
+    ];
+
+    let (server, _completions) = start_streaming_sse_server(vec![
+        first_chunks,
+        compact_chunks,
+        post_compact_continuation_chunks,
+        steered_follow_up_chunks,
+    ])
+    .await;
+
+    let codex = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(|config| {
+            config.model_provider.name = "OpenAI (test)".to_string();
+            config.model_provider.supports_websockets = false;
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"))
+        .codex;
+
+    submit_user_input(&codex, "first prompt").await;
+    submit_user_input(&codex, "second prompt").await;
+
+    wait_for_agent_message(&codex, "resumed old task").await;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 4);
+
+    let post_compact_body: Value =
+        from_slice(&requests[2]).unwrap_or_else(|err| panic!("parse post-compact request: {err}"));
+    let steered_body: Value =
+        from_slice(&requests[3]).unwrap_or_else(|err| panic!("parse steered request: {err}"));
+
+    let post_compact_user_texts = message_input_texts(&post_compact_body, "user");
+    assert!(
+        !post_compact_user_texts
+            .iter()
+            .any(|text| text == "second prompt"),
+        "steered input should stay pending until the model resumes after compaction"
+    );
+
+    let steered_user_texts = message_input_texts(&steered_body, "user");
+    assert!(
+        steered_user_texts
+            .iter()
+            .any(|text| text == "second prompt"),
+        "steered input should be recorded on the request after the post-compact continuation"
     );
 
     server.shutdown().await;
