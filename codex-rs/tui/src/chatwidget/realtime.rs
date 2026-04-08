@@ -10,7 +10,6 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSession;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
-#[cfg(not(target_os = "linux"))]
 use std::sync::atomic::AtomicU16;
 #[cfg(not(target_os = "linux"))]
 use std::time::Duration;
@@ -460,15 +459,23 @@ impl ChatWidget {
             return;
         }
 
-        let RealtimeConversationUiTransport::Webrtc {
-            handle: Some(handle),
-        } = &self.realtime_conversation.transport
-        else {
-            return;
-        };
-        let peak = handle.local_audio_peak();
-        if self.realtime_conversation.meter_placeholder_id.is_none() {
-            self.start_realtime_webrtc_meter(peak.clone());
+        #[cfg(target_os = "linux")]
+        {
+            let _ = peak;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let RealtimeConversationUiTransport::Webrtc {
+                handle: Some(handle),
+            } = &self.realtime_conversation.transport
+            else {
+                return;
+            };
+            let peak = handle.local_audio_peak();
+            if self.realtime_conversation.meter_placeholder_id.is_none() {
+                self.start_realtime_webrtc_meter(peak.clone());
+            }
         }
     }
 
