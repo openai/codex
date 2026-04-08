@@ -6,6 +6,22 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+fn find_env_key(env_map: &HashMap<String, String>, name: &str) -> Option<String> {
+    env_map
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case(name))
+        .cloned()
+}
+
+fn get_env_value(env_map: &HashMap<String, String>, name: &str) -> Option<String> {
+    find_env_key(env_map, name).and_then(|key| env_map.get(&key).cloned())
+}
+
+fn insert_env_value(env_map: &mut HashMap<String, String>, name: &str, value: String) {
+    let key = find_env_key(env_map, name).unwrap_or_else(|| name.to_string());
+    env_map.insert(key, value);
+}
+
 pub fn normalize_null_device_env(env_map: &mut HashMap<String, String>) {
     let keys: Vec<String> = env_map.keys().cloned().collect();
     for k in keys {
@@ -30,12 +46,12 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
 
 // Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
 pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
-    if !env_map.contains_key("PATH")
+    if find_env_key(env_map, "PATH").is_none()
         && let Ok(path) = env::var("PATH")
     {
         env_map.insert("PATH".into(), path);
     }
-    if !env_map.contains_key("PATHEXT")
+    if find_env_key(env_map, "PATHEXT").is_none()
         && let Ok(pathext) = env::var("PATHEXT")
     {
         env_map.insert("PATHEXT".into(), pathext);
@@ -43,9 +59,7 @@ pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
 }
 
 fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
-    let existing = env_map
-        .get("PATH")
-        .cloned()
+    let existing = get_env_value(env_map, "PATH")
         .or_else(|| env::var("PATH").ok())
         .unwrap_or_default();
     let parts: Vec<String> = existing.split(';').map(ToString::to_string).collect();
@@ -62,13 +76,11 @@ fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
         new_path.push(';');
         new_path.push_str(&existing);
     }
-    env_map.insert("PATH".into(), new_path);
+    insert_env_value(env_map, "PATH", new_path);
 }
 
 fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
-    let default = env_map
-        .get("PATHEXT")
-        .cloned()
+    let default = get_env_value(env_map, "PATHEXT")
         .or_else(|| env::var("PATHEXT").ok())
         .unwrap_or(".COM;.EXE;.BAT;.CMD".to_string());
     let exts: Vec<String> = default
@@ -96,7 +108,7 @@ fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
     let mut combined = Vec::new();
     combined.extend(front);
     combined.extend(rest);
-    env_map.insert("PATHEXT".into(), combined.join(";"));
+    insert_env_value(env_map, "PATHEXT", combined.join(";"));
 }
 
 fn ensure_denybin(tools: &[&str], denybin_dir: Option<&Path>) -> Result<PathBuf> {
@@ -171,4 +183,32 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_helpers_preserve_windows_env_key_casing() {
+        let mut env_map = HashMap::from([
+            ("Path".to_string(), r"C:\Users\dev\bin".to_string()),
+            ("PathExt".to_string(), ".EXE;.CMD;.BAT".to_string()),
+        ]);
+
+        inherit_path_env(&mut env_map);
+        prepend_path(&mut env_map, r"C:\denybin");
+        reorder_pathext_for_stubs(&mut env_map);
+
+        assert_eq!(
+            env_map.get("Path"),
+            Some(&r"C:\denybin;C:\Users\dev\bin".to_string())
+        );
+        assert_eq!(
+            env_map.get("PathExt"),
+            Some(&".CMD;.BAT;.EXE".to_string())
+        );
+        assert!(!env_map.contains_key("PATH"));
+        assert!(!env_map.contains_key("PATHEXT"));
+    }
 }
