@@ -66,11 +66,6 @@ pub(crate) mod recorder {
     pub use codex_rollout::RolloutRecorder;
 }
 
-pub(crate) mod session_index {
-    pub use codex_rollout::append_thread_name;
-    pub use codex_rollout::find_thread_name_by_id;
-}
-
 pub(crate) use crate::session_rollout_init_error::map_session_init_error;
 
 pub(crate) mod truncation {

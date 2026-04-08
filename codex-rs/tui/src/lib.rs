@@ -488,10 +488,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 cwd: None,
-                // Thread names are hydrated after `thread/list` resolves rollout metadata, so
-                // name-based resume must scan the filtered list client-side instead of relying on
-                // the backend search index.
-                search_term: None,
+                search_term: Some(name.to_string()),
             })
             .await?;
         if let Some(thread) = response
