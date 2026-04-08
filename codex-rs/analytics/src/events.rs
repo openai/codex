@@ -37,6 +37,7 @@ pub(crate) enum TrackEventRequest {
     ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    ToolCall(CodexToolCallEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -97,6 +98,81 @@ pub(crate) struct ThreadInitializedEventParams {
 pub(crate) struct ThreadInitializedEvent {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: ThreadInitializedEventParams,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolKind {
+    Shell,
+    UnifiedExec,
+    ApplyPatch,
+    Mcp,
+    Dynamic,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolCallFinalReviewOutcome {
+    NotNeeded,
+    GuardianApproved,
+    GuardianDenied,
+    GuardianAborted,
+    UserApproved,
+    UserApprovedForSession,
+    UserDenied,
+    UserAborted,
+    ConfigAllowed,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolCallTerminalStatus {
+    Completed,
+    Failed,
+    Rejected,
+    Interrupted,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolCallFailureKind {
+    ToolError,
+    ApprovalDenied,
+    ApprovalAborted,
+    SandboxDenied,
+    PolicyForbidden,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexToolCallEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) tool_call_id: String,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) tool_name: String,
+    pub(crate) tool_kind: ToolKind,
+    pub(crate) started_at: u64,
+    pub(crate) completed_at: Option<u64>,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) execution_started: bool,
+    pub(crate) review_count: u64,
+    pub(crate) guardian_review_count: u64,
+    pub(crate) user_review_count: u64,
+    pub(crate) final_review_outcome: ToolCallFinalReviewOutcome,
+    pub(crate) terminal_status: ToolCallTerminalStatus,
+    pub(crate) failure_kind: Option<ToolCallFailureKind>,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) requested_additional_permissions: bool,
+    pub(crate) requested_network_access: bool,
+    pub(crate) retry_count: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexToolCallEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexToolCallEventParams,
 }
 
 #[derive(Serialize)]
