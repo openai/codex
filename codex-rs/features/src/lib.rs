@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use toml::Table;
 
+mod feature_configs;
 mod legacy;
+pub use feature_configs::MultiAgentV2ConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -541,25 +543,6 @@ impl<T: FeatureConfig> FeatureToml<T> {
 
 pub trait FeatureConfig {
     fn enabled(&self) -> Option<bool>;
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MultiAgentV2ConfigToml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage_hint_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage_hint_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hide_spawn_agent_metadata: Option<bool>,
-}
-
-impl FeatureConfig for MultiAgentV2ConfigToml {
-    fn enabled(&self) -> Option<bool> {
-        self.enabled
-    }
 }
 
 /// Single, easy-to-read registry of all feature definitions.
