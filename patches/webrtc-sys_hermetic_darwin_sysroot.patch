@@ -2,10 +2,13 @@ diff --git a/build.rs b/build.rs
 index 3b4a24a..e6fb056 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -378,3 +378,9 @@
+@@ -378,6 +378,17 @@
 -    let sysroot = Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output().unwrap();
 -
 -    let sysroot = String::from_utf8_lossy(&sysroot.stdout);
+-    let sysroot = sysroot.trim();
+-
+-    let search_dirs = Command::new("cc").arg("--print-search-dirs").output().unwrap();
 +    let sysroot = env::var("WEBRTC_SYS_DARWIN_SDK_PATH").unwrap_or_else(|_| {
 +        let output = Command::new("xcrun")
 +            .args(["--sdk", sdk, "--show-sdk-path"])
@@ -15,8 +18,9 @@ index 3b4a24a..e6fb056 100644
 +    });
 +
 +    let sysroot = sysroot.as_str();
-@@ -383,1 +389,5 @@
--    let search_dirs = Command::new("cc").arg("--print-search-dirs").output().unwrap();
++    let sysroot = sysroot.trim();
++    builder.flag(format!("-F{sysroot}/System/Library/Frameworks"));
++
 +    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
 +    let search_dirs = Command::new(cc)
 +        .arg("--print-search-dirs")
