@@ -55,8 +55,17 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTimer;
+use codex_app_server_protocol::ThreadTimerCreateParams;
+use codex_app_server_protocol::ThreadTimerCreateResponse;
+use codex_app_server_protocol::ThreadTimerDeleteParams;
+use codex_app_server_protocol::ThreadTimerDeleteResponse;
+use codex_app_server_protocol::ThreadTimerListParams;
+use codex_app_server_protocol::ThreadTimerListResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::TimerDelivery;
+use codex_app_server_protocol::TimerTrigger;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -316,6 +325,28 @@ impl AppServerSession {
         started_thread_from_start_response(response, config).await
     }
 
+    pub(crate) async fn start_ephemeral_thread_with_base_instructions(
+        &mut self,
+        config: &Config,
+        base_instructions: String,
+    ) -> Result<AppServerStartedThread> {
+        let request_id = self.next_request_id();
+        let mut params = thread_start_params_from_config(
+            config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+        );
+        params.ephemeral = Some(true);
+        params.persist_extended_history = false;
+        params.base_instructions = Some(base_instructions);
+        let response: ThreadStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
+            .await
+            .wrap_err("thread/start failed during timer spec parsing")?;
+        started_thread_from_start_response(response, config).await
+    }
+
     pub(crate) async fn resume_thread(
         &mut self,
         config: Config,
@@ -412,6 +443,68 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_timer_create(
+        &mut self,
+        thread_id: ThreadId,
+        trigger: TimerTrigger,
+        prompt: String,
+        delivery: TimerDelivery,
+    ) -> Result<ThreadTimer> {
+        let request_id = self.next_request_id();
+        let response: ThreadTimerCreateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadTimerCreate {
+                request_id,
+                params: ThreadTimerCreateParams {
+                    thread_id: thread_id.to_string(),
+                    trigger,
+                    prompt,
+                    delivery,
+                },
+            })
+            .await
+            .wrap_err("thread/timer/create failed in TUI")?;
+        Ok(response.timer)
+    }
+
+    pub(crate) async fn thread_timer_delete(
+        &mut self,
+        thread_id: ThreadId,
+        id: String,
+    ) -> Result<bool> {
+        let request_id = self.next_request_id();
+        let response: ThreadTimerDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadTimerDelete {
+                request_id,
+                params: ThreadTimerDeleteParams {
+                    thread_id: thread_id.to_string(),
+                    id,
+                },
+            })
+            .await
+            .wrap_err("thread/timer/delete failed in TUI")?;
+        Ok(response.deleted)
+    }
+
+    pub(crate) async fn thread_timer_list(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<Vec<ThreadTimer>> {
+        let request_id = self.next_request_id();
+        let response: ThreadTimerListResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadTimerList {
+                request_id,
+                params: ThreadTimerListParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/timer/list failed in TUI")?;
+        Ok(response.data)
     }
 
     #[allow(clippy::too_many_arguments)]

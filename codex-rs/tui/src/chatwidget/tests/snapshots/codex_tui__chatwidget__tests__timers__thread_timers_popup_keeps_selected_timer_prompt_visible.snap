@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/timers.rs
+expression: popup
+---
+  Thread timers
+  Review an timer, then press Enter to delete it.
+
+› 1. delay 0s • one-shot  Give me a random animal name.
+                          Press Enter to delete this timer.
+
+  Press enter to confirm or esc to go back

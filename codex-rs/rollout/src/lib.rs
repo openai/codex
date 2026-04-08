@@ -11,6 +11,7 @@ pub(crate) mod policy;
 pub(crate) mod recorder;
 pub(crate) mod session_index;
 pub mod state_db;
+mod timer_sidecar;
 
 pub(crate) mod default_client {
     pub use codex_login::default_client::*;

@@ -84,8 +84,12 @@ use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadTimer;
+use codex_app_server_protocol::ThreadTimerFiredNotification;
+use codex_app_server_protocol::ThreadTimerUpdatedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::TimerTrigger;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -112,6 +116,8 @@ use codex_core::ThreadManager;
 use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
+use codex_core::timers::TIMER_FIRED_BACKGROUND_EVENT_PREFIX;
+use codex_core::timers::TIMER_UPDATED_BACKGROUND_EVENT_PREFIX;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
@@ -161,6 +167,35 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
+fn thread_timer_from_core(value: codex_core::timers::ThreadTimer) -> ThreadTimer {
+    ThreadTimer {
+        id: value.id,
+        trigger: timer_trigger_from_core(value.trigger),
+        prompt: value.prompt,
+        delivery: match value.delivery {
+            codex_core::timers::TimerDelivery::AfterTurn => {
+                codex_app_server_protocol::TimerDelivery::AfterTurn
+            }
+            codex_core::timers::TimerDelivery::SteerCurrentTurn => {
+                codex_app_server_protocol::TimerDelivery::SteerCurrentTurn
+            }
+        },
+        created_at: value.created_at,
+        next_run_at: value.next_run_at,
+        last_run_at: value.last_run_at,
+    }
+}
+
+fn timer_trigger_from_core(value: codex_core::timers::ThreadTimerTrigger) -> TimerTrigger {
+    match value {
+        codex_core::timers::ThreadTimerTrigger::Delay { seconds, repeat } => {
+            TimerTrigger::Delay { seconds, repeat }
+        }
+        codex_core::timers::ThreadTimerTrigger::Schedule { dtstart, rrule } => {
+            TimerTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -1304,6 +1339,34 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::DeprecationNotice(notification))
                 .await;
+        }
+        EventMsg::BackgroundEvent(event) => {
+            if let Some(payload) = event
+                .message
+                .strip_prefix(TIMER_UPDATED_BACKGROUND_EVENT_PREFIX)
+                && let Ok(timers) =
+                    serde_json::from_str::<Vec<codex_core::timers::ThreadTimer>>(payload)
+            {
+                let notification = ThreadTimerUpdatedNotification {
+                    thread_id: conversation_id.to_string(),
+                    timers: timers.into_iter().map(thread_timer_from_core).collect(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadTimerUpdated(notification))
+                    .await;
+            } else if let Some(payload) = event
+                .message
+                .strip_prefix(TIMER_FIRED_BACKGROUND_EVENT_PREFIX)
+                && let Ok(timer) = serde_json::from_str::<codex_core::timers::ThreadTimer>(payload)
+            {
+                let notification = ThreadTimerFiredNotification {
+                    thread_id: conversation_id.to_string(),
+                    timer: thread_timer_from_core(timer),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadTimerFired(notification))
+                    .await;
+            }
         }
         EventMsg::ReasoningContentDelta(event) => {
             let notification = ReasoningSummaryTextDeltaNotification {

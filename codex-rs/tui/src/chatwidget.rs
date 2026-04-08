@@ -66,6 +66,8 @@ use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
+use crate::timer_scheduler::format_timer_trigger;
+use crate::timer_scheduler::trigger_is_recurring;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
@@ -348,6 +350,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use codex_app_server_protocol::ThreadTimer;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod session_header;
@@ -843,6 +846,7 @@ pub(crate) struct ChatWidget {
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    thread_timers: Vec<ThreadTimer>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1070,6 +1074,71 @@ impl From<&str> for UserMessage {
             mention_bindings: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimerFiredUserMessage {
+    prompt: String,
+    trigger: Option<String>,
+    delivery: Option<String>,
+    recurring: bool,
+}
+
+impl TimerFiredUserMessage {
+    fn schedule(&self) -> String {
+        let mut parts = vec!["Running thread timer".to_string()];
+        if let Some(trigger) = self
+            .trigger
+            .as_deref()
+            .filter(|trigger| !trigger.is_empty())
+        {
+            parts.push(trigger.to_string());
+        }
+        if !self.recurring {
+            parts.push("one-shot".to_string());
+        }
+        if let Some(delivery) = self
+            .delivery
+            .as_deref()
+            .filter(|delivery| !delivery.is_empty())
+        {
+            parts.push(delivery.to_string());
+        }
+        parts.join(" • ")
+    }
+}
+
+fn parse_timer_fired_user_message(message: &str) -> Option<TimerFiredUserMessage> {
+    let trimmed = message.trim();
+    if !trimmed.starts_with("<timer_fired>") || !trimmed.ends_with("</timer_fired>") {
+        return None;
+    }
+
+    let prompt = extract_timer_fired_tag(trimmed, "prompt")
+        .unwrap_or_default()
+        .trim_matches('\n')
+        .to_string();
+    let trigger = extract_timer_fired_tag(trimmed, "trigger").map(|text| text.trim().to_string());
+    let delivery = extract_timer_fired_tag(trimmed, "delivery").map(|text| text.trim().to_string());
+    let recurring = extract_timer_fired_tag(trimmed, "recurring")
+        .as_deref()
+        .map(str::trim)
+        == Some("true");
+
+    Some(TimerFiredUserMessage {
+        prompt,
+        trigger,
+        delivery,
+        recurring,
+    })
+}
+
+fn extract_timer_fired_tag(message: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let after_open = message.split_once(&open)?.1;
+    let value = after_open.split_once(&close)?.0;
+    Some(value.to_string())
 }
 
 struct PendingSteer {
@@ -1939,6 +2008,7 @@ impl ChatWidget {
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
+        self.thread_timers.clear();
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
         match AbsolutePathBuf::try_from(event.cwd.clone()) {
@@ -1986,6 +2056,7 @@ impl ChatWidget {
         self.refresh_model_display();
         self.refresh_status_surfaces();
         self.sync_fast_command_enabled();
+        self.sync_timer_scheduler_command_enabled();
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.refresh_plugin_mentions();
@@ -2378,6 +2449,9 @@ impl ChatWidget {
             return;
         }
         if self.has_queued_follow_up_messages() {
+            return;
+        }
+        if !self.thread_timers.is_empty() {
             return;
         }
         if self.active_mode_kind() != ModeKind::Plan {
@@ -4674,6 +4748,7 @@ impl ChatWidget {
             thread_id: None,
             thread_name: None,
             forked_from: None,
+            thread_timers: Vec::new(),
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
@@ -4731,6 +4806,7 @@ impl ChatWidget {
             .bottom_pane
             .set_collaboration_modes_enabled(/*enabled*/ true);
         widget.sync_fast_command_enabled();
+        widget.sync_timer_scheduler_command_enabled();
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget
@@ -5048,6 +5124,14 @@ impl ChatWidget {
             }
             SlashCommand::Review => {
                 self.open_review_popup();
+            }
+            SlashCommand::Loop => {
+                let Some(thread_id) = self.thread_id else {
+                    self.add_error_message("No active thread is available.".to_string());
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::OpenThreadTimers { thread_id });
             }
             SlashCommand::Rename => {
                 self.session_telemetry
@@ -5448,6 +5532,27 @@ impl ChatWidget {
                     },
                     user_facing_hint: None,
                 }));
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Loop if !trimmed.is_empty() => {
+                let Some(thread_id) = self.thread_id else {
+                    self.add_error_message("No active thread is available.".to_string());
+                    return;
+                };
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.add_info_message(
+                    format!("Scheduling `/loop {prepared_args}`..."),
+                    Some("Parsing the spec and creating the thread timer.".to_string()),
+                );
+                self.app_event_tx.send(AppEvent::CreateThreadTimerFromSpec {
+                    thread_id,
+                    spec: prepared_args,
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
@@ -6316,6 +6421,12 @@ impl ChatWidget {
                     }
                 }
             }
+            ServerNotification::ThreadTimerUpdated(notification) => {
+                self.on_thread_timers_updated(notification.timers);
+            }
+            ServerNotification::ThreadTimerFired(notification) => {
+                self.on_thread_timer_fired(notification.timer);
+            }
             ServerNotification::TurnStarted(_) => {
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
@@ -7153,6 +7264,16 @@ impl ChatWidget {
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         self.last_rendered_user_message_event =
             Some(Self::rendered_user_message_event_from_event(&event));
+        if event.images.as_ref().is_none_or(Vec::is_empty)
+            && event.local_images.is_empty()
+            && event.text_elements.is_empty()
+            && let Some(timer) = parse_timer_fired_user_message(&event.message)
+        {
+            let schedule = timer.schedule();
+            self.add_info_message(timer.prompt, Some(schedule));
+            self.needs_final_message_separator = false;
+            return;
+        }
         let remote_image_urls = event.images.unwrap_or_default();
         if !event.message.trim().is_empty()
             || !event.text_elements.is_empty()
@@ -9344,6 +9465,9 @@ impl ChatWidget {
         if feature == Feature::FastMode {
             self.sync_fast_command_enabled();
         }
+        if feature == Feature::TimerScheduler {
+            self.sync_timer_scheduler_command_enabled();
+        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
@@ -9582,6 +9706,12 @@ impl ChatWidget {
     fn sync_fast_command_enabled(&mut self) {
         self.bottom_pane
             .set_fast_command_enabled(self.fast_mode_enabled());
+    }
+
+    fn sync_timer_scheduler_command_enabled(&mut self) {
+        self.bottom_pane.set_timer_scheduler_command_enabled(
+            self.config.features.enabled(Feature::TimerScheduler),
+        );
     }
 
     fn sync_personality_command_enabled(&mut self) {
@@ -9902,6 +10032,70 @@ impl ChatWidget {
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_thread_timers_updated(&mut self, timers: Vec<ThreadTimer>) {
+        self.thread_timers = timers;
+    }
+
+    pub(crate) fn on_thread_timer_fired(&mut self, timer: ThreadTimer) {
+        // The transcript row is rendered from the visible <timer_fired> user
+        // message, so the fire notification only needs to refresh the viewport.
+        let _ = timer;
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_thread_timers_popup(
+        &mut self,
+        thread_id: ThreadId,
+        timers: Vec<ThreadTimer>,
+    ) {
+        self.thread_timers = timers.clone();
+        if timers.is_empty() {
+            self.add_info_message(
+                "No thread timers are currently scheduled.".to_string(),
+                Some("Use `/loop <spec>` to create one.".to_string()),
+            );
+            return;
+        }
+
+        let items = timers
+            .into_iter()
+            .map(|timer| {
+                let timer_id = timer.id.clone();
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::DeleteThreadTimer {
+                        thread_id,
+                        id: timer_id.clone(),
+                    });
+                })];
+                let trigger = format_timer_trigger(&timer.trigger);
+                let name = if trigger_is_recurring(&timer.trigger) {
+                    trigger
+                } else {
+                    format!("{trigger} • one-shot")
+                };
+                let selected_description =
+                    format!("{}\n\nPress Enter to delete this timer.", timer.prompt);
+                SelectionItem {
+                    name,
+                    description: Some(timer.prompt),
+                    selected_description: Some(selected_description),
+                    is_current: false,
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Thread timers".to_string()),
+            subtitle: Some("Review an timer, then press Enter to delete it.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
         self.request_redraw();
     }
 

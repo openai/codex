@@ -162,12 +162,21 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadTimer as ApiThreadTimer;
+use codex_app_server_protocol::ThreadTimerCreateParams;
+use codex_app_server_protocol::ThreadTimerCreateResponse;
+use codex_app_server_protocol::ThreadTimerDeleteParams;
+use codex_app_server_protocol::ThreadTimerDeleteResponse;
+use codex_app_server_protocol::ThreadTimerListParams;
+use codex_app_server_protocol::ThreadTimerListResponse;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::TimerDelivery as ApiTimerDelivery;
+use codex_app_server_protocol::TimerTrigger as ApiTimerTrigger;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -772,6 +781,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadTimerCreate { request_id, params } => {
+                self.thread_timer_create(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadTimerDelete { request_id, params } => {
+                self.thread_timer_delete(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadTimerList { request_id, params } => {
+                self.thread_timer_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
@@ -3126,7 +3147,7 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
-            tokio::fs::rename(&canonical_rollout_path, &restored_path)
+            rename_rollout_with_timer_sidecar(&canonical_rollout_path, &restored_path)
                 .await
                 .map_err(|err| JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
@@ -3676,6 +3697,106 @@ impl CodexMessageProcessor {
         );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_timer_create(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadTimerCreateParams,
+    ) {
+        let ThreadTimerCreateParams {
+            thread_id,
+            trigger,
+            prompt,
+            delivery,
+        } = params;
+        let Some(thread) = self.load_timer_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        match thread
+            .create_timer(
+                timer_trigger_to_core(trigger),
+                prompt,
+                timer_delivery_to_core(delivery),
+            )
+            .await
+        {
+            Ok(timer) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ThreadTimerCreateResponse {
+                            timer: api_thread_timer_from_core(timer),
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => self.send_invalid_request_error(request_id, err).await,
+        }
+    }
+
+    async fn thread_timer_delete(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadTimerDeleteParams,
+    ) {
+        let ThreadTimerDeleteParams { thread_id, id } = params;
+        let Some(thread) = self.load_timer_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        let deleted = match thread.delete_timer(&id).await {
+            Ok(deleted) => deleted,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, err).await;
+                return;
+            }
+        };
+        self.outgoing
+            .send_response(request_id, ThreadTimerDeleteResponse { deleted })
+            .await;
+    }
+
+    async fn thread_timer_list(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadTimerListParams,
+    ) {
+        let ThreadTimerListParams { thread_id } = params;
+        let Some(thread) = self.load_timer_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        let data = thread
+            .list_timers()
+            .await
+            .into_iter()
+            .map(api_thread_timer_from_core)
+            .collect();
+        self.outgoing
+            .send_response(request_id, ThreadTimerListResponse { data })
+            .await;
+    }
+
+    async fn load_timer_thread(
+        &mut self,
+        request_id: ConnectionRequestId,
+        thread_id: &str,
+    ) -> Option<Arc<CodexThread>> {
+        let (_, thread) = match self.load_thread(thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return None;
+            }
+        };
+        if !thread.enabled(Feature::TimerScheduler) {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread {thread_id} does not support timer scheduling"),
+            )
+            .await;
+            return None;
+        }
+        Some(thread)
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -5652,7 +5773,7 @@ impl CodexMessageProcessor {
                 .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
-            tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
+            rename_rollout_with_timer_sidecar(&canonical_rollout_path, &archived_path).await?;
             if let Some(ctx) = state_db_ctx {
                 let _ = ctx
                     .mark_archived(thread_id, archived_path.as_path(), Utc::now())
@@ -7910,6 +8031,21 @@ impl CodexMessageProcessor {
     }
 }
 
+async fn rename_rollout_with_timer_sidecar(from: &Path, to: &Path) -> std::io::Result<()> {
+    tokio::fs::rename(from, to).await?;
+
+    let from_sidecar = codex_core::timers::timer_sidecar_path_for_rollout(from);
+    let to_sidecar = codex_core::timers::timer_sidecar_path_for_rollout(to);
+    match tokio::fs::rename(&from_sidecar, &to_sidecar).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => {
+            let _ = tokio::fs::rename(to, from).await;
+            Err(err)
+        }
+    }
+}
+
 fn normalize_thread_list_cwd_filter(
     cwd: Option<String>,
 ) -> Result<Option<PathBuf>, JSONRPCErrorError> {
@@ -9052,6 +9188,54 @@ fn build_thread_from_snapshot(
         git_info: None,
         name: None,
         turns: Vec::new(),
+    }
+}
+
+fn timer_delivery_to_core(value: ApiTimerDelivery) -> codex_core::timers::TimerDelivery {
+    match value {
+        ApiTimerDelivery::AfterTurn => codex_core::timers::TimerDelivery::AfterTurn,
+        ApiTimerDelivery::SteerCurrentTurn => codex_core::timers::TimerDelivery::SteerCurrentTurn,
+    }
+}
+
+fn api_timer_delivery_from_core(value: codex_core::timers::TimerDelivery) -> ApiTimerDelivery {
+    match value {
+        codex_core::timers::TimerDelivery::AfterTurn => ApiTimerDelivery::AfterTurn,
+        codex_core::timers::TimerDelivery::SteerCurrentTurn => ApiTimerDelivery::SteerCurrentTurn,
+    }
+}
+
+fn timer_trigger_to_core(value: ApiTimerTrigger) -> codex_core::timers::ThreadTimerTrigger {
+    match value {
+        ApiTimerTrigger::Delay { seconds, repeat } => {
+            codex_core::timers::ThreadTimerTrigger::Delay { seconds, repeat }
+        }
+        ApiTimerTrigger::Schedule { dtstart, rrule } => {
+            codex_core::timers::ThreadTimerTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
+
+fn api_timer_trigger_from_core(value: codex_core::timers::ThreadTimerTrigger) -> ApiTimerTrigger {
+    match value {
+        codex_core::timers::ThreadTimerTrigger::Delay { seconds, repeat } => {
+            ApiTimerTrigger::Delay { seconds, repeat }
+        }
+        codex_core::timers::ThreadTimerTrigger::Schedule { dtstart, rrule } => {
+            ApiTimerTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
+
+fn api_thread_timer_from_core(value: codex_core::timers::ThreadTimer) -> ApiThreadTimer {
+    ApiThreadTimer {
+        id: value.id,
+        trigger: api_timer_trigger_from_core(value.trigger),
+        prompt: value.prompt,
+        delivery: api_timer_delivery_from_core(value.delivery),
+        created_at: value.created_at,
+        next_run_at: value.next_run_at,
+        last_run_at: value.last_run_at,
     }
 }
 

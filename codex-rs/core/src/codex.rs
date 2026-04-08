@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -303,6 +304,19 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::timers::ClaimedTimer;
+use crate::timers::CreateTimer;
+use crate::timers::PersistedTimer;
+use crate::timers::TIMER_FIRED_BACKGROUND_EVENT_PREFIX;
+use crate::timers::TIMER_UPDATED_BACKGROUND_EVENT_PREFIX;
+use crate::timers::ThreadTimer;
+use crate::timers::ThreadTimerTrigger;
+use crate::timers::TimerDelivery;
+use crate::timers::TimerTaskSpec;
+use crate::timers::TimersState;
+use crate::timers::load_timer_sidecar;
+use crate::timers::timer_prompt_input_item;
+use crate::timers::write_timer_sidecar;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
@@ -821,13 +835,27 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Prevents concurrent timers from claiming multiple timers before a
+    /// newly started turn becomes the active turn.
+    timer_start_in_progress: Mutex<bool>,
+    /// Serializes timer sidecar snapshots and file writes so stale timer state
+    /// cannot overwrite newer persisted state.
+    timer_sidecar_write_lock: Mutex<()>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    timers: Mutex<TimersState>,
+    timer_tasks_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.timer_tasks_cancellation_token.cancel();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1985,9 +2013,13 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            timer_start_in_progress: Mutex::new(false),
+            timer_sidecar_write_lock: Mutex::new(()),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
+            timers: Mutex::new(TimersState::default()),
+            timer_tasks_cancellation_token: CancellationToken::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -2025,6 +2057,7 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+        sess.restore_timers_from_sidecar().await;
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
@@ -2665,6 +2698,310 @@ impl Session {
             /*sandbox_policy_changed*/ false,
         )
         .await
+    }
+
+    pub(crate) async fn list_timers(&self) -> Vec<ThreadTimer> {
+        self.timers.lock().await.list_timers()
+    }
+
+    pub(crate) async fn create_timer(
+        self: &Arc<Self>,
+        trigger: ThreadTimerTrigger,
+        prompt: String,
+        delivery: TimerDelivery,
+    ) -> Result<ThreadTimer, String> {
+        self.ensure_rollout_materialized().await;
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return Err("timers require a persisted rollout path for restoration".to_string());
+        };
+
+        let timer_cancel = CancellationToken::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let (timer, timer_spec) = {
+            let mut timers = self.timers.lock().await;
+            timers.create_timer(
+                CreateTimer {
+                    id: id.clone(),
+                    trigger,
+                    prompt,
+                    delivery,
+                    now: Utc::now(),
+                },
+                Some(timer_cancel.clone()),
+            )?
+        };
+        if let Err(err) = self.persist_timers_to_rollout_sidecar(&rollout_path).await {
+            if let Some(runtime) = self.timers.lock().await.remove_timer(&id) {
+                TimersState::cancel_runtime(&runtime);
+            }
+            return Err(err);
+        }
+
+        if let Some(timer_spec) = timer_spec {
+            self.spawn_timer_task(id, timer_spec, timer_cancel);
+        }
+        self.emit_timer_updated_notification().await;
+        self.maybe_start_pending_timer().await;
+        Ok(timer)
+    }
+
+    pub(crate) async fn delete_timer(&self, id: &str) -> Result<bool, String> {
+        let Some(runtime) = self.timers.lock().await.remove_timer(id) else {
+            return Ok(false);
+        };
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            self.timers.lock().await.restore_runtime(runtime);
+            return Err("timers require a persisted rollout path for restoration".to_string());
+        };
+        if let Err(err) = self.persist_timers_to_rollout_sidecar(&rollout_path).await {
+            self.timers.lock().await.restore_runtime(runtime);
+            return Err(err);
+        }
+        TimersState::cancel_runtime(&runtime);
+        self.emit_timer_updated_notification().await;
+        Ok(true)
+    }
+
+    pub(crate) async fn maybe_start_pending_timer(self: &Arc<Self>) {
+        let Some(ClaimedTimer {
+            timer,
+            context,
+            deleted_one_shot_timer,
+        }) = self.claim_next_timer_for_delivery().await
+        else {
+            return;
+        };
+
+        self.emit_timer_fired_notification(&timer).await;
+        if deleted_one_shot_timer {
+            self.emit_timer_updated_notification().await;
+        }
+        self.persist_timers_sidecar_best_effort().await;
+
+        let input_item = timer_prompt_input_item(&context);
+        match context.delivery {
+            TimerDelivery::SteerCurrentTurn => {
+                if !self.inject_timer_into_active_turn(input_item.clone()).await {
+                    self.queue_response_items_for_next_turn(vec![input_item])
+                        .await;
+                    self.maybe_start_turn_for_pending_work().await;
+                }
+            }
+            TimerDelivery::AfterTurn => {
+                self.queue_response_items_for_next_turn(vec![input_item])
+                    .await;
+                self.maybe_start_turn_for_pending_work().await;
+            }
+        }
+        *self.timer_start_in_progress.lock().await = false;
+    }
+
+    async fn claim_next_timer_for_delivery(self: &Arc<Self>) -> Option<ClaimedTimer> {
+        let mut timer_start_in_progress = self.timer_start_in_progress.lock().await;
+        if *timer_start_in_progress {
+            return None;
+        }
+        *timer_start_in_progress = true;
+        drop(timer_start_in_progress);
+
+        let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await;
+
+        let (has_active_turn, active_turn_is_regular) = {
+            let active_turn = self.active_turn.lock().await;
+            let has_active_turn = active_turn.is_some();
+            let active_turn_is_regular = active_turn
+                .as_ref()
+                .and_then(|turn| turn.tasks.first())
+                .is_some_and(|(_, task)| matches!(task.kind, crate::state::TaskKind::Regular));
+            (has_active_turn, active_turn_is_regular)
+        };
+        let can_after_turn = !has_active_turn && !has_pending_turn_inputs;
+        let claimed = self.timers.lock().await.claim_next_timer(
+            Utc::now(),
+            can_after_turn,
+            active_turn_is_regular,
+        );
+        if claimed.is_none() {
+            *self.timer_start_in_progress.lock().await = false;
+        }
+        claimed
+    }
+
+    async fn inject_timer_into_active_turn(&self, item: ResponseInputItem) -> bool {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            let Some(active_turn) = active.as_ref() else {
+                return false;
+            };
+
+            match active_turn.tasks.first().map(|(_, task)| task.kind) {
+                Some(crate::state::TaskKind::Regular) => Arc::clone(&active_turn.turn_state),
+                Some(crate::state::TaskKind::Review | crate::state::TaskKind::Compact) | None => {
+                    return false;
+                }
+            }
+        };
+
+        let mut turn_state = turn_state.lock().await;
+        turn_state.push_pending_input(item);
+        true
+    }
+
+    fn spawn_timer_task(
+        self: &Arc<Self>,
+        id: String,
+        timer_spec: TimerTaskSpec,
+        cancellation_token: CancellationToken,
+    ) {
+        let weak = Arc::downgrade(self);
+        let session_cancel = self.timer_tasks_cancellation_token.clone();
+        tokio::spawn(async move {
+            let mut delay = timer_spec.delay;
+            loop {
+                tokio::select! {
+                    _ = session_cancel.cancelled() => break,
+                    _ = cancellation_token.cancelled() => break,
+                    _ = tokio::time::sleep(delay) => {}
+                }
+                let Some(session) = weak.upgrade() else {
+                    break;
+                };
+                let changed = session.timers.lock().await.mark_timer_due(&id, Utc::now());
+                if changed {
+                    session.persist_timers_sidecar_best_effort().await;
+                }
+                session.maybe_start_pending_timer().await;
+                let next_timer_spec = session
+                    .timers
+                    .lock()
+                    .await
+                    .timer_spec_for_timer(&id, Utc::now());
+                let Some(next_timer_spec) = next_timer_spec else {
+                    break;
+                };
+                delay = next_timer_spec.delay;
+            }
+        });
+    }
+
+    async fn persist_timers_to_rollout_sidecar(&self, rollout_path: &Path) -> Result<(), String> {
+        let rollout_path = rollout_path.to_path_buf();
+        self.persist_timers_sidecar_with_writer(|timers| async move {
+            write_timer_sidecar(&rollout_path, &timers).await
+        })
+        .await
+    }
+
+    async fn persist_timers_sidecar_with_writer<W, Fut>(
+        &self,
+        write_sidecar: W,
+    ) -> Result<(), String>
+    where
+        W: FnOnce(Vec<PersistedTimer>) -> Fut,
+        Fut: Future<Output = Result<(), String>>,
+    {
+        let _write_lock = self.timer_sidecar_write_lock.lock().await;
+        let timers = self.timers.lock().await.persisted_timers();
+        write_sidecar(timers).await
+    }
+
+    async fn persist_timers_sidecar_best_effort(&self) {
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return;
+        };
+        if let Err(err) = self.persist_timers_to_rollout_sidecar(&rollout_path).await {
+            warn!("failed to persist timers sidecar: {err}");
+        }
+    }
+
+    async fn restore_timers_from_sidecar(self: &Arc<Self>) {
+        if !self.features.enabled(Feature::TimerScheduler) {
+            return;
+        }
+        let Some(rollout_path) = self.current_rollout_path().await else {
+            return;
+        };
+        let persisted = match load_timer_sidecar(&rollout_path).await {
+            Ok(persisted) => persisted,
+            Err(err) => {
+                warn!("{err}");
+                return;
+            }
+        };
+        if persisted.is_empty() {
+            return;
+        }
+
+        {
+            let _write_lock = self.timer_sidecar_write_lock.lock().await;
+            let mut normalized = Vec::<PersistedTimer>::new();
+            for persisted_timer in persisted {
+                let timer_cancel = CancellationToken::new();
+                let timer_spec = {
+                    let mut timers = self.timers.lock().await;
+                    match timers.restore_timer(
+                        persisted_timer.clone(),
+                        Utc::now(),
+                        Some(timer_cancel.clone()),
+                    ) {
+                        Ok(timer_spec) => {
+                            normalized = timers.persisted_timers();
+                            timer_spec
+                        }
+                        Err(err) => {
+                            warn!(
+                                "skipping invalid persisted timer {}: {err}",
+                                persisted_timer.timer.id
+                            );
+                            continue;
+                        }
+                    }
+                };
+                if let Some(timer_spec) = timer_spec {
+                    self.spawn_timer_task(
+                        persisted_timer.timer.id.clone(),
+                        timer_spec,
+                        timer_cancel,
+                    );
+                }
+            }
+
+            if let Err(err) = write_timer_sidecar(&rollout_path, &normalized).await {
+                warn!("failed to rewrite normalized timer sidecar: {err}");
+            }
+        }
+        self.emit_timer_updated_notification().await;
+        self.maybe_start_pending_timer().await;
+    }
+
+    async fn emit_timer_updated_notification(&self) {
+        let timers = self.list_timers().await;
+        let Ok(payload) = serde_json::to_string(&timers) else {
+            warn!("failed to serialize timer update payload");
+            return;
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("{TIMER_UPDATED_BACKGROUND_EVENT_PREFIX}{payload}"),
+            }),
+        })
+        .await;
+    }
+
+    async fn emit_timer_fired_notification(&self, timer: &ThreadTimer) {
+        let Ok(payload) = serde_json::to_string(timer) else {
+            warn!("failed to serialize timer fired payload");
+            return;
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("{TIMER_FIRED_BACKGROUND_EVENT_PREFIX}{payload}"),
+            }),
+        })
+        .await;
     }
 
     async fn build_settings_update_items(
@@ -4199,8 +4536,6 @@ impl Session {
         }
     }
 
-    /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;

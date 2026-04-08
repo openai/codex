@@ -3212,6 +3212,70 @@
       ],
       "type": "object"
     },
+    "TimerDelivery": {
+      "enum": [
+        "after-turn",
+        "steer-current-turn"
+      ],
+      "type": "string"
+    },
+    "TimerTrigger": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "delay"
+              ],
+              "type": "string"
+            },
+            "repeat": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "seconds": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "seconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dtstart": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "schedule"
+              ],
+              "type": "string"
+            },
+            "rrule": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "KindTimerTrigger",
+          "type": "object"
+        }
+      ]
+    },
     "TurnInterruptParams": {
       "properties": {
         "threadId": {

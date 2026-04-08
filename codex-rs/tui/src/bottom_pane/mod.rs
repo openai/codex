@@ -272,6 +272,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_timer_scheduler_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_timer_scheduler_command_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
         self.composer.take_mention_bindings()
     }

@@ -252,14 +252,7 @@ async fn run_session_picker_with_loader(
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
     };
     let codex_home = config.codex_home.as_path();
-    let filter_cwd = if show_all || is_remote {
-        // Remote sessions live in the server's filesystem namespace, so the client
-        // process cwd is not a meaningful row filter. If the user provided an
-        // explicit remote --cd, filtering is handled server-side in thread/list.
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
+    let filter_cwd = picker_filter_cwd(config, show_all, is_remote);
 
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
@@ -1147,6 +1140,17 @@ fn thread_list_params(
     }
 }
 
+fn picker_filter_cwd(config: &Config, show_all: bool, is_remote: bool) -> Option<PathBuf> {
+    if show_all || is_remote {
+        // Remote sessions live in the server's filesystem namespace, so the client
+        // process cwd is not a meaningful row filter. If the user provided an
+        // explicit remote --cd, filtering is handled server-side in thread/list.
+        None
+    } else {
+        Some(config.cwd.to_path_buf())
+    }
+}
+
 fn paths_match(a: &Path, b: &Path) -> bool {
     if let (Ok(ca), Ok(cb)) = (
         path_utils::normalize_for_path_comparison(a),
@@ -1645,6 +1649,7 @@ fn column_visibility(
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_core::config::ConfigBuilder;
     use codex_protocol::ThreadId;
 
     use crossterm::event::KeyCode;
@@ -1687,6 +1692,15 @@ mod tests {
             num_scanned_files,
             reached_scan_cap,
         })
+    }
+
+    async fn build_config(temp_dir: &tempfile::TempDir, cwd: &Path) -> Config {
+        ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .fallback_cwd(Some(cwd.to_path_buf()))
+            .build()
+            .await
+            .expect("config should build")
     }
 
     #[allow(dead_code)]
@@ -1894,6 +1908,32 @@ mod tests {
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, None);
         assert_eq!(params.source_kinds, None);
+    }
+
+    #[tokio::test]
+    async fn local_picker_filter_uses_config_cwd() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir, Path::new("/tmp/config-cwd")).await;
+
+        assert_eq!(
+            picker_filter_cwd(&config, /*show_all*/ false, /*is_remote*/ false),
+            Some(config.cwd.to_path_buf())
+        );
+    }
+
+    #[tokio::test]
+    async fn picker_filter_cwd_is_disabled_for_show_all_and_remote() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir, Path::new("/tmp/config-cwd")).await;
+
+        assert_eq!(
+            picker_filter_cwd(&config, /*show_all*/ true, /*is_remote*/ false),
+            None
+        );
+        assert_eq!(
+            picker_filter_cwd(&config, /*show_all*/ false, /*is_remote*/ true),
+            None
+        );
     }
 
     #[test]

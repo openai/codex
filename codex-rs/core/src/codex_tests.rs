@@ -11,6 +11,11 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
+use crate::timers::ThreadTimerTrigger;
+use crate::timers::TimerDelivery;
+use crate::timers::TimersState;
+use crate::timers::load_timer_sidecar;
+use crate::timers::write_timer_sidecar;
 use crate::tools::format_exec_output_str;
 
 use codex_features::Features;
@@ -115,6 +120,8 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
+use tempfile::TempDir;
+use tokio::sync::Notify;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
@@ -2815,9 +2822,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        timer_start_in_progress: Mutex::new(false),
+        timer_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        timers: Mutex::new(TimersState::default()),
+        timer_tasks_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3656,9 +3667,13 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        timer_start_in_progress: Mutex::new(false),
+        timer_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        timers: Mutex::new(TimersState::default()),
+        timer_tasks_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3676,6 +3691,165 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+}
+
+#[tokio::test]
+async fn dropping_session_cancels_timer_tasks() {
+    let (session, _, _) = make_session_and_context_with_rx().await;
+    let cancel_token = session.timer_tasks_cancellation_token.clone();
+
+    drop(session);
+
+    assert!(cancel_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn maybe_start_pending_timer_claims_only_one_timer_while_start_is_in_progress() {
+    let (session, _, _) = make_session_and_context_with_rx().await;
+    let now = chrono::Utc::now();
+    {
+        let mut timers = session.timers.lock().await;
+        timers
+            .create_timer(
+                crate::timers::CreateTimer {
+                    id: "timer-1".to_string(),
+                    trigger: ThreadTimerTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
+                    prompt: "first".to_string(),
+                    delivery: TimerDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("first timer should be created");
+        timers
+            .create_timer(
+                crate::timers::CreateTimer {
+                    id: "timer-2".to_string(),
+                    trigger: ThreadTimerTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
+                    prompt: "second".to_string(),
+                    delivery: TimerDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("second timer should be created");
+        timers.mark_timer_due("timer-1", now);
+        timers.mark_timer_due("timer-2", now);
+    }
+
+    let first = Arc::clone(&session);
+    let second = Arc::clone(&session);
+    tokio::join!(
+        first.maybe_start_pending_timer(),
+        second.maybe_start_pending_timer()
+    );
+
+    let timers = session.timers.lock().await.list_timers();
+    assert_eq!(
+        timers
+            .iter()
+            .filter(|timer| timer.last_run_at.is_some())
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn timer_sidecar_persistence_serializes_stale_and_newer_snapshots() {
+    let (session, _, _) = make_session_and_context_with_rx().await;
+    let tempdir = TempDir::new().expect("tempdir");
+    let rollout_path = tempdir.path().join("rollout.jsonl");
+    let now = chrono::Utc::now();
+    {
+        let mut timers = session.timers.lock().await;
+        timers
+            .create_timer(
+                crate::timers::CreateTimer {
+                    id: "timer-1".to_string(),
+                    trigger: ThreadTimerTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
+                    prompt: "first".to_string(),
+                    delivery: TimerDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("first timer should be created");
+    }
+
+    let first_snapshot_taken = Arc::new(Notify::new());
+    let allow_first_write = Arc::new(Notify::new());
+    let first_session = Arc::clone(&session);
+    let first_rollout_path = rollout_path.clone();
+    let first_snapshot_taken_for_task = Arc::clone(&first_snapshot_taken);
+    let allow_first_write_for_task = Arc::clone(&allow_first_write);
+    let first_write = tokio::spawn(async move {
+        first_session
+            .persist_timers_sidecar_with_writer(|timers| async move {
+                first_snapshot_taken_for_task.notify_one();
+                allow_first_write_for_task.notified().await;
+                write_timer_sidecar(&first_rollout_path, &timers).await
+            })
+            .await
+            .expect("first persist should succeed");
+    });
+    first_snapshot_taken.notified().await;
+
+    {
+        let mut timers = session.timers.lock().await;
+        let removed = timers
+            .remove_timer("timer-1")
+            .expect("first timer should be removable");
+        TimersState::cancel_runtime(&removed);
+        timers
+            .create_timer(
+                crate::timers::CreateTimer {
+                    id: "timer-2".to_string(),
+                    trigger: ThreadTimerTrigger::Delay {
+                        seconds: 10,
+                        repeat: Some(true),
+                    },
+                    prompt: "second".to_string(),
+                    delivery: TimerDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("second timer should be created");
+    }
+
+    let second_session = Arc::clone(&session);
+    let second_rollout_path = rollout_path.clone();
+    let second_write = tokio::spawn(async move {
+        second_session
+            .persist_timers_sidecar_with_writer(|timers| async move {
+                write_timer_sidecar(&second_rollout_path, &timers).await
+            })
+            .await
+            .expect("second persist should succeed");
+    });
+
+    allow_first_write.notify_one();
+    first_write
+        .await
+        .expect("first persist task should complete");
+    second_write
+        .await
+        .expect("second persist task should complete");
+
+    let loaded = load_timer_sidecar(&rollout_path)
+        .await
+        .expect("timer sidecar should load");
+    let persisted = session.timers.lock().await.persisted_timers();
+    assert_eq!(loaded, persisted);
 }
 
 #[tokio::test]

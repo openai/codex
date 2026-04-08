@@ -313,6 +313,9 @@ export type { ThreadStartResponse } from "./ThreadStartResponse";
 export type { ThreadStartedNotification } from "./ThreadStartedNotification";
 export type { ThreadStatus } from "./ThreadStatus";
 export type { ThreadStatusChangedNotification } from "./ThreadStatusChangedNotification";
+export type { ThreadTimer } from "./ThreadTimer";
+export type { ThreadTimerFiredNotification } from "./ThreadTimerFiredNotification";
+export type { ThreadTimerUpdatedNotification } from "./ThreadTimerUpdatedNotification";
 export type { ThreadTokenUsage } from "./ThreadTokenUsage";
 export type { ThreadTokenUsageUpdatedNotification } from "./ThreadTokenUsageUpdatedNotification";
 export type { ThreadUnarchiveParams } from "./ThreadUnarchiveParams";
@@ -321,6 +324,8 @@ export type { ThreadUnarchivedNotification } from "./ThreadUnarchivedNotificatio
 export type { ThreadUnsubscribeParams } from "./ThreadUnsubscribeParams";
 export type { ThreadUnsubscribeResponse } from "./ThreadUnsubscribeResponse";
 export type { ThreadUnsubscribeStatus } from "./ThreadUnsubscribeStatus";
+export type { TimerDelivery } from "./TimerDelivery";
+export type { TimerTrigger } from "./TimerTrigger";
 export type { TokenUsageBreakdown } from "./TokenUsageBreakdown";
 export type { ToolRequestUserInputAnswer } from "./ToolRequestUserInputAnswer";
 export type { ToolRequestUserInputOption } from "./ToolRequestUserInputOption";

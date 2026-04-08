@@ -103,6 +103,7 @@ mod clipboard_text;
 mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;
+mod timer_scheduler;
 pub use custom_terminal::Terminal;
 mod cwd_prompt;
 mod debug_config;

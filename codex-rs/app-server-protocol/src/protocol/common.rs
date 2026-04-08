@@ -317,6 +317,21 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    #[experimental("thread/timer/create")]
+    ThreadTimerCreate => "thread/timer/create" {
+        params: v2::ThreadTimerCreateParams,
+        response: v2::ThreadTimerCreateResponse,
+    },
+    #[experimental("thread/timer/delete")]
+    ThreadTimerDelete => "thread/timer/delete" {
+        params: v2::ThreadTimerDeleteParams,
+        response: v2::ThreadTimerDeleteResponse,
+    },
+    #[experimental("thread/timer/list")]
+    ThreadTimerList => "thread/timer/list" {
+        params: v2::ThreadTimerListParams,
+        response: v2::ThreadTimerListResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
@@ -958,6 +973,10 @@ server_notification_definitions! {
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
+    #[experimental("thread/timer/updated")]
+    ThreadTimerUpdated => "thread/timer/updated" (v2::ThreadTimerUpdatedNotification),
+    #[experimental("thread/timer/fired")]
+    ThreadTimerFired => "thread/timer/fired" (v2::ThreadTimerFiredNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),

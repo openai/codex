@@ -44,6 +44,9 @@ use crate::create_spawn_agent_tool_v1;
 use crate::create_spawn_agent_tool_v2;
 use crate::create_spawn_agents_on_csv_tool;
 use crate::create_test_sync_tool;
+use crate::create_timer_create_tool;
+use crate::create_timer_delete_tool;
+use crate::create_timer_list_tool;
 use crate::create_tool_search_tool;
 use crate::create_tool_suggest_tool;
 use crate::create_update_plan_tool;
@@ -225,6 +228,27 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
+    }
+
+    if config.timer_scheduler {
+        plan.push_spec(
+            create_timer_create_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.push_spec(
+            create_timer_delete_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.push_spec(
+            create_timer_list_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("TimerCreate", ToolHandlerKind::TimerCreate);
+        plan.register_handler("TimerDelete", ToolHandlerKind::TimerDelete);
+        plan.register_handler("TimerList", ToolHandlerKind::TimerList);
     }
 
     if config.search_tool
