@@ -3,6 +3,7 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
+use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -61,6 +62,85 @@ fn create_codex_apps_tools_cache_context(
             is_workspace_account: false,
         },
     }
+}
+
+#[test]
+fn declared_openai_file_fields_treat_names_literally() {
+    let meta = serde_json::json!({
+        "openai/fileParams": ["file", "input_file", "attachments"],
+        "openai/fileOutputs": ["output", "artifact"]
+    });
+    let meta = meta.as_object().expect("meta object");
+
+    assert_eq!(
+        declared_openai_file_input_param_names(Some(meta)),
+        vec![
+            "file".to_string(),
+            "input_file".to_string(),
+            "attachments".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn model_visible_tool_masks_codex_apps_file_params() {
+    let mut tool_info = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "upload");
+    tool_info.tool.input_schema = Arc::new(
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "object",
+                    "description": "Original file payload."
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "object"}
+                }
+            }
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    );
+    tool_info.tool.meta = Some(Meta(
+        serde_json::json!({
+            "openai/fileParams": ["file", "files"]
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    ));
+
+    let tool = tool_info.model_visible_tool();
+
+    assert_eq!(
+        *tool.input_schema,
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Original file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                }
+            }
+        })
+        .as_object()
+        .expect("object")
+        .clone()
+    );
+}
+
+#[test]
+fn model_visible_tool_leaves_other_tools_unchanged() {
+    let original = create_test_tool("custom", "upload");
+
+    assert_eq!(original.model_visible_tool(), original.tool);
 }
 
 #[test]
