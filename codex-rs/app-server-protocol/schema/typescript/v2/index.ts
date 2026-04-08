@@ -273,6 +273,8 @@ export type { TextPosition } from "./TextPosition";
 export type { TextRange } from "./TextRange";
 export type { Thread } from "./Thread";
 export type { ThreadActiveFlag } from "./ThreadActiveFlag";
+export type { ThreadAddCreditsNudgeEmailParams } from "./ThreadAddCreditsNudgeEmailParams";
+export type { ThreadAddCreditsNudgeEmailResponse } from "./ThreadAddCreditsNudgeEmailResponse";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification";

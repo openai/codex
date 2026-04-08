@@ -296,6 +296,10 @@ client_request_definitions! {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
     },
+    ThreadAddCreditsNudgeEmail => "thread/addCreditsNudgeEmail" {
+        params: v2::ThreadAddCreditsNudgeEmailParams,
+        response: v2::ThreadAddCreditsNudgeEmailResponse,
+    },
     #[experimental("thread/backgroundTerminals/clean")]
     ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
         params: v2::ThreadBackgroundTerminalsCleanParams,

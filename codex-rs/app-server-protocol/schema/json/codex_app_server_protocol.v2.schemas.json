@@ -1151,6 +1151,30 @@
             },
             "method": {
               "enum": [
+                "thread/addCreditsNudgeEmail"
+              ],
+              "title": "Thread/addCreditsNudgeEmailRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadAddCreditsNudgeEmailParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/addCreditsNudgeEmailRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -10442,6 +10466,24 @@
         "waitingOnUserInput"
       ],
       "type": "string"
+    },
+    "ThreadAddCreditsNudgeEmailParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadAddCreditsNudgeEmailParams",
+      "type": "object"
+    },
+    "ThreadAddCreditsNudgeEmailResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadAddCreditsNudgeEmailResponse",
+      "type": "object"
     },
     "ThreadArchiveParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

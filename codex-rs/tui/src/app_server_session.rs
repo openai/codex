@@ -24,6 +24,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -563,6 +565,24 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_add_credits_nudge_email(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadAddCreditsNudgeEmailResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAddCreditsNudgeEmail {
+                request_id,
+                params: ThreadAddCreditsNudgeEmailParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/addCreditsNudgeEmail failed in TUI")?;
         Ok(())
     }
 

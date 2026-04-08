@@ -2411,6 +2411,10 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommandView::SendAddCreditsNudgeEmail => {
+                app_server.thread_add_credits_nudge_email(thread_id).await?;
+                Ok(true)
+            }
             AppCommandView::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
                 Ok(true)
