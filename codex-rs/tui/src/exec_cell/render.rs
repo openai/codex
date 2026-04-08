@@ -885,6 +885,28 @@ mod tests {
     }
 
     #[test]
+    fn command_truncation_ellipsis_does_not_include_transcript_hint() {
+        let truncated = ExecCell::limit_lines_from_start(
+            &[
+                Line::from("first"),
+                Line::from("second"),
+                Line::from("third"),
+            ],
+            2,
+        );
+        let rendered: Vec<String> = truncated.iter().map(render_line_text).collect();
+
+        assert_eq!(
+            rendered,
+            vec![
+                "first".to_string(),
+                "second".to_string(),
+                "… +1 lines".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn truncate_lines_middle_does_not_truncate_blank_prefixed_output_lines() {
         let mut lines = vec![Line::from("  └ start")];
         lines.extend(std::iter::repeat_n(Line::from("    "), 26));
