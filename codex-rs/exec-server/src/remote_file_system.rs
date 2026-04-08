@@ -62,7 +62,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<u8>> {
         trace!("remote fs read_file_with_sandbox_policy");
         let response = self
@@ -99,7 +98,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
         sandbox_policy: Option<&SandboxPolicy>,
-        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs write_file_with_sandbox_policy");
         self.client
@@ -135,7 +133,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         path: &AbsolutePathBuf,
         create_directory_options: CreateDirectoryOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs create_directory_with_sandbox_policy");
         self.client
@@ -171,7 +168,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata_with_sandbox_policy");
         let response = self
@@ -218,7 +214,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         trace!("remote fs read_directory_with_sandbox_policy");
         let response = self
@@ -259,7 +254,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         path: &AbsolutePathBuf,
         remove_options: RemoveOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs remove_with_sandbox_policy");
         self.client
@@ -299,7 +293,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         destination_path: &AbsolutePathBuf,
         copy_options: CopyOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        _sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
         trace!("remote fs copy_with_sandbox_policy");
         self.client

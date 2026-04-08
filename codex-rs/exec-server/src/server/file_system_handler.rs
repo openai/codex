@@ -40,11 +40,7 @@ impl FileSystemHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file_with_sandbox_policy(
-                &params.path,
-                params.sandbox_policy.as_ref(),
-                /*sandbox_cwd*/ None,
-            )
+            .read_file_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -62,12 +58,7 @@ impl FileSystemHandler {
             ))
         })?;
         self.file_system
-            .write_file_with_sandbox_policy(
-                &params.path,
-                bytes,
-                params.sandbox_policy.as_ref(),
-                /*sandbox_cwd*/ None,
-            )
+            .write_file_with_sandbox_policy(&params.path, bytes, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -84,7 +75,6 @@ impl FileSystemHandler {
                     recursive: params.recursive.unwrap_or(true),
                 },
                 params.sandbox_policy.as_ref(),
-                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -97,11 +87,7 @@ impl FileSystemHandler {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata_with_sandbox_policy(
-                &params.path,
-                params.sandbox_policy.as_ref(),
-                /*sandbox_cwd*/ None,
-            )
+            .get_metadata_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -118,11 +104,7 @@ impl FileSystemHandler {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory_with_sandbox_policy(
-                &params.path,
-                params.sandbox_policy.as_ref(),
-                /*sandbox_cwd*/ None,
-            )
+            .read_directory_with_sandbox_policy(&params.path, params.sandbox_policy.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -149,7 +131,6 @@ impl FileSystemHandler {
                     force: params.force.unwrap_or(true),
                 },
                 params.sandbox_policy.as_ref(),
-                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -168,7 +149,6 @@ impl FileSystemHandler {
                     recursive: params.recursive,
                 },
                 params.sandbox_policy.as_ref(),
-                /*sandbox_cwd*/ None,
             )
             .await
             .map_err(map_fs_error)?;

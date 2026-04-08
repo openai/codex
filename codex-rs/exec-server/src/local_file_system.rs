@@ -44,9 +44,8 @@ impl ExecutorFileSystem for LocalFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<u8>> {
-        enforce_read_access(path, sandbox_policy, sandbox_cwd)?;
+        enforce_read_access(path, sandbox_policy)?;
         self.read_file(path).await
     }
 
@@ -59,9 +58,8 @@ impl ExecutorFileSystem for LocalFileSystem {
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
-        enforce_write_access(path, sandbox_policy, sandbox_cwd)?;
+        enforce_write_access(path, sandbox_policy)?;
         self.write_file(path, contents).await
     }
 
@@ -83,9 +81,8 @@ impl ExecutorFileSystem for LocalFileSystem {
         path: &AbsolutePathBuf,
         create_directory_options: CreateDirectoryOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
-        enforce_write_access(path, sandbox_policy, sandbox_cwd)?;
+        enforce_write_access(path, sandbox_policy)?;
         self.create_directory(path, create_directory_options).await
     }
 
@@ -103,9 +100,8 @@ impl ExecutorFileSystem for LocalFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<FileMetadata> {
-        enforce_read_access(path, sandbox_policy, sandbox_cwd)?;
+        enforce_read_access(path, sandbox_policy)?;
         self.get_metadata(path).await
     }
 
@@ -130,9 +126,8 @@ impl ExecutorFileSystem for LocalFileSystem {
         &self,
         path: &AbsolutePathBuf,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        enforce_read_access(path, sandbox_policy, sandbox_cwd)?;
+        enforce_read_access(path, sandbox_policy)?;
         self.read_directory(path).await
     }
 
@@ -161,9 +156,8 @@ impl ExecutorFileSystem for LocalFileSystem {
         path: &AbsolutePathBuf,
         remove_options: RemoveOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
-        enforce_write_access_preserving_leaf(path, sandbox_policy, sandbox_cwd)?;
+        enforce_write_access_preserving_leaf(path, sandbox_policy)?;
         self.remove(path, remove_options).await
     }
 
@@ -224,10 +218,9 @@ impl ExecutorFileSystem for LocalFileSystem {
         destination_path: &AbsolutePathBuf,
         copy_options: CopyOptions,
         sandbox_policy: Option<&SandboxPolicy>,
-        sandbox_cwd: Option<&AbsolutePathBuf>,
     ) -> FileSystemResult<()> {
-        enforce_copy_source_read_access(source_path, sandbox_policy, sandbox_cwd)?;
-        enforce_write_access(destination_path, sandbox_policy, sandbox_cwd)?;
+        enforce_copy_source_read_access(source_path, sandbox_policy)?;
+        enforce_write_access(destination_path, sandbox_policy)?;
         self.copy(source_path, destination_path, copy_options).await
     }
 }
@@ -235,12 +228,10 @@ impl ExecutorFileSystem for LocalFileSystem {
 fn enforce_read_access(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
-    sandbox_cwd: Option<&AbsolutePathBuf>,
 ) -> FileSystemResult<()> {
-    enforce_access(
+    enforce_access_for_current_dir(
         path,
         sandbox_policy,
-        sandbox_cwd,
         FileSystemSandboxPolicy::can_read_path_with_cwd,
         "read",
         AccessPathMode::ResolveAll,
@@ -250,12 +241,10 @@ fn enforce_read_access(
 fn enforce_write_access(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
-    sandbox_cwd: Option<&AbsolutePathBuf>,
 ) -> FileSystemResult<()> {
-    enforce_access(
+    enforce_access_for_current_dir(
         path,
         sandbox_policy,
-        sandbox_cwd,
         FileSystemSandboxPolicy::can_write_path_with_cwd,
         "write",
         AccessPathMode::ResolveAll,
@@ -265,12 +254,10 @@ fn enforce_write_access(
 fn enforce_write_access_preserving_leaf(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
-    sandbox_cwd: Option<&AbsolutePathBuf>,
 ) -> FileSystemResult<()> {
-    enforce_access(
+    enforce_access_for_current_dir(
         path,
         sandbox_policy,
-        sandbox_cwd,
         FileSystemSandboxPolicy::can_write_path_with_cwd,
         "write",
         AccessPathMode::PreserveLeaf,
@@ -280,26 +267,39 @@ fn enforce_write_access_preserving_leaf(
 fn enforce_copy_source_read_access(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
-    sandbox_cwd: Option<&AbsolutePathBuf>,
 ) -> FileSystemResult<()> {
     let path_mode = match std::fs::symlink_metadata(path.as_path()) {
         Ok(metadata) if metadata.file_type().is_symlink() => AccessPathMode::PreserveLeaf,
         _ => AccessPathMode::ResolveAll,
     };
-    enforce_access(
+    enforce_access_for_current_dir(
         path,
         sandbox_policy,
-        sandbox_cwd,
         FileSystemSandboxPolicy::can_read_path_with_cwd,
         "read",
         path_mode,
     )
 }
 
-fn enforce_access(
+#[cfg(all(test, unix))]
+fn enforce_read_access_for_cwd(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
-    sandbox_cwd: Option<&AbsolutePathBuf>,
+    sandbox_cwd: &AbsolutePathBuf,
+) -> FileSystemResult<()> {
+    enforce_access_for_cwd(
+        path,
+        sandbox_policy,
+        sandbox_cwd,
+        FileSystemSandboxPolicy::can_read_path_with_cwd,
+        "read",
+        AccessPathMode::ResolveAll,
+    )
+}
+
+fn enforce_access_for_current_dir(
+    path: &AbsolutePathBuf,
+    sandbox_policy: Option<&SandboxPolicy>,
     is_allowed: fn(&FileSystemSandboxPolicy, &Path, &Path) -> bool,
     access_kind: &str,
     path_mode: AccessPathMode,
@@ -307,11 +307,52 @@ fn enforce_access(
     let Some(sandbox_policy) = sandbox_policy else {
         return Ok(());
     };
-    let cwd = resolve_sandbox_cwd(sandbox_cwd)?;
+    let cwd = current_sandbox_cwd()?;
+    enforce_access(
+        path,
+        sandbox_policy,
+        cwd.as_path(),
+        is_allowed,
+        access_kind,
+        path_mode,
+    )
+}
+
+#[cfg(all(test, unix))]
+fn enforce_access_for_cwd(
+    path: &AbsolutePathBuf,
+    sandbox_policy: Option<&SandboxPolicy>,
+    sandbox_cwd: &AbsolutePathBuf,
+    is_allowed: fn(&FileSystemSandboxPolicy, &Path, &Path) -> bool,
+    access_kind: &str,
+    path_mode: AccessPathMode,
+) -> FileSystemResult<()> {
+    let Some(sandbox_policy) = sandbox_policy else {
+        return Ok(());
+    };
+    let cwd = resolve_existing_path(sandbox_cwd.as_path())?;
+    enforce_access(
+        path,
+        sandbox_policy,
+        cwd.as_path(),
+        is_allowed,
+        access_kind,
+        path_mode,
+    )
+}
+
+fn enforce_access(
+    path: &AbsolutePathBuf,
+    sandbox_policy: &SandboxPolicy,
+    sandbox_cwd: &Path,
+    is_allowed: fn(&FileSystemSandboxPolicy, &Path, &Path) -> bool,
+    access_kind: &str,
+    path_mode: AccessPathMode,
+) -> FileSystemResult<()> {
     let resolved_path = resolve_path_for_access_check(path.as_path(), path_mode)?;
     let file_system_policy =
         canonicalize_file_system_policy_paths(FileSystemSandboxPolicy::from(sandbox_policy))?;
-    if is_allowed(&file_system_policy, resolved_path.as_path(), cwd.as_path()) {
+    if is_allowed(&file_system_policy, resolved_path.as_path(), sandbox_cwd) {
         Ok(())
     } else {
         Err(io::Error::new(
@@ -396,12 +437,9 @@ fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
-fn resolve_sandbox_cwd(sandbox_cwd: Option<&AbsolutePathBuf>) -> io::Result<PathBuf> {
-    let cwd = match sandbox_cwd {
-        Some(cwd) => cwd.to_path_buf(),
-        None => std::env::current_dir()
-            .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?,
-    };
+fn current_sandbox_cwd() -> io::Result<PathBuf> {
+    let cwd = std::env::current_dir()
+        .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
     resolve_existing_path(cwd.as_path())
 }
 
@@ -531,9 +569,9 @@ mod tests {
         let other_cwd = absolute_path(other_dir);
         let note_path = absolute_path(note_path);
 
-        enforce_read_access(&note_path, Some(&sandbox_policy), Some(&sandbox_cwd))?;
+        enforce_read_access_for_cwd(&note_path, Some(&sandbox_policy), &sandbox_cwd)?;
 
-        let error = enforce_read_access(&note_path, Some(&sandbox_policy), Some(&other_cwd))
+        let error = enforce_read_access_for_cwd(&note_path, Some(&sandbox_policy), &other_cwd)
             .expect_err("read should be rejected outside provided cwd");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         Ok(())

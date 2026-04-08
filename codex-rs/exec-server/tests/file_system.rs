@@ -3,7 +3,6 @@
 mod common;
 
 use std::os::unix::fs::symlink;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -259,11 +258,7 @@ async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: b
     let sandbox_policy = read_only_sandbox_policy(allowed_dir);
 
     let contents = file_system
-        .read_file_with_sandbox_policy(
-            &absolute_path(file_path),
-            Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
-        )
+        .read_file_with_sandbox_policy(&absolute_path(file_path), Some(&sandbox_policy))
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -291,7 +286,6 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
             &absolute_path(blocked_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -334,7 +328,6 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
         .read_file_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -374,11 +367,7 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_parent_dotdot_esca
     let requested_path = absolute_path(allowed_dir.join("link").join("..").join("secret.txt"));
     let sandbox_policy = read_only_sandbox_policy(allowed_dir);
     let error = match file_system
-        .read_file_with_sandbox_policy(
-            &requested_path,
-            Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
-        )
+        .read_file_with_sandbox_policy(&requested_path, Some(&sandbox_policy))
         .await
     {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
@@ -412,7 +401,6 @@ async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
             &absolute_path(requested_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -455,7 +443,6 @@ async fn file_system_create_directory_with_sandbox_policy_rejects_symlink_escape
             &absolute_path(requested_path.clone()),
             CreateDirectoryOptions { recursive: false },
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -498,7 +485,6 @@ async fn file_system_get_metadata_with_sandbox_policy_rejects_symlink_escape(
         .get_metadata_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -540,7 +526,6 @@ async fn file_system_read_directory_with_sandbox_policy_rejects_symlink_escape(
         .read_directory_with_sandbox_policy(
             &absolute_path(requested_path.clone()),
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -584,7 +569,6 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -632,7 +616,6 @@ async fn file_system_remove_with_sandbox_policy_removes_symlink_not_target(
                 force: false,
             },
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -671,7 +654,6 @@ async fn file_system_copy_with_sandbox_policy_preserves_symlink_source(
             &absolute_path(copied_symlink.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -711,7 +693,6 @@ async fn file_system_remove_with_sandbox_policy_rejects_symlink_escape(
                 force: false,
             },
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
@@ -758,7 +739,6 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_source(
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
             Some(&sandbox_policy),
-            /*sandbox_cwd*/ None,
         )
         .await
     {
