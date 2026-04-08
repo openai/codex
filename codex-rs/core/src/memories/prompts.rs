@@ -32,6 +32,18 @@ static MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE: LazyLock<Template> = LazyLoc
         "memories/read_path.md",
     )
 });
+static MEMORY_EXTENSIONS_FOLDER_STRUCTURE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    parse_embedded_template(
+        MEMORY_EXTENSIONS_FOLDER_STRUCTURE,
+        "memories/extensions_folder_structure.md",
+    )
+});
+static MEMORY_EXTENSIONS_PRIMARY_INPUTS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    parse_embedded_template(
+        MEMORY_EXTENSIONS_PRIMARY_INPUTS,
+        "memories/extensions_primary_inputs.md",
+    )
+});
 
 fn parse_embedded_template(source: &'static str, template_name: &str) -> Template {
     match Template::parse(source) {
@@ -40,19 +52,65 @@ fn parse_embedded_template(source: &'static str, template_name: &str) -> Templat
     }
 }
 
+const MEMORY_EXTENSIONS_FOLDER_STRUCTURE: &str = r#"
+Memory extensions (under {{ memory_extensions_root }}/):
+
+- <extension_name>/instructions.md
+  - Source-specific guidance for interpreting additional memory signals. If an
+    extension folder exists, you must read its instructions.md to determine how to use this memory
+    source.
+
+If the user has any memory extensions, you MUST read the instructions for each extension to
+determine how to use the memory source. If it has no extension folders, continue with the standard
+memory inputs only.
+"#;
+
+const MEMORY_EXTENSIONS_PRIMARY_INPUTS: &str = r#"
+Optional source-specific inputs:
+Under `{{ memory_extensions_root }}/`:
+
+- `<extension_name>/instructions.md`
+  - If extension folders exist, read each instructions.md first and follow it when interpreting
+    that extension's memory source.
+"#;
+
 /// Builds the consolidation subagent prompt for a specific memory root.
 pub(super) fn build_consolidation_prompt(
     memory_root: &Path,
     selection: &Phase2InputSelection,
 ) -> String {
     let memory_extensions_root = memory_extensions_root(memory_root);
+    let memory_extensions_exist = memory_extensions_root.is_dir();
     let memory_root = memory_root.display().to_string();
     let memory_extensions_root = memory_extensions_root.display().to_string();
+    let memory_extensions_folder_structure = if memory_extensions_exist {
+        render_memory_extensions_block(
+            &MEMORY_EXTENSIONS_FOLDER_STRUCTURE_TEMPLATE,
+            &memory_extensions_root,
+        )
+    } else {
+        String::new()
+    };
+    let memory_extensions_primary_inputs = if memory_extensions_exist {
+        render_memory_extensions_block(
+            &MEMORY_EXTENSIONS_PRIMARY_INPUTS_TEMPLATE,
+            &memory_extensions_root,
+        )
+    } else {
+        String::new()
+    };
     let phase2_input_selection = render_phase2_input_selection(selection);
     CONSOLIDATION_PROMPT_TEMPLATE
         .render([
             ("memory_root", memory_root.as_str()),
-            ("memory_extensions_root", memory_extensions_root.as_str()),
+            (
+                "memory_extensions_folder_structure",
+                memory_extensions_folder_structure.as_str(),
+            ),
+            (
+                "memory_extensions_primary_inputs",
+                memory_extensions_primary_inputs.as_str(),
+            ),
             ("phase2_input_selection", phase2_input_selection.as_str()),
         ])
         .unwrap_or_else(|err| {
@@ -60,6 +118,15 @@ pub(super) fn build_consolidation_prompt(
             format!(
                 "## Memory Phase 2 (Consolidation)\nConsolidate Codex memories in: {memory_root}\n\n{phase2_input_selection}"
             )
+        })
+}
+
+fn render_memory_extensions_block(template: &Template, memory_extensions_root: &str) -> String {
+    template
+        .render([("memory_extensions_root", memory_extensions_root)])
+        .unwrap_or_else(|err| {
+            warn!("failed to render memories extension prompt block: {err}");
+            String::new()
         })
 }
 

@@ -57,7 +57,6 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
 fn build_consolidation_prompt_renders_embedded_template() {
     let temp = tempdir().unwrap();
     let memories_dir = temp.path().join("memories");
-    let memory_extensions_dir = temp.path().join("memories_extensions");
 
     let prompt = build_consolidation_prompt(&memories_dir, &Phase2InputSelection::default());
 
@@ -65,10 +64,8 @@ fn build_consolidation_prompt_renders_embedded_template() {
         "Folder structure (under {}/):",
         memories_dir.display()
     )));
-    assert!(prompt.contains(&format!(
-        "Memory extensions (under {}/)",
-        memory_extensions_dir.display()
-    )));
+    assert!(!prompt.contains("Memory extensions (under"));
+    assert!(!prompt.contains("<extension_name>/instructions.md"));
     assert!(prompt.contains("**Diff since last consolidation:**"));
     assert!(prompt.contains("- selected inputs this run: 0"));
 }
@@ -101,7 +98,9 @@ async fn build_consolidation_prompt_points_to_extensions_without_inlining_them()
         "Memory extensions (under {}/)",
         memory_extensions_dir.display()
     )));
+    assert!(prompt.contains(&format!("Under `{}/`:", memory_extensions_dir.display())));
     assert!(prompt.contains("<extension_name>/instructions.md"));
+    assert!(prompt.contains("Optional source-specific inputs:"));
     assert!(!prompt.contains("source-specific instructions"));
     assert!(!prompt.contains("source-specific resource"));
 }

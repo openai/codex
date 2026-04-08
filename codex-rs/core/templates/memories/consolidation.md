@@ -33,18 +33,7 @@ Folder structure (under {{ memory_root }}/):
   - Recap of the rollout, including lessons learned, reusable knowledge,
     pointers/references, and pruned raw evidence snippets. Distilled version of
     everything valuable from the raw rollout.
-
-Memory extensions (under {{ memory_extensions_root }}/):
-
-- <extension_name>/instructions.md
-  - Source-specific guidance for interpreting additional memory signals. If an
-    extension folder exists, you must read its instructions.md to determine how to use this memory
-    source.
-
-If the user has any memory extensions, you MUST read the instructions for each extension to
-determine how to use the memory source. If `{{ memory_extensions_root }}` does not exist or has no
-extension folders, continue with the standard memory inputs only.
-
+{{ memory_extensions_folder_structure }}
 ============================================================
 GLOBAL SAFETY, HYGIENE, AND NO-FILLER RULES (STRICT)
 ============================================================
@@ -146,14 +135,7 @@ Under `{{ memory_root }}/`:
   - read the existing summary so updates stay consistent
 - `skills/*`
   - read existing skills so updates are incremental and non-duplicative
-
-Optional source-specific inputs:
-Under `{{ memory_extensions_root }}/`:
-
-- `<extension_name>/instructions.md`
-  - If extension folders exist, read each instructions.md first and follow it when interpreting
-    that extension's memory source.
-
+{{ memory_extensions_primary_inputs }}
 Mode selection:
 
 - INIT phase: existing artifacts are missing/empty (especially `memory_summary.md`
