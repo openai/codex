@@ -15,6 +15,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         } else {
             server_name.to_string()
         },
+        server_instructions: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
@@ -507,19 +508,19 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
 }
 
 #[test]
-fn elicitation_capability_enabled_only_for_codex_apps() {
-    let codex_apps_capability = elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME);
-    assert!(matches!(
-        codex_apps_capability,
-        Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: None
-            }),
-            url: None,
-        })
-    ));
-
-    assert!(elicitation_capability_for_server("custom_mcp").is_none());
+fn elicitation_capability_enabled_for_custom_servers() {
+    for server_name in [CODEX_APPS_MCP_SERVER_NAME, "custom_mcp"] {
+        let capability = elicitation_capability_for_server(server_name);
+        assert!(matches!(
+            capability,
+            Some(ElicitationCapability {
+                form: Some(FormElicitationCapability {
+                    schema_validation: None
+                }),
+                url: None,
+            })
+        ));
+    }
 }
 
 #[test]

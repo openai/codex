@@ -7,64 +7,48 @@ pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "csv_path".to_string(),
-            JsonSchema::String {
-                description: Some("Path to the CSV file containing input rows.".to_string()),
-            },
+            JsonSchema::string(Some("Path to the CSV file containing input rows.".to_string())),
         ),
         (
             "instruction".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Instruction template to apply to each CSV row. Use {column_name} placeholders to inject values from the row."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::string(Some(
+                "Instruction template to apply to each CSV row. Use {column_name} placeholders to inject values from the row."
+                    .to_string(),
+            )),
         ),
         (
             "id_column".to_string(),
-            JsonSchema::String {
-                description: Some("Optional column name to use as stable item id.".to_string()),
-            },
+            JsonSchema::string(Some(
+                "Optional column name to use as stable item id.".to_string(),
+            )),
         ),
         (
             "output_csv_path".to_string(),
-            JsonSchema::String {
-                description: Some("Optional output CSV path for exported results.".to_string()),
-            },
+            JsonSchema::string(Some("Optional output CSV path for exported results.".to_string())),
         ),
         (
             "max_concurrency".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::number(Some(
+                "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."
+                    .to_string(),
+            )),
         ),
         (
             "max_workers".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
-                ),
-            },
+            JsonSchema::number(Some(
+                "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
+            )),
         ),
         (
             "max_runtime_seconds".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum runtime per worker before it is failed. Defaults to 1800 seconds."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::number(Some(
+                "Maximum runtime per worker before it is failed. Defaults to 1800 seconds."
+                    .to_string(),
+            )),
         ),
         (
             "output_schema".to_string(),
-            JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            JsonSchema::object(BTreeMap::new(), /*required*/ None, /*additional_properties*/ None),
         ),
     ]);
 
@@ -74,11 +58,7 @@ pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+        parameters: JsonSchema::object(properties, Some(vec!["csv_path".to_string(), "instruction".to_string()]), Some(false.into())),
         output_schema: None,
     })
 }
@@ -87,32 +67,22 @@ pub fn create_report_agent_job_result_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "job_id".to_string(),
-            JsonSchema::String {
-                description: Some("Identifier of the job.".to_string()),
-            },
+            JsonSchema::string(Some("Identifier of the job.".to_string())),
         ),
         (
             "item_id".to_string(),
-            JsonSchema::String {
-                description: Some("Identifier of the job item.".to_string()),
-            },
+            JsonSchema::string(Some("Identifier of the job item.".to_string())),
         ),
         (
             "result".to_string(),
-            JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            JsonSchema::object(BTreeMap::new(), /*required*/ None, /*additional_properties*/ None),
         ),
         (
             "stop".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Optional. When true, cancels the remaining job items after this result is recorded."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::boolean(Some(
+                "Optional. When true, cancels the remaining job items after this result is recorded."
+                    .to_string(),
+            )),
         ),
     ]);
 
@@ -123,15 +93,11 @@ pub fn create_report_agent_job_result_tool() -> ToolSpec {
                 .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec![
+        parameters: JsonSchema::object(properties, Some(vec![
                 "job_id".to_string(),
                 "item_id".to_string(),
                 "result".to_string(),
-            ]),
-            additional_properties: Some(false.into()),
-        },
+            ]), Some(false.into())),
         output_schema: None,
     })
 }
