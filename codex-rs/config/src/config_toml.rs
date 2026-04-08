@@ -445,6 +445,15 @@ pub enum RealtimeWsMode {
     Transcription,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeTransport {
+    #[serde(rename = "webrtc")]
+    WebRtc,
+    #[default]
+    Websocket,
+}
+
 pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -453,6 +462,7 @@ pub struct RealtimeConfig {
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
+    pub transport: RealtimeTransport,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -461,6 +471,7 @@ pub struct RealtimeToml {
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
+    pub transport: Option<RealtimeTransport>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

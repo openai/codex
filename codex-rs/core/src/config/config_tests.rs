@@ -12,6 +12,7 @@ use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
+use codex_config::config_toml::RealtimeTransport;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_config::config_toml::ToolsToml;
@@ -125,6 +126,56 @@ fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     )?;
 
     assert_eq!(config.cwd, expected_cwd);
+    Ok(())
+}
+
+#[test]
+fn load_config_records_global_agents_path() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+    std::fs::write(&global_agents_path, "\n  global instructions  \n")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs().into_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.user_instructions.as_deref(),
+        Some("global instructions")
+    );
+    assert_eq!(
+        config.user_instructions_path.as_deref(),
+        Some(global_agents_path.as_path())
+    );
+    Ok(())
+}
+
+#[test]
+fn load_config_records_preferred_global_agents_override_path() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    std::fs::write(
+        codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME),
+        "global instructions",
+    )?;
+    let global_agents_override_path = codex_home.path().join(LOCAL_PROJECT_DOC_FILENAME);
+    std::fs::write(&global_agents_override_path, "local override instructions")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs().into_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.user_instructions.as_deref(),
+        Some("local override instructions")
+    );
+    assert_eq!(
+        config.user_instructions_path.as_deref(),
+        Some(global_agents_override_path.as_path())
+    );
     Ok(())
 }
 
@@ -1746,7 +1797,7 @@ fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
     let mut entries = BTreeMap::new();
     entries.insert("apply_patch_freeform".to_string(), false);
     let cfg = ConfigToml {
-        features: Some(FeaturesToml { entries }),
+        features: Some(FeaturesToml::from(entries)),
         ..Default::default()
     };
 
@@ -1794,7 +1845,7 @@ fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> 
         let mut entries = BTreeMap::new();
         entries.insert(feature_key.to_string(), true);
         let cfg = ConfigToml {
-            features: Some(FeaturesToml { entries }),
+            features: Some(FeaturesToml::from(entries)),
             ..Default::default()
         };
 
@@ -3005,14 +3056,14 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&true),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(true),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         None,
     );
 
@@ -3047,14 +3098,14 @@ async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&false),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(false),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         None,
     );
 
@@ -3087,15 +3138,15 @@ async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&true),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(true),
     );
     assert_eq!(
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&false),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(false),
     );
 
     Ok(())
@@ -4457,6 +4508,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
+            user_instructions_path: None,
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -4520,6 +4572,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
+            multi_agent_v2: MultiAgentV2Config::default(),
             features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("o3".to_string()),
@@ -4602,6 +4655,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -4665,6 +4719,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
+        multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt3".to_string()),
@@ -4745,6 +4800,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -4808,6 +4864,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
+        multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("zdr".to_string()),
@@ -4874,6 +4931,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -4937,6 +4995,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
+        multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt5".to_string()),
@@ -6097,6 +6156,71 @@ smart_approvals = true
 }
 
 #[tokio::test]
+async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+usage_hint_enabled = false
+usage_hint_text = "Custom delegation guidance."
+hide_spawn_agent_metadata = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::MultiAgentV2));
+    assert!(!config.multi_agent_v2.usage_hint_enabled);
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("Custom delegation guidance.")
+    );
+    assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "no_hint"
+
+[features.multi_agent_v2]
+usage_hint_enabled = true
+usage_hint_text = "base hint"
+hide_spawn_agent_metadata = true
+
+[profiles.no_hint.features.multi_agent_v2]
+usage_hint_enabled = false
+usage_hint_text = "profile hint"
+hide_spawn_agent_metadata = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(!config.multi_agent_v2.usage_hint_enabled);
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("profile hint")
+    );
+    assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
@@ -6364,6 +6488,7 @@ fn realtime_loads_from_config_toml() -> std::io::Result<()> {
 [realtime]
 version = "v2"
 type = "transcription"
+transport = "webrtc"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -6373,6 +6498,7 @@ type = "transcription"
         Some(RealtimeToml {
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
+            transport: Some(RealtimeTransport::WebRtc),
         })
     );
 
@@ -6388,6 +6514,7 @@ type = "transcription"
         RealtimeConfig {
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
+            transport: RealtimeTransport::WebRtc,
         }
     );
     Ok(())

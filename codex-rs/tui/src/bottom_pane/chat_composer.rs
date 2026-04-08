@@ -455,7 +455,10 @@ impl ChatComposer {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
-            is_zellij: codex_terminal_detection::terminal_info().is_zellij(),
+            is_zellij: matches!(
+                codex_terminal_detection::terminal_info().multiplexer,
+                Some(codex_terminal_detection::Multiplexer::Zellij {})
+            ),
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,

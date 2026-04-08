@@ -1,4 +1,5 @@
 use super::*;
+use crate::JsonSchema;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -14,16 +15,10 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
                 .to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            parameters: JsonSchema::object(BTreeMap::from([(
                     "path".to_string(),
-                    JsonSchema::String {
-                        description: Some("Local filesystem path to an image file".to_string()),
-                    },
-                )]),
-                required: Some(vec!["path".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                    JsonSchema::string(Some("Local filesystem path to an image file".to_string()),),
+                )]), Some(vec!["path".to_string()]), Some(false.into())),
             output_schema: Some(view_image_output_schema()),
         })
     );
@@ -41,26 +36,18 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
                 .to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "detail".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "path".to_string(),
-                        JsonSchema::String {
-                            description: Some("Local filesystem path to an image file".to_string()),
-                        },
+                        JsonSchema::string(Some("Local filesystem path to an image file".to_string()),),
                     ),
-                ]),
-                required: Some(vec!["path".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                ]), Some(vec!["path".to_string()]), Some(false.into())),
             output_schema: Some(view_image_output_schema()),
         })
     );

@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 
 use crate::PUBLIC_TOOL_NAME;
 
@@ -55,6 +56,12 @@ pub struct ToolDefinition {
     pub kind: CodeModeToolKind,
     pub input_schema: Option<JsonValue>,
     pub output_schema: Option<JsonValue>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolNamespaceDescription {
+    pub name: String,
+    pub description: String,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
@@ -163,6 +170,7 @@ pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
 
 pub fn build_exec_tool_description(
     enabled_tools: &[(String, String)],
+    namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
     code_mode_only: bool,
 ) -> String {
     if !code_mode_only {
@@ -175,17 +183,38 @@ pub fn build_exec_tool_description(
     ];
 
     if !enabled_tools.is_empty() {
-        let nested_tool_reference = enabled_tools
-            .iter()
-            .map(|(name, nested_description)| {
-                let global_name = normalize_code_mode_identifier(name);
-                format!(
-                    "### `{global_name}` (`{name}`)\n{}",
-                    nested_description.trim()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let mut current_namespace: Option<&str> = None;
+        let mut nested_tool_sections = Vec::with_capacity(enabled_tools.len());
+
+        for (name, nested_description) in enabled_tools {
+            let next_namespace = namespace_descriptions
+                .get(name)
+                .map(|namespace_description| namespace_description.name.as_str());
+            if next_namespace != current_namespace {
+                if let Some(namespace_description) = namespace_descriptions.get(name) {
+                    let namespace_description_text = namespace_description.description.trim();
+                    if !namespace_description_text.is_empty() {
+                        nested_tool_sections.push(format!(
+                            "## {}\n{namespace_description_text}",
+                            namespace_description.name
+                        ));
+                    }
+                }
+                current_namespace = next_namespace;
+            }
+
+            let global_name = normalize_code_mode_identifier(name);
+            let nested_description = nested_description.trim();
+            if nested_description.is_empty() {
+                nested_tool_sections.push(format!("### `{global_name}` (`{name}`)"));
+            } else {
+                nested_tool_sections.push(format!(
+                    "### `{global_name}` (`{name}`)\n{nested_description}"
+                ));
+            }
+        }
+
+        let nested_tool_reference = nested_tool_sections.join("\n\n");
         sections.push(nested_tool_reference);
     }
 
@@ -408,6 +437,45 @@ fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>) -> String 
     "unknown[]".to_string()
 }
 
+fn append_additional_properties_line(
+    lines: &mut Vec<String>,
+    map: &serde_json::Map<String, JsonValue>,
+    properties: &serde_json::Map<String, JsonValue>,
+    line_prefix: &str,
+) {
+    if let Some(additional_properties) = map.get("additionalProperties") {
+        let property_type = match additional_properties {
+            JsonValue::Bool(true) => Some("unknown".to_string()),
+            JsonValue::Bool(false) => None,
+            value => Some(render_json_schema_to_typescript_inner(value)),
+        };
+
+        if let Some(property_type) = property_type {
+            lines.push(format!("{line_prefix}[key: string]: {property_type};"));
+        }
+    } else if properties.is_empty() {
+        lines.push(format!("{line_prefix}[key: string]: unknown;"));
+    }
+}
+
+fn has_property_description(value: &JsonValue) -> bool {
+    value
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .is_some_and(|description| !description.is_empty())
+}
+
+fn render_json_schema_object_property(name: &str, value: &JsonValue, required: &[&str]) -> String {
+    let optional = if required.iter().any(|required_name| required_name == &name) {
+        ""
+    } else {
+        "?"
+    };
+    let property_name = render_json_schema_property_name(name);
+    let property_type = render_json_schema_to_typescript_inner(value);
+    format!("{property_name}{optional}: {property_type};")
+}
+
 fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String {
     let required = map
         .get("required")
@@ -427,33 +495,39 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String
 
     let mut sorted_properties = properties.iter().collect::<Vec<_>>();
     sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+    if sorted_properties
+        .iter()
+        .any(|(_, value)| has_property_description(value))
+    {
+        let mut lines = vec!["{".to_string()];
+        for (name, value) in sorted_properties {
+            if let Some(description) = value.get("description").and_then(JsonValue::as_str) {
+                for description_line in description
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                {
+                    lines.push(format!("  // {description_line}"));
+                }
+            }
+
+            lines.push(format!(
+                "  {}",
+                render_json_schema_object_property(name, value, &required)
+            ));
+        }
+
+        append_additional_properties_line(&mut lines, map, &properties, "  ");
+        lines.push("}".to_string());
+        return lines.join("\n");
+    }
+
     let mut lines = sorted_properties
         .into_iter()
-        .map(|(name, value)| {
-            let optional = if required.iter().any(|required_name| required_name == name) {
-                ""
-            } else {
-                "?"
-            };
-            let property_name = render_json_schema_property_name(name);
-            let property_type = render_json_schema_to_typescript_inner(value);
-            format!("{property_name}{optional}: {property_type};")
-        })
+        .map(|(name, value)| render_json_schema_object_property(name, value, &required))
         .collect::<Vec<_>>();
 
-    if let Some(additional_properties) = map.get("additionalProperties") {
-        let property_type = match additional_properties {
-            JsonValue::Bool(true) => Some("unknown".to_string()),
-            JsonValue::Bool(false) => None,
-            value => Some(render_json_schema_to_typescript_inner(value)),
-        };
-
-        if let Some(property_type) = property_type {
-            lines.push(format!("[key: string]: {property_type};"));
-        }
-    } else if properties.is_empty() {
-        lines.push("[key: string]: unknown;".to_string());
-    }
+    append_additional_properties_line(&mut lines, map, &properties, "");
 
     if lines.is_empty() {
         return "{}".to_string();
@@ -479,12 +553,14 @@ mod tests {
     use super::CodeModeToolKind;
     use super::ParsedExecSource;
     use super::ToolDefinition;
+    use super::ToolNamespaceDescription;
     use super::augment_tool_definition;
     use super::build_exec_tool_description;
     use super::normalize_code_mode_identifier;
     use super::parse_exec_source;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn parse_exec_source_without_pragma() {
@@ -551,9 +627,57 @@ mod tests {
     }
 
     #[test]
+    fn augment_tool_definition_includes_property_descriptions_as_comments() {
+        let definition = ToolDefinition {
+            name: "weather_tool".to_string(),
+            description: "Weather tool".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "weather": {
+                        "type": "array",
+                        "description": "look up weather for a given list of locations",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "location": { "type": "string" }
+                            },
+                            "required": ["location"]
+                        }
+                    }
+                },
+                "required": ["weather"]
+            })),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "forecast": {
+                        "type": "string",
+                        "description": "human readable weather forecast"
+                    }
+                },
+                "required": ["forecast"]
+            })),
+        };
+
+        let description = augment_tool_definition(definition).description;
+        assert!(description.contains(
+            r#"weather_tool(args: {
+  // look up weather for a given list of locations
+  weather: Array<{ location: string; }>;
+}): Promise<{
+  // human readable weather forecast
+  forecast: string;
+}>;"#
+        ));
+    }
+
+    #[test]
     fn code_mode_only_description_includes_nested_tools() {
         let description = build_exec_tool_description(
             &[("foo".to_string(), "bar".to_string())],
+            &BTreeMap::new(),
             /*code_mode_only*/ true,
         );
         assert!(description.contains("### `foo` (`foo`)"));
@@ -561,8 +685,67 @@ mod tests {
 
     #[test]
     fn exec_description_mentions_timeout_helpers() {
-        let description = build_exec_tool_description(&[], /*code_mode_only*/ false);
+        let description =
+            build_exec_tool_description(&[], &BTreeMap::new(), /*code_mode_only*/ false);
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
+    }
+
+    #[test]
+    fn code_mode_only_description_groups_namespace_instructions_once() {
+        let namespace_descriptions = BTreeMap::from([
+            (
+                "mcp__sample__alpha".to_string(),
+                ToolNamespaceDescription {
+                    name: "mcp__sample".to_string(),
+                    description: "Shared namespace guidance.".to_string(),
+                },
+            ),
+            (
+                "mcp__sample__beta".to_string(),
+                ToolNamespaceDescription {
+                    name: "mcp__sample".to_string(),
+                    description: "Shared namespace guidance.".to_string(),
+                },
+            ),
+        ]);
+        let description = build_exec_tool_description(
+            &[
+                ("mcp__sample__alpha".to_string(), "First tool".to_string()),
+                ("mcp__sample__beta".to_string(), "Second tool".to_string()),
+            ],
+            &namespace_descriptions,
+            /*code_mode_only*/ true,
+        );
+        assert_eq!(description.matches("## mcp__sample").count(), 1);
+        assert!(description.contains(
+            r#"## mcp__sample
+Shared namespace guidance.
+
+### `mcp__sample__alpha` (`mcp__sample__alpha`)
+First tool
+
+### `mcp__sample__beta` (`mcp__sample__beta`)
+Second tool"#
+        ));
+    }
+
+    #[test]
+    fn code_mode_only_description_omits_empty_namespace_sections() {
+        let namespace_descriptions = BTreeMap::from([(
+            "mcp__sample__alpha".to_string(),
+            ToolNamespaceDescription {
+                name: "mcp__sample".to_string(),
+                description: String::new(),
+            },
+        )]);
+        let description = build_exec_tool_description(
+            &[("mcp__sample__alpha".to_string(), "First tool".to_string())],
+            &namespace_descriptions,
+            /*code_mode_only*/ true,
+        );
+
+        assert!(!description.contains("## mcp__sample"));
+        assert!(description.contains("### `mcp__sample__alpha` (`mcp__sample__alpha`)"));
     }
 }
