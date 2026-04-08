@@ -239,6 +239,7 @@ impl MessageProcessor {
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         );
+        outgoing.set_analytics_events_client(analytics_events_client.clone());
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
