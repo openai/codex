@@ -12,7 +12,7 @@
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
-//! - Context usage (remaining %, used %, window size)
+//! - Context usage (remaining meter, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (ID, tokens used)
 //! - Application version
@@ -22,7 +22,6 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use strum_macros::EnumString;
@@ -63,10 +62,10 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
-    /// Percentage of context window remaining.
+    /// Visual meter of context window remaining.
     ContextRemaining,
 
-    /// Percentage of context window used.
+    /// Legacy alias for the context window meter.
     ContextUsed,
 
     /// Remaining usage on the 5-hour rate limit.
@@ -107,11 +106,9 @@ impl StatusLineItem {
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
             StatusLineItem::ContextRemaining => {
-                "Percentage of context window remaining (omitted when unknown)"
+                "Visual meter of context window remaining (omitted when unknown)"
             }
-            StatusLineItem::ContextUsed => {
-                "Percentage of context window used (omitted when unknown)"
-            }
+            StatusLineItem::ContextUsed => StatusLineItem::ContextRemaining.description(),
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on 5-hour usage limit (omitted when unavailable)"
             }
@@ -130,6 +127,31 @@ impl StatusLineItem {
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
         }
+    }
+}
+
+const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
+    StatusLineItem::ModelName,
+    StatusLineItem::ModelWithReasoning,
+    StatusLineItem::CurrentDir,
+    StatusLineItem::ProjectRoot,
+    StatusLineItem::GitBranch,
+    StatusLineItem::ContextRemaining,
+    StatusLineItem::FiveHourLimit,
+    StatusLineItem::WeeklyLimit,
+    StatusLineItem::CodexVersion,
+    StatusLineItem::ContextWindowSize,
+    StatusLineItem::UsedTokens,
+    StatusLineItem::TotalInputTokens,
+    StatusLineItem::TotalOutputTokens,
+    StatusLineItem::SessionId,
+    StatusLineItem::FastMode,
+];
+
+fn normalize_status_line_item_for_setup(item: StatusLineItem) -> StatusLineItem {
+    match item {
+        StatusLineItem::ContextUsed => StatusLineItem::ContextRemaining,
+        item => item,
     }
 }
 
@@ -201,6 +223,7 @@ impl StatusLineSetupView {
                 let Ok(item) = id.parse::<StatusLineItem>() else {
                     continue;
                 };
+                let item = normalize_status_line_item_for_setup(item);
                 let item_id = item.to_string();
                 if !used_ids.insert(item_id.clone()) {
                     continue;
@@ -209,7 +232,7 @@ impl StatusLineSetupView {
             }
         }
 
-        for item in StatusLineItem::iter() {
+        for item in SELECTABLE_STATUS_LINE_ITEMS.iter().cloned() {
             let item_id = item.to_string();
             if used_ids.contains(&item_id) {
                 continue;
