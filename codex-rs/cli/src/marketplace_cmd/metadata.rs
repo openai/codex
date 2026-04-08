@@ -12,7 +12,7 @@ const MARKETPLACE_ADD_SOURCE_FILE: &str = ".codex-marketplace-source";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MarketplaceInstallMetadata {
     pub(super) source_id: String,
-    source: InstalledMarketplaceSource,
+    pub(super) source: InstalledMarketplaceSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,7 +48,11 @@ pub(super) fn installed_marketplace_root_for_source(
             continue;
         }
         let metadata = read_marketplace_source_metadata(&root)?;
-        if metadata.source_id == source_id && validate_marketplace_root(&root).is_ok() {
+        if metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.source_id == source_id)
+            && validate_marketplace_root(&root).is_ok()
+        {
             return Ok(Some(root));
         }
     }
@@ -88,8 +92,13 @@ pub(super) fn write_marketplace_source_metadata(
     })
 }
 
-fn read_marketplace_source_metadata(root: &Path) -> Result<MarketplaceInstallMetadata> {
+pub(super) fn read_marketplace_source_metadata(
+    root: &Path,
+) -> Result<Option<MarketplaceInstallMetadata>> {
     let path = root.join(MARKETPLACE_ADD_SOURCE_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
     let content = fs::read_to_string(&path).with_context(|| {
         format!(
             "failed to read marketplace source metadata {}",
@@ -97,12 +106,12 @@ fn read_marketplace_source_metadata(root: &Path) -> Result<MarketplaceInstallMet
         )
     })?;
     if !content.trim_start().starts_with('{') {
-        return Ok(MarketplaceInstallMetadata {
+        return Ok(Some(MarketplaceInstallMetadata {
             source_id: content.trim().to_string(),
             source: InstalledMarketplaceSource::LocalDirectory {
                 path: root.to_path_buf(),
             },
-        });
+        }));
     }
 
     let json: serde_json::Value = serde_json::from_str(&content).with_context(|| {
@@ -162,7 +171,7 @@ fn read_marketplace_source_metadata(root: &Path) -> Result<MarketplaceInstallMet
         }
         other => bail!("unsupported marketplace source metadata kind `{other}`"),
     };
-    Ok(MarketplaceInstallMetadata { source_id, source })
+    Ok(Some(MarketplaceInstallMetadata { source_id, source }))
 }
 
 impl MarketplaceInstallMetadata {

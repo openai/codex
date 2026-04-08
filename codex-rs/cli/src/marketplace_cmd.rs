@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod metadata;
+mod update;
 
 #[derive(Debug, Parser)]
 pub struct MarketplaceCli {
@@ -28,6 +29,8 @@ pub struct MarketplaceCli {
 enum MarketplaceSubcommand {
     /// Add a marketplace repository or local marketplace directory.
     Add(AddMarketplaceArgs),
+    /// Refresh one added marketplace, or every added marketplace when NAME is omitted.
+    Update(update::UpdateMarketplaceArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -72,6 +75,7 @@ impl MarketplaceCli {
 
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(args).await?,
+            MarketplaceSubcommand::Update(args) => update::run_update(args).await?,
         }
 
         Ok(())

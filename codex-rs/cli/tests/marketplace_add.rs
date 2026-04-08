@@ -96,3 +96,47 @@ async fn marketplace_add_same_source_is_idempotent() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn marketplace_update_refreshes_installed_marketplace_from_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "first install")?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    std::fs::write(
+        source.path().join("plugins/sample/marker.txt"),
+        "updated source",
+    )?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "update", "debug"])
+        .assert()
+        .success()
+        .stdout(contains("Successfully updated marketplace: debug"));
+
+    let installed_root = marketplace_install_root(codex_home.path()).join("debug");
+    assert_eq!(
+        std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt"))?,
+        "updated source"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_update_without_marketplaces_is_successful_noop() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "update"])
+        .assert()
+        .success()
+        .stdout(contains("No marketplaces configured."));
+
+    Ok(())
+}
