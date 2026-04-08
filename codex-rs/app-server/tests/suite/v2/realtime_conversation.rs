@@ -161,10 +161,22 @@ struct StartedWebrtcRealtime {
     sdp: ThreadRealtimeSdpNotification,
 }
 
+// Scripted SSE responses for the normal Codex agent loop. Realtime can ask for a delegated
+// Codex turn; that turn talks to this mock `/responses` endpoint and may request ordinary tools.
+struct MainLoopResponsesScript {
+    responses: Vec<String>,
+}
+
+// Scripted server events for the direct realtime sideband WebSocket. This mock is the realtime
+// session app-server joins after call creation; it is not the main-loop Responses stream.
+struct RealtimeSidebandScript {
+    connections: Vec<WebSocketConnectionConfig>,
+}
+
 struct RealtimeE2eHarness {
     mcp: McpProcess,
     _codex_home: TempDir,
-    responses_server: MockServer,
+    main_loop_responses_server: MockServer,
     realtime_server: WebSocketTestServer,
     call_capture: RealtimeCallRequestCapture,
     thread_id: String,
@@ -175,14 +187,15 @@ impl RealtimeE2eHarness {
     // creation capture, sideband WebSocket server, login, config, and a started thread.
     async fn new(
         realtime_version: RealtimeTestVersion,
-        responses: Vec<String>,
-        sideband_connections: Vec<WebSocketConnectionConfig>,
+        main_loop: MainLoopResponsesScript,
+        realtime_sideband: RealtimeSidebandScript,
     ) -> Result<Self> {
-        let responses_server = create_mock_responses_server_sequence_unchecked(responses).await;
-        Self::new_with_responses_server_and_sandbox(
+        let main_loop_responses_server =
+            create_mock_responses_server_sequence_unchecked(main_loop.responses).await;
+        Self::new_with_main_loop_responses_server_and_sandbox(
             realtime_version,
-            responses_server,
-            sideband_connections,
+            main_loop_responses_server,
+            realtime_sideband,
             RealtimeTestSandbox::ReadOnly,
         )
         .await
@@ -190,38 +203,39 @@ impl RealtimeE2eHarness {
 
     async fn new_with_sandbox(
         realtime_version: RealtimeTestVersion,
-        responses: Vec<String>,
-        sideband_connections: Vec<WebSocketConnectionConfig>,
+        main_loop: MainLoopResponsesScript,
+        realtime_sideband: RealtimeSidebandScript,
         sandbox: RealtimeTestSandbox,
     ) -> Result<Self> {
-        let responses_server = create_mock_responses_server_sequence_unchecked(responses).await;
-        Self::new_with_responses_server_and_sandbox(
+        let main_loop_responses_server =
+            create_mock_responses_server_sequence_unchecked(main_loop.responses).await;
+        Self::new_with_main_loop_responses_server_and_sandbox(
             realtime_version,
-            responses_server,
-            sideband_connections,
+            main_loop_responses_server,
+            realtime_sideband,
             sandbox,
         )
         .await
     }
 
-    async fn new_with_responses_server(
+    async fn new_with_main_loop_responses_server(
         realtime_version: RealtimeTestVersion,
-        responses_server: MockServer,
-        sideband_connections: Vec<WebSocketConnectionConfig>,
+        main_loop_responses_server: MockServer,
+        realtime_sideband: RealtimeSidebandScript,
     ) -> Result<Self> {
-        Self::new_with_responses_server_and_sandbox(
+        Self::new_with_main_loop_responses_server_and_sandbox(
             realtime_version,
-            responses_server,
-            sideband_connections,
+            main_loop_responses_server,
+            realtime_sideband,
             RealtimeTestSandbox::ReadOnly,
         )
         .await
     }
 
-    async fn new_with_responses_server_and_sandbox(
+    async fn new_with_main_loop_responses_server_and_sandbox(
         realtime_version: RealtimeTestVersion,
-        responses_server: MockServer,
-        sideband_connections: Vec<WebSocketConnectionConfig>,
+        main_loop_responses_server: MockServer,
+        realtime_sideband: RealtimeSidebandScript,
         sandbox: RealtimeTestSandbox,
     ) -> Result<Self> {
         let call_capture = RealtimeCallRequestCapture::new();
@@ -233,14 +247,15 @@ impl RealtimeE2eHarness {
                     .insert_header("Location", "/v1/realtime/calls/rtc_e2e")
                     .set_body_string("v=answer\r\n"),
             )
-            .mount(&responses_server)
+            .mount(&main_loop_responses_server)
             .await;
 
-        let realtime_server = start_websocket_server_with_headers(sideband_connections).await;
+        let realtime_server =
+            start_websocket_server_with_headers(realtime_sideband.connections).await;
         let codex_home = TempDir::new()?;
         create_config_toml_with_realtime_version(
             codex_home.path(),
-            &responses_server.uri(),
+            &main_loop_responses_server.uri(),
             realtime_server.uri(),
             /*realtime_enabled*/ true,
             StartupContextConfig::Override("startup context"),
@@ -265,7 +280,7 @@ impl RealtimeE2eHarness {
         Ok(Self {
             mcp,
             _codex_home: codex_home,
-            responses_server,
+            main_loop_responses_server,
             realtime_server,
             call_capture,
             thread_id: thread_start.thread.id,
@@ -357,8 +372,8 @@ impl RealtimeE2eHarness {
         Ok(())
     }
 
-    async fn responses_requests(&self) -> Result<Vec<Value>> {
-        responses_requests(&self.responses_server).await
+    async fn main_loop_responses_requests(&self) -> Result<Vec<Value>> {
+        responses_requests(&self.main_loop_responses_server).await
     }
 
     async fn shutdown(self) {
@@ -366,19 +381,35 @@ impl RealtimeE2eHarness {
     }
 }
 
-fn sideband_connection(requests: Vec<Vec<Value>>) -> WebSocketConnectionConfig {
+fn main_loop_responses(responses: Vec<String>) -> MainLoopResponsesScript {
+    MainLoopResponsesScript { responses }
+}
+
+fn no_main_loop_responses() -> MainLoopResponsesScript {
+    main_loop_responses(Vec::new())
+}
+
+fn realtime_sideband(connections: Vec<WebSocketConnectionConfig>) -> RealtimeSidebandScript {
+    RealtimeSidebandScript { connections }
+}
+
+fn realtime_sideband_connection(
+    realtime_server_events: Vec<Vec<Value>>,
+) -> WebSocketConnectionConfig {
     WebSocketConnectionConfig {
-        requests,
+        requests: realtime_server_events,
         response_headers: Vec::new(),
         accept_delay: None,
         close_after_requests: true,
     }
 }
 
-fn open_sideband_connection(requests: Vec<Vec<Value>>) -> WebSocketConnectionConfig {
+fn open_realtime_sideband_connection(
+    realtime_server_events: Vec<Vec<Value>>,
+) -> WebSocketConnectionConfig {
     WebSocketConnectionConfig {
         close_after_requests: false,
-        ..sideband_connection(requests)
+        ..realtime_sideband_connection(realtime_server_events)
     }
 }
 
@@ -902,10 +933,10 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
     // that immediately proves the joined connection can receive server events.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V1,
-        Vec::new(),
-        vec![open_sideband_connection(vec![vec![session_updated(
-            "sess_v1_webrtc",
-        )]])],
+        no_main_loop_responses(),
+        realtime_sideband(vec![open_realtime_sideband_connection(vec![vec![
+            session_updated("sess_v1_webrtc"),
+        ]])]),
     )
     .await?;
 
@@ -962,10 +993,10 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     // Phase 1: script one v1 handoff request on the sideband and one delegated Responses turn.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V1,
-        vec![create_final_assistant_message_sse_response(
+        main_loop_responses(vec![create_final_assistant_message_sse_response(
             "delegated from v1",
-        )?],
-        vec![sideband_connection(vec![
+        )?]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v1_handoff"),
                 json!({
@@ -980,7 +1011,7 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
                 }),
             ],
             vec![],
-        ])],
+        ])]),
     )
     .await?;
 
@@ -999,7 +1030,7 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
 
     // Phase 3: assert the delegated prompt went to Responses, then the v1 handoff append went back
     // over the existing sideband connection.
-    let requests = harness.responses_requests().await?;
+    let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
         response_request_contains_text(&requests[0], "user: delegate from v1"),
@@ -1029,8 +1060,8 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     // after the client has had a chance to append input.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V2,
-        Vec::new(),
-        vec![sideband_connection(vec![
+        no_main_loop_responses(),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![session_updated("sess_v2_stream")],
             vec![],
             vec![
@@ -1047,7 +1078,7 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
                 }),
             ],
             vec![],
-        ])],
+        ])]),
     )
     .await?;
 
@@ -1109,16 +1140,16 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
     // assistant text.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V2,
-        vec![create_final_assistant_message_sse_response(
+        main_loop_responses(vec![create_final_assistant_message_sse_response(
             "delegated from v2",
-        )?],
-        vec![sideband_connection(vec![
+        )?]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_tool"),
                 v2_codex_tool_call("call_v2", "delegate from v2"),
             ],
             vec![],
-        ])],
+        ])]),
     )
     .await?;
 
@@ -1137,7 +1168,7 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
 
     // Phase 3: assert the delegated prompt went to Responses and the result returned as exactly one
     // v2 function-call output event on the sideband.
-    let requests = harness.responses_requests().await?;
+    let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
         response_request_contains_text(&requests[0], "delegate from v2"),
@@ -1156,33 +1187,37 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
 async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    // Phase 1: script a v2 codex function call; the delegated turn first requests a shell command
-    // and then completes after Codex reports the command output back to Responses.
+    // Phase 1: keep the two mocked OpenAI conversations explicit. The realtime sideband only
+    // calls the `codex` function; the shell command is requested by the delegated main-loop
+    // Responses turn that app-server starts after receiving that function call.
+    let main_loop = main_loop_responses(vec![
+        create_shell_command_sse_response(
+            realtime_tool_ok_command(),
+            /*workdir*/ None,
+            Some(5000),
+            "shell_call",
+        )?,
+        create_final_assistant_message_sse_response("shell tool finished")?,
+    ]);
+    let realtime = realtime_sideband(vec![realtime_sideband_connection(vec![
+        vec![
+            session_updated("sess_v2_shell"),
+            v2_codex_tool_call("call_shell", "run shell through delegated turn"),
+        ],
+        vec![],
+    ])]);
+
     let mut harness = RealtimeE2eHarness::new_with_sandbox(
         RealtimeTestVersion::V2,
-        vec![
-            create_shell_command_sse_response(
-                realtime_tool_ok_command(),
-                /*workdir*/ None,
-                Some(5000),
-                "shell_call",
-            )?,
-            create_final_assistant_message_sse_response("shell tool finished")?,
-        ],
-        vec![sideband_connection(vec![
-            vec![
-                session_updated("sess_v2_shell"),
-                v2_codex_tool_call("call_shell", "run shell through delegated turn"),
-            ],
-            vec![],
-        ])],
+        main_loop,
+        realtime,
         RealtimeTestSandbox::DangerFullAccess,
     )
     .await?;
 
     let _ = harness.start_webrtc_realtime("v=offer\r\n").await?;
 
-    // Phase 2: observe the delegated turn executing the requested shell command.
+    // Phase 2: observe the delegated main-loop turn executing the requested shell command.
     let started_command = wait_for_started_command_execution(&mut harness.mcp).await?;
     let ThreadItem::CommandExecution { id, status, .. } = started_command.item else {
         unreachable!("helper returns command execution items");
@@ -1213,7 +1248,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
-    let requests = harness.responses_requests().await?;
+    let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 2);
     assert!(
         response_request_contains_text(&requests[1], "realtime-tool-ok"),
@@ -1238,7 +1273,7 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
 
     // Phase 1: gate the delegated Responses stream so the sideband can send audio while the tool
     // call is still waiting on its delegated turn.
-    let responses_server = responses::start_mock_server().await;
+    let main_loop_responses_server = responses::start_mock_server().await;
     let (gate_completed_tx, gate_completed_rx) = mpsc::channel();
     let gated_response = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -1252,13 +1287,13 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
             response: gated_response,
         })
         .expect(1)
-        .mount(&responses_server)
+        .mount(&main_loop_responses_server)
         .await;
 
-    let mut harness = RealtimeE2eHarness::new_with_responses_server(
+    let mut harness = RealtimeE2eHarness::new_with_main_loop_responses_server(
         RealtimeTestVersion::V2,
-        responses_server,
-        vec![sideband_connection(vec![
+        main_loop_responses_server,
+        realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_nonblocking"),
                 v2_codex_tool_call("call_audio", "delegate while audio continues"),
@@ -1271,7 +1306,7 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
                 }),
             ],
             vec![],
-        ])],
+        ])]),
     )
     .await?;
 
