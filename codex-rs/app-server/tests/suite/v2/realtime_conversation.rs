@@ -1455,9 +1455,10 @@ fn realtime_tool_ok_command() -> Vec<String> {
     #[cfg(windows)]
     {
         vec![
-            "Write-Host".to_string(),
-            "-NoNewline".to_string(),
-            "realtime-tool-ok".to_string(),
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "[Console]::Write('realtime-tool-ok')".to_string(),
         ]
     }
 
