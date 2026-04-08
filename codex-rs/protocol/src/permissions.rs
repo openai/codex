@@ -279,7 +279,7 @@ impl FileSystemSandboxPolicy {
                 }
             });
 
-            if let Ok(cwd_root) = AbsolutePathBuf::relative_to_current_dir(cwd) {
+            if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
                 for protected_path in default_read_only_subpaths_for_writable_root(
                     &cwd_root, /*protect_missing_dot_codex*/ true,
                 ) {
@@ -476,7 +476,7 @@ impl FileSystemSandboxPolicy {
                 .iter()
                 .filter(|path| normalize_effective_absolute_path((*path).clone()) == root)
                 .collect();
-            let protect_missing_dot_codex = AbsolutePathBuf::relative_to_current_dir(cwd)
+            let protect_missing_dot_codex = AbsolutePathBuf::from_absolute_path(cwd)
                 .ok()
                 .is_some_and(|cwd| normalize_effective_absolute_path(cwd) == root);
             let mut read_only_subpaths: Vec<AbsolutePathBuf> =
@@ -562,7 +562,7 @@ impl FileSystemSandboxPolicy {
             return Vec::new();
         }
 
-        let root = AbsolutePathBuf::relative_to_current_dir(cwd)
+        let root = AbsolutePathBuf::from_absolute_path(cwd)
             .ok()
             .map(|cwd| absolute_root_path_for_cwd(&cwd));
 
@@ -604,7 +604,7 @@ impl FileSystemSandboxPolicy {
                 }
             }
             FileSystemSandboxKind::Restricted => {
-                let cwd_absolute = AbsolutePathBuf::relative_to_current_dir(cwd).ok();
+                let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
                 let mut include_platform_defaults = false;
                 let mut has_full_disk_read_access = false;
                 let mut has_full_disk_write_access = false;
@@ -744,7 +744,7 @@ impl FileSystemSandboxPolicy {
     }
 
     fn resolved_entries_with_cwd(&self, cwd: &Path) -> Vec<ResolvedFileSystemEntry> {
-        let cwd_absolute = AbsolutePathBuf::relative_to_current_dir(cwd).ok();
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
         self.entries
             .iter()
             .filter_map(|entry| {

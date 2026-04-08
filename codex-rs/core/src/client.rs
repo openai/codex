@@ -39,6 +39,8 @@ use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
 use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
 use codex_api::RawMemory as ApiRawMemory;
+use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
+use codex_api::RealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -403,11 +405,7 @@ impl ModelClient {
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
 
-        let instructions = prompt
-            .base_instructions
-            .as_ref()
-            .map(|base_instructions| base_instructions.text.clone())
-            .unwrap_or_default();
+        let instructions = prompt.base_instructions.text.clone();
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
@@ -444,6 +442,30 @@ impl ModelClient {
         client
             .compact_input(&payload, extra_headers)
             .await
+            .map_err(map_api_error)
+    }
+
+    pub async fn create_realtime_call(
+        &self,
+        sdp: String,
+        session_config: RealtimeSessionConfig,
+    ) -> Result<String> {
+        self.create_realtime_call_with_headers(sdp, session_config, ApiHeaderMap::new())
+            .await
+    }
+
+    pub async fn create_realtime_call_with_headers(
+        &self,
+        sdp: String,
+        session_config: RealtimeSessionConfig,
+        extra_headers: ApiHeaderMap,
+    ) -> Result<String> {
+        let client_setup = self.current_client_setup().await?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+            .create_with_session_and_headers(sdp, session_config, extra_headers)
+            .await
+            .map(|response| response.sdp)
             .map_err(map_api_error)
     }
 
@@ -771,10 +793,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
     ) -> Result<ResponsesApiRequest> {
-        let instructions = prompt
-            .base_instructions
-            .as_ref()
-            .map(|base_instructions| base_instructions.text.clone());
+        let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
@@ -813,7 +832,7 @@ impl ModelClientSession {
         let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
-            instructions,
+            instructions: instructions.clone(),
             input,
             tools,
             tool_choice: "auto".to_string(),

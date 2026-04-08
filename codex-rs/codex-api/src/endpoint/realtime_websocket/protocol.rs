@@ -48,8 +48,12 @@ pub(super) enum RealtimeOutboundMessage {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionUpdateSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) id: Option<String>,
     #[serde(rename = "type")]
     pub(super) r#type: SessionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

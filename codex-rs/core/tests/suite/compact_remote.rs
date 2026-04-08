@@ -118,6 +118,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
+            transport: None,
         }))
         .await?;
 
@@ -869,7 +870,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 let override_base_instructions = override_base_instructions.clone();
                 move |config| {
                     config.model_context_window = Some(override_context_window);
-                    config.base_instructions = Some(Some(override_base_instructions));
+                    config.base_instructions = Some(override_base_instructions);
                 }
             }),
     )

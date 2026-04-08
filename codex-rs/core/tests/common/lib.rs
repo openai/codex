@@ -303,6 +303,10 @@ pub fn sandbox_network_env_var() -> &'static str {
 
 const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
 
+pub fn remote_env_env_var() -> &'static str {
+    REMOTE_ENV_ENV_VAR
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteEnvConfig {
     pub container_name: String,
@@ -531,6 +535,30 @@ macro_rules! skip_if_no_network {
         if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
             println!(
                 "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return $return_value;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_remote {
+    ($reason:expr $(,)?) => {{
+        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
+            eprintln!(
+                "Skipping test under {}: {}",
+                $crate::remote_env_env_var(),
+                $reason
+            );
+            return;
+        }
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
+            eprintln!(
+                "Skipping test under {}: {}",
+                $crate::remote_env_env_var(),
+                $reason
             );
             return $return_value;
         }

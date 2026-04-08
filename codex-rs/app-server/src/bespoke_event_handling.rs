@@ -80,6 +80,7 @@ use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
@@ -354,6 +355,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_server_notification(ServerNotification::ThreadRealtimeStarted(
                         notification,
                     ))
+                    .await;
+            }
+        }
+        EventMsg::RealtimeConversationSdp(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadRealtimeSdpNotification {
+                    thread_id: conversation_id.to_string(),
+                    sdp: event.sdp,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadRealtimeSdp(notification))
                     .await;
             }
         }
@@ -1343,7 +1355,6 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let message = ev.message.clone();
             let codex_error_info = ev.codex_error_info.clone();
-
             // If this error belongs to an in-flight `thread/rollback` request, fail that request
             // (and clear pending state) so subsequent rollbacks are unblocked.
             //
