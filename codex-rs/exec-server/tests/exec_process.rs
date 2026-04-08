@@ -17,7 +17,9 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxLaunchConfig;
+use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::get_platform_sandbox;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -31,6 +33,11 @@ use common::exec_server::exec_server;
 struct ProcessContext {
     backend: Arc<dyn ExecBackend>,
     server: Option<ExecServerHarness>,
+}
+
+fn platform_sandbox_type() -> SandboxType {
+    get_platform_sandbox(/*windows_sandbox_enabled*/ false)
+        .expect("sandbox denial test requires a Unix sandbox")
 }
 
 async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {

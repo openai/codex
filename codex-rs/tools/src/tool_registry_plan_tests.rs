@@ -1609,6 +1609,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        image_generation_tool_auth_allowed: true,
     });
 
     let (tools, _) = build_specs(

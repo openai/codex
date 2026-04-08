@@ -175,6 +175,7 @@ fn multi_agent_v2_tools_config() -> ToolsConfig {
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        image_generation_tool_auth_allowed: true,
     })
 }
 
