@@ -7713,12 +7713,13 @@ impl CodexMessageProcessor {
         }
 
         let session_source = self.thread_manager.session_source();
-        let allow_feedback_mirror_upload = is_openai_employee_email(
-            self.auth_manager
-                .auth_cached()
-                .and_then(|auth| auth.get_account_email())
-                .as_deref(),
-        );
+        let allow_feedback_mirror_upload = self.config.features.enabled(Feature::FeedbackMirror)
+            && is_openai_employee_email(
+                self.auth_manager
+                    .auth_cached()
+                    .and_then(|auth| auth.get_account_email())
+                    .as_deref(),
+            );
 
         let upload_result = tokio::task::spawn_blocking(move || {
             snapshot.upload_feedback(

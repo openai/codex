@@ -124,6 +124,8 @@ pub enum Feature {
     RuntimeMetrics,
     /// Enable thread lifecycle analytics emitted via the app-server analytics pipeline.
     GeneralAnalytics,
+    /// Mirror internal feedback uploads to a configured endpoint.
+    FeedbackMirror,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -597,6 +599,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GeneralAnalytics,
         key: "general_analytics",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::FeedbackMirror,
+        key: "feedback_mirror",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
