@@ -577,11 +577,6 @@ impl ChatWidget {
     #[cfg(target_os = "linux")]
     fn start_realtime_local_audio(&mut self) {}
 
-    #[cfg(target_os = "linux")]
-    fn start_realtime_webrtc_meter(&mut self, peak: Arc<AtomicU16>) {
-        let _ = peak;
-    }
-
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn restart_realtime_audio_device(&mut self, kind: RealtimeAudioDeviceKind) {
         if !self.realtime_conversation.is_active() {
