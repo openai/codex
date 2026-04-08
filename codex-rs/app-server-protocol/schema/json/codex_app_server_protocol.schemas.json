@@ -9994,7 +9994,7 @@
           "cwds": {
             "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": [
               "array",
@@ -15207,9 +15207,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "cwd": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "mode": {

@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -68,7 +67,7 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
-            cwds: Some(vec![repo_root.path().to_path_buf()]),
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
         .await?;
@@ -103,58 +102,28 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
 }
 
 #[tokio::test]
-async fn plugin_list_resolves_relative_cwds() -> Result<()> {
+async fn plugin_list_rejects_relative_cwds() -> Result<()> {
     let codex_home = TempDir::new()?;
-    write_plugins_enabled_config(codex_home.path())?;
-    let repo_root = codex_home.path().join("relative-root");
-    std::fs::create_dir_all(repo_root.join(".git"))?;
-    std::fs::create_dir_all(repo_root.join(".agents/plugins"))?;
-    std::fs::create_dir_all(repo_root.join("plugins/relative-plugin/.codex-plugin"))?;
-    std::fs::write(
-        repo_root.join(".agents/plugins/marketplace.json"),
-        r#"{
-  "name": "relative-marketplace",
-  "plugins": [
-    {
-      "name": "relative-plugin",
-      "source": {
-        "source": "local",
-        "path": "./plugins/relative-plugin"
-      }
-    }
-  ]
-}"#,
-    )?;
-    std::fs::write(
-        repo_root.join("plugins/relative-plugin/.codex-plugin/plugin.json"),
-        r#"{"name":"relative-plugin"}"#,
-    )?;
-
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: Some(vec![PathBuf::from("relative-root")]),
-            force_remote_sync: false,
-        })
+        .send_raw_request(
+            "plugin/list",
+            Some(serde_json::json!({
+                "cwds": ["relative-root"],
+            })),
+        )
         .await?;
 
-    let response: JSONRPCResponse = timeout(
+    let err = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let response: PluginListResponse = to_response(response)?;
 
-    assert!(
-        response
-            .marketplaces
-            .iter()
-            .any(|marketplace| marketplace.name == "relative-marketplace"),
-        "relative cwd marketplace should be discovered: {:?}",
-        response.marketplaces
-    );
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("Invalid request"));
     Ok(())
 }
 
@@ -225,8 +194,8 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![
-                valid_repo_root.path().to_path_buf(),
-                invalid_repo_root.path().to_path_buf(),
+                AbsolutePathBuf::try_from(valid_repo_root.path())?,
+                AbsolutePathBuf::try_from(invalid_repo_root.path())?,
             ]),
             force_remote_sync: false,
         })
@@ -381,7 +350,7 @@ enabled = false
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
-            cwds: Some(vec![repo_root.path().to_path_buf()]),
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
         .await?;
@@ -534,8 +503,8 @@ enabled = false
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![
-                workspace_enabled.path().to_path_buf(),
-                workspace_default.path().to_path_buf(),
+                AbsolutePathBuf::try_from(workspace_enabled.path())?,
+                AbsolutePathBuf::try_from(workspace_default.path())?,
             ]),
             force_remote_sync: false,
         })
@@ -620,7 +589,7 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
-            cwds: Some(vec![repo_root.path().to_path_buf()]),
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
         .await?;
@@ -733,7 +702,7 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
-            cwds: Some(vec![repo_root.path().to_path_buf()]),
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
         .await?;

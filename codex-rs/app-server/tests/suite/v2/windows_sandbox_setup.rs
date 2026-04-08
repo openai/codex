@@ -64,9 +64,8 @@ async fn windows_sandbox_setup_start_emits_completion_notification() -> Result<(
 }
 
 #[tokio::test]
-async fn windows_sandbox_setup_start_accepts_relative_cwd() -> Result<()> {
+async fn windows_sandbox_setup_start_rejects_relative_cwd() -> Result<()> {
     let codex_home = TempDir::new()?;
-    std::fs::create_dir_all(codex_home.path().join("relative-root"))?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
@@ -80,13 +79,13 @@ async fn windows_sandbox_setup_start_accepts_relative_cwd() -> Result<()> {
         )
         .await?;
 
-    let response: JSONRPCResponse = timeout(
+    let err = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let start_payload: WindowsSandboxSetupStartResponse = to_response(response)?;
 
-    assert!(start_payload.started);
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("Invalid request"));
     Ok(())
 }
