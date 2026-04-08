@@ -269,10 +269,13 @@ pub fn collect_tool_search_source_infos<'a>(
                 .map(str::trim)
                 .filter(|connector_name| !connector_name.is_empty())
             {
-                let description = connector_description(tool.connector_description);
                 return Some(ToolSearchSourceInfo {
                     name: name.to_string(),
-                    description,
+                    description: tool
+                        .connector_description
+                        .map(str::trim)
+                        .filter(|description| !description.is_empty())
+                        .map(str::to_string),
                 });
             }
 
@@ -287,13 +290,6 @@ pub fn collect_tool_search_source_infos<'a>(
             })
         })
         .collect()
-}
-
-fn connector_description(description: Option<&str>) -> Option<String> {
-    description
-        .map(str::trim)
-        .filter(|description| !description.is_empty())
-        .map(str::to_string)
 }
 
 pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> ToolSpec {

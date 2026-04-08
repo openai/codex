@@ -25,6 +25,7 @@ use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
+use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -73,9 +74,7 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
-use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
-use codex_mcp::filter_non_codex_apps_mcp_tools_only;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
@@ -322,7 +321,6 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
@@ -434,8 +432,6 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
-const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
-
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -6579,71 +6575,6 @@ fn connector_inserted_in_messages(
         .copied()
         .unwrap_or(0);
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
-}
-
-struct McpToolExposure {
-    direct_tools: HashMap<String, McpToolInfo>,
-    deferred_tools: Option<HashMap<String, McpToolInfo>>,
-}
-
-fn build_mcp_tool_exposure(
-    all_mcp_tools: &HashMap<String, McpToolInfo>,
-    connectors: Option<&[connectors::AppInfo]>,
-    explicitly_enabled_connectors: &[connectors::AppInfo],
-    config: &Config,
-    tools_config: &ToolsConfig,
-) -> McpToolExposure {
-    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
-    if let Some(connectors) = connectors {
-        deferred_tools.extend(filter_codex_apps_mcp_tools(
-            all_mcp_tools,
-            connectors,
-            config,
-        ));
-    }
-
-    if !tools_config.search_tool || deferred_tools.len() < DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD {
-        return McpToolExposure {
-            direct_tools: deferred_tools,
-            deferred_tools: None,
-        };
-    }
-
-    let direct_tools =
-        filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
-    McpToolExposure {
-        direct_tools,
-        deferred_tools: Some(deferred_tools),
-    }
-}
-
-fn filter_codex_apps_mcp_tools(
-    mcp_tools: &HashMap<String, McpToolInfo>,
-    connectors: &[connectors::AppInfo],
-    config: &Config,
-) -> HashMap<String, McpToolInfo> {
-    let allowed: HashSet<&str> = connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect();
-
-    mcp_tools
-        .iter()
-        .filter(|(_, tool)| {
-            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-                return false;
-            }
-            let Some(connector_id) = codex_apps_connector_id(tool) else {
-                return false;
-            };
-            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
-        })
-        .map(|(name, tool)| (name.clone(), tool.clone()))
-        .collect()
-}
-
-fn codex_apps_connector_id(tool: &McpToolInfo) -> Option<&str> {
-    tool.connector_id.as_deref()
 }
 
 pub(crate) fn build_prompt(
