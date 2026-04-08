@@ -589,8 +589,10 @@ fn latest_session_lookup_params(
 fn config_cwd_for_app_server_target(
     cwd: Option<&Path>,
     app_server_target: &AppServerTarget,
+    remote_exec_server_configured: bool,
 ) -> std::io::Result<AbsolutePathBuf> {
-    if matches!(app_server_target, AppServerTarget::Remote { .. }) {
+    if remote_exec_server_configured || matches!(app_server_target, AppServerTarget::Remote { .. })
+    {
         return AbsolutePathBuf::current_dir();
     }
 
@@ -689,7 +691,14 @@ pub async fn run_main(
     };
 
     let cwd = cli.cwd.clone();
-    let config_cwd = config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target)?;
+    let remote_exec_server_configured = codex_exec_server::EnvironmentManager::from_env()
+        .exec_server_url()
+        .is_some();
+    let config_cwd = config_cwd_for_app_server_target(
+        cwd.as_deref(),
+        &app_server_target,
+        remote_exec_server_configured,
+    )?;
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
@@ -1712,6 +1721,7 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -1892,7 +1902,11 @@ mod tests {
             auth_token: None,
         };
 
-        let config_cwd = config_cwd_for_app_server_target(Some(remote_only_cwd), &target)?;
+        let config_cwd = config_cwd_for_app_server_target(
+            Some(remote_only_cwd),
+            &target,
+            /*remote_exec_server_configured*/ false,
+        )?;
 
         assert_eq!(config_cwd, AbsolutePathBuf::current_dir()?);
         Ok(())
@@ -1903,12 +1917,36 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::Embedded;
 
-        let config_cwd = config_cwd_for_app_server_target(Some(temp_dir.path()), &target)?;
+        let config_cwd = config_cwd_for_app_server_target(
+            Some(temp_dir.path()),
+            &target,
+            /*remote_exec_server_configured*/ false,
+        )?;
 
         assert_eq!(
             config_cwd,
             AbsolutePathBuf::from_absolute_path(temp_dir.path().canonicalize()?)?
         );
+        Ok(())
+    }
+
+    #[test]
+    fn config_cwd_for_app_server_target_uses_current_dir_for_remote_exec_server()
+    -> std::io::Result<()> {
+        let remote_only_cwd = if cfg!(windows) {
+            Path::new(r"C:\definitely\not\local\to\this\test")
+        } else {
+            Path::new("/definitely/not/local/to/this/test")
+        };
+        let target = AppServerTarget::Embedded;
+
+        let config_cwd = config_cwd_for_app_server_target(
+            Some(remote_only_cwd),
+            &target,
+            /*remote_exec_server_configured*/ true,
+        )?;
+
+        assert_eq!(config_cwd, AbsolutePathBuf::current_dir()?);
         Ok(())
     }
 
