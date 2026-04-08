@@ -31,6 +31,16 @@ WINDOWS_RUSTC_LINK_FLAGS = select({
     "//conditions:default": [],
 })
 
+# libwebrtc uses Objective-C categories from native archives. Any Bazel-linked
+# macOS binary/test that can pull it in must keep category symbols alive.
+MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
+    "@platforms//os:macos": [
+        "-C",
+        "link-arg=-ObjC",
+    ],
+    "//conditions:default": [],
+})
+
 def multiplatform_binaries(name, platforms = PLATFORMS):
     for platform in platforms:
         platform_data(

@@ -345,6 +345,22 @@ crate.annotation(
 
 inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
 
+crate.annotation(
+    # Provide the hermetic SDK path so the build script doesn't try to invoke an unavailable `xcrun --show-sdk-path`.
+    build_script_data = [
+        "@macos_sdk//sysroot",
+    ],
+    build_script_env = {
+        "WEBRTC_SYS_DARWIN_SDK_PATH": "$(location @macos_sdk//sysroot)",
+    },
+    crate = "webrtc-sys",
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-sys_hermetic_darwin_sysroot.patch",
+    ],
+)
+
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",

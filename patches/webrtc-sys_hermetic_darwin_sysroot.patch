@@ -1,0 +1,23 @@
+diff --git a/webrtc-sys/build.rs b/webrtc-sys/build.rs
+index 3b4a24a..e6fb056 100644
+--- a/webrtc-sys/build.rs
++++ b/webrtc-sys/build.rs
+@@ -375,9 +375,16 @@ fn configure_darwin_sysroot(builder: &mut cc::Build) {
+     println!("cargo:rustc-link-lib={}", clang_rt);
+     println!("cargo:rustc-link-arg=-ObjC");
+ 
+-    let sysroot = Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output().unwrap();
+-
+-    let sysroot = String::from_utf8_lossy(&sysroot.stdout);
++    let sysroot = env::var("WEBRTC_SYS_DARWIN_SDK_PATH").unwrap_or_else(|_| {
++        let output = Command::new("xcrun")
++            .args(["--sdk", sdk, "--show-sdk-path"])
++            .output()
++            .unwrap();
++        String::from_utf8_lossy(&output.stdout).into_owned()
++    });
++
++    let sysroot = sysroot.as_str();
+     let sysroot = sysroot.trim();
+ 
+     let search_dirs = Command::new("cc").arg("--print-search-dirs").output().unwrap();
