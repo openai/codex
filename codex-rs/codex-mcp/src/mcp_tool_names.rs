@@ -103,6 +103,11 @@ struct CallableToolCandidate {
     callable_name: String,
 }
 
+/// Returns a qualified-name lookup for MCP tools.
+///
+/// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
+/// `callable_namespace` / `callable_name` are sanitized and, when necessary, hashed so
+/// every model-visible `mcp__namespace__tool` name is unique and <= 64 bytes.
 pub(crate) fn qualify_tools<I>(tools: I) -> HashMap<String, ToolInfo>
 where
     I: IntoIterator<Item = ToolInfo>,
