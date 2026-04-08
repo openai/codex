@@ -1139,9 +1139,12 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         requests[1]
     );
 
-    let function_outputs = function_call_output_sideband_requests(&harness.realtime_server);
-    assert_eq!(function_outputs.len(), 1);
-    assert_v2_function_call_output(&function_outputs[0], "call_shell", "shell tool finished");
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_function_call_output(&tool_output, "call_shell", "shell tool finished");
+    assert_eq!(
+        function_call_output_sideband_requests(&harness.realtime_server).len(),
+        1
+    );
 
     harness.shutdown().await;
     Ok(())
