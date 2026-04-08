@@ -234,21 +234,6 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 
             write_schema_types(map, &schema_types);
             ensure_default_children_for_schema_types(map, &schema_types);
-
-            if matches!(schema_types.as_slice(), [JsonSchemaPrimitiveType::Object])
-                && !map.contains_key("properties")
-            {
-                map.insert(
-                    "properties".to_string(),
-                    JsonValue::Object(serde_json::Map::new()),
-                );
-            }
-
-            if matches!(schema_types.as_slice(), [JsonSchemaPrimitiveType::Array])
-                && !map.contains_key("items")
-            {
-                map.insert("items".to_string(), json!({ "type": "string" }));
-            }
         }
         _ => {}
     }
