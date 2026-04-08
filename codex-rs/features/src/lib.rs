@@ -549,7 +549,9 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage_hint: Option<bool>,
+    pub usage_hint_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_spawn_agent_metadata: Option<bool>,
 }

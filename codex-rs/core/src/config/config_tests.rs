@@ -6107,7 +6107,8 @@ async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features.multi_agent_v2]
 enabled = true
-usage_hint = false
+usage_hint_enabled = false
+usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
 "#,
     )?;
@@ -6119,7 +6120,11 @@ hide_spawn_agent_metadata = true
         .await?;
 
     assert!(config.features.enabled(Feature::MultiAgentV2));
-    assert!(!config.multi_agent_v2.usage_hint);
+    assert!(!config.multi_agent_v2.usage_hint_enabled);
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("Custom delegation guidance.")
+    );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
 
     Ok(())
@@ -6133,11 +6138,13 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
         r#"profile = "no_hint"
 
 [features.multi_agent_v2]
-usage_hint = true
+usage_hint_enabled = true
+usage_hint_text = "base hint"
 hide_spawn_agent_metadata = true
 
 [profiles.no_hint.features.multi_agent_v2]
-usage_hint = false
+usage_hint_enabled = false
+usage_hint_text = "profile hint"
 hide_spawn_agent_metadata = false
 "#,
     )?;
@@ -6148,7 +6155,11 @@ hide_spawn_agent_metadata = false
         .build()
         .await?;
 
-    assert!(!config.multi_agent_v2.usage_hint);
+    assert!(!config.multi_agent_v2.usage_hint_enabled);
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("profile hint")
+    );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
 
     Ok(())

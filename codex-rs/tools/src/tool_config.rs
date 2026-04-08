@@ -106,6 +106,7 @@ pub struct ToolsConfig {
     pub multi_agent_v2: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
+    pub spawn_agent_usage_hint_text: Option<String>,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -221,6 +222,7 @@ impl ToolsConfig {
             multi_agent_v2: include_multi_agent_v2,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
+            spawn_agent_usage_hint_text: None,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -236,6 +238,14 @@ impl ToolsConfig {
 
     pub fn with_spawn_agent_usage_hint(mut self, spawn_agent_usage_hint: bool) -> Self {
         self.spawn_agent_usage_hint = spawn_agent_usage_hint;
+        self
+    }
+
+    pub fn with_spawn_agent_usage_hint_text(
+        mut self,
+        spawn_agent_usage_hint_text: Option<String>,
+    ) -> Self {
+        self.spawn_agent_usage_hint_text = spawn_agent_usage_hint_text;
         self
     }
 

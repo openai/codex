@@ -267,7 +267,8 @@ fn multi_agent_v2_feature_config_deserializes_table() {
         r#"
 [multi_agent_v2]
 enabled = true
-usage_hint = false
+usage_hint_enabled = false
+usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
 "#,
     )
@@ -281,18 +282,19 @@ hide_spawn_agent_metadata = true
         features.multi_agent_v2,
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: Some(true),
-            usage_hint: Some(false),
+            usage_hint_enabled: Some(false),
+            usage_hint_text: Some("Custom delegation guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
         }))
     );
 }
 
 #[test]
-fn multi_agent_v2_feature_config_usage_hint_does_not_enable_feature() {
+fn multi_agent_v2_feature_config_usage_hint_enabled_does_not_enable_feature() {
     let features_toml: FeaturesToml = toml::from_str(
         r#"
 [multi_agent_v2]
-usage_hint = false
+usage_hint_enabled = false
 "#,
     )
     .expect("features table should deserialize");
@@ -311,7 +313,8 @@ usage_hint = false
         features_toml.multi_agent_v2,
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: None,
-            usage_hint: Some(false),
+            usage_hint_enabled: Some(false),
+            usage_hint_text: None,
             hide_spawn_agent_metadata: None,
         }))
     );

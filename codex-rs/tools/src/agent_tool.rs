@@ -12,6 +12,7 @@ pub struct SpawnAgentToolOptions<'a> {
     pub agent_type_description: String,
     pub hide_agent_type_model_reasoning: bool,
     pub include_usage_hint: bool,
+    pub usage_hint_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
             available_models_description.as_deref(),
             return_value_description,
             options.include_usage_hint,
+            options.usage_hint_text,
         ),
         strict: false,
         defer_loading: None,
@@ -77,6 +79,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
             available_models_description.as_deref(),
             return_value_description,
             options.include_usage_hint,
+            options.usage_hint_text,
         ),
         strict: false,
         defer_loading: None,
@@ -675,6 +678,7 @@ fn spawn_agent_tool_description(
     available_models_description: Option<&str>,
     return_value_description: &str,
     include_usage_hint: bool,
+    usage_hint_text: Option<String>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
 
@@ -686,6 +690,13 @@ fn spawn_agent_tool_description(
 
     if !include_usage_hint {
         return tool_description;
+    }
+    if let Some(usage_hint_text) = usage_hint_text {
+        return format!(
+            r#"
+        {tool_description}
+{usage_hint_text}"#
+        );
     }
     let agent_role_usage_hint = available_models_description
         .map(|_| {

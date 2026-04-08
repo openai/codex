@@ -996,8 +996,11 @@
         "hide_spawn_agent_metadata": {
           "type": "boolean"
         },
-        "usage_hint": {
+        "usage_hint_enabled": {
           "type": "boolean"
+        },
+        "usage_hint_text": {
+          "type": "string"
         }
       },
       "type": "object"

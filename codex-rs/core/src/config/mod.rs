@@ -570,16 +570,18 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
-    pub usage_hint: bool,
+    pub usage_hint_enabled: bool,
+    pub usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
 }
 
 impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self {
-            usage_hint: true,
+            usage_hint_enabled: true,
+            usage_hint_text: None,
             hide_spawn_agent_metadata: false,
         }
     }
@@ -1308,17 +1310,23 @@ fn resolve_multi_agent_v2_config(
     let profile = multi_agent_v2_toml_config(config_profile.features.as_ref());
     let default = MultiAgentV2Config::default();
 
-    let usage_hint = profile
-        .and_then(|config| config.usage_hint)
-        .or_else(|| base.and_then(|config| config.usage_hint))
-        .unwrap_or(default.usage_hint);
+    let usage_hint_enabled = profile
+        .and_then(|config| config.usage_hint_enabled)
+        .or_else(|| base.and_then(|config| config.usage_hint_enabled))
+        .unwrap_or(default.usage_hint_enabled);
+    let usage_hint_text = profile
+        .and_then(|config| config.usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.usage_hint_text);
     let hide_spawn_agent_metadata = profile
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
         .unwrap_or(default.hide_spawn_agent_metadata);
 
     MultiAgentV2Config {
-        usage_hint,
+        usage_hint_enabled,
+        usage_hint_text,
         hide_spawn_agent_metadata,
     }
 }
