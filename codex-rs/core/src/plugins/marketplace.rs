@@ -211,6 +211,17 @@ pub fn list_marketplaces(
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
 }
 
+pub fn validate_marketplace_root(root: &Path) -> Result<String, MarketplaceError> {
+    let path = AbsolutePathBuf::try_from(root.join(MARKETPLACE_RELATIVE_PATH)).map_err(|err| {
+        MarketplaceError::InvalidMarketplaceFile {
+            path: root.join(MARKETPLACE_RELATIVE_PATH),
+            message: format!("marketplace path must resolve to an absolute path: {err}"),
+        }
+    })?;
+    let marketplace = load_marketplace(&path)?;
+    Ok(marketplace.name)
+}
+
 pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
