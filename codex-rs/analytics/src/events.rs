@@ -113,6 +113,7 @@ pub(crate) enum ToolKind {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub(crate) enum ToolCallFinalReviewOutcome {
     NotNeeded,
     GuardianApproved,
@@ -127,6 +128,7 @@ pub(crate) enum ToolCallFinalReviewOutcome {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub(crate) enum ToolCallTerminalStatus {
     Completed,
     Failed,
@@ -136,6 +138,7 @@ pub(crate) enum ToolCallTerminalStatus {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub(crate) enum ToolCallFailureKind {
     ToolError,
     ApprovalDenied,
