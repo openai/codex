@@ -265,6 +265,7 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
         ExecParams {
             command,
             cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()?,
+            stdin: None,
             expiration: 1.into(),
             capture_policy: ExecCapturePolicy::FullBuffer,
             env,
@@ -305,6 +306,7 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
                     "printf hello; sleep 30 &".to_string(),
                 ],
                 cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()?,
+                stdin: None,
                 expiration: 1.into(),
                 capture_policy: ExecCapturePolicy::FullBuffer,
                 env: std::env::vars().collect(),
@@ -356,6 +358,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
         ExecParams {
             command,
             cwd: cwd.clone(),
+            stdin: None,
             expiration: 1.into(),
             capture_policy: ExecCapturePolicy::FullBuffer,
             env: std::env::vars().collect(),
@@ -926,6 +929,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
     let params = ExecParams {
         command,
         cwd,
+        stdin: None,
         expiration: 500.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
@@ -985,6 +989,7 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
     let params = ExecParams {
         command,
         cwd: cwd.clone(),
+        stdin: None,
         expiration: ExecExpiration::Cancellation(cancel_token),
         capture_policy: ExecCapturePolicy::ShellTool,
         env,

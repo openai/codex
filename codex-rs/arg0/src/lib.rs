@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::future::Future;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -94,7 +95,16 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 
     let argv1 = args.next().unwrap_or_default();
     if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
-        let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
+        let patch_arg = match args.next() {
+            Some(arg) => arg.to_str().map(str::to_owned),
+            None => {
+                let mut patch = String::new();
+                match std::io::stdin().read_to_string(&mut patch) {
+                    Ok(_) if !patch.is_empty() => Some(patch),
+                    _ => None,
+                }
+            }
+        };
         let exit_code = match patch_arg {
             Some(patch_arg) => {
                 let mut stdout = std::io::stdout();

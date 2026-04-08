@@ -9,6 +9,7 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
     pub command: Vec<String>,
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
+    pub stdin: Option<Vec<u8>>,
     pub timeout_ms: Option<u64>,
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
@@ -32,6 +33,7 @@ mod windows_impl {
     use crate::ipc_framed::OutputStream;
     use crate::ipc_framed::SpawnRequest;
     use crate::ipc_framed::decode_bytes;
+    use crate::ipc_framed::encode_bytes;
     use crate::ipc_framed::read_frame;
     use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
@@ -234,6 +236,7 @@ mod windows_impl {
             command,
             cwd,
             mut env_map,
+            stdin,
             timeout_ms,
             use_private_desktop,
             proxy_enforced,
@@ -422,13 +425,26 @@ mod windows_impl {
                         cap_sids,
                         timeout_ms,
                         tty: false,
-                        stdin_open: false,
+                        stdin_open: stdin.is_some(),
                         use_private_desktop,
                     }),
                 },
             };
             write_frame(&mut pipe_write, &spawn_request)?;
             read_spawn_ready(&mut pipe_read)?;
+            if let Some(stdin) = stdin {
+                write_frame(
+                    &mut pipe_write,
+                    &FramedMessage {
+                        version: 1,
+                        message: Message::Stdin {
+                            payload: crate::ipc_framed::StdinPayload {
+                                data_b64: encode_bytes(&stdin),
+                            },
+                        },
+                    },
+                )?;
+            }
             drop(pipe_write);
 
             let mut stdout = Vec::new();

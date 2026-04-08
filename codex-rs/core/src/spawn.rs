@@ -45,6 +45,7 @@ pub(crate) struct SpawnChildRequest<'a> {
     pub network: Option<&'a NetworkProxy>,
     pub stdio_policy: StdioPolicy,
     pub env: HashMap<String, String>,
+    pub stdin: Option<Vec<u8>>,
 }
 
 pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io::Result<Child> {
@@ -57,6 +58,7 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
         network,
         stdio_policy,
         mut env,
+        stdin,
     } = request;
 
     trace!(
@@ -105,11 +107,15 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
 
     match stdio_policy {
         StdioPolicy::RedirectForShellTool => {
-            // Do not create a file descriptor for stdin because otherwise some
-            // commands may hang forever waiting for input. For example, ripgrep has
-            // a heuristic where it may try to read from stdin as explained here:
-            // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
-            cmd.stdin(Stdio::null());
+            if stdin.is_some() {
+                cmd.stdin(Stdio::piped());
+            } else {
+                // Do not create a file descriptor for stdin because otherwise some
+                // commands may hang forever waiting for input. For example, ripgrep has
+                // a heuristic where it may try to read from stdin as explained here:
+                // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
+                cmd.stdin(Stdio::null());
+            }
 
             cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         }
@@ -121,5 +127,16 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
         }
     }
 
-    cmd.kill_on_drop(true).spawn()
+    let mut child = cmd.kill_on_drop(true).spawn()?;
+    if let Some(stdin) = stdin {
+        let Some(mut child_stdin) = child.stdin.take() else {
+            return Err(std::io::Error::other("child stdin was not piped"));
+        };
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt as _;
+            let _ = child_stdin.write_all(&stdin).await;
+            let _ = child_stdin.shutdown().await;
+        });
+    }
+    Ok(child)
 }

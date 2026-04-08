@@ -83,6 +83,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: None,
+                stdin: None,
             },
             policy: &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Restricted,
@@ -135,6 +136,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                         write: Some(Vec::new()),
                     }),
                 }),
+                stdin: None,
             },
             policy: &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Restricted,
@@ -189,6 +191,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
                     }),
                     ..Default::default()
                 }),
+                stdin: None,
             },
             policy: &SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::FullAccess,
@@ -259,6 +262,7 @@ fn transform_linux_seccomp_request(
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: None,
+                stdin: None,
             },
             policy: &SandboxPolicy::DangerFullAccess,
             file_system_policy: &FileSystemSandboxPolicy::unrestricted(),

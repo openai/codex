@@ -35,6 +35,7 @@ pub(crate) fn build_sandbox_command(
         cwd: cwd.clone(),
         env: env.clone(),
         additional_permissions,
+        stdin: None,
     })
 }
 

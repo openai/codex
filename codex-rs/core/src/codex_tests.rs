@@ -5597,6 +5597,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             ]
         },
         cwd: turn_context.cwd.clone(),
+        stdin: None,
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),

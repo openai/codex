@@ -43,6 +43,7 @@ pub async fn spawn_command_under_seatbelt(
         network,
         stdio_policy,
         env,
+        stdin: None,
     })
     .await
 }

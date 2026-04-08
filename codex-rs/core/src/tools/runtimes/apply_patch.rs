@@ -29,6 +29,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxCommand;
+#[cfg(target_os = "windows")]
+use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -75,6 +77,7 @@ impl ApplyPatchRuntime {
         Ok(Self::build_sandbox_command_with_program(
             req,
             codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
+            /*pass_patch_via_stdin*/ true,
         ))
     }
 
@@ -84,7 +87,9 @@ impl ApplyPatchRuntime {
         codex_self_exe: Option<&PathBuf>,
     ) -> Result<SandboxCommand, ToolError> {
         let exe = Self::resolve_apply_patch_program(codex_self_exe)?;
-        Ok(Self::build_sandbox_command_with_program(req, exe))
+        Ok(Self::build_sandbox_command_with_program(
+            req, exe, /*pass_patch_via_stdin*/ true,
+        ))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -97,17 +102,33 @@ impl ApplyPatchRuntime {
             .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
     }
 
-    fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
+    fn build_sandbox_command_with_program(
+        req: &ApplyPatchRequest,
+        exe: PathBuf,
+        pass_patch_via_stdin: bool,
+    ) -> SandboxCommand {
+        let (args, stdin) = if pass_patch_via_stdin {
+            (
+                vec![CODEX_CORE_APPLY_PATCH_ARG1.to_string()],
+                Some(req.action.patch.clone().into_bytes()),
+            )
+        } else {
+            (
+                vec![
+                    CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
+                    req.action.patch.clone(),
+                ],
+                None,
+            )
+        };
         SandboxCommand {
             program: exe.into_os_string(),
-            args: vec![
-                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
-                req.action.patch.clone(),
-            ],
-            cwd: req.action.cwd.clone(),
+            args,
+            cwd: req.action.cwd.to_path_buf(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),
+            stdin,
         }
     }
 
@@ -241,7 +262,17 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         }
 
         #[cfg(target_os = "windows")]
-        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        let command = {
+            let exe = codex_windows_sandbox::resolve_current_exe_for_launch(
+                &ctx.turn.config.codex_home,
+                "codex.exe",
+            );
+            Self::build_sandbox_command_with_program(
+                req,
+                exe,
+                matches!(attempt.sandbox, SandboxType::WindowsRestrictedToken),
+            )
+        };
         #[cfg(not(target_os = "windows"))]
         let command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
         let options = ExecOptions {

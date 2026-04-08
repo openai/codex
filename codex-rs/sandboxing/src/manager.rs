@@ -69,6 +69,7 @@ pub struct SandboxCommand {
     pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub additional_permissions: Option<PermissionProfile>,
+    pub stdin: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -76,6 +77,7 @@ pub struct SandboxExecRequest {
     pub command: Vec<String>,
     pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
+    pub stdin: Option<Vec<u8>>,
     pub network: Option<NetworkProxy>,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -244,6 +246,7 @@ impl SandboxManager {
             command: argv,
             cwd: command.cwd,
             env: command.env,
+            stdin: command.stdin,
             network: network.cloned(),
             sandbox,
             windows_sandbox_level,

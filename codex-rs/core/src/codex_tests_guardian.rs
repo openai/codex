@@ -123,6 +123,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             ]
         },
         cwd: turn_context.cwd.clone(),
+        stdin: None,
         expiration: expiration_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),

@@ -64,6 +64,7 @@ fn test_exec_request(
         command,
         cwd,
         env,
+        None,
         network,
         ExecExpiration::DefaultTimeout,
         ExecCapturePolicy::ShellTool,

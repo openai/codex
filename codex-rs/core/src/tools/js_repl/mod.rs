@@ -1053,6 +1053,7 @@ impl JsReplManager {
             cwd: turn.cwd.clone(),
             env,
             additional_permissions: None,
+            stdin: None,
         };
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,

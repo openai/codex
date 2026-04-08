@@ -234,6 +234,8 @@ mod windows_impl {
     use std::collections::HashMap;
     use std::ffi::c_void;
     use std::io;
+    use std::io::Write;
+    use std::os::windows::io::FromRawHandle;
     use std::path::Path;
     use std::path::PathBuf;
     use std::ptr;
@@ -311,6 +313,7 @@ mod windows_impl {
             command,
             cwd,
             env_map,
+            None,
             timeout_ms,
             &[],
             use_private_desktop,
@@ -325,6 +328,7 @@ mod windows_impl {
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
+        stdin: Option<Vec<u8>>,
         timeout_ms: Option<u64>,
         additional_deny_write_paths: &[PathBuf],
         use_private_desktop: bool,
@@ -479,10 +483,18 @@ mod windows_impl {
 
         unsafe {
             CloseHandle(in_r);
-            // Close the parent's stdin write end so the child sees EOF immediately.
-            CloseHandle(in_w);
             CloseHandle(out_w);
             CloseHandle(err_w);
+        }
+        if let Some(stdin) = stdin {
+            let mut stdin_write = unsafe { std::fs::File::from_raw_handle(in_w as _) };
+            stdin_write.write_all(&stdin)?;
+            drop(stdin_write);
+        } else {
+            // Close the parent's stdin write end so the child sees EOF immediately.
+            unsafe {
+                CloseHandle(in_w);
+            }
         }
 
         let (tx_out, rx_out) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -694,6 +706,7 @@ mod stub {
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,
+        _stdin: Option<Vec<u8>>,
         _timeout_ms: Option<u64>,
         _use_private_desktop: bool,
     ) -> Result<CaptureResult> {

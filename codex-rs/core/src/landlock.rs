@@ -72,6 +72,7 @@ where
         network,
         stdio_policy,
         env,
+        stdin: None,
     })
     .await
 }

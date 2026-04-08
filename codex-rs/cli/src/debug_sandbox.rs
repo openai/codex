@@ -171,6 +171,7 @@ async fn run_command_under_sandbox(
                             command: command_vec,
                             cwd: &cwd_clone,
                             env_map,
+                            stdin: None,
                             timeout_ms: None,
                             use_private_desktop: config.permissions.windows_sandbox_private_desktop,
                             proxy_enforced: false,
