@@ -8,13 +8,19 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::multi_agents::apply_requested_spawn_agent_model_overrides;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentSpawnTool;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
@@ -49,6 +55,8 @@ struct SpawnAgentsOnCsvArgs {
     id_column: Option<String>,
     output_csv_path: Option<String>,
     output_schema: Option<Value>,
+    model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
     max_concurrency: Option<usize>,
     max_workers: Option<usize>,
     max_runtime_seconds: Option<u64>,
@@ -194,6 +202,7 @@ impl ToolHandler for BatchJobHandler {
             turn,
             tool_name,
             payload,
+            call_id,
             ..
         } = invocation;
 
@@ -207,7 +216,9 @@ impl ToolHandler for BatchJobHandler {
         };
 
         match tool_name.as_str() {
-            "spawn_agents_on_csv" => spawn_agents_on_csv::handle(session, turn, arguments).await,
+            "spawn_agents_on_csv" => {
+                spawn_agents_on_csv::handle(session, turn, call_id, arguments).await
+            }
             "report_agent_job_result" => report_agent_job_result::handle(session, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported agent job tool {other}"
@@ -227,6 +238,7 @@ mod spawn_agents_on_csv {
     pub async fn handle(
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        call_id: String,
         arguments: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args: SpawnAgentsOnCsvArgs = parse_arguments(arguments.as_str())?;
@@ -235,6 +247,20 @@ mod spawn_agents_on_csv {
                 "instruction must be non-empty".to_string(),
             ));
         }
+        session
+            .send_event(
+                &turn,
+                CollabAgentSpawnBeginEvent {
+                    call_id: call_id.clone(),
+                    tool: CollabAgentSpawnTool::SpawnAgentsOnCsv,
+                    sender_thread_id: session.conversation_id,
+                    prompt: args.instruction.clone(),
+                    model: args.model.clone().unwrap_or_default(),
+                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
+                }
+                .into(),
+            )
+            .await;
 
         let db = required_state_db(&session)?;
         let input_path = turn.resolve_path(Some(args.csv_path));
@@ -339,7 +365,15 @@ mod spawn_agents_on_csv {
             })?;
 
         let requested_concurrency = args.max_concurrency.or(args.max_workers);
-        let options = match build_runner_options(&session, &turn, requested_concurrency).await {
+        let options = match build_runner_options(
+            &session,
+            &turn,
+            requested_concurrency,
+            args.model.as_deref(),
+            args.reasoning_effort,
+        )
+        .await
+        {
             Ok(options) => options,
             Err(err) => {
                 let error_message = err.to_string();
@@ -362,12 +396,17 @@ mod spawn_agents_on_csv {
             "agent job concurrency: job_id={job_id} requested={requested_concurrency:?} max_threads={max_threads:?} effective={effective_concurrency}"
         );
         let _ = session.notify_background_event(&turn, message).await;
+        let effective_batch_model = options.spawn_config.model.clone().unwrap_or_default();
+        let effective_batch_reasoning_effort = options
+            .spawn_config
+            .model_reasoning_effort
+            .unwrap_or_default();
         if let Err(err) = run_agent_job_loop(
             session.clone(),
             turn.clone(),
             db.clone(),
             job_id.clone(),
-            options,
+            options.clone(),
         )
         .await
         {
@@ -410,6 +449,55 @@ mod spawn_agents_on_csv {
                 ))
             })?;
         let mut job_error = job.last_error.clone().filter(|err| !err.trim().is_empty());
+        let agent_statuses = collect_batch_agent_statuses(db.clone(), job_id.as_str())
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to load batch worker statuses for {job_id}: {err}"
+                ))
+            })?;
+        let collab_status = match job.status {
+            codex_state::AgentJobStatus::Completed => {
+                if progress.failed_items > 0 {
+                    AgentStatus::Completed(Some(format!(
+                        "agent job completed with {} failed items",
+                        progress.failed_items
+                    )))
+                } else {
+                    AgentStatus::Completed(None)
+                }
+            }
+            codex_state::AgentJobStatus::Cancelled => {
+                AgentStatus::Completed(job.last_error.clone())
+            }
+            codex_state::AgentJobStatus::Failed => AgentStatus::Errored(
+                job_error
+                    .clone()
+                    .unwrap_or_else(|| "agent job failed".to_string()),
+            ),
+            codex_state::AgentJobStatus::Pending | codex_state::AgentJobStatus::Running => {
+                AgentStatus::Running
+            }
+        };
+        session
+            .send_event(
+                &turn,
+                CollabAgentSpawnEndEvent {
+                    call_id: call_id.clone(),
+                    tool: CollabAgentSpawnTool::SpawnAgentsOnCsv,
+                    sender_thread_id: session.conversation_id,
+                    new_thread_id: None,
+                    new_agent_nickname: None,
+                    new_agent_role: None,
+                    prompt: job.instruction.clone(),
+                    model: effective_batch_model,
+                    reasoning_effort: effective_batch_reasoning_effort,
+                    agent_statuses,
+                    status: collab_status,
+                }
+                .into(),
+            )
+            .await;
         let failed_item_errors = if progress.failed_items > 0 {
             let items = db
                 .list_agent_job_items(
@@ -523,6 +611,8 @@ async fn build_runner_options(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     requested_concurrency: Option<usize>,
+    requested_model: Option<&str>,
+    requested_reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
@@ -535,7 +625,15 @@ async fn build_runner_options(
     let max_concurrency =
         normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
-    let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
+    let mut spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
+    apply_requested_spawn_agent_model_overrides(
+        session,
+        turn.as_ref(),
+        &mut spawn_config,
+        requested_model,
+        requested_reasoning_effort,
+    )
+    .await?;
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
@@ -992,6 +1090,41 @@ async fn finalize_finished_item(
         .shutdown_live_agent(thread_id)
         .await;
     Ok(())
+}
+
+async fn collect_batch_agent_statuses(
+    db: Arc<codex_state::StateRuntime>,
+    job_id: &str,
+) -> anyhow::Result<Vec<CollabAgentStatusEntry>> {
+    let items = db
+        .list_agent_job_items(job_id, /*status*/ None, /*limit*/ None)
+        .await?;
+    let mut agent_statuses = Vec::new();
+    for item in items {
+        let Some(assigned_thread_id) = item.assigned_thread_id.as_deref() else {
+            continue;
+        };
+        let Ok(thread_id) = ThreadId::from_string(assigned_thread_id) else {
+            continue;
+        };
+        let status = match item.status {
+            codex_state::AgentJobItemStatus::Completed => AgentStatus::Completed(None),
+            codex_state::AgentJobItemStatus::Failed => AgentStatus::Errored(
+                item.last_error
+                    .clone()
+                    .unwrap_or_else(|| "agent job item failed".to_string()),
+            ),
+            codex_state::AgentJobItemStatus::Pending => continue,
+            codex_state::AgentJobItemStatus::Running => AgentStatus::Running,
+        };
+        agent_statuses.push(CollabAgentStatusEntry {
+            thread_id,
+            agent_nickname: None,
+            agent_role: None,
+            status,
+        });
+    }
+    Ok(agent_statuses)
 }
 
 fn build_worker_prompt(

@@ -57,12 +57,22 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::Respond;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -75,6 +85,135 @@ fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     String::from_utf8(req.body.clone())
         .ok()
         .is_some_and(|body| body.contains(text))
+}
+
+struct BatchAgentsResponder {
+    spawn_args_json: String,
+    seen_main: AtomicBool,
+    call_counter: AtomicUsize,
+}
+
+impl BatchAgentsResponder {
+    fn new(spawn_args_json: String) -> Self {
+        Self {
+            spawn_args_json,
+            seen_main: AtomicBool::new(false),
+            call_counter: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Respond for BatchAgentsResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body_bytes = decode_body_bytes(request);
+        let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+
+        if has_function_call_output(&body) {
+            return core_test_support::responses::sse_response(core_test_support::responses::sse(
+                vec![
+                    core_test_support::responses::ev_response_created("resp-tool"),
+                    core_test_support::responses::ev_completed("resp-tool"),
+                ],
+            ));
+        }
+
+        if let Some((job_id, item_id)) = extract_batch_job_and_item(&body) {
+            let call_id = format!(
+                "call-worker-{}",
+                self.call_counter.fetch_add(1, Ordering::SeqCst)
+            );
+            let args = json!({
+                "job_id": job_id,
+                "item_id": item_id,
+                "result": { "item_id": item_id },
+            });
+            let args_json = serde_json::to_string(&args).unwrap_or_else(|err| {
+                panic!("worker args serialize: {err}");
+            });
+            return core_test_support::responses::sse_response(core_test_support::responses::sse(
+                vec![
+                    core_test_support::responses::ev_response_created("resp-worker"),
+                    core_test_support::responses::ev_function_call(
+                        &call_id,
+                        "report_agent_job_result",
+                        &args_json,
+                    ),
+                    core_test_support::responses::ev_completed("resp-worker"),
+                ],
+            ));
+        }
+
+        if !self.seen_main.swap(true, Ordering::SeqCst) {
+            return core_test_support::responses::sse_response(core_test_support::responses::sse(
+                vec![
+                    core_test_support::responses::ev_response_created("resp-main"),
+                    core_test_support::responses::ev_function_call(
+                        "call-spawn",
+                        "spawn_agents_on_csv",
+                        &self.spawn_args_json,
+                    ),
+                    core_test_support::responses::ev_completed("resp-main"),
+                ],
+            ));
+        }
+
+        core_test_support::responses::sse_response(core_test_support::responses::sse(vec![
+            core_test_support::responses::ev_response_created("resp-parent-done"),
+            core_test_support::responses::ev_assistant_message("msg-parent-done", "parent done"),
+            core_test_support::responses::ev_completed("resp-parent-done"),
+        ]))
+    }
+}
+
+fn decode_body_bytes(request: &wiremock::Request) -> Vec<u8> {
+    request.body.clone()
+}
+
+fn has_function_call_output(body: &Value) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("function_call_output")
+            })
+        })
+}
+
+fn extract_batch_job_and_item(body: &Value) -> Option<(String, String)> {
+    let texts = message_input_texts(body);
+    let mut combined = texts.join("\n");
+    if let Some(instructions) = body.get("instructions").and_then(Value::as_str) {
+        combined.push('\n');
+        combined.push_str(instructions);
+    }
+    if !combined.contains("You are processing one item for a generic agent job.") {
+        return None;
+    }
+    let job_id = extract_prefixed_line(&combined, "Job ID:")?;
+    let item_id = extract_prefixed_line(&combined, "Item ID:")?;
+    Some((job_id, item_id))
+}
+
+fn extract_prefixed_line(text: &str, prefix: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.strip_prefix(prefix).map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn message_input_texts(body: &Value) -> Vec<String> {
+    let Some(items) = body.get("input").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 #[tokio::test]
@@ -2037,6 +2176,178 @@ config_file = "./custom-role.toml"
     })
     .await??;
     assert_eq!(turn_completed.thread_id, thread.id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_emits_spawn_agents_on_csv_item_with_model_metadata_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const PARENT_PROMPT: &str = "run the csv batch";
+    const INSTRUCTION: &str = "Return {path}";
+    const REQUESTED_MODEL: &str = "gpt-5.1";
+    const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
+    const SPAWN_CALL_ID: &str = "call-spawn";
+
+    let server = responses::start_mock_server().await;
+
+    let codex_home = TempDir::new()?;
+    let input_path = codex_home.path().join("batch_input.csv");
+    let output_path = codex_home.path().join("batch_output.csv");
+    fs::write(&input_path, "path\nfile-1\n")?;
+
+    let spawn_args = serde_json::to_string(&json!({
+        "csv_path": input_path.display().to_string(),
+        "instruction": INSTRUCTION,
+        "output_csv_path": output_path.display().to_string(),
+        "model": REQUESTED_MODEL,
+        "reasoning_effort": REQUESTED_REASONING_EFFORT,
+    }))?;
+    let responder = BatchAgentsResponder::new(spawn_args);
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder)
+        .mount(&server)
+        .await;
+
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([
+            (Feature::SpawnCsv, true),
+            (Feature::Sqlite, true),
+            (Feature::EnableRequestCompression, false),
+        ]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let spawn_started = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.expect("item/started params"))?;
+            if let ThreadItem::CollabAgentToolCall { id, .. } = &started.item
+                && id == SPAWN_CALL_ID
+            {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(
+        spawn_started,
+        ThreadItem::CollabAgentToolCall {
+            id: SPAWN_CALL_ID.to_string(),
+            tool: CollabAgentTool::SpawnAgentsOnCsv,
+            status: CollabAgentToolCallStatus::InProgress,
+            sender_thread_id: thread.id.clone(),
+            receiver_thread_ids: Vec::new(),
+            prompt: Some(INSTRUCTION.to_string()),
+            model: Some(REQUESTED_MODEL.to_string()),
+            reasoning_effort: Some(REQUESTED_REASONING_EFFORT),
+            agents_states: HashMap::new(),
+        }
+    );
+
+    let spawn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification =
+                serde_json::from_value(completed_notif.params.expect("item/completed params"))?;
+            if let ThreadItem::CollabAgentToolCall { id, .. } = &completed.item
+                && id == SPAWN_CALL_ID
+            {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CollabAgentToolCall {
+        id,
+        tool,
+        status,
+        sender_thread_id,
+        receiver_thread_ids,
+        prompt,
+        model,
+        reasoning_effort,
+        agents_states,
+    } = spawn_completed
+    else {
+        unreachable!("loop ensures we break on collab agent tool call items");
+    };
+    let receiver_thread_id = receiver_thread_ids
+        .first()
+        .cloned()
+        .expect("batch completion should include worker thread id");
+    assert_eq!(id, SPAWN_CALL_ID);
+    assert_eq!(tool, CollabAgentTool::SpawnAgentsOnCsv);
+    assert_eq!(status, CollabAgentToolCallStatus::Completed);
+    assert_eq!(sender_thread_id, thread.id);
+    assert_eq!(receiver_thread_ids, vec![receiver_thread_id.clone()]);
+    assert_eq!(prompt, Some(INSTRUCTION.to_string()));
+    assert_eq!(model, Some(REQUESTED_MODEL.to_string()));
+    assert_eq!(reasoning_effort, Some(REQUESTED_REASONING_EFFORT));
+    let agent_state = agents_states
+        .get(&receiver_thread_id)
+        .expect("batch completion should include worker state");
+    assert_eq!(agent_state.status, CollabAgentStatus::Completed);
+    assert_eq!(agent_state.message, None);
+
+    let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let turn_completed_notif = mcp
+                .read_stream_until_notification_message("turn/completed")
+                .await?;
+            let turn_completed: TurnCompletedNotification = serde_json::from_value(
+                turn_completed_notif.params.expect("turn/completed params"),
+            )?;
+            if turn_completed.thread_id == thread.id && turn_completed.turn.id == turn.turn.id {
+                return Ok::<TurnCompletedNotification, anyhow::Error>(turn_completed);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(turn_completed.thread_id, thread.id);
+    assert_eq!(turn_completed.turn.id, turn.turn.id);
 
     Ok(())
 }

@@ -13,6 +13,7 @@ use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentSpawnTool;
 use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -177,31 +178,48 @@ pub(crate) fn spawn_end(
 ) -> PlainHistoryCell {
     let CollabAgentSpawnEndEvent {
         call_id: _,
+        tool,
         sender_thread_id: _,
         new_thread_id,
         new_agent_nickname,
         new_agent_role,
         prompt,
+        agent_statuses,
         status: _,
         ..
     } = ev;
 
-    let title = match new_thread_id {
-        Some(thread_id) => title_with_agent(
-            "Spawned",
-            AgentLabel {
-                thread_id: Some(thread_id),
-                nickname: new_agent_nickname.as_deref(),
-                role: new_agent_role.as_deref(),
-            },
-            spawn_request,
-        ),
-        None => title_text("Agent spawn failed"),
+    let title = match tool {
+        CollabAgentSpawnTool::SpawnAgent => match new_thread_id {
+            Some(thread_id) => title_with_agent(
+                "Spawned",
+                AgentLabel {
+                    thread_id: Some(thread_id),
+                    nickname: new_agent_nickname.as_deref(),
+                    role: new_agent_role.as_deref(),
+                },
+                spawn_request,
+            ),
+            None => title_text("Agent spawn failed"),
+        },
+        CollabAgentSpawnTool::SpawnAgentsOnCsv => {
+            let mut spans =
+                vec![Span::from(format!("Spawned {} CSV workers", agent_statuses.len())).bold()];
+            spans.extend(spawn_request_spans(spawn_request));
+            title_spans_line(spans)
+        }
     };
 
     let mut details = Vec::new();
     if let Some(line) = prompt_line(&prompt) {
         details.push(line);
+    }
+    if matches!(tool, CollabAgentSpawnTool::SpawnAgentsOnCsv) {
+        let statuses = agent_statuses
+            .iter()
+            .map(|agent_status| (agent_status.thread_id, agent_status.status.clone()))
+            .collect::<HashMap<_, _>>();
+        details.extend(wait_complete_lines(&statuses, &agent_statuses));
     }
     collab_event(title, details)
 }
@@ -604,6 +622,7 @@ mod tests {
         let spawn = spawn_end(
             CollabAgentSpawnEndEvent {
                 call_id: "call-spawn".to_string(),
+                tool: CollabAgentSpawnTool::SpawnAgent,
                 sender_thread_id,
                 new_thread_id: Some(robie_id),
                 new_agent_nickname: Some("Robie".to_string()),
@@ -611,6 +630,7 @@ mod tests {
                 prompt: "Compute 11! and reply with just the integer result.".to_string(),
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
+                agent_statuses: Vec::new(),
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {
@@ -742,6 +762,7 @@ mod tests {
         let cell = spawn_end(
             CollabAgentSpawnEndEvent {
                 call_id: "call-spawn".to_string(),
+                tool: CollabAgentSpawnTool::SpawnAgent,
                 sender_thread_id,
                 new_thread_id: Some(robie_id),
                 new_agent_nickname: Some("Robie".to_string()),
@@ -749,6 +770,7 @@ mod tests {
                 prompt: String::new(),
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
+                agent_statuses: Vec::new(),
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {

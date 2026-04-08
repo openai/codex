@@ -4893,6 +4893,7 @@ v2_enum_from_core! {
 #[ts(export_to = "v2/")]
 pub enum CollabAgentTool {
     SpawnAgent,
+    SpawnAgentsOnCsv,
     SendInput,
     ResumeAgent,
     Wait,

@@ -188,6 +188,7 @@
     "CollabAgentTool": {
       "enum": [
         "spawnAgent",
+        "spawnAgentsOnCsv",
         "sendInput",
         "resumeAgent",
         "wait",

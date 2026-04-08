@@ -3410,9 +3410,26 @@ pub enum TurnAbortReason {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CollabAgentSpawnTool {
+    SpawnAgent,
+    SpawnAgentsOnCsv,
+}
+
+impl Default for CollabAgentSpawnTool {
+    fn default() -> Self {
+        Self::SpawnAgent
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabAgentSpawnBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    /// Tool that initiated the spawn flow.
+    #[serde(default)]
+    pub tool: CollabAgentSpawnTool,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
@@ -3452,6 +3469,9 @@ pub struct CollabAgentStatusEntry {
 pub struct CollabAgentSpawnEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    /// Tool that initiated the spawn flow.
+    #[serde(default)]
+    pub tool: CollabAgentSpawnTool,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the newly spawned agent, if it was created.
@@ -3469,6 +3489,9 @@ pub struct CollabAgentSpawnEndEvent {
     pub model: String,
     /// Effective reasoning effort used by the spawned agent after inheritance and role overrides.
     pub reasoning_effort: ReasoningEffortConfig,
+    /// Final per-agent statuses for multi-agent batch spawns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_statuses: Vec<CollabAgentStatusEntry>,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
 }
