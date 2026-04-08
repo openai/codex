@@ -79,7 +79,7 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
-pub const INSTALLED_MARKETPLACES_DIR: &str = "marketplaces";
+pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/plugins/marketplaces";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
