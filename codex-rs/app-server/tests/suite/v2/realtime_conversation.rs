@@ -170,7 +170,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
-            prompt: "backend prompt".to_string(),
+            prompt: None,
             session_id: None,
             transport: None,
         })
@@ -196,12 +196,13 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         startup_context_request.body_json()["type"].as_str(),
         Some("session.update")
     );
-    assert!(
+    let startup_context_instructions =
         startup_context_request.body_json()["session"]["instructions"]
             .as_str()
             .context("expected startup context instructions")?
-            .contains(STARTUP_CONTEXT_HEADER)
-    );
+            .to_string();
+    assert!(startup_context_instructions.starts_with("You are **Codex**"));
+    assert!(startup_context_instructions.contains(STARTUP_CONTEXT_HEADER));
 
     let audio_append_request_id = mcp
         .send_thread_realtime_append_audio_request(ThreadRealtimeAppendAudioParams {
@@ -307,11 +308,9 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
     );
-    assert!(
-        connection[0].body_json()["session"]["instructions"]
-            .as_str()
-            .context("expected startup context instructions")?
-            .contains(STARTUP_CONTEXT_HEADER)
+    assert_eq!(
+        connection[0].body_json()["session"]["instructions"].as_str(),
+        Some(startup_context_instructions.as_str()),
     );
     let mut request_types = [
         connection[1].body_json()["type"]
@@ -381,7 +380,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
         })
@@ -476,7 +475,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_id.clone(),
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
@@ -620,7 +619,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id,
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
@@ -675,7 +674,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
         })

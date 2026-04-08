@@ -133,7 +133,13 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationStartParams {
-    pub prompt: String,
+    #[serde(
+        default,
+        deserialize_with = "conversation_start_prompt_serde::deserialize",
+        serialize_with = "conversation_start_prompt_serde::serialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prompt: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,6 +152,28 @@ pub struct ConversationStartParams {
 pub enum ConversationStartTransport {
     Websocket,
     Webrtc { sdp: String },
+}
+
+mod conversation_start_prompt_serde {
+    use serde::Deserializer;
+    use serde::Serializer;
+
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        serde_with::rust::double_option::deserialize(deserializer)
+    }
+
+    pub(crate) fn serialize<S>(
+        value: &Option<Option<String>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_with::rust::double_option::serialize(value, serializer)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -4410,12 +4438,12 @@ mod tests {
             },
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "be helpful".to_string(),
+            prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: None,
         });
         let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "be helpful".to_string(),
+            prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: Some(ConversationStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
@@ -4425,6 +4453,16 @@ mod tests {
             text: "hello".to_string(),
         });
         let close = Op::RealtimeConversationClose;
+        let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: None,
+            session_id: None,
+            transport: None,
+        });
+        let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(None),
+            session_id: None,
+            transport: None,
+        });
 
         assert_eq!(
             serde_json::to_value(&start).unwrap(),
@@ -4433,6 +4471,34 @@ mod tests {
                 "prompt": "be helpful",
                 "session_id": "conv_1"
             })
+        );
+        assert_eq!(
+            serde_json::to_value(&default_prompt_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&null_prompt_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "prompt": null
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(json!({
+                "type": "realtime_conversation_start"
+            }))
+            .unwrap(),
+            default_prompt_start
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(json!({
+                "type": "realtime_conversation_start",
+                "prompt": null
+            }))
+            .unwrap(),
+            null_prompt_start
         );
         assert_eq!(
             serde_json::to_value(&audio).unwrap(),

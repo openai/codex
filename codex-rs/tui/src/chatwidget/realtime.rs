@@ -15,8 +15,6 @@ use std::sync::atomic::AtomicU16;
 #[cfg(not(target_os = "linux"))]
 use std::time::Duration;
 
-const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum RealtimeConversationPhase {
     #[default]
@@ -262,7 +260,7 @@ impl ChatWidget {
     ) {
         self.submit_op(AppCommand::realtime_conversation_start(
             ConversationStartParams {
-                prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
+                prompt: None,
                 session_id: None,
                 transport,
             },

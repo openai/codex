@@ -3854,7 +3854,14 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
-    pub prompt: String,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub prompt: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub session_id: Option<String>,
     #[ts(optional = nullable)]

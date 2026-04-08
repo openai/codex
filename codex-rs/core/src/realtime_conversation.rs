@@ -1,6 +1,7 @@
 use crate::client::ModelClient;
 use crate::codex::Session;
 use crate::realtime_context::build_realtime_startup_context;
+use crate::realtime_prompt::prepare_realtime_backend_prompt;
 use async_channel::Receiver;
 use async_channel::Sender;
 use async_channel::TrySendError;
@@ -546,14 +547,14 @@ async fn prepare_realtime_start(
 
 pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
-    prompt: String,
+    prompt: Option<Option<String>>,
     session_id: Option<String>,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
-    let prompt = config
-        .experimental_realtime_ws_backend_prompt
-        .clone()
-        .unwrap_or(prompt);
+    let prompt = prepare_realtime_backend_prompt(
+        prompt,
+        config.experimental_realtime_ws_backend_prompt.clone(),
+    );
     let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
         Some(startup_context) => startup_context,
         None => {
@@ -562,10 +563,11 @@ pub(crate) async fn build_realtime_session_config(
                 .unwrap_or_default()
         }
     };
-    let prompt = if startup_context.is_empty() {
-        prompt
-    } else {
-        format!("{prompt}\n\n{startup_context}")
+    let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => startup_context,
+        (false, true) => prompt,
+        (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
     let model = config.experimental_realtime_ws_model.clone();
     let event_parser = match config.realtime.version {
