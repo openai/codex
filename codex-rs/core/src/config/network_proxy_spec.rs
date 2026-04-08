@@ -132,21 +132,16 @@ impl NetworkProxySpec {
     ) -> std::io::Result<StartedNetworkProxy> {
         let state = self.build_state_with_audit_metadata(audit_metadata)?;
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
-        if enable_network_approval_flow
-            && !self.hard_deny_allowlist_misses
-            && matches!(
+        if enable_network_approval_flow && !self.hard_deny_allowlist_misses {
+            if let Some(policy_decider) = policy_decider {
+                builder = builder.policy_decider_arc(policy_decider);
+            } else if matches!(
                 sandbox_policy,
                 SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-            )
-        {
-            builder = match policy_decider {
-                Some(policy_decider) => builder.policy_decider_arc(policy_decider),
-                None => builder.policy_decider(|_request| async {
-                    // In restricted sandbox modes, allowlist misses should ask for
-                    // explicit network approval instead of hard-denying.
-                    NetworkDecision::ask("not_allowed")
-                }),
-            };
+            ) {
+                builder = builder
+                    .policy_decider(|_request| async { NetworkDecision::ask("not_allowed") });
+            }
         }
         if let Some(blocked_request_observer) = blocked_request_observer {
             builder = builder.blocked_request_observer_arc(blocked_request_observer);
