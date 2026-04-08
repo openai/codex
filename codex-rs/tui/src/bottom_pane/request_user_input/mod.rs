@@ -1567,9 +1567,9 @@ mod tests {
                 questions: vec![question_with_options("q1", "First")],
             },
             tx,
-            true,
-            false,
-            false,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
         );
 
         assert!(

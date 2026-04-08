@@ -2402,13 +2402,13 @@ mod tests {
         let mut overlay = McpServerElicitationOverlay::new(
             McpServerElicitationFormRequest::from_event(
                 thread_id,
-                form_request("First", supported_form_schema.clone(), None),
+                form_request("First", supported_form_schema.clone(), /*meta*/ None),
             )
             .expect("expected supported form"),
             tx,
-            true,
-            false,
-            false,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
         );
         overlay.try_consume_mcp_server_elicitation_request(
             McpServerElicitationFormRequest::from_event(
