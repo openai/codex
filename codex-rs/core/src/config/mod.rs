@@ -255,8 +255,9 @@ pub struct Config {
     pub developer_instructions: Option<String>,
 
     /// Guardian-specific tenant policy config override from requirements.toml.
-    /// This is inserted into the fixed guardian prompt template rather than
-    /// replacing the whole guardian developer prompt.
+    /// This is inserted into the fixed guardian prompt template under the
+    /// `# Policy Configuration` section rather than replacing the whole
+    /// guardian developer prompt.
     pub guardian_policy_config: Option<String>,
 
     /// Whether to inject the `<permissions instructions>` developer block.
