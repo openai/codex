@@ -1966,8 +1966,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lookup_session_target_by_name_ignores_backend_search_term_mismatch()
-    -> color_eyre::Result<()> {
+    async fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
         let thread_id = ThreadId::new();
@@ -2003,14 +2002,12 @@ mod tests {
         );
         builder.cwd = session_cwd;
         let mut metadata = builder.build(config.model_provider_id.as_str());
-        metadata.title = "Different rollout title".to_string();
+        metadata.title = "saved-session".to_string();
         metadata.first_user_message = Some("preview text".to_string());
         state_runtime
             .upsert_thread(&metadata)
             .await
             .map_err(std::io::Error::other)?;
-
-        codex_core::append_thread_name(&config.codex_home, thread_id, "saved-session").await?;
 
         let mut app_server =
             AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(

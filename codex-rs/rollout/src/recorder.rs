@@ -241,7 +241,9 @@ impl RolloutRecorder {
             )
             .await
         {
-            return Ok(db_page.into());
+            if !db_page.items.is_empty() || cursor.is_some() {
+                return Ok(db_page.into());
+            }
         }
 
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing

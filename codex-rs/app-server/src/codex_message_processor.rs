@@ -2699,7 +2699,7 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let state_db_ctx = get_state_db(&self.config).await;
+        let state_db_ctx = open_state_db_for_direct_thread_lookup(&self.config).await;
         reconcile_rollout(
             state_db_ctx.as_deref(),
             rollout_path.as_path(),
@@ -8631,7 +8631,7 @@ async fn read_summary_from_state_db_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = get_state_db(config).await;
+    let state_db_ctx = open_state_db_for_direct_thread_lookup(config).await;
     read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
 }
 
@@ -8649,7 +8649,7 @@ async fn read_summary_from_state_db_context_by_thread_id(
 }
 
 async fn title_from_state_db(config: &Config, thread_id: ThreadId) -> Option<String> {
-    let state_db_ctx = get_state_db(config).await?;
+    let state_db_ctx = open_state_db_for_direct_thread_lookup(config).await?;
     let metadata = state_db_ctx.get_thread(thread_id).await.ok().flatten()?;
     non_empty_title(&metadata)
 }
@@ -8658,7 +8658,7 @@ async fn thread_titles_by_ids(
     config: &Config,
     thread_ids: &HashSet<ThreadId>,
 ) -> HashMap<ThreadId, String> {
-    let Some(state_db_ctx) = get_state_db(config).await else {
+    let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await else {
         return HashMap::new();
     };
     let mut names = HashMap::with_capacity(thread_ids.len());
@@ -8671,6 +8671,12 @@ async fn thread_titles_by_ids(
         }
     }
     names
+}
+
+async fn open_state_db_for_direct_thread_lookup(config: &Config) -> Option<StateDbHandle> {
+    StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+        .await
+        .ok()
 }
 
 fn non_empty_title(metadata: &ThreadMetadata) -> Option<String> {
