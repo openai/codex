@@ -259,13 +259,13 @@ enum WebsocketStreamOutcome {
     FallbackToHttp,
 }
 
-pub(crate) struct RealtimeCallStart {
+pub(crate) struct RealtimeWebrtcCallStart {
     pub(crate) sdp: String,
     pub(crate) call_id: String,
     pub(crate) sideband_headers: ApiHeaderMap,
 }
 
-fn api_auth_headers(api_auth: &CoreAuthProvider) -> ApiHeaderMap {
+fn sideband_websocket_auth_headers(api_auth: &CoreAuthProvider) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
     if let Some(token) = api_auth.token.as_ref()
         && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}"))
@@ -472,17 +472,17 @@ impl ModelClient {
         sdp: String,
         session_config: ApiRealtimeSessionConfig,
         extra_headers: ApiHeaderMap,
-    ) -> Result<RealtimeCallStart> {
+    ) -> Result<RealtimeWebrtcCallStart> {
         let client_setup = self.current_client_setup().await?;
         let mut sideband_headers = extra_headers.clone();
-        sideband_headers.extend(api_auth_headers(&client_setup.api_auth));
+        sideband_headers.extend(sideband_websocket_auth_headers(&client_setup.api_auth));
         let transport = ReqwestTransport::new(build_reqwest_client());
         let response =
             ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .create_with_session_and_headers(sdp, session_config, extra_headers)
                 .await
                 .map_err(map_api_error)?;
-        Ok(RealtimeCallStart {
+        Ok(RealtimeWebrtcCallStart {
             sdp: response.sdp,
             call_id: response.call_id,
             sideband_headers,

@@ -206,7 +206,7 @@ impl RealtimeConversationManager {
                 )
                 .await?;
             let connection = client
-                .connect_call_id(
+                .connect_webrtc_sideband(
                     session_config,
                     &call.call_id,
                     call.sideband_headers,

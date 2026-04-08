@@ -196,7 +196,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
 }
 
 #[tokio::test]
-async fn realtime_ws_connect_call_id_retries_join_until_server_is_available() {
+async fn realtime_ws_connect_webrtc_sideband_retries_join_until_server_is_available() {
     let reserving_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = reserving_listener.local_addr().expect("local addr");
     drop(reserving_listener);
@@ -239,7 +239,7 @@ async fn realtime_ws_connect_call_id_retries_join_until_server_is_available() {
 
     let client = RealtimeWebsocketClient::new(provider);
     let connection = client
-        .connect_call_id(
+        .connect_webrtc_sideband(
             RealtimeSessionConfig {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),

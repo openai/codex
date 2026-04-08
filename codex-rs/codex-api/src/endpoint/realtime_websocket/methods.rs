@@ -465,11 +465,11 @@ impl RealtimeWebsocketClient {
             config.event_parser,
             config.session_mode,
         )?;
-        self.connect_url(ws_url, config, extra_headers, default_headers)
+        self.connect_realtime_websocket_url(ws_url, config, extra_headers, default_headers)
             .await
     }
 
-    pub async fn connect_call_id(
+    pub async fn connect_webrtc_sideband(
         &self,
         config: RealtimeSessionConfig,
         call_id: &str,
@@ -478,7 +478,7 @@ impl RealtimeWebsocketClient {
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
         for attempt in 0..=self.provider.retry.max_attempts {
             let result = self
-                .connect_call_id_once(
+                .connect_webrtc_sideband_once(
                     config.clone(),
                     call_id,
                     extra_headers.clone(),
@@ -506,7 +506,7 @@ impl RealtimeWebsocketClient {
         ))
     }
 
-    async fn connect_call_id_once(
+    async fn connect_webrtc_sideband_once(
         &self,
         config: RealtimeSessionConfig,
         call_id: &str,
@@ -518,11 +518,11 @@ impl RealtimeWebsocketClient {
             self.provider.query_params.as_ref(),
             call_id,
         )?;
-        self.connect_url(ws_url, config, extra_headers, default_headers)
+        self.connect_realtime_websocket_url(ws_url, config, extra_headers, default_headers)
             .await
     }
 
-    async fn connect_url(
+    async fn connect_realtime_websocket_url(
         &self,
         ws_url: Url,
         config: RealtimeSessionConfig,
