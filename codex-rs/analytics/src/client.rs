@@ -16,6 +16,7 @@ use crate::facts::TrackEventsContext;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
@@ -240,6 +241,13 @@ impl AnalyticsEventsClient {
     pub fn track_server_response(&self, response: ServerResponse) {
         self.record_fact(AnalyticsFact::ServerResponse {
             response: Box::new(response),
+        });
+    }
+
+    pub fn track_notification(&self, connection_id: u64, notification: ServerNotification) {
+        self.record_fact(AnalyticsFact::Notification {
+            connection_id,
+            notification: Box::new(notification),
         });
     }
 }
