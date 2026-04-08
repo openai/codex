@@ -1122,16 +1122,15 @@ fn local_exec_server_paths(arg0_paths: &Arg0DispatchPaths) -> Vec<std::path::Pat
 }
 
 fn find_codex_rs_workspace() -> Option<std::path::PathBuf> {
-    let start_dirs = std::iter::once(std::env::current_exe().ok()).chain(std::iter::once(
-        std::env::current_dir().ok().map(std::path::PathBuf::from),
-    ));
+    let start_dirs = std::iter::once(std::env::current_exe().ok())
+        .chain(std::iter::once(std::env::current_dir().ok()));
 
     for start_dir in start_dirs.flatten() {
-        let candidates = start_dir
+        if let Some(candidate) = start_dir
             .ancestors()
             .map(|ancestor| ancestor.join("codex-rs"))
-            .filter(|candidate| candidate.join("Cargo.toml").is_file());
-        for candidate in candidates {
+            .find(|candidate| candidate.join("Cargo.toml").is_file())
+        {
             return Some(candidate);
         }
     }
