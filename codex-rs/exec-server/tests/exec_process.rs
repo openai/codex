@@ -174,9 +174,9 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
         .start(ExecParams {
             process_id: process_id.clone().into(),
             argv: vec![
-                "/usr/bin/python3".to_string(),
+                "/bin/sh".to_string(),
                 "-c".to_string(),
-                "import sys; line = sys.stdin.readline(); sys.stdout.write(f'from-stdin:{line}'); sys.stdout.flush()".to_string(),
+                "IFS= read -r line; printf 'from-stdin:%s\\n' \"$line\"".to_string(),
             ],
             cwd: cwd.clone(),
             env: Default::default(),
@@ -276,10 +276,10 @@ async fn assert_exec_process_sandbox_denies_write_outside_workspace(
         .start(ExecParams {
             process_id: ProcessId::from("proc-sandbox-denied"),
             argv: vec![
-                "/usr/bin/python3".to_string(),
+                "/bin/sh".to_string(),
                 "-c".to_string(),
-                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('blocked')"
-                    .to_string(),
+                "printf blocked > \"$1\"".to_string(),
+                "write-outside-workspace".to_string(),
                 blocked_path.to_string_lossy().into_owned(),
             ],
             cwd: workspace_root.clone(),
