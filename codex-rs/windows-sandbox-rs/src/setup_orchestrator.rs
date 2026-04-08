@@ -124,7 +124,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
     extra_read_roots: Vec<PathBuf>,
     proxy_enforced: bool,
 ) -> Result<()> {
-    let mut read_roots = gather_read_roots(command_cwd, policy, codex_home);
+    let mut read_roots = gather_read_roots(command_cwd, policy, codex_home, env_map);
     read_roots.extend(extra_read_roots);
     run_setup_refresh_inner(
         SandboxSetupRequest {
@@ -330,6 +330,24 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn path_env_read_roots(env_map: &HashMap<String, String>) -> Vec<PathBuf> {
+    let Some(path) = env_map
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var("PATH").ok())
+    else {
+        return Vec::new();
+    };
+
+    path.split(';')
+        .map(str::trim)
+        .map(|entry| entry.trim_matches('"'))
+        .filter(|entry| !entry.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
@@ -347,6 +365,7 @@ fn gather_legacy_full_read_roots(
     command_cwd: &Path,
     policy: &SandboxPolicy,
     codex_home: &Path,
+    env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
     let mut roots = gather_helper_read_roots(codex_home);
     roots.extend(
@@ -363,6 +382,7 @@ fn gather_legacy_full_read_roots(
             roots.push(root.to_path_buf());
         }
     }
+    roots.extend(path_env_read_roots(env_map));
     canonical_existing(&roots)
 }
 
@@ -370,6 +390,7 @@ fn gather_restricted_read_roots(
     command_cwd: &Path,
     policy: &SandboxPolicy,
     codex_home: &Path,
+    env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
     let mut roots = gather_helper_read_roots(codex_home);
     if policy.include_platform_defaults() {
@@ -385,6 +406,7 @@ fn gather_restricted_read_roots(
             .into_iter()
             .map(|path| path.to_path_buf()),
     );
+    roots.extend(path_env_read_roots(env_map));
     canonical_existing(&roots)
 }
 
@@ -392,11 +414,12 @@ pub(crate) fn gather_read_roots(
     command_cwd: &Path,
     policy: &SandboxPolicy,
     codex_home: &Path,
+    env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
     if policy.has_full_disk_read_access() {
-        gather_legacy_full_read_roots(command_cwd, policy, codex_home)
+        gather_legacy_full_read_roots(command_cwd, policy, codex_home, env_map)
     } else {
-        gather_restricted_read_roots(command_cwd, policy, codex_home)
+        gather_restricted_read_roots(command_cwd, policy, codex_home, env_map)
     }
 }
 
@@ -767,7 +790,12 @@ fn build_payload_roots(
     let mut read_roots = if let Some(roots) = overrides.read_roots {
         canonical_existing(&roots)
     } else {
-        gather_read_roots(request.command_cwd, request.policy, request.codex_home)
+        gather_read_roots(
+            request.command_cwd,
+            request.policy,
+            request.codex_home,
+            request.env_map,
+        )
     };
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
@@ -995,6 +1023,47 @@ mod tests {
     }
 
     #[test]
+    fn path_env_read_roots_accepts_windows_path_key_and_trims_entries() {
+        let mut env = HashMap::new();
+        env.insert(
+            "Path".to_string(),
+            r#"C:\Tools;"D:\Node Bin";;  E:\Go\bin  "#.to_string(),
+        );
+
+        assert_eq!(
+            path_env_read_roots(&env),
+            vec![
+                PathBuf::from(r"C:\Tools"),
+                PathBuf::from(r"D:\Node Bin"),
+                PathBuf::from(r"E:\Go\bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn gather_read_roots_includes_existing_path_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let tool_dir = tmp.path().join("fnm").join("node").join("bin");
+        let missing_tool_dir = tmp.path().join("missing-tool-bin");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&tool_dir).expect("create tool dir");
+        let policy = SandboxPolicy::new_read_only_policy();
+        let mut env = HashMap::new();
+        env.insert(
+            "PATH".to_string(),
+            format!("{};{}", tool_dir.display(), missing_tool_dir.display()),
+        );
+
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home, &env);
+        let expected_tool_dir = dunce::canonicalize(&tool_dir).expect("canonical tool dir");
+
+        assert!(roots.contains(&expected_tool_dir));
+        assert!(!roots.contains(&missing_tool_dir));
+    }
+
+    #[test]
     fn gather_read_roots_includes_helper_bin_dir() {
         let tmp = TempDir::new().expect("tempdir");
         let codex_home = tmp.path().join("codex-home");
@@ -1002,7 +1071,7 @@ mod tests {
         fs::create_dir_all(&command_cwd).expect("create workspace");
         let policy = SandboxPolicy::new_read_only_policy();
 
-        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home, &HashMap::new());
         let expected =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
@@ -1028,7 +1097,7 @@ mod tests {
             network_access: false,
         };
 
-        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home, &HashMap::new());
         let expected_helper =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
         let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
@@ -1059,7 +1128,7 @@ mod tests {
             network_access: false,
         };
 
-        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home, &HashMap::new());
 
         assert!(
             canonical_windows_platform_default_roots()
@@ -1090,7 +1159,7 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home, &HashMap::new());
         let expected_writable =
             dunce::canonicalize(&writable_root).expect("canonical writable root");
 
@@ -1105,7 +1174,8 @@ mod tests {
         fs::create_dir_all(&command_cwd).expect("create workspace");
         let policy = SandboxPolicy::new_read_only_policy();
 
-        let roots = gather_legacy_full_read_roots(&command_cwd, &policy, &codex_home);
+        let roots =
+            gather_legacy_full_read_roots(&command_cwd, &policy, &codex_home, &HashMap::new());
 
         assert!(
             canonical_windows_platform_default_roots()
