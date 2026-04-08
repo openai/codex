@@ -41,9 +41,11 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
@@ -73,6 +75,9 @@ pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
+    persisted_thread_id: Option<String>,
+    pending_implicit_turn_id: Option<String>,
+    next_synthetic_turn_index: usize,
     next_item_index: i64,
     current_rollout_index: usize,
     next_rollout_index: usize,
@@ -89,6 +94,9 @@ impl ThreadHistoryBuilder {
         Self {
             turns: Vec::new(),
             current_turn: None,
+            persisted_thread_id: None,
+            pending_implicit_turn_id: None,
+            next_synthetic_turn_index: 0,
             next_item_index: 1,
             current_rollout_index: 0,
             next_rollout_index: 0,
@@ -205,8 +213,40 @@ impl ThreadHistoryBuilder {
             RolloutItem::EventMsg(event) => self.handle_event(event),
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
             RolloutItem::ResponseItem(item) => self.handle_response_item(item),
-            RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {}
+            RolloutItem::TurnContext(payload) => self.handle_turn_context(payload),
+            RolloutItem::SessionMeta(payload) => self.handle_session_meta(payload),
         }
+    }
+
+    fn handle_session_meta(&mut self, payload: &SessionMetaLine) {
+        self.persisted_thread_id = Some(payload.meta.id.to_string());
+    }
+
+    fn handle_turn_context(&mut self, payload: &TurnContextItem) {
+        let Some(turn_id) = payload.turn_id.as_ref() else {
+            return;
+        };
+
+        if let Some(current_turn) = self.current_turn.as_mut() {
+            if current_turn.opened_explicitly {
+                if current_turn.id != *turn_id {
+                    warn!(
+                        active_turn_id = current_turn.id.as_str(),
+                        context_turn_id = turn_id,
+                        "ignoring mismatched turn_context turn_id for explicit turn"
+                    );
+                }
+            } else {
+                current_turn.id.clone_from(turn_id);
+            }
+            return;
+        }
+
+        if self.turns.last().is_some_and(|turn| turn.id == *turn_id) {
+            return;
+        }
+
+        self.pending_implicit_turn_id = Some(turn_id.clone());
     }
 
     fn handle_response_item(&mut self, item: &codex_protocol::models::ResponseItem) {
@@ -912,6 +952,7 @@ impl ThreadHistoryBuilder {
 
     fn handle_turn_started(&mut self, payload: &TurnStartedEvent) {
         self.finish_current_turn();
+        self.pending_implicit_turn_id = None;
         self.current_turn = Some(
             self.new_turn(Some(payload.turn_id.clone()))
                 .with_status(TurnStatus::InProgress)
@@ -987,7 +1028,7 @@ impl ThreadHistoryBuilder {
 
     fn new_turn(&mut self, id: Option<String>) -> PendingTurn {
         PendingTurn {
-            id: id.unwrap_or_else(|| Uuid::now_v7().to_string()),
+            id: id.unwrap_or_else(|| self.take_next_implicit_turn_id()),
             items: Vec::new(),
             error: None,
             status: TurnStatus::Completed,
@@ -1008,6 +1049,37 @@ impl ThreadHistoryBuilder {
         }
 
         unreachable!("current turn must exist after initialization");
+    }
+
+    fn take_next_implicit_turn_id(&mut self) -> String {
+        if let Some(turn_id) = self.pending_implicit_turn_id.take() {
+            return turn_id;
+        }
+
+        let synthetic_turn_index = self.next_synthetic_turn_index;
+        self.next_synthetic_turn_index += 1;
+        self.synthetic_turn_id(synthetic_turn_index)
+    }
+
+    fn synthetic_turn_id(&self, synthetic_turn_index: usize) -> String {
+        let replay_seed = match self.persisted_thread_id.as_deref() {
+            Some(thread_id) => format!("{thread_id}:{synthetic_turn_index}"),
+            None => format!("legacy:{synthetic_turn_index}"),
+        };
+        let hash_bytes = |offset_basis: u64| {
+            let mut hash = offset_basis;
+            for byte in replay_seed.as_bytes() {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            hash.to_be_bytes()
+        };
+        let mut bytes = [0_u8; 16];
+        bytes[..8].copy_from_slice(&hash_bytes(0xcbf29ce484222325));
+        bytes[8..].copy_from_slice(&hash_bytes(0x84222325cbf29ce4));
+        bytes[6] = (bytes[6] & 0x0f) | 0x80;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        Uuid::from_bytes(bytes).to_string()
     }
 
     fn upsert_item_in_turn_id(&mut self, turn_id: &str, item: ThreadItem) {
@@ -1200,6 +1272,7 @@ mod tests {
     use super::*;
     use crate::protocol::v2::CommandExecutionSource;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
     use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -1212,6 +1285,7 @@ mod tests {
     use codex_protocol::protocol::AgentReasoningEvent;
     use codex_protocol::protocol::AgentReasoningRawContentEvent;
     use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+    use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::CompactedItem;
     use codex_protocol::protocol::DynamicToolCallResponseEvent;
@@ -1221,10 +1295,15 @@ mod tests {
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallEndEvent;
     use codex_protocol::protocol::PatchApplyBeginEvent;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::protocol::WebSearchEndEvent;
@@ -1232,6 +1311,51 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
     use uuid::Uuid;
+
+    fn build_session_meta_line(thread_id: ThreadId) -> SessionMetaLine {
+        SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                forked_from_id: None,
+                timestamp: "2025-01-05T12:00:00Z".into(),
+                cwd: PathBuf::from("/"),
+                originator: "codex".into(),
+                cli_version: "0.0.0".into(),
+                source: SessionSource::Cli,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: Some("mock_provider".into()),
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+            },
+            git: None,
+        }
+    }
+
+    fn build_turn_context(turn_id: Option<&str>) -> TurnContextItem {
+        TurnContextItem {
+            turn_id: turn_id.map(str::to_string),
+            trace_id: None,
+            cwd: PathBuf::from("/"),
+            current_date: None,
+            timezone: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            network: None,
+            model: "mock-model".into(),
+            personality: None,
+            collaboration_mode: None,
+            realtime_active: None,
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        }
+    }
 
     #[test]
     fn builds_multiple_turns_with_reasoning_items() {
@@ -1333,6 +1457,91 @@ mod tests {
                 memory_citation: None,
             }
         );
+    }
+
+    #[test]
+    fn uses_turn_context_id_for_legacy_implicit_turns() {
+        let items = vec![
+            RolloutItem::SessionMeta(build_session_meta_line(ThreadId::new())),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "legacy turn".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::TurnContext(build_turn_context(Some("legacy-turn-id"))),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "completed".into(),
+                phase: None,
+                memory_citation: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].id, "legacy-turn-id");
+    }
+
+    #[test]
+    fn replays_legacy_implicit_turns_with_stable_ids() {
+        let items = vec![
+            RolloutItem::SessionMeta(build_session_meta_line(ThreadId::new())),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "first".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "A1".into(),
+                phase: None,
+                memory_citation: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "second".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "A2".into(),
+                phase: None,
+                memory_citation: None,
+            })),
+        ];
+
+        let first_replay = build_turns_from_rollout_items(&items);
+        let second_replay = build_turns_from_rollout_items(&items);
+
+        assert_eq!(first_replay, second_replay);
+        assert_ne!(first_replay[0].id, first_replay[1].id);
+    }
+
+    #[test]
+    fn preserves_explicit_turn_started_id_when_turn_context_differs() {
+        let items = vec![
+            RolloutItem::SessionMeta(build_session_meta_line(ThreadId::new())),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "explicit-turn-id".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::TurnContext(build_turn_context(Some("different-turn-id"))),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "explicit".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "explicit-turn-id".into(),
+                last_agent_message: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].id, "explicit-turn-id");
     }
 
     #[test]
