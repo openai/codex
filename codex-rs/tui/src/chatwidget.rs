@@ -4864,10 +4864,10 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
-            // Alt+C - copy last agent response from the main view.
+            // Ctrl+O - copy last agent response from the main view.
             KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: KeyModifiers::ALT,
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {

@@ -1,4 +1,4 @@
-//! Clipboard copy backend for the TUI's `/copy` command and `Alt+C` hotkey.
+//! Clipboard copy backend for the TUI's `/copy` command and `Ctrl+O` hotkey.
 //!
 //! This module decides *how* to get text onto the user's clipboard based on the
 //! current environment. The selection order is:
