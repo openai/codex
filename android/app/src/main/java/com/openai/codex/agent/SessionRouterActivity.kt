@@ -57,8 +57,8 @@ class SessionRouterActivity : Activity() {
                 targetPackage = targetPackage,
             )
         }
-        if (isRunningHomeSession(session)) {
-            return Destination.OpenRunningHomeTarget(session)
+        if (isRunningTargetSession(session)) {
+            return Destination.OpenRunningTarget(session)
         }
         return Destination.Popup(sessionId)
     }
@@ -76,8 +76,8 @@ class SessionRouterActivity : Activity() {
                 )
                 finish()
             }
-            is Destination.OpenRunningHomeTarget -> {
-                openRunningHomeTarget(destination.session)
+            is Destination.OpenRunningTarget -> {
+                openRunningTarget(destination.session)
             }
             is Destination.Popup -> {
                 startActivity(
@@ -90,7 +90,7 @@ class SessionRouterActivity : Activity() {
         }
     }
 
-    private fun openRunningHomeTarget(session: AgentSessionDetails) {
+    private fun openRunningTarget(session: AgentSessionDetails) {
         thread(name = "CodexSessionRouterOpenTarget-${session.sessionId}") {
             val opened = runCatching {
                 if (session.targetDetached) {
@@ -122,10 +122,8 @@ class SessionRouterActivity : Activity() {
             !session.targetPackage.isNullOrBlank()
     }
 
-    private fun isRunningHomeSession(session: AgentSessionDetails): Boolean {
-        return session.anchor == AgentSessionInfo.ANCHOR_HOME &&
-            session.parentSessionId == null &&
-            session.state == AgentSessionInfo.STATE_RUNNING
+    private fun isRunningTargetSession(session: AgentSessionDetails): Boolean {
+        return SessionTapRouting.shouldOpenRunningTarget(session)
     }
 
     private sealed interface Destination {
@@ -134,7 +132,7 @@ class SessionRouterActivity : Activity() {
             val targetPackage: String,
         ) : Destination
 
-        data class OpenRunningHomeTarget(
+        data class OpenRunningTarget(
             val session: AgentSessionDetails,
         ) : Destination
 

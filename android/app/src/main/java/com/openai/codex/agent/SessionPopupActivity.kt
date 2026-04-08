@@ -163,7 +163,7 @@ class SessionPopupActivity : Activity() {
         when {
             isQuestionSession(session) -> showQuestionPopup(session)
             isResultSession(session) -> showResultPopup(session)
-            isRunningHomeSession(session) -> openRunningHomeTarget(session)
+            isRunningTargetSession(session) -> openRunningTarget(session)
             popupRendered || fallbackLaunched -> finish()
             else -> launchFallbackDetail(session.sessionId)
         }
@@ -184,10 +184,8 @@ class SessionPopupActivity : Activity() {
         }
     }
 
-    private fun isRunningHomeSession(session: AgentSessionDetails): Boolean {
-        return session.anchor == AgentSessionInfo.ANCHOR_HOME &&
-            session.parentSessionId == null &&
-            session.state == AgentSessionInfo.STATE_RUNNING
+    private fun isRunningTargetSession(session: AgentSessionDetails): Boolean {
+        return SessionTapRouting.shouldOpenRunningTarget(session)
     }
 
     private fun showQuestionPopup(session: AgentSessionDetails) {
@@ -627,7 +625,7 @@ class SessionPopupActivity : Activity() {
         finish()
     }
 
-    private fun openRunningHomeTarget(session: AgentSessionDetails) {
+    private fun openRunningTarget(session: AgentSessionDetails) {
         fallbackLaunched = true
         thread(name = "CodexSessionPopupAttachTarget-${session.sessionId}") {
             runCatching {
