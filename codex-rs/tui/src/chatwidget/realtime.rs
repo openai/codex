@@ -547,7 +547,7 @@ impl ChatWidget {
         let stop_flag = capture.stopped_flag();
         let peak = capture.last_peak_arc();
         self.start_realtime_meter(stop_flag.clone(), peak);
-        self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
+        self.realtime_conversation.capture_stop_flag = Some(stop_flag);
         self.realtime_conversation.capture = Some(capture);
         if self.realtime_conversation.audio_player.is_none() {
             self.realtime_conversation.audio_player =
