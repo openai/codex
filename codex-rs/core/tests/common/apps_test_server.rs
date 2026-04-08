@@ -22,6 +22,8 @@ const SEARCHABLE_TOOL_COUNT: usize = 100;
 pub const CALENDAR_CREATE_EVENT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_create_event";
 const CALENDAR_LIST_EVENTS_RESOURCE_URI: &str = "connector://calendar/tools/calendar_list_events";
+pub const DOCUMENT_EXTRACT_TEXT_RESOURCE_URI: &str =
+    "connector://calendar/tools/calendar_extract_text";
 
 #[derive(Clone)]
 pub struct AppsTestServer {
@@ -235,6 +237,39 @@ impl Respond for CodexAppsJsonRpcResponder {
                                         "connector_id": CONNECTOR_ID
                                     }
                                 }
+                            },
+                            {
+                                "name": "calendar_extract_text",
+                                "description": "Extract text from an uploaded document.",
+                                "annotations": {
+                                    "readOnlyHint": false
+                                },
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "file": {
+                                            "type": "object",
+                                            "description": "Document file payload.",
+                                            "properties": {
+                                                "fileId": { "type": "string" }
+                                            },
+                                            "required": ["fileId"]
+                                        }
+                                    },
+                                    "required": ["file"],
+                                    "additionalProperties": false
+                                },
+                                "_meta": {
+                                    "connector_id": CONNECTOR_ID,
+                                    "connector_name": self.connector_name.clone(),
+                                    "connector_description": self.connector_description.clone(),
+                                    "openai/fileParams": ["file"],
+                                    "_codex_apps": {
+                                        "resource_uri": DOCUMENT_EXTRACT_TEXT_RESOURCE_URI,
+                                        "contains_mcp_source": true,
+                                        "connector_id": CONNECTOR_ID
+                                    }
+                                }
                             }
                         ],
                         "nextCursor": null
@@ -245,7 +280,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                         .pointer_mut("/result/tools")
                         .and_then(Value::as_array_mut)
                 {
-                    for index in 2..SEARCHABLE_TOOL_COUNT {
+                    for index in 3..SEARCHABLE_TOOL_COUNT {
                         tools.push(json!({
                             "name": format!("calendar_timezone_option_{index}"),
                             "description": format!("Read timezone option {index}."),
@@ -283,6 +318,10 @@ impl Respond for CodexAppsJsonRpcResponder {
                     .pointer("/params/arguments/starts_at")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                let file_id = body
+                    .pointer("/params/arguments/file/fileId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let codex_apps_meta = body.pointer("/params/_meta/_codex_apps").cloned();
 
                 ResponseTemplate::new(200).set_body_json(json!({
@@ -291,7 +330,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                     "result": {
                         "content": [{
                             "type": "text",
-                            "text": format!("called {tool_name} for {title} at {starts_at}")
+                            "text": format!("called {tool_name} for {title} at {starts_at} with {file_id}")
                         }],
                         "structuredContent": {
                             "_codex_apps": codex_apps_meta,
