@@ -5,6 +5,8 @@ use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
@@ -80,6 +82,13 @@ pub(crate) enum AnalyticsFact {
     Response {
         connection_id: u64,
         response: Box<ClientResponse>,
+    },
+    ServerRequest {
+        connection_id: u64,
+        request: Box<ServerRequest>,
+    },
+    ServerResponse {
+        response: Box<ServerResponse>,
     },
     Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or

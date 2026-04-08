@@ -76,6 +76,13 @@ impl AnalyticsReducer {
             } => {
                 self.ingest_response(connection_id, *response, out);
             }
+            AnalyticsFact::ServerRequest {
+                connection_id: _connection_id,
+                request: _request,
+            } => {}
+            AnalyticsFact::ServerResponse {
+                response: _response,
+            } => {}
             AnalyticsFact::Notification(_notification) => {}
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
