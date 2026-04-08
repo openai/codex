@@ -309,6 +309,19 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                 format!("SetProtocol failed: {err:?}"),
             ))
         })?;
+        let supports_remote_ports = protocol_supports_remote_ports(spec.protocol);
+        if supports_remote_ports {
+            // Existing loopback TCP rules may still carry the previous proxy-port complement.
+            // Clear it before rewriting RemoteAddresses; Windows Firewall COM can reject
+            // otherwise-valid address updates when paired with a stale port list.
+            rule.SetRemotePorts(&BSTR::from("*")).map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("SetRemotePorts pre-clear failed: {err:?}"),
+                ))
+            })?;
+        }
+
         let remote_addresses = spec.remote_addresses.unwrap_or("*");
         rule.SetRemoteAddresses(&BSTR::from(remote_addresses))
             .map_err(|err| {
@@ -317,14 +330,16 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                     format!("SetRemoteAddresses failed: {err:?}"),
                 ))
             })?;
-        let remote_ports = spec.remote_ports.unwrap_or("*");
-        rule.SetRemotePorts(&BSTR::from(remote_ports))
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetRemotePorts failed: {err:?}"),
-                ))
-            })?;
+        if supports_remote_ports {
+            let remote_ports = spec.remote_ports.unwrap_or("*");
+            rule.SetRemotePorts(&BSTR::from(remote_ports))
+                .map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                        format!("SetRemotePorts failed: {err:?}"),
+                    ))
+                })?;
+        }
         rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_spec))
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
@@ -352,6 +367,10 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn protocol_supports_remote_ports(protocol: i32) -> bool {
+    protocol == NET_FW_IP_PROTOCOL_TCP.0 || protocol == NET_FW_IP_PROTOCOL_UDP.0
 }
 
 fn blocked_loopback_tcp_remote_ports(proxy_ports: &[u16]) -> Option<String> {
