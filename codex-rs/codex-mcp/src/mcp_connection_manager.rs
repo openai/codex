@@ -199,16 +199,6 @@ pub struct ToolInfo {
     pub connector_description: Option<String>,
 }
 
-impl ToolInfo {
-    pub fn model_visible_tool(&self) -> Tool {
-        let mut tool = self.tool.clone();
-        if self.server_name == CODEX_APPS_MCP_SERVER_NAME {
-            mask_model_visible_tool_input_schema(&mut tool);
-        }
-        tool
-    }
-}
-
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
 
 pub fn declared_openai_file_input_param_names(
@@ -228,17 +218,22 @@ pub fn declared_openai_file_input_param_names(
         .collect()
 }
 
-fn mask_model_visible_tool_input_schema(tool: &mut Tool) {
+/// Returns the model-visible view of a tool while preserving the raw metadata
+/// used by execution. Keep cache entries raw and call this at manager return
+/// boundaries.
+fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
     let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
     if file_params.is_empty() {
-        return;
+        return tool.clone();
     }
 
+    let mut tool = tool.clone();
     let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
     mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
     if let JsonValue::Object(input_schema) = input_schema {
         tool.input_schema = Arc::new(input_schema);
     }
+    tool
 }
 
 fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
@@ -624,6 +619,10 @@ impl AsyncManagedClient {
         let annotate_tools = |tools: Vec<ToolInfo>| {
             let mut tools = tools;
             for tool in &mut tools {
+                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                }
+
                 let plugin_names = match tool.connector_id.as_deref() {
                     Some(connector_id) => self
                         .tool_plugin_provenance
@@ -1004,10 +1003,13 @@ impl McpConnectionManager {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        Ok(qualify_tools(filter_tools(
-            tools,
-            &managed_client.tool_filter,
-        )))
+        let tools = filter_tools(tools, &managed_client.tool_filter)
+            .into_iter()
+            .map(|mut tool| {
+                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                tool
+            });
+        Ok(qualify_tools(tools))
     }
 
     /// Returns a single map that contains all resources. Each key is the

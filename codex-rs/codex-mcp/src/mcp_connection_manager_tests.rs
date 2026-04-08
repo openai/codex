@@ -83,9 +83,9 @@ fn declared_openai_file_fields_treat_names_literally() {
 }
 
 #[test]
-fn model_visible_tool_masks_codex_apps_file_params() {
-    let mut tool_info = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "upload");
-    tool_info.tool.input_schema = Arc::new(
+fn tool_with_model_visible_input_schema_masks_file_params() {
+    let mut tool = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "upload").tool;
+    tool.input_schema = Arc::new(
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -103,7 +103,7 @@ fn model_visible_tool_masks_codex_apps_file_params() {
         .expect("object")
         .clone(),
     );
-    tool_info.tool.meta = Some(Meta(
+    tool.meta = Some(Meta(
         serde_json::json!({
             "openai/fileParams": ["file", "files"]
         })
@@ -112,7 +112,7 @@ fn model_visible_tool_masks_codex_apps_file_params() {
         .clone(),
     ));
 
-    let tool = tool_info.model_visible_tool();
+    let tool = tool_with_model_visible_input_schema(&tool);
 
     assert_eq!(
         *tool.input_schema,
@@ -137,10 +137,12 @@ fn model_visible_tool_masks_codex_apps_file_params() {
 }
 
 #[test]
-fn model_visible_tool_leaves_other_tools_unchanged() {
-    let original = create_test_tool("custom", "upload");
+fn tool_with_model_visible_input_schema_leaves_tools_without_file_params_unchanged() {
+    let original_tool = create_test_tool("custom", "upload").tool;
 
-    assert_eq!(original.model_visible_tool(), original.tool);
+    let tool = tool_with_model_visible_input_schema(&original_tool);
+
+    assert_eq!(tool, original_tool);
 }
 
 #[test]

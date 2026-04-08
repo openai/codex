@@ -62,9 +62,6 @@ impl ToolHandler for ToolSearchHandler {
 
         let mut entries: Vec<(String, ToolInfo)> = self.tools.clone().into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
-        for (_name, tool) in &mut entries {
-            tool.tool = tool.model_visible_tool();
-        }
 
         if entries.is_empty() {
             return Ok(ToolSearchOutput { tools: Vec::new() });
