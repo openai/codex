@@ -4,6 +4,7 @@ use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
+use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -316,12 +317,13 @@ fn session_summary(
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
 ) -> Option<SessionSummary> {
-    if token_usage.is_zero() {
+    let usage_line = (!token_usage.is_zero()).then(|| FinalOutput::from(token_usage).to_string());
+    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
+
+    if usage_line.is_none() && resume_command.is_none() {
         return None;
     }
 
-    let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -486,7 +488,7 @@ fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
-    usage_line: String,
+    usage_line: Option<String>,
     resume_command: Option<String>,
 }
 
@@ -1023,7 +1025,7 @@ fn normalize_harness_overrides_for_cwd(
 
     let mut normalized = Vec::with_capacity(overrides.additional_writable_roots.len());
     for root in overrides.additional_writable_roots.drain(..) {
-        let absolute = AbsolutePathBuf::resolve_path_against_base(root, base_cwd)?;
+        let absolute = AbsolutePathBuf::resolve_path_against_base(root, base_cwd);
         normalized.push(absolute.into_path_buf());
     }
     overrides.additional_writable_roots = normalized;
@@ -1893,14 +1895,25 @@ impl App {
         });
     }
 
-    fn refresh_rate_limits(&mut self, app_server: &AppServerSession, request_id: u64) {
+    /// Spawns a background task to fetch account rate limits and deliver the
+    /// result as a `RateLimitsLoaded` event.
+    ///
+    /// The `origin` is forwarded to the completion handler so it can distinguish
+    /// a startup prefetch (which only updates cached snapshots and schedules a
+    /// frame) from a `/status`-triggered refresh (which must finalize the
+    /// corresponding status card).
+    fn refresh_rate_limits(
+        &mut self,
+        app_server: &AppServerSession,
+        origin: RateLimitRefreshOrigin,
+    ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let result = fetch_account_rate_limits(request_handle)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::RateLimitsLoaded { request_id, result });
+            app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
         });
     }
 
@@ -3301,7 +3314,10 @@ impl App {
                         "Failed to attach to fresh app-server thread: {err}"
                     ));
                 } else if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    let mut lines: Vec<Line<'static>> = Vec::new();
+                    if let Some(usage_line) = summary.usage_line {
+                        lines.push(usage_line.into());
+                    }
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
                         lines.push(spans.into());
@@ -3609,9 +3625,9 @@ impl App {
         let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
+        let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
-        let startup_rate_limit_snapshots = bootstrap.rate_limit_snapshots;
         let session_telemetry = SessionTelemetry::new(
             ThreadId::new(),
             model.as_str(),
@@ -3745,9 +3761,6 @@ impl App {
             }
         };
 
-        for snapshot in startup_rate_limit_snapshots {
-            chat_widget.on_rate_limit_snapshot(Some(snapshot));
-        }
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
@@ -3835,6 +3848,11 @@ impl App {
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();
+        // Kick off a non-blocking rate-limit prefetch so the first `/status`
+        // already has data, without delaying the initial frame render.
+        if requires_openai_auth && has_chatgpt_account {
+            app.refresh_rate_limits(&app_server, RateLimitRefreshOrigin::StartupPrefetch);
+        }
 
         let mut listen_for_app_server_events = true;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
@@ -4114,8 +4132,10 @@ impl App {
                                 {
                                     Ok(()) => {
                                         if let Some(summary) = summary {
-                                            let mut lines: Vec<Line<'static>> =
-                                                vec![summary.usage_line.clone().into()];
+                                            let mut lines: Vec<Line<'static>> = Vec::new();
+                                            if let Some(usage_line) = summary.usage_line {
+                                                lines.push(usage_line.into());
+                                            }
                                             if let Some(command) = summary.resume_command {
                                                 let spans = vec![
                                                     "To continue this session, run ".into(),
@@ -4174,8 +4194,10 @@ impl App {
                             {
                                 Ok(()) => {
                                     if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> =
-                                            vec![summary.usage_line.clone().into()];
+                                        let mut lines: Vec<Line<'static>> = Vec::new();
+                                        if let Some(usage_line) = summary.usage_line {
+                                            lines.push(usage_line.into());
+                                        }
                                         if let Some(command) = summary.resume_command {
                                             let spans = vec![
                                                 "To continue this session, run ".into(),
@@ -4432,21 +4454,30 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RefreshRateLimits { request_id } => {
-                self.refresh_rate_limits(app_server, request_id);
+            AppEvent::RefreshRateLimits { origin } => {
+                self.refresh_rate_limits(app_server, origin);
             }
-            AppEvent::RateLimitsLoaded { request_id, result } => match result {
+            AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
                     for snapshot in snapshots {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
-                    self.chat_widget
-                        .finish_status_rate_limit_refresh(request_id);
+                    match origin {
+                        RateLimitRefreshOrigin::StartupPrefetch => {
+                            tui.frame_requester().schedule_frame();
+                        }
+                        RateLimitRefreshOrigin::StatusCommand { request_id } => {
+                            self.chat_widget
+                                .finish_status_rate_limit_refresh(request_id);
+                        }
+                    }
                 }
                 Err(err) => {
                     tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
-                    self.chat_widget
-                        .finish_status_rate_limit_refresh(request_id);
+                    if let RateLimitRefreshOrigin::StatusCommand { request_id } = origin {
+                        self.chat_widget
+                            .finish_status_rate_limit_refresh(request_id);
+                    }
                 }
             },
             AppEvent::ConnectorsLoaded { result, is_final } => {
@@ -6212,6 +6243,7 @@ mod tests {
     use crate::chatwidget::create_initial_user_message;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
+    use crate::chatwidget::tests::set_fast_mode_test_catalog;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
@@ -9034,15 +9066,17 @@ guardian_approval = true
         target_os = "windows",
         ignore = "snapshot path rendering differs on Windows"
     )]
-    async fn clear_ui_header_shows_fast_status_only_for_gpt54() {
+    async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
         let mut app = make_test_app().await;
         app.config.cwd = PathBuf::from("/tmp/project").abs();
         app.chat_widget.set_model("gpt-5.4");
+        set_fast_mode_test_catalog(&mut app.chat_widget);
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
         app.chat_widget
             .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
         set_chatgpt_auth(&mut app.chat_widget);
+        set_fast_mode_test_catalog(&mut app.chat_widget);
 
         let rendered = app
             .clear_ui_header_lines_with_version(/*width*/ 80, "<VERSION>")
@@ -9056,7 +9090,7 @@ guardian_approval = true
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert_snapshot!("clear_ui_header_fast_status_gpt54_only", rendered);
+        assert_snapshot!("clear_ui_header_fast_status_fast_capable_models", rendered);
     }
 
     async fn make_test_app() -> App {
@@ -10897,7 +10931,7 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn session_summary_skip_zero_usage() {
+    async fn session_summary_skips_when_no_usage_or_resume_hint() {
         assert!(
             session_summary(
                 TokenUsage::default(),
@@ -10922,7 +10956,7 @@ guardian_approval = true
             session_summary(usage, Some(conversation), /*thread_name*/ None).expect("summary");
         assert_eq!(
             summary.usage_line,
-            "Token usage: total=12 input=10 output=2"
+            Some("Token usage: total=12 input=10 output=2".to_string())
         );
         assert_eq!(
             summary.resume_command,

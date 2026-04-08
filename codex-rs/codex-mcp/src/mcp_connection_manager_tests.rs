@@ -15,6 +15,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         } else {
             server_name.to_string()
         },
+        server_instructions: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,

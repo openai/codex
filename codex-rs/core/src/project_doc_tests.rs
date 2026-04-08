@@ -334,8 +334,7 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     )
     .expect("absolute parent doc path");
     let expected_child = AbsolutePathBuf::try_from(
-        dunce::canonicalize(cfg.cwd.join("AGENTS.md").expect("absolute child doc path"))
-            .expect("canonical child doc path"),
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical child doc path"),
     )
     .expect("absolute child doc path");
     assert_eq!(discovery.len(), 2);

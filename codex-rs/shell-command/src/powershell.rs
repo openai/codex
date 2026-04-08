@@ -112,10 +112,8 @@ pub fn try_find_pwsh_executable_blocking() -> Option<AbsolutePathBuf> {
     {
         let candidate = AbsolutePathBuf::resolve_path_against_base("pwsh.exe", &ps_home);
 
-        if let Ok(candidate_abs_path) = candidate
-            && is_powershellish_executable_available(candidate_abs_path.as_path())
-        {
-            return Some(candidate_abs_path);
+        if is_powershellish_executable_available(candidate.as_path()) {
+            return Some(candidate);
         }
     }
 

@@ -38,6 +38,7 @@ mod flags;
 mod git_info_tests;
 mod guardian;
 mod hook_runtime;
+mod installation_id;
 pub(crate) mod instructions;
 pub(crate) mod landlock;
 pub use landlock::spawn_command_under_linux_sandbox;
@@ -179,6 +180,7 @@ pub mod util;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
+pub use client::X_CODEX_INSTALLATION_ID_HEADER;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;

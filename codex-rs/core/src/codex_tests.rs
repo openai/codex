@@ -121,7 +121,7 @@ mod guardian_tests;
 
 struct InstructionsTestCase {
     slug: &'static str,
-    expects_apply_patch_instructions: bool,
+    expects_apply_patch_description: bool,
 }
 
 fn user_message(text: &str) -> ResponseItem {
@@ -255,6 +255,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*auth_manager*/ None,
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
         /*model_verbosity*/ None,
@@ -304,6 +305,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
+            tool_namespaces: None,
             app_tools: None,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -412,6 +414,7 @@ fn make_mcp_tool(
         server_name: server_name.to_string(),
         tool_name: tool_name.to_string(),
         tool_namespace,
+        server_instructions: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
@@ -544,6 +547,139 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 }
 
 #[tokio::test]
+async fn managed_network_proxy_refreshes_when_sandbox_policy_changes() -> anyhow::Result<()> {
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([(
+                    "blocked.example.com".to_string(),
+                    NetworkDomainPermissionToml::Deny,
+                )]),
+            }),
+            danger_full_access_denylist_only: Some(true),
+            allow_local_binding: Some(false),
+            ..Default::default()
+        }),
+        &SandboxPolicy::new_workspace_write_policy(),
+    )?;
+    let exec_policy = Policy::empty();
+
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &exec_policy,
+        &SandboxPolicy::new_workspace_write_policy(),
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+
+    assert!(!started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::DangerFullAccess)?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+
+    assert!(started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(
+        current_cfg.network.allowed_domains(),
+        Some(vec!["*".to_string()])
+    );
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+
+    assert!(!started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::Result<()> {
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            danger_full_access_denylist_only: Some(true),
+            ..Default::default()
+        }),
+        &SandboxPolicy::DangerFullAccess,
+    )?;
+    let exec_policy = Policy::empty();
+    let decider_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let network_policy_decider: Arc<dyn codex_network_proxy::NetworkPolicyDecider> = Arc::new({
+        let decider_calls = Arc::clone(&decider_calls);
+        move |_request| {
+            decider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { codex_network_proxy::NetworkDecision::ask("not_allowed") }
+        }
+    });
+
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &exec_policy,
+        &SandboxPolicy::DangerFullAccess,
+        Some(network_policy_decider),
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ true,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut stream = tokio::net::TcpStream::connect(started_proxy.proxy().http_addr()).await?;
+    stream
+        .write_all(
+            b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+        )
+        .await?;
+    let mut buffer = [0_u8; 4096];
+    let bytes_read = tokio::time::timeout(StdDuration::from_secs(2), stream.read(&mut buffer))
+        .await
+        .expect("timed out waiting for proxy response")?;
+    let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+
+    assert!(
+        response.starts_with("HTTP/1.1 403 Forbidden"),
+        "unexpected proxy response: {response}"
+    );
+    assert!(
+        response.contains("x-proxy-error: blocked-by-allowlist"),
+        "unexpected proxy response: {response}"
+    );
+    assert_eq!(
+        decider_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "unexpected proxy response: {response}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_base_instructions_no_user_content() {
     let prompt_with_apply_patch_instructions =
         include_str!("../prompt_with_apply_patch_instructions.md");
@@ -561,19 +697,19 @@ async fn get_base_instructions_no_user_content() {
     let test_cases = vec![
         InstructionsTestCase {
             slug: "gpt-5",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
         InstructionsTestCase {
             slug: "gpt-5.1",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
         InstructionsTestCase {
             slug: "gpt-5.1-codex",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
         InstructionsTestCase {
             slug: "gpt-5.1-codex-max",
-            expects_apply_patch_instructions: false,
+            expects_apply_patch_description: false,
         },
     ];
 
@@ -582,7 +718,7 @@ async fn get_base_instructions_no_user_content() {
 
     for test_case in test_cases {
         let model_info = model_info_for_slug(test_case.slug, &config);
-        if test_case.expects_apply_patch_instructions {
+        if test_case.expects_apply_patch_description {
             assert_eq!(
                 model_info.base_instructions.as_str(),
                 prompt_with_apply_patch_instructions
@@ -591,15 +727,11 @@ async fn get_base_instructions_no_user_content() {
 
         {
             let mut state = session.state.lock().await;
-            state.session_configuration.base_instructions =
-                Some(model_info.base_instructions.clone());
+            state.session_configuration.base_instructions = model_info.base_instructions.clone();
         }
 
         let base_instructions = session.get_base_instructions().await;
-        assert_eq!(
-            base_instructions.expect("base instructions").text,
-            model_info.base_instructions
-        );
+        assert_eq!(base_instructions.text, model_info.base_instructions);
     }
 }
 
@@ -1095,7 +1227,7 @@ async fn recompute_token_usage_uses_session_base_instructions() {
     let override_instructions = "SESSION_OVERRIDE_INSTRUCTIONS_ONLY".repeat(120);
     {
         let mut state = session.state.lock().await;
-        state.session_configuration.base_instructions = Some(override_instructions.clone());
+        state.session_configuration.base_instructions = override_instructions.clone();
     }
 
     let item = user_message("hello");
@@ -1859,7 +1991,7 @@ async fn set_rate_limits_retains_previous_credits() {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -1961,7 +2093,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2226,7 +2358,7 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
             ThreadId::default(),
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -2310,7 +2442,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2507,10 +2639,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 #[tokio::test]
 async fn session_update_settings_keeps_runtime_cwds_absolute() {
     let (session, turn_context) = make_session_and_context().await;
-    let updated_cwd = turn_context
-        .cwd
-        .join("project")
-        .expect("resolve project dir");
+    let updated_cwd = turn_context.cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
     session
@@ -2576,7 +2705,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2679,7 +2808,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2766,6 +2895,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             conversation_id,
+            /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,
@@ -2816,6 +2946,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
+        managed_network_proxy_refresh_lock: Mutex::new(()),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -3519,7 +3650,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -3606,6 +3737,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             conversation_id,
+            /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,
@@ -3656,6 +3788,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
+        managed_network_proxy_refresh_lock: Mutex::new(()),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -4263,7 +4396,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
             ThreadId::default(),
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -4360,7 +4493,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
             ThreadId::default(),
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -5161,15 +5294,12 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .await
     };
     let app_tools = Some(tools.clone());
+    let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&tools);
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            mcp_tools: Some(
-                tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
+            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
             app_tools,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

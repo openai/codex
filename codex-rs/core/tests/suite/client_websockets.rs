@@ -55,6 +55,7 @@ const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
     let client_metadata = body["client_metadata"]
@@ -124,6 +125,10 @@ async fn responses_websocket_streams_request() {
     assert_eq!(
         handshake.header(X_CLIENT_REQUEST_ID_HEADER),
         Some(harness.conversation_id.to_string())
+    );
+    assert_eq!(
+        body["client_metadata"]["x-codex-installation-id"].as_str(),
+        Some(TEST_INSTALLATION_ID)
     );
 
     server.shutdown().await;
@@ -1654,9 +1659,9 @@ fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
 
 fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Prompt {
     let mut prompt = prompt_with_input(input);
-    prompt.base_instructions = Some(BaseInstructions {
+    prompt.base_instructions = BaseInstructions {
         text: instructions.to_string(),
-    });
+    };
     prompt
 }
 
@@ -1756,6 +1761,7 @@ async fn websocket_harness_with_provider_options(
     let client = ModelClient::new(
         /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,

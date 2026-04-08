@@ -186,6 +186,8 @@ pub struct ToolInfo {
     pub server_name: String,
     pub tool_name: String,
     pub tool_namespace: String,
+    #[serde(default)]
+    pub server_instructions: Option<String>,
     pub tool: Tool,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
@@ -356,6 +358,7 @@ struct ManagedClient {
     tools: Vec<ToolInfo>,
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
+    server_instructions: Option<String>,
     server_supports_sandbox_state_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
@@ -842,6 +845,7 @@ impl McpConnectionManager {
             CODEX_APPS_MCP_SERVER_NAME,
             &managed_client.client,
             managed_client.tool_timeout,
+            managed_client.server_instructions.as_deref(),
         )
         .await
         .with_context(|| {
@@ -1374,9 +1378,14 @@ async fn start_server_task(
 
     let list_start = Instant::now();
     let fetch_start = Instant::now();
-    let tools = list_tools_for_client_uncached(&server_name, &client, startup_timeout)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+    let tools = list_tools_for_client_uncached(
+        &server_name,
+        &client,
+        startup_timeout,
+        initialize_result.instructions.as_deref(),
+    )
+    .await
+    .map_err(StartupOutcomeError::from)?;
     emit_duration(
         MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
         fetch_start.elapsed(),
@@ -1407,6 +1416,7 @@ async fn start_server_task(
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
+        server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_capability,
         codex_apps_tools_cache_context,
     };
@@ -1587,6 +1597,7 @@ async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
+    server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
     let resp = client
         .list_tools_with_connector_ids(/*params*/ None, timeout)
@@ -1617,6 +1628,7 @@ async fn list_tools_for_client_uncached(
                 server_name: server_name.to_owned(),
                 tool_name,
                 tool_namespace,
+                server_instructions: server_instructions.map(str::to_string),
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,

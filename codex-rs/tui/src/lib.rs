@@ -1596,6 +1596,9 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
+/// Determines the user's authentication mode using a lightweight account read
+/// rather than a full `bootstrap`, avoiding the model-list fetch and
+/// rate-limit round-trip that `bootstrap` would trigger.
 async fn get_login_status(
     app_server: &mut AppServerSession,
     config: &Config,
@@ -1604,7 +1607,7 @@ async fn get_login_status(
         return Ok(LoginStatus::NotAuthenticated);
     }
 
-    let account = app_server.account().await?;
+    let account = app_server.read_account().await?;
     Ok(match account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
         Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
