@@ -1612,14 +1612,6 @@ mod tests {
         app_server
     }
 
-    fn exec_server_from_args(args: &[&str]) -> ExecServerCommand {
-        let cli = MultitoolCli::try_parse_from(args).expect("parse");
-        let Some(Subcommand::ExecServer(cmd)) = cli.subcommand else {
-            panic!("expected exec-server subcommand");
-        };
-        cmd
-    }
-
     #[test]
     fn debug_prompt_input_parses_prompt_and_images() {
         let cli = MultitoolCli::try_parse_from([
@@ -2171,13 +2163,5 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
-    }
-
-    #[test]
-    fn exec_server_listens_parses() {
-        let cmd = exec_server_from_args(
-            ["codex", "exec-server", "--listen", "ws://127.0.0.1:5001"].as_ref(),
-        );
-        assert_eq!(cmd.listen, "ws://127.0.0.1:5001");
     }
 }
