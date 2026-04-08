@@ -42,6 +42,8 @@ osx.frameworks(names = [
     "CoreGraphics",
     "CoreServices",
     "CoreText",
+    "CoreVideo",
+    "DiskArbitration",
     "AudioToolbox",
     "CFNetwork",
     "FontServices",
