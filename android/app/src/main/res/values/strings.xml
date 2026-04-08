@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Codex</string>
-    <string name="app_name_manager">Codex Manager</string>
+    <string name="app_name_manager">Session Manager</string>
 </resources>

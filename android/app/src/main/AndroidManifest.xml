@@ -40,8 +40,10 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:icon="@mipmap/ic_session_manager"
             android:label="@string/app_name_manager"
-            android:launchMode="singleTop">
+            android:launchMode="singleTop"
+            android:roundIcon="@mipmap/ic_session_manager_round">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
