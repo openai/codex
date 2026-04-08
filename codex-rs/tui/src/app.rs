@@ -80,6 +80,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
@@ -3271,6 +3272,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
+        session_start_source: Option<ThreadStartSource>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -3292,7 +3294,10 @@ impl App {
             }
         }
         self.config = config.clone();
-        match app_server.start_thread(&config).await {
+        match app_server
+            .start_thread_with_session_start_source(&config, session_start_source)
+            .await
+        {
             Ok(started) => {
                 if let Err(err) = self
                     .replace_chat_widget_with_app_server_thread(tui, app_server, started)
@@ -4019,15 +4024,21 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                self.start_fresh_session_with_summary_hint(tui, app_server)
-                    .await;
+                self.start_fresh_session_with_summary_hint(
+                    tui, app_server, /*session_start_source*/ None,
+                )
+                .await;
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(tui, app_server)
-                    .await;
+                self.start_fresh_session_with_summary_hint(
+                    tui,
+                    app_server,
+                    Some(ThreadStartSource::Clear),
+                )
+                .await;
             }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(

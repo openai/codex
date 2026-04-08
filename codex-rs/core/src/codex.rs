@@ -591,7 +591,7 @@ impl Codex {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
-                InitialHistory::New => None,
+                InitialHistory::New | InitialHistory::Cleared => None,
             };
             match thread_id {
                 Some(thread_id) => {
@@ -1530,7 +1530,7 @@ impl Session {
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
@@ -1571,14 +1571,14 @@ impl Session {
                     .count(),
             )
             .unwrap_or(u64::MAX),
-            InitialHistory::New | InitialHistory::Forked(_) => 0,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
                 resumed.history.as_slice(),
                 resumed.rollout_path.as_path(),
             ),
-            InitialHistory::New | InitialHistory::Forked(_) => None,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
         };
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
@@ -2111,6 +2111,7 @@ impl Session {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 codex_hooks::SessionStartSource::Startup
             }
+            InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
         };
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
@@ -2245,7 +2246,7 @@ impl Session {
             )
         };
         match conversation_history {
-            InitialHistory::New => {
+            InitialHistory::New | InitialHistory::Cleared => {
                 // Defer initial context insertion until the first real turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
