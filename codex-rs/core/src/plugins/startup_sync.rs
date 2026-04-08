@@ -19,10 +19,7 @@ use crate::config::Config;
 use codex_login::AuthManager;
 use codex_login::default_client::build_reqwest_client;
 
-use super::OPENAI_CURATED_MARKETPLACE_NAME;
 use super::PluginsManager;
-use super::marketplace_install_root;
-use super::record_installed_marketplace_root;
 
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_ACCEPT_HEADER: &str = "application/vnd.github+json";
@@ -31,6 +28,7 @@ const CURATED_PLUGINS_BACKUP_ARCHIVE_API_URL: &str =
     "https://chatgpt.com/backend-api/plugins/export/curated";
 const OPENAI_PLUGINS_OWNER: &str = "openai";
 const OPENAI_PLUGINS_REPO: &str = "plugins";
+const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
 const CURATED_PLUGINS_BACKUP_ARCHIVE_FALLBACK_VERSION: &str = "export-backup";
 const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -62,7 +60,7 @@ struct CuratedPluginsBackupArchiveResponse {
 }
 
 pub(crate) fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
-    marketplace_install_root(codex_home).join(OPENAI_CURATED_MARKETPLACE_NAME)
+    codex_home.join(CURATED_PLUGINS_RELATIVE_DIR)
 }
 
 pub(crate) fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
@@ -90,7 +88,6 @@ fn sync_openai_plugins_repo_with_transport_overrides(
 ) -> Result<String, String> {
     match sync_openai_plugins_repo_via_git(codex_home, git_binary) {
         Ok(remote_sha) => {
-            record_curated_marketplace_root(codex_home)?;
             emit_curated_plugins_startup_sync_metric("git", "success");
             emit_curated_plugins_startup_sync_final_metric("git", "success");
             Ok(remote_sha)
@@ -104,7 +101,6 @@ fn sync_openai_plugins_repo_with_transport_overrides(
             );
             match sync_openai_plugins_repo_via_http(codex_home, api_base_url) {
                 Ok(remote_sha) => {
-                    record_curated_marketplace_root(codex_home)?;
                     emit_curated_plugins_startup_sync_metric("http", "success");
                     emit_curated_plugins_startup_sync_final_metric("http", "success");
                     Ok(remote_sha)
@@ -135,15 +131,11 @@ fn sync_openai_plugins_repo_with_transport_overrides(
                         let status = if result.is_ok() { "success" } else { "failure" };
                         emit_curated_plugins_startup_sync_metric("export_archive", status);
                         emit_curated_plugins_startup_sync_final_metric("export_archive", status);
-                        match result {
-                            Ok(remote_sha) => {
-                                record_curated_marketplace_root(codex_home)?;
-                                Ok(remote_sha)
-                            }
-                            Err(export_err) => Err(format!(
+                        result.map_err(|export_err| {
+                            format!(
                                 "git sync failed for curated plugin sync: {err}; GitHub HTTP sync failed for curated plugin sync: {http_err}; export archive sync failed for curated plugin sync: {export_err}"
-                            )),
-                        }
+                            )
+                        })
                     }
                 }
             }
@@ -296,17 +288,6 @@ pub(super) fn start_startup_remote_plugin_sync_once(
 
 fn startup_remote_plugin_sync_marker_path(codex_home: &Path) -> PathBuf {
     codex_home.join(STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE)
-}
-
-fn record_curated_marketplace_root(codex_home: &Path) -> Result<(), String> {
-    let repo_path = curated_plugins_repo_path(codex_home);
-    record_installed_marketplace_root(codex_home, OPENAI_CURATED_MARKETPLACE_NAME, &repo_path)
-        .map_err(|err| {
-            format!(
-                "failed to record curated marketplace root {}: {err}",
-                repo_path.display()
-            )
-        })
 }
 
 fn has_local_curated_plugins_snapshot(codex_home: &Path) -> bool {

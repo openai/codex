@@ -144,7 +144,7 @@ fn curated_plugins_repo_path_uses_codex_home_tmp_dir() {
     let tmp = tempdir().expect("tempdir");
     assert_eq!(
         curated_plugins_repo_path(tmp.path()),
-        tmp.path().join(".tmp/marketplaces/openai-curated")
+        tmp.path().join(".tmp/plugins")
     );
 }
 
@@ -254,10 +254,6 @@ exit 1
     assert!(repo_path.join(".git").is_dir());
     assert_curated_gmail_repo(&repo_path);
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
-    let registry =
-        std::fs::read_to_string(tmp.path().join(".tmp/known_marketplaces.json")).unwrap();
-    assert!(registry.contains(r#""name": "openai-curated""#));
-    assert!(registry.contains(r#""installLocation""#));
 }
 
 #[cfg(unix)]
