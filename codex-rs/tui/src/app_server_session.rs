@@ -92,19 +92,27 @@ use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Data collected during the TUI bootstrap phase that the main event loop
+/// needs to configure the UI, telemetry, and initial rate-limit prefetch.
+///
+/// Rate-limit snapshots are intentionally **not** included here; they are
+/// fetched asynchronously after bootstrap returns so that the TUI can render
+/// its first frame without waiting for the rate-limit round-trip.
 pub(crate) struct AppServerBootstrap {
-    pub(crate) account_auth_mode: Option<AuthMode>,
     pub(crate) account_email: Option<String>,
     pub(crate) auth_mode: Option<TelemetryAuthMode>,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
     pub(crate) workspace_role: Option<codex_app_server_protocol::WorkspaceRole>,
     pub(crate) is_workspace_owner: Option<bool>,
     pub(crate) plan_type: Option<codex_protocol::account::PlanType>,
+    /// Whether the configured model provider needs OpenAI-style auth. Combined
+    /// with `has_chatgpt_account` to decide if a startup rate-limit prefetch
+    /// should be fired.
+    pub(crate) requires_openai_auth: bool,
     pub(crate) default_model: String,
     pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) has_chatgpt_account: bool,
     pub(crate) available_models: Vec<ModelPreset>,
-    pub(crate) rate_limit_snapshots: Vec<RateLimitSnapshot>,
 }
 
 pub(crate) struct AppServerSession {
@@ -175,17 +183,7 @@ impl AppServerSession {
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
-        let account_request_id = self.next_request_id();
-        let account: GetAccountResponse = self
-            .client
-            .request_typed(ClientRequest::GetAccount {
-                request_id: account_request_id,
-                params: GetAccountParams {
-                    refresh_token: false,
-                },
-            })
-            .await
-            .wrap_err("account/read failed during TUI bootstrap")?;
+        let account = self.read_account().await?;
         let model_request_id = self.next_request_id();
         let models: ModelListResponse = self
             .client
@@ -217,7 +215,6 @@ impl AppServerSession {
             .wrap_err("model/list returned no models for TUI bootstrap")?;
 
         let (
-            account_auth_mode,
             account_email,
             auth_mode,
             status_account_display,
@@ -228,7 +225,6 @@ impl AppServerSession {
             has_chatgpt_account,
         ) = match account.account {
             Some(Account::ApiKey {}) => (
-                Some(AuthMode::ApiKey),
                 None,
                 Some(TelemetryAuthMode::ApiKey),
                 Some(StatusAccountDisplay::ApiKey),
@@ -245,7 +241,6 @@ impl AppServerSession {
                     FeedbackAudience::External
                 };
                 (
-                    Some(AuthMode::Chatgpt),
                     Some(email.clone()),
                     Some(TelemetryAuthMode::Chatgpt),
                     Some(StatusAccountDisplay::ChatGpt {
@@ -266,45 +261,40 @@ impl AppServerSession {
                 None,
                 None,
                 None,
-                None,
                 FeedbackAudience::External,
                 false,
             ),
         };
-        let rate_limit_snapshots = if account.requires_openai_auth && has_chatgpt_account {
-            let rate_limit_request_id = self.next_request_id();
-            match self
-                .client
-                .request_typed(ClientRequest::GetAccountRateLimits {
-                    request_id: rate_limit_request_id,
-                    params: None,
-                })
-                .await
-            {
-                Ok(rate_limits) => app_server_rate_limit_snapshots_to_core(rate_limits),
-                Err(err) => {
-                    tracing::warn!("account/rateLimits/read failed during TUI bootstrap: {err}");
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        };
-
         Ok(AppServerBootstrap {
-            account_auth_mode,
             account_email,
             auth_mode,
             status_account_display,
             workspace_role,
             is_workspace_owner,
             plan_type,
+            requires_openai_auth: account.requires_openai_auth,
             default_model,
             feedback_audience,
             has_chatgpt_account,
             available_models,
-            rate_limit_snapshots,
         })
+    }
+
+    /// Fetches the current account info without refreshing the auth token.
+    ///
+    /// Used by both `bootstrap` (to populate the initial UI) and `get_login_status`
+    /// (to check auth mode without the overhead of a full bootstrap).
+    pub(crate) async fn read_account(&mut self) -> Result<GetAccountResponse> {
+        let account_request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::GetAccount {
+                request_id: account_request_id,
+                params: GetAccountParams {
+                    refresh_token: false,
+                },
+            })
+            .await
+            .wrap_err("account/read failed during TUI bootstrap")
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
@@ -833,6 +823,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
             })
             .collect(),
         supports_personality: model.supports_personality,
+        additional_speed_tiers: model.additional_speed_tiers,
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,

@@ -4,6 +4,7 @@ use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
+use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -1896,31 +1897,26 @@ impl App {
         });
     }
 
-    fn refresh_rate_limits(&mut self, app_server: &AppServerSession, request_id: u64) {
+    /// Spawns a background task to fetch account rate limits and deliver the
+    /// result as a `RateLimitsLoaded` event.
+    ///
+    /// The `origin` is forwarded to the completion handler so it can distinguish
+    /// a startup prefetch (which only updates cached snapshots and schedules a
+    /// frame) from a `/status`-triggered refresh (which must finalize the
+    /// corresponding status card).
+    fn refresh_rate_limits(
+        &mut self,
+        app_server: &AppServerSession,
+        origin: RateLimitRefreshOrigin,
+    ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            tracing::info!(request_id, "starting background rate-limit refresh");
+            tracing::info!(?origin, "starting background rate-limit refresh");
             let result = fetch_account_rate_limits(request_handle)
                 .await
                 .map_err(|err| err.to_string());
-            match &result {
-                Ok(snapshots) => {
-                    tracing::info!(
-                        request_id,
-                        snapshot_count = snapshots.len(),
-                        "background rate-limit refresh completed"
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        request_id,
-                        error = %err,
-                        "background rate-limit refresh failed"
-                    );
-                }
-            }
-            app_event_tx.send(AppEvent::RateLimitsLoaded { request_id, result });
+            app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
         });
     }
 
@@ -3632,11 +3628,11 @@ impl App {
         let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
+        let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_workspace_role = bootstrap.workspace_role;
         let initial_is_workspace_owner = bootstrap.is_workspace_owner;
         let initial_plan_type = bootstrap.plan_type;
-        let startup_rate_limit_snapshots = bootstrap.rate_limit_snapshots;
         let session_telemetry = SessionTelemetry::new(
             ThreadId::new(),
             model.as_str(),
@@ -3776,9 +3772,6 @@ impl App {
             }
         };
 
-        for snapshot in startup_rate_limit_snapshots {
-            chat_widget.on_rate_limit_snapshot(Some(snapshot));
-        }
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
@@ -3866,6 +3859,11 @@ impl App {
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();
+        // Kick off a non-blocking rate-limit prefetch so the first `/status`
+        // already has data, without delaying the initial frame render.
+        if requires_openai_auth && has_chatgpt_account {
+            app.refresh_rate_limits(&app_server, RateLimitRefreshOrigin::StartupPrefetch);
+        }
 
         let mut listen_for_app_server_events = true;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
@@ -4467,30 +4465,35 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RefreshRateLimits { request_id } => {
-                self.refresh_rate_limits(app_server, request_id);
+            AppEvent::RefreshRateLimits { origin } => {
+                self.refresh_rate_limits(app_server, origin);
             }
-            AppEvent::RateLimitsLoaded { request_id, result } => match result {
+            AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
                     tracing::info!(
-                        request_id,
+                        ?origin,
                         snapshot_count = snapshots.len(),
                         "applying refreshed rate limits to status UI"
                     );
                     for snapshot in snapshots {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
-                    self.chat_widget
-                        .finish_status_rate_limit_refresh(request_id);
+                    match origin {
+                        RateLimitRefreshOrigin::StartupPrefetch => {
+                            tui.frame_requester().schedule_frame();
+                        }
+                        RateLimitRefreshOrigin::StatusCommand { request_id } => {
+                            self.chat_widget
+                                .finish_status_rate_limit_refresh(request_id);
+                        }
+                    }
                 }
                 Err(err) => {
-                    tracing::warn!(
-                        request_id,
-                        error = %err,
-                        "account/rateLimits/read failed during TUI refresh"
-                    );
-                    self.chat_widget
-                        .finish_status_rate_limit_refresh(request_id);
+                    tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+                    if let RateLimitRefreshOrigin::StatusCommand { request_id } = origin {
+                        self.chat_widget
+                            .finish_status_rate_limit_refresh(request_id);
+                    }
                 }
             },
             AppEvent::NotifyWorkspaceOwner => {
@@ -6325,6 +6328,7 @@ mod tests {
     use crate::chatwidget::create_initial_user_message;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
+    use crate::chatwidget::tests::set_fast_mode_test_catalog;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
@@ -9149,15 +9153,17 @@ guardian_approval = true
         target_os = "windows",
         ignore = "snapshot path rendering differs on Windows"
     )]
-    async fn clear_ui_header_shows_fast_status_only_for_gpt54() {
+    async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
         let mut app = make_test_app().await;
         app.config.cwd = PathBuf::from("/tmp/project").abs();
         app.chat_widget.set_model("gpt-5.4");
+        set_fast_mode_test_catalog(&mut app.chat_widget);
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
         app.chat_widget
             .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
         set_chatgpt_auth(&mut app.chat_widget);
+        set_fast_mode_test_catalog(&mut app.chat_widget);
 
         let rendered = app
             .clear_ui_header_lines_with_version(/*width*/ 80, "<VERSION>")
@@ -9171,7 +9177,7 @@ guardian_approval = true
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert_snapshot!("clear_ui_header_fast_status_gpt54_only", rendered);
+        assert_snapshot!("clear_ui_header_fast_status_fast_capable_models", rendered);
     }
 
     async fn make_test_app() -> App {

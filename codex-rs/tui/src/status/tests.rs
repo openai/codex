@@ -844,7 +844,7 @@ async fn status_snapshot_includes_credits_and_limits() {
 }
 
 #[tokio::test]
-async fn status_snapshot_shows_empty_limits_message() {
+async fn status_snapshot_shows_unavailable_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
@@ -952,6 +952,64 @@ async fn status_snapshot_shows_spend_cap_reached_message() {
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_snapshot_treats_refreshing_empty_limits_as_unavailable() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.cwd = PathBuf::from("/workspace/tests").abs();
+
+    let usage = TokenUsage {
+        input_tokens: 500,
+        cached_input_tokens: 0,
+        output_tokens: 250,
+        reasoning_output_tokens: 0,
+        total_tokens: 750,
+    };
+
+    let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        spend_control: None,
+        plan_type: None,
+    };
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
+        .single()
+        .expect("timestamp");
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let composite = new_status_output_with_rate_limits(
+        &config,
+        /*account_display*/ None,
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        std::slice::from_ref(&rate_display),
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        /*refreshing_rate_limits*/ true,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {

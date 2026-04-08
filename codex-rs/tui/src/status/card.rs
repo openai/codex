@@ -96,6 +96,7 @@ impl StatusHistoryHandle {
                 format!("available:{} rows", rows.len())
             }
             StatusRateLimitData::Stale(rows) => format!("stale:{} rows", rows.len()),
+            StatusRateLimitData::Unavailable => "unavailable".to_string(),
             StatusRateLimitData::Missing => "missing".to_string(),
         };
         #[expect(clippy::expect_used)]
@@ -426,23 +427,11 @@ impl StatusHistoryCell {
                 if rows_data.is_empty() {
                     return vec![formatter.line(
                         "Limits",
-                        vec![if state.refreshing_rate_limits {
-                            Span::from("refreshing cached limits...").dim()
-                        } else {
-                            Span::from("data not available yet").dim()
-                        }],
+                        vec![Span::from("not available for this account").dim()],
                     )];
                 }
 
-                let mut lines =
-                    self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
-                if state.refreshing_rate_limits {
-                    lines.push(formatter.line(
-                        "Notice",
-                        vec![Span::from("refreshing limits in background...").dim()],
-                    ));
-                }
-                lines
+                self.rate_limit_row_lines(rows_data, available_inner_width, formatter)
             }
             StatusRateLimitData::Stale(rows_data) => {
                 let mut lines =
@@ -450,7 +439,7 @@ impl StatusHistoryCell {
                 lines.push(formatter.line(
                     "Warning",
                     vec![Span::from(if state.refreshing_rate_limits {
-                        "limits may be stale - refreshing in background..."
+                        "limits may be stale - run /status again shortly."
                     } else {
                         "limits may be stale - start new turn to refresh."
                     })
@@ -458,11 +447,17 @@ impl StatusHistoryCell {
                 ));
                 lines
             }
+            StatusRateLimitData::Unavailable => {
+                vec![formatter.line(
+                    "Limits",
+                    vec![Span::from("not available for this account").dim()],
+                )]
+            }
             StatusRateLimitData::Missing => {
                 vec![formatter.line(
                     "Limits",
                     vec![Span::from(if state.refreshing_rate_limits {
-                        "refreshing limits..."
+                        "refresh requested; run /status again shortly."
                     } else {
                         "data not available yet"
                     })
@@ -547,6 +542,7 @@ impl StatusHistoryCell {
                 }
                 push_label(labels, seen, "Warning");
             }
+            StatusRateLimitData::Unavailable => push_label(labels, seen, "Limits"),
             StatusRateLimitData::Missing => push_label(labels, seen, "Limits"),
         }
     }
