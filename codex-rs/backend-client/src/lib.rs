@@ -1,5 +1,5 @@
 mod client;
-pub mod types;
+pub(crate) mod types;
 
 pub use client::Client;
 pub use client::RequestError;

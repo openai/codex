@@ -251,6 +251,7 @@ fn build_test_processor(
         session_source: SessionSource::VSCode,
         auth_manager,
         rpc_transport: AppServerRpcTransport::Stdio,
+        remote_control_handle: None,
     });
     (processor, outgoing_rx)
 }

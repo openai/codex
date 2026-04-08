@@ -1,11 +1,22 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
+use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+async fn get_user_instructions(config: &Config) -> Option<String> {
+    super::get_user_instructions_with_fs(config, LOCAL_FS.as_ref()).await
+}
+
+async fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    super::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await
+}
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
 /// the maximum number of bytes to embed from AGENTS.md. The caller can
@@ -85,6 +96,16 @@ async fn no_doc_file_returns_none() {
     assert!(res.is_none(), "Expected None when AGENTS.md is absent");
 }
 
+#[tokio::test]
+async fn no_environment_returns_none() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
+
+    let res = super::get_user_instructions(&config, /*environment*/ None).await;
+
+    assert_eq!(res, None);
+}
+
 /// Small file within the byte-limit is returned unmodified.
 #[tokio::test]
 async fn doc_smaller_than_limit_is_returned() {
@@ -159,6 +180,18 @@ async fn zero_byte_limit_disables_docs() {
         res.is_none(),
         "With limit 0 the function should return None"
     );
+}
+
+#[tokio::test]
+async fn zero_byte_limit_disables_discovery() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
+
+    let discovery =
+        discover_project_doc_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
+            .await
+            .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
 #[tokio::test]
@@ -293,11 +326,17 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     .await;
     cfg.cwd = nested.abs();
 
-    let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
-    let expected_parent =
-        dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path");
-    let expected_child =
-        dunce::canonicalize(cfg.cwd.as_path().join("AGENTS.md")).expect("canonical child doc path");
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    let expected_parent = AbsolutePathBuf::try_from(
+        dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path"),
+    )
+    .expect("absolute parent doc path");
+    let expected_child = AbsolutePathBuf::try_from(
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical child doc path"),
+    )
+    .expect("absolute child doc path");
     assert_eq!(discovery.len(), 2);
     assert_eq!(discovery[0], expected_parent);
     assert_eq!(discovery[1], expected_child);
@@ -321,7 +360,9 @@ async fn agents_local_md_preferred() {
 
     assert_eq!(res, "local");
 
-    let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
         discovery[0].file_name().unwrap().to_string_lossy(),
@@ -371,7 +412,9 @@ async fn agents_md_preferred_over_fallbacks() {
 
     assert_eq!(res, "primary");
 
-    let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert!(
         discovery[0]
@@ -379,6 +422,73 @@ async fn agents_md_preferred_over_fallbacks() {
             .unwrap()
             .to_string_lossy()
             .eq(DEFAULT_PROJECT_DOC_FILENAME)
+    );
+}
+
+#[tokio::test]
+async fn agents_md_directory_is_ignored() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(tmp.path().join("AGENTS.md")).unwrap();
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg).await;
+    assert_eq!(res, None);
+
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agents_md_special_file_is_ignored() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("AGENTS.md");
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("path without nul");
+    // SAFETY: `c_path` is a valid, nul-terminated path and `mkfifo` does not
+    // retain the pointer after the call.
+    let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) };
+    assert_eq!(rc, 0);
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg).await;
+    assert_eq!(res, None);
+
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+}
+
+#[tokio::test]
+async fn override_directory_falls_back_to_agents_md_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME)).unwrap();
+    fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "primary").unwrap();
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg)
+        .await
+        .expect("AGENTS.md should be used when override is a directory");
+    assert_eq!(res, "primary");
+
+    let discovery = discover_project_doc_paths(&cfg)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery.len(), 1);
+    assert_eq!(
+        discovery[0]
+            .file_name()
+            .expect("file name")
+            .to_string_lossy(),
+        DEFAULT_PROJECT_DOC_FILENAME
     );
 }
 

@@ -101,6 +101,19 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
         .unwrap_or_else(|err| panic!("submit user input: {err}"));
 }
 
+async fn steer_user_input(codex: &CodexThread, text: &str) {
+    codex
+        .steer_input(
+            vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            /*expected_turn_id*/ None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("steer user input: {err:?}"));
+}
+
 async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
     codex
         .submit(Op::InterAgentCommunication {
@@ -410,7 +423,7 @@ async fn user_input_does_not_preempt_after_reasoning_item() {
 
     wait_for_reasoning_item_started(&codex).await;
 
-    submit_user_input(&codex, "second prompt").await;
+    steer_user_input(&codex, "second prompt").await;
 
     let _ = gate_reasoning_done_tx.send(());
 

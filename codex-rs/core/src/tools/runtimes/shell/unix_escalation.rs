@@ -658,7 +658,7 @@ fn commands_for_intercepted_exec_policy(
 
 struct CoreShellCommandExecutor {
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
@@ -827,7 +827,7 @@ impl CoreShellCommandExecutor {
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),
-            cwd: workdir.to_path_buf(),
+            cwd: workdir.clone(),
             env,
             additional_permissions,
         };
@@ -844,7 +844,7 @@ impl CoreShellCommandExecutor {
             enforce_managed_network: self.network.is_some(),
             network: self.network.as_ref(),
             sandbox_policy_cwd: &self.sandbox_policy_cwd,
-            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: false,
@@ -857,7 +857,7 @@ impl CoreShellCommandExecutor {
 
         Ok(PreparedExec {
             command: exec_request.command,
-            cwd: exec_request.cwd,
+            cwd: exec_request.cwd.to_path_buf(),
             env: exec_request.env,
             arg0: exec_request.arg0,
         })

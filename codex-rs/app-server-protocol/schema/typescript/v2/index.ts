@@ -172,6 +172,8 @@ export type { McpElicitationTitledSingleSelectEnumSchema } from "./McpElicitatio
 export type { McpElicitationUntitledEnumItems } from "./McpElicitationUntitledEnumItems";
 export type { McpElicitationUntitledMultiSelectEnumSchema } from "./McpElicitationUntitledMultiSelectEnumSchema";
 export type { McpElicitationUntitledSingleSelectEnumSchema } from "./McpElicitationUntitledSingleSelectEnumSchema";
+export type { McpResourceReadParams } from "./McpResourceReadParams";
+export type { McpResourceReadResponse } from "./McpResourceReadResponse";
 export type { McpServerElicitationAction } from "./McpServerElicitationAction";
 export type { McpServerElicitationRequestParams } from "./McpServerElicitationRequestParams";
 export type { McpServerElicitationRequestResponse } from "./McpServerElicitationRequestResponse";
@@ -292,6 +294,8 @@ export type { ThreadRealtimeClosedNotification } from "./ThreadRealtimeClosedNot
 export type { ThreadRealtimeErrorNotification } from "./ThreadRealtimeErrorNotification";
 export type { ThreadRealtimeItemAddedNotification } from "./ThreadRealtimeItemAddedNotification";
 export type { ThreadRealtimeOutputAudioDeltaNotification } from "./ThreadRealtimeOutputAudioDeltaNotification";
+export type { ThreadRealtimeSdpNotification } from "./ThreadRealtimeSdpNotification";
+export type { ThreadRealtimeStartTransport } from "./ThreadRealtimeStartTransport";
 export type { ThreadRealtimeStartedNotification } from "./ThreadRealtimeStartedNotification";
 export type { ThreadRealtimeTranscriptUpdatedNotification } from "./ThreadRealtimeTranscriptUpdatedNotification";
 export type { ThreadResumeParams } from "./ThreadResumeParams";

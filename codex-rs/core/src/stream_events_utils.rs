@@ -379,17 +379,12 @@ pub(crate) async fn handle_non_tool_response_item(
                             .parent()
                             .unwrap_or(turn_context.config.codex_home.as_path());
                         let message: ResponseItem = DeveloperInstructions::new(format!(
-                            "Generated images are saved to {} as {} by default.",
+                            "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
                             image_output_dir.display(),
                             image_output_path.display(),
                         ))
                         .into();
-                        let copy_message: ResponseItem = DeveloperInstructions::new(
-                            "If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
-                                .to_string(),
-                        )
-                        .into();
-                        sess.record_conversation_items(turn_context, &[message, copy_message])
+                        sess.record_conversation_items(turn_context, &[message])
                             .await;
                     }
                     Err(err) => {

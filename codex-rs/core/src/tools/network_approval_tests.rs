@@ -1,6 +1,7 @@
 use super::*;
 use codex_network_proxy::BlockedRequestArgs;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -177,6 +178,19 @@ fn only_never_policy_disables_network_approval_flow() {
     assert!(allows_network_approval_flow(AskForApproval::OnRequest));
     assert!(allows_network_approval_flow(AskForApproval::OnFailure));
     assert!(allows_network_approval_flow(AskForApproval::UnlessTrusted));
+}
+
+#[test]
+fn network_approval_flow_is_limited_to_restricted_sandbox_modes() {
+    assert!(sandbox_policy_allows_network_approval_flow(
+        &SandboxPolicy::new_read_only_policy()
+    ));
+    assert!(sandbox_policy_allows_network_approval_flow(
+        &SandboxPolicy::new_workspace_write_policy()
+    ));
+    assert!(!sandbox_policy_allows_network_approval_flow(
+        &SandboxPolicy::DangerFullAccess
+    ));
 }
 
 fn denied_blocked_request(host: &str) -> BlockedRequest {

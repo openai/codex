@@ -147,11 +147,11 @@ fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
                 description: String::new(),
                 strict: false,
                 defer_loading: Some(true),
-                parameters: codex_tools::JsonSchema::Object {
-                    properties: Default::default(),
-                    required: None,
-                    additional_properties: None,
-                },
+                parameters: codex_tools::JsonSchema::object(
+                    /*properties*/ Default::default(),
+                    /*required*/ None,
+                    /*additional_properties*/ None,
+                ),
                 output_schema: None,
             },
         )],
@@ -249,11 +249,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(10),
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "rm -rf /tmp/example.sqlite".to_string(),
-        ]),
+        session_command: None,
     }
     .to_response_item("call-42", &payload);
 
@@ -267,8 +263,7 @@ fn exec_command_tool_output_formats_truncated_response() {
                 .expect("exec output should serialize as text");
             assert_regex_match(
                 r#"(?sx)
-                    ^Command:\ /bin/zsh\ -lc\ 'rm\ -rf\ /tmp/example\.sqlite'
-                    \nChunk\ ID:\ abc123
+                    ^Chunk\ ID:\ abc123
                     \nWall\ time:\ \d+\.\d{4}\ seconds
                     \nProcess\ exited\ with\ code\ 0
                     \nOriginal\ token\ count:\ 10

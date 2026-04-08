@@ -37,42 +37,42 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use codex_exec::event_processor_with_jsonl_output::CodexStatus;
-use codex_exec::event_processor_with_jsonl_output::CollectedThreadEvents;
-use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
-use codex_exec::exec_events::AgentMessageItem;
-use codex_exec::exec_events::CollabAgentState;
-use codex_exec::exec_events::CollabAgentStatus;
-use codex_exec::exec_events::CollabTool;
-use codex_exec::exec_events::CollabToolCallItem;
-use codex_exec::exec_events::CollabToolCallStatus;
-use codex_exec::exec_events::CommandExecutionItem;
-use codex_exec::exec_events::CommandExecutionStatus;
-use codex_exec::exec_events::ErrorItem;
-use codex_exec::exec_events::FileChangeItem;
-use codex_exec::exec_events::FileUpdateChange as ExecFileUpdateChange;
-use codex_exec::exec_events::ItemCompletedEvent;
-use codex_exec::exec_events::ItemStartedEvent;
-use codex_exec::exec_events::ItemUpdatedEvent;
-use codex_exec::exec_events::McpToolCallItem;
-use codex_exec::exec_events::McpToolCallItemError;
-use codex_exec::exec_events::McpToolCallItemResult;
-use codex_exec::exec_events::McpToolCallStatus;
-use codex_exec::exec_events::PatchApplyStatus;
-use codex_exec::exec_events::PatchChangeKind;
-use codex_exec::exec_events::ReasoningItem;
-use codex_exec::exec_events::ThreadErrorEvent;
-use codex_exec::exec_events::ThreadEvent;
-use codex_exec::exec_events::ThreadItem as ExecThreadItem;
-use codex_exec::exec_events::ThreadItemDetails;
-use codex_exec::exec_events::ThreadStartedEvent;
-use codex_exec::exec_events::TodoItem;
-use codex_exec::exec_events::TodoListItem;
-use codex_exec::exec_events::TurnCompletedEvent;
-use codex_exec::exec_events::TurnFailedEvent;
-use codex_exec::exec_events::TurnStartedEvent;
-use codex_exec::exec_events::Usage;
-use codex_exec::exec_events::WebSearchItem;
+use codex_exec::AgentMessageItem;
+use codex_exec::CodexStatus;
+use codex_exec::CollabAgentState;
+use codex_exec::CollabAgentStatus;
+use codex_exec::CollabTool;
+use codex_exec::CollabToolCallItem;
+use codex_exec::CollabToolCallStatus;
+use codex_exec::CollectedThreadEvents;
+use codex_exec::CommandExecutionItem;
+use codex_exec::CommandExecutionStatus;
+use codex_exec::ErrorItem;
+use codex_exec::EventProcessorWithJsonOutput;
+use codex_exec::ExecThreadItem;
+use codex_exec::FileChangeItem;
+use codex_exec::FileUpdateChange as ExecFileUpdateChange;
+use codex_exec::ItemCompletedEvent;
+use codex_exec::ItemStartedEvent;
+use codex_exec::ItemUpdatedEvent;
+use codex_exec::McpToolCallItem;
+use codex_exec::McpToolCallItemError;
+use codex_exec::McpToolCallItemResult;
+use codex_exec::McpToolCallStatus;
+use codex_exec::PatchApplyStatus;
+use codex_exec::PatchChangeKind;
+use codex_exec::ReasoningItem;
+use codex_exec::ThreadErrorEvent;
+use codex_exec::ThreadEvent;
+use codex_exec::ThreadItemDetails;
+use codex_exec::ThreadStartedEvent;
+use codex_exec::TodoItem;
+use codex_exec::TodoListItem;
+use codex_exec::TurnCompletedEvent;
+use codex_exec::TurnFailedEvent;
+use codex_exec::TurnStartedEvent;
+use codex_exec::Usage;
+use codex_exec::WebSearchItem;
 
 #[test]
 fn map_todo_items_preserves_text_and_completion_state() {
@@ -482,6 +482,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 result: Some(McpToolCallResult {
                     content: Vec::new(),
                     structured_content: None,
+                    meta: None,
                 }),
                 error: None,
                 duration_ms: Some(1_000),
@@ -613,6 +614,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                         "text": "done",
                     })],
                     structured_content: Some(json!({ "status": "ok" })),
+                    meta: None,
                 }),
                 error: None,
                 duration_ms: Some(10),

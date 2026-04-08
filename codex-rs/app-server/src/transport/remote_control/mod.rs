@@ -19,6 +19,7 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -29,6 +30,21 @@ pub(super) struct QueuedServerEnvelope {
     pub(super) write_complete_tx: Option<oneshot::Sender<()>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct RemoteControlHandle {
+    enabled_tx: Arc<watch::Sender<bool>>,
+}
+
+impl RemoteControlHandle {
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        self.enabled_tx.send_if_modified(|state| {
+            let changed = *state != enabled;
+            *state = enabled;
+            changed
+        });
+    }
+}
+
 pub(crate) async fn start_remote_control(
     remote_control_url: String,
     state_db: Option<Arc<StateRuntime>>,
@@ -36,21 +52,38 @@ pub(crate) async fn start_remote_control(
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
     app_server_client_name_rx: Option<oneshot::Receiver<String>>,
-) -> io::Result<JoinHandle<()>> {
-    let remote_control_target = normalize_remote_control_url(&remote_control_url)?;
-    validate_remote_control_auth(&auth_manager).await?;
+    initial_enabled: bool,
+) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
+    let remote_control_target = if initial_enabled {
+        Some(normalize_remote_control_url(&remote_control_url)?)
+    } else {
+        None
+    };
+    if initial_enabled {
+        validate_remote_control_auth(&auth_manager).await?;
+    }
 
-    Ok(tokio::spawn(async move {
+    let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
+    let join_handle = tokio::spawn(async move {
         RemoteControlWebsocket::new(
+            remote_control_url,
             remote_control_target,
             state_db,
             auth_manager,
             transport_event_tx,
             shutdown_token,
+            enabled_rx,
         )
         .run(app_server_client_name_rx)
         .await;
-    }))
+    });
+
+    Ok((
+        join_handle,
+        RemoteControlHandle {
+            enabled_tx: Arc::new(enabled_tx),
+        },
+    ))
 }
 
 pub(crate) async fn validate_remote_control_auth(

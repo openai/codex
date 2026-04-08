@@ -24,8 +24,8 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(crate) struct ExecOptions {
@@ -36,7 +36,7 @@ pub(crate) struct ExecOptions {
 #[derive(Debug)]
 pub struct ExecRequest {
     pub command: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
@@ -56,7 +56,7 @@ impl ExecRequest {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         env: HashMap<String, String>,
         network: Option<NetworkProxy>,
         expiration: ExecExpiration,

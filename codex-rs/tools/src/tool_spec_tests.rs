@@ -24,11 +24,11 @@ fn tool_spec_name_covers_all_variants() {
             description: "Look up an order".to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             output_schema: None,
         })
         .name(),
@@ -38,11 +38,11 @@ fn tool_spec_name_covers_all_variants() {
         ToolSpec::ToolSearch {
             execution: "sync".to_string(),
             description: "Search for tools".to_string(),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
         }
         .name(),
         "tool_search"
@@ -90,11 +90,11 @@ fn configured_tool_spec_name_delegates_to_tool_spec() {
                 description: "Look up an order".to_string(),
                 strict: false,
                 defer_loading: None,
-                parameters: JsonSchema::Object {
-                    properties: BTreeMap::new(),
-                    required: None,
-                    additional_properties: None,
-                },
+                parameters: JsonSchema::object(
+                    BTreeMap::new(),
+                    /*required*/ None,
+                    /*additional_properties*/ None
+                ),
                 output_schema: None,
             }),
             /*supports_parallel_tool_calls*/ true,
@@ -140,14 +140,11 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
             description: "A demo tool".to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
-                    "foo".to_string(),
-                    JsonSchema::String { description: None },
-                )]),
-                required: None,
-                additional_properties: None,
-            },
+            parameters: JsonSchema::object(
+                BTreeMap::from([("foo".to_string(), JsonSchema::string(/*description*/ None),)]),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             output_schema: None,
         })])
         .expect("serialize tools"),
@@ -210,16 +207,14 @@ fn tool_search_tool_spec_serializes_expected_wire_shape() {
         serde_json::to_value(ToolSpec::ToolSearch {
             execution: "sync".to_string(),
             description: "Search app tools".to_string(),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
                     "query".to_string(),
-                    JsonSchema::String {
-                        description: Some("Tool search query".to_string()),
-                    },
+                    JsonSchema::string(Some("Tool search query".to_string()),),
                 )]),
-                required: Some(vec!["query".to_string()]),
-                additional_properties: Some(AdditionalProperties::Boolean(false)),
-            },
+                Some(vec!["query".to_string()]),
+                Some(AdditionalProperties::Boolean(false))
+            ),
         })
         .expect("serialize tool_search"),
         json!({
