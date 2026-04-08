@@ -4,7 +4,6 @@ use codex_core::config::Config;
 use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::FeatureRequirementsToml;
 use codex_core::config_loader::NetworkConstraints;
 use codex_core::config_loader::NetworkDomainPermissionToml;
 use codex_core::config_loader::NetworkUnixSocketPermissionToml;
@@ -146,9 +145,17 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
     }
 
     if let Some(feature_requirements) = requirements.feature_requirements.as_ref() {
+        let value = join_or_empty(
+            feature_requirements
+                .value
+                .entries
+                .iter()
+                .map(|(feature, enabled)| format!("{feature}={enabled}"))
+                .collect::<Vec<_>>(),
+        );
         requirement_lines.push(requirement_line(
             "features",
-            format_feature_requirements(&feature_requirements.value),
+            value,
             Some(&feature_requirements.source),
         ));
     }
@@ -346,15 +353,6 @@ fn format_residency_requirement(requirement: ResidencyRequirement) -> String {
     match requirement {
         ResidencyRequirement::Us => "us".to_string(),
     }
-}
-
-fn format_feature_requirements(requirements: &FeatureRequirementsToml) -> String {
-    let values = requirements
-        .entries
-        .iter()
-        .map(|(feature, enabled)| format!("{feature}={enabled}"))
-        .collect::<Vec<_>>();
-    join_or_empty(values)
 }
 
 fn format_network_constraints(network: &NetworkConstraints) -> String {
@@ -703,7 +701,7 @@ mod tests {
         assert!(rendered.contains(
             "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
         ));
-        assert!(!rendered.contains("  <none>"));
+        assert!(!rendered.contains("Requirements:\n  <none>"));
     }
 
     #[test]
