@@ -494,7 +494,8 @@ impl BottomPane {
             let needs_redraw = view.handle_paste(pasted);
             let view_complete = view.is_complete();
             if view_complete {
-                self.pop_active_view();
+                self.view_stack.clear();
+                self.on_active_view_complete();
             }
             if needs_redraw || view_complete {
                 self.request_redraw();
