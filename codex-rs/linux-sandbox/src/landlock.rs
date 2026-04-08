@@ -190,7 +190,6 @@ fn install_network_seccomp_filter_on_current_thread(
             deny_syscall(&mut rules, libc::SYS_getpeername);
             deny_syscall(&mut rules, libc::SYS_getsockname);
             deny_syscall(&mut rules, libc::SYS_shutdown);
-            deny_syscall(&mut rules, libc::SYS_sendto);
             deny_syscall(&mut rules, libc::SYS_sendmmsg);
             // NOTE: allowing recvfrom allows some tools like: `cargo clippy`
             // to run with their socketpair + child processes for sub-proc
@@ -209,8 +208,27 @@ fn install_network_seccomp_filter_on_current_thread(
                 libc::AF_UNIX as u64,
             )?])?;
 
+            // Allow send()/self-pipe wakeups on already-connected sockets, but
+            // continue denying sendto() when it names a destination address.
+            let sendto_dest_addr_rule = SeccompRule::new(vec![SeccompCondition::new(
+                4, // fifth argument (dest_addr)
+                SeccompCmpArgLen::Qword,
+                SeccompCmpOp::Ne,
+                0,
+            )?])?;
+            let sendto_addrlen_rule = SeccompRule::new(vec![SeccompCondition::new(
+                5, // sixth argument (addrlen)
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                0,
+            )?])?;
+
             rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
             rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
+            rules.insert(
+                libc::SYS_sendto,
+                vec![sendto_dest_addr_rule, sendto_addrlen_rule],
+            );
         }
         NetworkSeccompMode::ProxyRouted => {
             // In proxy-routed mode we allow IP sockets in the isolated

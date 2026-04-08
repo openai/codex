@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
+use crate::fd_cleanup::close_inherited_fds;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
@@ -728,6 +729,8 @@ fn exec_or_panic(command: Vec<String>) -> ! {
 
     let mut c_args_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|arg| arg.as_ptr()).collect();
     c_args_ptrs.push(std::ptr::null());
+
+    close_inherited_fds();
 
     unsafe {
         libc::execvp(c_command.as_ptr(), c_args_ptrs.as_ptr());

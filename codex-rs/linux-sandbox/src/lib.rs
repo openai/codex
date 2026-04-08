@@ -6,6 +6,8 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
 #[cfg(target_os = "linux")]
+mod fd_cleanup;
+#[cfg(target_os = "linux")]
 mod landlock;
 #[cfg(target_os = "linux")]
 mod launcher;
