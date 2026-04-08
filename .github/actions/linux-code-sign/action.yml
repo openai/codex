@@ -12,7 +12,7 @@ runs:
   using: composite
   steps:
     - name: Install cosign
-      uses: sigstore/cosign-installer@v3.7.0
+      uses: sigstore/cosign-installer@1aa8e0f2454b781fbf0fbf306a4c9533a0c57409 # v3.7.0
 
     - name: Cosign Linux artifacts
       shell: bash

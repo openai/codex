@@ -27,14 +27,14 @@ runs:
   using: composite
   steps:
     - name: Azure login for Trusted Signing (OIDC)
-      uses: azure/login@v2
+      uses: azure/login@1384c340ab2dda50fed2bee3041d1d87018aa5e8 # v2
       with:
         client-id: ${{ inputs.client-id }}
         tenant-id: ${{ inputs.tenant-id }}
         subscription-id: ${{ inputs.subscription-id }}
 
     - name: Sign Windows binaries with Azure Trusted Signing
-      uses: azure/trusted-signing-action@v0
+      uses: azure/trusted-signing-action@b37b55d83a0c5c993cb33d1b376b20b75e13668c # v0
       with:
         endpoint: ${{ inputs.endpoint }}
         trusted-signing-account-name: ${{ inputs.account-name }}
