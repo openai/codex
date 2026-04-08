@@ -4026,6 +4026,16 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn update_stream_render_width(&mut self, terminal_width: u16) {
+        let terminal_width = usize::from(terminal_width);
+        if let Some(controller) = self.stream_controller.as_mut() {
+            controller.set_width(Some(terminal_width.saturating_sub(2)));
+        }
+        if let Some(controller) = self.plan_stream_controller.as_mut() {
+            controller.set_width(Some(terminal_width.saturating_sub(4)));
+        }
+    }
+
     /// Handle completion of an `AgentMessage` turn item.
     ///
     /// Commentary completion sets a deferred restore flag so the status row

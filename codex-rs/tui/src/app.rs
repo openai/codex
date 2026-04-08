@@ -3985,10 +3985,7 @@ impl App {
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) {
-            let size = tui.terminal.size()?;
-            if size != tui.terminal.last_known_screen_size {
-                self.refresh_status_line();
-            }
+            self.sync_terminal_size_dependent_state(tui)?;
         }
 
         if self.overlay.is_some() {
@@ -4038,6 +4035,15 @@ impl App {
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    fn sync_terminal_size_dependent_state(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let size = tui.terminal.size()?;
+        if size != tui.terminal.last_known_screen_size {
+            self.chat_widget.update_stream_render_width(size.width);
+            self.refresh_status_line();
+        }
+        Ok(())
     }
 
     async fn handle_event(
@@ -4256,7 +4262,8 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+                let display_width = tui.terminal.size()?.width;
+                let mut display = cell.display_lines(display_width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
                     // part of an ongoing stream. Streaming continuations should not
@@ -4300,6 +4307,7 @@ impl App {
                 self.commit_anim_running.store(false, Ordering::Release);
             }
             AppEvent::CommitTick => {
+                self.sync_terminal_size_dependent_state(tui)?;
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::Exit(mode) => {
@@ -5709,6 +5717,8 @@ impl App {
         app_server: &mut AppServerSession,
         event: ThreadBufferedEvent,
     ) -> Result<()> {
+        self.sync_terminal_size_dependent_state(tui)?;
+
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(

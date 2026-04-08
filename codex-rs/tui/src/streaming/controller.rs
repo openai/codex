@@ -100,6 +100,11 @@ impl StreamController {
         self.state.oldest_queued_age(now)
     }
 
+    /// Updates the markdown render width used for future stream commits.
+    pub(crate) fn set_width(&mut self, width: Option<usize>) {
+        self.state.set_width(width);
+    }
+
     fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
@@ -202,6 +207,11 @@ impl PlanStreamController {
     /// Returns the age of the oldest queued plan line.
     pub(crate) fn oldest_queued_age(&self, now: Instant) -> Option<Duration> {
         self.state.oldest_queued_age(now)
+    }
+
+    /// Updates the markdown render width used for future stream commits.
+    pub(crate) fn set_width(&mut self, width: Option<usize>) {
+        self.state.set_width(width);
     }
 
     fn emit(

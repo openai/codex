@@ -51,6 +51,10 @@ impl StreamState {
         self.queued_lines.clear();
         self.has_seen_delta = false;
     }
+    /// Updates the markdown render width used for future stream commits.
+    pub(crate) fn set_width(&mut self, width: Option<usize>) {
+        self.collector.set_width(width);
+    }
     /// Drains one queued line from the front of the queue.
     pub(crate) fn step(&mut self) -> Vec<Line<'static>> {
         self.queued_lines

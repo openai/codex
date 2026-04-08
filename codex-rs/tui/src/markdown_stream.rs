@@ -3,12 +3,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::markdown;
+use crate::render::line_utils::is_blank_line_spaces_only;
 
 /// Newline-gated accumulator that renders markdown and commits only fully
 /// completed logical lines.
 pub(crate) struct MarkdownStreamCollector {
     buffer: String,
     committed_line_count: usize,
+    committed_source_len: usize,
     width: Option<usize>,
     cwd: PathBuf,
 }
@@ -24,6 +26,7 @@ impl MarkdownStreamCollector {
         Self {
             buffer: String::new(),
             committed_line_count: 0,
+            committed_source_len: 0,
             width,
             cwd: cwd.to_path_buf(),
         }
@@ -32,6 +35,18 @@ impl MarkdownStreamCollector {
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
+        self.committed_source_len = 0;
+    }
+
+    pub fn set_width(&mut self, width: Option<usize>) {
+        if self.width == width {
+            return;
+        }
+
+        self.width = width;
+        // The rendered line index is width-dependent; preserve the source commit boundary and
+        // recompute how many rendered lines it occupies at the new width.
+        self.committed_line_count = self.rendered_committed_line_count();
     }
 
     pub fn push_delta(&mut self, delta: &str) {
@@ -43,33 +58,35 @@ impl MarkdownStreamCollector {
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
     pub fn commit_complete_lines(&mut self) -> Vec<Line<'static>> {
-        let source = self.buffer.clone();
-        let last_newline_idx = source.rfind('\n');
-        let source = if let Some(last_newline_idx) = last_newline_idx {
-            source[..=last_newline_idx].to_string()
-        } else {
+        let Some(last_newline_idx) = self.buffer.rfind('\n') else {
             return Vec::new();
         };
+        let commit_source_len = last_newline_idx + 1;
+        let source = &self.buffer[..commit_source_len];
         let mut rendered: Vec<Line<'static>> = Vec::new();
-        markdown::append_markdown(&source, self.width, Some(self.cwd.as_path()), &mut rendered);
-        let mut complete_line_count = rendered.len();
-        if complete_line_count > 0
-            && crate::render::line_utils::is_blank_line_spaces_only(
-                &rendered[complete_line_count - 1],
-            )
-        {
-            complete_line_count -= 1;
-        }
+        markdown::append_markdown(source, self.width, Some(self.cwd.as_path()), &mut rendered);
+        let complete_line_count = complete_line_count(&rendered);
 
-        if self.committed_line_count >= complete_line_count {
-            return Vec::new();
-        }
+        let out = if self.committed_line_count >= complete_line_count {
+            Vec::new()
+        } else {
+            rendered[self.committed_line_count..complete_line_count].to_vec()
+        };
 
-        let out_slice = &rendered[self.committed_line_count..complete_line_count];
-
-        let out = out_slice.to_vec();
-        self.committed_line_count = complete_line_count;
+        self.committed_line_count = complete_line_count.max(self.committed_line_count);
+        self.committed_source_len = commit_source_len;
         out
+    }
+
+    fn rendered_committed_line_count(&self) -> usize {
+        if self.committed_source_len == 0 {
+            return 0;
+        }
+
+        let source = &self.buffer[..self.committed_source_len];
+        let mut rendered: Vec<Line<'static>> = Vec::new();
+        markdown::append_markdown(source, self.width, Some(self.cwd.as_path()), &mut rendered);
+        complete_line_count(&rendered)
     }
 
     /// Finalize the stream: emit all remaining lines beyond the last commit.
@@ -104,6 +121,14 @@ impl MarkdownStreamCollector {
         self.clear();
         out
     }
+}
+
+fn complete_line_count(rendered: &[Line<'static>]) -> usize {
+    let mut complete_line_count = rendered.len();
+    if complete_line_count > 0 && is_blank_line_spaces_only(&rendered[complete_line_count - 1]) {
+        complete_line_count -= 1;
+    }
+    complete_line_count
 }
 
 #[cfg(test)]
@@ -154,6 +179,24 @@ mod tests {
         c.push_delta("Line without newline");
         let out = c.finalize_and_drain();
         assert_eq!(out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn changing_width_preserves_source_commit_position() {
+        let mut c = super::MarkdownStreamCollector::new(Some(16), &super::test_cwd());
+        c.push_delta("- first second third fourth\n");
+
+        let first = c.commit_complete_lines();
+        assert_eq!(
+            lines_to_plain_strings(&first),
+            vec!["- first second", "  third fourth"]
+        );
+
+        c.set_width(Some(40));
+        c.push_delta("- fifth sixth\n");
+
+        let next = c.commit_complete_lines();
+        assert_eq!(lines_to_plain_strings(&next), vec!["- fifth sixth"]);
     }
 
     #[tokio::test]
