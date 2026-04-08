@@ -148,6 +148,7 @@ const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
     StatusLineItem::FastMode,
 ];
 
+/// Keeps legacy `context-used` configs editable via the supported context meter item.
 fn normalize_status_line_item_for_setup(item: StatusLineItem) -> StatusLineItem {
     match item {
         StatusLineItem::ContextUsed => StatusLineItem::ContextRemaining,
