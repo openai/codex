@@ -38,6 +38,7 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// process-invocation contract between the apply-patch runtime and the arg0
 /// dispatcher.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+pub const CODEX_CORE_APPLY_PATCH_FILE_ARG1: &str = "--codex-run-as-apply-patch-file";
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {

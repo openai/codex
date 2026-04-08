@@ -22,6 +22,8 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+#[cfg(target_os = "windows")]
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_FILE_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
@@ -33,6 +35,8 @@ use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -71,10 +75,13 @@ impl ApplyPatchRuntime {
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
         codex_home: &std::path::Path,
+        patch_file: &std::path::Path,
     ) -> Result<SandboxCommand, ToolError> {
         Ok(Self::build_sandbox_command_with_program(
             req,
             codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
+            CODEX_CORE_APPLY_PATCH_FILE_ARG1.to_string(),
+            patch_file.display().to_string(),
         ))
     }
 
@@ -84,7 +91,12 @@ impl ApplyPatchRuntime {
         codex_self_exe: Option<&PathBuf>,
     ) -> Result<SandboxCommand, ToolError> {
         let exe = Self::resolve_apply_patch_program(codex_self_exe)?;
-        Ok(Self::build_sandbox_command_with_program(req, exe))
+        Ok(Self::build_sandbox_command_with_program(
+            req,
+            exe,
+            CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
+            req.action.patch.clone(),
+        ))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -97,18 +109,36 @@ impl ApplyPatchRuntime {
             .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
     }
 
-    fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
+    fn build_sandbox_command_with_program(
+        req: &ApplyPatchRequest,
+        exe: PathBuf,
+        mode_arg: String,
+        patch_arg: String,
+    ) -> SandboxCommand {
         SandboxCommand {
             program: exe.into_os_string(),
-            args: vec![
-                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
-                req.action.patch.clone(),
-            ],
+            args: vec![mode_arg, patch_arg],
             cwd: req.action.cwd.to_path_buf(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn write_patch_temp_file(
+        req: &ApplyPatchRequest,
+    ) -> Result<tempfile::NamedTempFile, ToolError> {
+        let mut patch_file = tempfile::Builder::new()
+            .prefix(".codex-apply-patch-")
+            .suffix(".patch")
+            .tempfile_in(req.action.cwd.as_path())
+            .map_err(|err| ToolError::Rejected(format!("failed to create patch file: {err}")))?;
+        patch_file
+            .write_all(req.action.patch.as_bytes())
+            .and_then(|_| patch_file.flush())
+            .map_err(|err| ToolError::Rejected(format!("failed to write patch file: {err}")))?;
+        Ok(patch_file)
     }
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
@@ -241,7 +271,10 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         }
 
         #[cfg(target_os = "windows")]
-        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        let patch_file = Self::write_patch_temp_file(req)?;
+        #[cfg(target_os = "windows")]
+        let command =
+            Self::build_sandbox_command(req, &ctx.turn.config.codex_home, patch_file.path())?;
         #[cfg(not(target_os = "windows"))]
         let command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
         let options = ExecOptions {
