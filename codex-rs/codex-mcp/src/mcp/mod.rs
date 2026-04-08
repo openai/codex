@@ -593,10 +593,11 @@ async fn collect_mcp_server_status_snapshot_from_manager(
         let Some(tool) = protocol_tool_from_rmcp_tool(&raw_tool_name, &tool_info.tool) else {
             continue;
         };
+        let tool_name = tool.name.clone();
         tools_by_server
             .entry(tool_info.server_name)
             .or_default()
-            .insert(raw_tool_name, tool);
+            .insert(tool_name, tool);
     }
 
     McpServerStatusSnapshot {

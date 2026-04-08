@@ -38,9 +38,9 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn mcp_server_status_list_returns_tools_for_hyphenated_server_names() -> Result<()> {
+async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_mcp_server("lookup").await?;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server("look-up.raw").await?;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
         codex_home.path(),
@@ -85,7 +85,14 @@ url = "{mcp_server_url}/mcp"
     assert_eq!(status.name, "some-server");
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
-        BTreeSet::from(["lookup".to_string()])
+        BTreeSet::from(["look-up.raw".to_string()])
+    );
+    assert_eq!(
+        status
+            .tools
+            .get("look-up.raw")
+            .map(|tool| tool.name.as_str()),
+        Some("look-up.raw")
     );
 
     mcp_server_handle.abort();
