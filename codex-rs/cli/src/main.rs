@@ -33,7 +33,6 @@ use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
-use tokio::process::Command;
 
 #[cfg(target_os = "macos")]
 mod app_cmd;
@@ -1015,7 +1014,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths).await?;
+            run_exec_server_command(cmd).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1087,88 +1086,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_exec_server_command(
-    cmd: ExecServerCommand,
-    arg0_paths: &Arg0DispatchPaths,
-) -> anyhow::Result<()> {
-    let args = vec!["--listen".to_string(), cmd.listen];
-
-    let status = run_exec_server(args, arg0_paths)
+async fn run_exec_server_command(cmd: ExecServerCommand) -> anyhow::Result<()> {
+    codex_exec_server::run_main_with_listen_url(&cmd.listen)
         .await
-        .map_err(anyhow::Error::new)?;
-
-    if !status.success() {
-        anyhow::bail!("`codex-exec-server` exited with status {status}");
-    }
-
-    Ok(())
-}
-
-fn local_exec_server_paths(arg0_paths: &Arg0DispatchPaths) -> Vec<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-    let bin_name = if cfg!(windows) {
-        "codex-exec-server.exe"
-    } else {
-        "codex-exec-server"
-    };
-
-    if let Some(codex_self_exe) = &arg0_paths.codex_self_exe
-        && let Some(parent) = codex_self_exe.parent()
-    {
-        candidates.push(parent.join(bin_name));
-    }
-
-    candidates
-}
-
-fn find_codex_rs_workspace() -> Option<std::path::PathBuf> {
-    let start_dirs = std::iter::once(std::env::current_exe().ok())
-        .chain(std::iter::once(std::env::current_dir().ok()));
-
-    for start_dir in start_dirs.flatten() {
-        if let Some(candidate) = start_dir
-            .ancestors()
-            .map(|ancestor| ancestor.join("codex-rs"))
-            .find(|candidate| candidate.join("Cargo.toml").is_file())
-        {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-async fn run_exec_server(
-    args: Vec<String>,
-    arg0_paths: &Arg0DispatchPaths,
-) -> std::io::Result<std::process::ExitStatus> {
-    for candidate in local_exec_server_paths(arg0_paths) {
-        match Command::new(&candidate).args(&args).status().await {
-            Ok(status) => return Ok(status),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        }
-    }
-
-    match Command::new("codex-exec-server").args(&args).status().await {
-        Ok(status) => return Ok(status),
-        Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err),
-        _ => {}
-    }
-
-    let Some(codex_rs_workspace) = find_codex_rs_workspace() else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "`codex-exec-server` not found and `codex-rs/Cargo.toml` could not be located for fallback build",
-        ));
-    };
-
-    Command::new("cargo")
-        .current_dir(codex_rs_workspace)
-        .args(["run", "-p", "codex-exec-server", "--"])
-        .args(&args)
-        .status()
-        .await
+        .map_err(anyhow::Error::from_boxed)
 }
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
