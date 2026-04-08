@@ -27,6 +27,10 @@ pub struct RealtimeCallClient<T: HttpTransport, A: AuthProvider> {
     session: EndpointSession<T, A>,
 }
 
+/// Answer from creating a WebRTC Realtime call.
+///
+/// `sdp` configures the peer connection. `call_id` is parsed from the response `Location` header
+/// and is later used by the server-side sideband WebSocket to join this exact call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeCallResponse {
     pub sdp: String,
@@ -114,6 +118,9 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
         session_config: RealtimeSessionConfig,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
+        // WebRTC can begin inference as soon as the peer connection comes up, so the initial
+        // session payload is sent with call creation. The sideband WebSocket still sends its normal
+        // session.update after it joins.
         let mut session = realtime_session_json(session_config)?;
         if let Some(session) = session.as_object_mut() {
             session.remove("id");

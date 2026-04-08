@@ -476,6 +476,9 @@ impl RealtimeWebsocketClient {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        // The WebRTC call already exists; this loop only retries joining its sideband control
+        // socket. Once joined, the returned connection is the same reader/writer state that the
+        // ordinary websocket start path uses.
         for attempt in 0..=self.provider.retry.max_attempts {
             let result = self
                 .connect_webrtc_sideband_once(
@@ -513,6 +516,8 @@ impl RealtimeWebsocketClient {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        // Keep the parser/session query shaping from standalone realtime while replacing the model
+        // query with a call_id join onto an existing WebRTC session.
         let ws_url = websocket_url_from_api_url_for_call(
             self.provider.base_url.as_str(),
             self.provider.query_params.as_ref(),

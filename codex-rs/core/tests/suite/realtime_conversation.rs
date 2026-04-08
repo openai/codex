@@ -383,6 +383,8 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         }))
         .await?;
 
+    // Phase 1: the client gets the SDP answer that configures its peer connection, and then the
+    // normal realtime event stream from the joined sideband WebSocket.
     let created = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationSdp(created) => Some(Ok(created.clone())),
         EventMsg::Error(err) => Some(Err(err.clone())),
@@ -401,6 +403,8 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     .await;
     assert_eq!(session_updated, "sess_webrtc");
 
+    // Phase 2: call creation posts the offer and generated session together, so the media leg can
+    // begin inference before the sideband WebSocket is ready.
     let request = capture.single_request();
     assert_eq!(request.url.path(), "/v1/realtime/calls");
     assert_eq!(request.url.query(), None);
@@ -438,6 +442,8 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         )
     );
 
+    // Phase 3: the server joins that same call over the direct sideband WebSocket, sends the
+    // ordinary session.update, and keeps the conversation alive until the client closes it.
     let session_update = realtime_server
         .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
         .await;
