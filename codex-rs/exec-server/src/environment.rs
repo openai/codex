@@ -4,6 +4,7 @@ use tokio::sync::OnceCell;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::ExecServerRuntimeConfig;
 use crate::RemoteExecServerConnectArgs;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
@@ -22,6 +23,7 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub struct EnvironmentManager {
     exec_server_url: Option<String>,
     disabled: bool,
+    runtime: ExecServerRuntimeConfig,
     current_environment: OnceCell<Option<Arc<Environment>>>,
 }
 
@@ -34,17 +36,33 @@ impl Default for EnvironmentManager {
 impl EnvironmentManager {
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value.
     pub fn new(exec_server_url: Option<String>) -> Self {
+        Self::new_with_runtime(exec_server_url, ExecServerRuntimeConfig::detect())
+    }
+
+    /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value and the
+    /// runtime resources available in this client process.
+    pub fn new_with_runtime(
+        exec_server_url: Option<String>,
+        runtime: ExecServerRuntimeConfig,
+    ) -> Self {
         let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
         Self {
             exec_server_url,
             disabled,
+            runtime,
             current_environment: OnceCell::new(),
         }
     }
 
     /// Builds a manager from process environment variables.
     pub fn from_env() -> Self {
-        Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
+        Self::from_env_with_runtime(ExecServerRuntimeConfig::detect())
+    }
+
+    /// Builds a manager from process environment variables and explicit local
+    /// runtime resources.
+    pub fn from_env_with_runtime(runtime: ExecServerRuntimeConfig) -> Self {
+        Self::new_with_runtime(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(), runtime)
     }
 
     /// Builds a manager from the currently selected environment, or from the
@@ -54,11 +72,13 @@ impl EnvironmentManager {
             Some(environment) => Self {
                 exec_server_url: environment.exec_server_url().map(str::to_owned),
                 disabled: false,
+                runtime: ExecServerRuntimeConfig::detect(),
                 current_environment: OnceCell::new(),
             },
             None => Self {
                 exec_server_url: None,
                 disabled: true,
+                runtime: ExecServerRuntimeConfig::detect(),
                 current_environment: OnceCell::new(),
             },
         }
@@ -82,7 +102,11 @@ impl EnvironmentManager {
                     Ok(None)
                 } else {
                     Ok(Some(Arc::new(
-                        Environment::create(self.exec_server_url.clone()).await?,
+                        Environment::create_with_runtime(
+                            self.exec_server_url.clone(),
+                            self.runtime.clone(),
+                        )
+                        .await?,
                     )))
                 }
             })
@@ -132,6 +156,15 @@ impl std::fmt::Debug for Environment {
 impl Environment {
     /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value.
     pub async fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
+        Self::create_with_runtime(exec_server_url, ExecServerRuntimeConfig::detect()).await
+    }
+
+    /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value and
+    /// runtime resources available when spawning local processes.
+    pub async fn create_with_runtime(
+        exec_server_url: Option<String>,
+        runtime: ExecServerRuntimeConfig,
+    ) -> Result<Self, ExecServerError> {
         let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
         if disabled {
             return Err(ExecServerError::Protocol(
@@ -161,7 +194,7 @@ impl Environment {
                 ));
             }
             None => {
-                let local_process = LocalProcess::default();
+                let local_process = LocalProcess::default_with_runtime(runtime);
                 local_process
                     .initialize()
                     .map_err(|err| ExecServerError::Protocol(err.message))?;

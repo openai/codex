@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -11,6 +10,7 @@ use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
+use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ExecCommandSession;
@@ -123,18 +123,20 @@ struct StartedProcess {
 
 impl Default for LocalProcess {
     fn default() -> Self {
-        let (outgoing_tx, mut outgoing_rx) =
-            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
-        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::new(RpcNotificationSender::new(outgoing_tx))
+        Self::default_with_runtime(ExecServerRuntimeConfig::detect())
     }
 }
 
 impl LocalProcess {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
-        Self::new_with_runtime(notifications, ExecServerRuntimeConfig::detect())
+    pub(crate) fn default_with_runtime(runtime: ExecServerRuntimeConfig) -> Self {
+        let (outgoing_tx, mut outgoing_rx) =
+            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
+        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        Self::new_with_runtime(RpcNotificationSender::new(outgoing_tx), runtime)
     }
+}
 
+impl LocalProcess {
     pub(crate) fn new_with_runtime(
         notifications: RpcNotificationSender,
         runtime: ExecServerRuntimeConfig,
@@ -502,48 +504,33 @@ impl ExecProcess for LocalExecProcess {
     }
 }
 
-fn build_sandbox_command(
-    argv: &[String],
-    cwd: &Path,
-    env: &HashMap<String, String>,
-    additional_permissions: Option<codex_protocol::models::PermissionProfile>,
-) -> Result<SandboxCommand, JSONRPCErrorError> {
-    let (program, args) = argv
-        .split_first()
-        .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
-    Ok(SandboxCommand {
-        program: program.clone().into(),
-        args: args.to_vec(),
-        cwd: AbsolutePathBuf::try_from(cwd)
-            .map_err(|err| invalid_params(format!("cwd must be absolute: {err}")))?,
-        env: env.clone(),
-        additional_permissions,
-    })
-}
-
 fn prepare_exec_launch(
     params: &ExecParams,
     runtime: &ExecServerRuntimeConfig,
 ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
-    let command = build_sandbox_command(
-        &params.argv,
-        params.cwd.as_path(),
-        &params.env,
-        params.sandbox.additional_permissions.clone(),
-    )?;
-    let mut launch = params
-        .sandbox
+    let (program, args) = params
+        .argv
+        .split_first()
+        .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+    let command = SandboxCommand {
+        program: program.clone().into(),
+        args: args.to_vec(),
+        cwd: AbsolutePathBuf::try_from(params.cwd.as_path())
+            .map_err(|err| invalid_params(format!("cwd must be absolute: {err}")))?,
+        env: params.env.clone(),
+        additional_permissions: params.sandbox.additional_permissions.clone(),
+    };
+    SandboxManager::new()
         .transform(
             command,
+            &params.sandbox,
             // TODO: Thread managed-network proxy state across exec-server so
             // sandbox profile generation preserves proxy-specific allowances.
             /*network*/
             None,
             runtime.codex_linux_sandbox_exe.as_deref(),
         )
-        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))?;
-    launch.prepare_env_for_spawn();
-    Ok(launch)
+        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))
 }
 
 impl LocalProcess {

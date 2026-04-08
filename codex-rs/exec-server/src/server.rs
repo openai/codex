@@ -10,13 +10,7 @@ pub use transport::DEFAULT_LISTEN_URL;
 pub use transport::ExecServerListenUrlParseError;
 
 pub async fn run_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_main_with_listen_url(DEFAULT_LISTEN_URL).await
-}
-
-pub async fn run_main_with_listen_url(
-    listen_url: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    transport::run_transport(listen_url, crate::ExecServerRuntimeConfig::detect()).await
+    run_main_with_runtime(DEFAULT_LISTEN_URL, crate::ExecServerRuntimeConfig::detect()).await
 }
 
 pub async fn run_main_with_runtime(

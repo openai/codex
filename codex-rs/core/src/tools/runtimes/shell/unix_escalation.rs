@@ -817,13 +817,6 @@ impl CoreShellCommandExecutor {
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
         let sandbox_manager = SandboxManager::new();
-        let sandbox = sandbox_manager.select_initial(
-            file_system_sandbox_policy,
-            network_sandbox_policy,
-            SandboxablePreference::Auto,
-            self.windows_sandbox_level,
-            self.network.is_some(),
-        );
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),
@@ -836,7 +829,7 @@ impl CoreShellCommandExecutor {
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let sandbox_launch_config = SandboxLaunchConfig {
-            sandbox_preference: SandboxablePreference::from_selected_sandbox(sandbox),
+            sandbox_preference: SandboxablePreference::Auto,
             policy: sandbox_policy.clone(),
             file_system_policy: file_system_sandbox_policy.clone(),
             network_policy: network_sandbox_policy,

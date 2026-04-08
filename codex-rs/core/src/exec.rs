@@ -40,7 +40,6 @@ use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxLaunchConfig;
-use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -113,21 +112,6 @@ pub enum ExecCapturePolicy {
     /// Trusted internal helpers can buffer the full child output in memory
     /// without the shell-oriented output cap or exec-expiration behavior.
     FullBuffer,
-}
-
-fn select_process_exec_tool_sandbox_type(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
-    enforce_managed_network: bool,
-) -> SandboxType {
-    SandboxManager::new().select_initial(
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        SandboxablePreference::Auto,
-        windows_sandbox_level,
-        enforce_managed_network,
-    )
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
@@ -238,15 +222,7 @@ pub fn build_exec_request(
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
-    let windows_sandbox_level = params.windows_sandbox_level;
     let enforce_managed_network = params.network.is_some();
-    let sandbox_type = select_process_exec_tool_sandbox_type(
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        windows_sandbox_level,
-        enforce_managed_network,
-    );
-    tracing::debug!("Sandbox type: {sandbox_type:?}");
 
     let ExecParams {
         command,
@@ -271,7 +247,6 @@ pub fn build_exec_request(
         ))
     })?;
 
-    let manager = SandboxManager::new();
     let command = SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
@@ -284,7 +259,7 @@ pub fn build_exec_request(
         capture_policy,
     };
     let sandbox_launch_config = SandboxLaunchConfig {
-        sandbox_preference: SandboxablePreference::from_selected_sandbox(sandbox_type),
+        sandbox_preference: SandboxablePreference::Auto,
         policy: sandbox_policy.clone(),
         file_system_policy: file_system_sandbox_policy.clone(),
         network_policy: network_sandbox_policy,
@@ -295,7 +270,7 @@ pub fn build_exec_request(
         windows_sandbox_private_desktop,
         use_legacy_landlock,
     };
-    let mut exec_req = manager
+    let mut exec_req = codex_sandboxing::SandboxManager::new()
         .transform(
             command,
             &sandbox_launch_config,
@@ -304,6 +279,7 @@ pub fn build_exec_request(
         )
         .map(|request| ExecRequest::from_sandbox_exec_request(request, options))
         .map_err(CodexErr::from)?;
+    tracing::debug!("Sandbox type: {:?}", exec_req.sandbox);
     exec_req.windows_restricted_token_filesystem_overlay =
         resolve_windows_restricted_token_filesystem_overlay(
             exec_req.sandbox,

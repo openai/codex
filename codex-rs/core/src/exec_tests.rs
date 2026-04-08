@@ -688,9 +688,10 @@ fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() 
         .unwrap_or(SandboxType::None);
 
     assert_eq!(
-        select_process_exec_tool_sandbox_type(
+        codex_sandboxing::SandboxManager::new().select_initial(
             &FileSystemSandboxPolicy::unrestricted(),
             NetworkSandboxPolicy::Restricted,
+            codex_sandboxing::SandboxablePreference::Auto,
             codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             /*enforce_managed_network*/ false,
         ),

@@ -85,10 +85,11 @@ impl ExecRequest {
     }
 
     pub(crate) fn from_sandbox_exec_request(
-        mut request: SandboxExecRequest,
+        request: SandboxExecRequest,
         options: ExecOptions,
     ) -> Self {
-        request.prepare_env_for_spawn();
+        // SandboxManager::transform prepares spawn env (`CODEX_SANDBOX*`).
+        // This adapter only attaches core-owned exec options.
         let SandboxExecRequest {
             command,
             cwd,

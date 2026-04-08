@@ -21,29 +21,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::path::Path;
 use tempfile::TempDir;
-
-fn test_launch_config(
-    cwd: &Path,
-    policy: SandboxPolicy,
-    file_system_policy: FileSystemSandboxPolicy,
-    network_policy: NetworkSandboxPolicy,
-    sandbox_preference: SandboxablePreference,
-) -> SandboxLaunchConfig {
-    SandboxLaunchConfig {
-        sandbox_preference,
-        policy,
-        file_system_policy,
-        network_policy,
-        sandbox_policy_cwd: cwd.to_path_buf(),
-        additional_permissions: None,
-        enforce_managed_network: false,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        windows_sandbox_private_desktop: false,
-        use_legacy_landlock: false,
-    }
-}
 
 #[test]
 fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
@@ -106,15 +84,20 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
                 env: HashMap::new(),
                 additional_permissions: None,
             },
-            &test_launch_config(
-                cwd.as_path(),
-                SandboxPolicy::ExternalSandbox {
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Forbid,
+                policy: SandboxPolicy::ExternalSandbox {
                     network_access: NetworkAccess::Restricted,
                 },
-                FileSystemSandboxPolicy::unrestricted(),
-                NetworkSandboxPolicy::Restricted,
-                SandboxablePreference::Forbid,
-            ),
+                file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
+            },
             /*network*/ None,
             /*codex_linux_sandbox_exe*/ None,
         )
@@ -156,15 +139,20 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                     }),
                 }),
             },
-            &test_launch_config(
-                cwd.as_path(),
-                SandboxPolicy::ExternalSandbox {
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Forbid,
+                policy: SandboxPolicy::ExternalSandbox {
                     network_access: NetworkAccess::Restricted,
                 },
-                FileSystemSandboxPolicy::unrestricted(),
-                NetworkSandboxPolicy::Restricted,
-                SandboxablePreference::Forbid,
-            ),
+                file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
+            },
             /*network*/ None,
             /*codex_linux_sandbox_exe*/ None,
         )
@@ -208,13 +196,13 @@ fn transform_additional_permissions_preserves_denied_entries() {
                     ..Default::default()
                 }),
             },
-            &test_launch_config(
-                cwd.as_path(),
-                SandboxPolicy::ReadOnly {
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Forbid,
+                policy: SandboxPolicy::ReadOnly {
                     access: ReadOnlyAccess::FullAccess,
                     network_access: false,
                 },
-                FileSystemSandboxPolicy::restricted(vec![
+                file_system_policy: FileSystemSandboxPolicy::restricted(vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
                             value: FileSystemSpecialPath::Root,
@@ -228,9 +216,14 @@ fn transform_additional_permissions_preserves_denied_entries() {
                         access: FileSystemAccessMode::None,
                     },
                 ]),
-                NetworkSandboxPolicy::Restricted,
-                SandboxablePreference::Forbid,
-            ),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
+            },
             /*network*/ None,
             /*codex_linux_sandbox_exe*/ None,
         )
@@ -276,13 +269,18 @@ fn transform_linux_seccomp_request(
                 env: HashMap::new(),
                 additional_permissions: None,
             },
-            &test_launch_config(
-                cwd.as_path(),
-                SandboxPolicy::DangerFullAccess,
-                FileSystemSandboxPolicy::unrestricted(),
-                NetworkSandboxPolicy::Enabled,
-                SandboxablePreference::Require,
-            ),
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Require,
+                policy: SandboxPolicy::DangerFullAccess,
+                file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Enabled,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
+            },
             /*network*/ None,
             Some(codex_linux_sandbox_exe),
         )

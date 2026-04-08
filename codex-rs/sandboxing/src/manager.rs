@@ -51,17 +51,6 @@ pub enum SandboxablePreference {
     Forbid,
 }
 
-impl SandboxablePreference {
-    pub fn from_selected_sandbox(sandbox: SandboxType) -> Self {
-        match sandbox {
-            SandboxType::None => Self::Forbid,
-            SandboxType::MacosSeatbelt
-            | SandboxType::LinuxSeccomp
-            | SandboxType::WindowsRestrictedToken => Self::Require,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxLaunchConfig {
@@ -91,15 +80,6 @@ impl SandboxLaunchConfig {
             windows_sandbox_private_desktop: false,
             use_legacy_landlock: false,
         }
-    }
-
-    pub fn transform(
-        &self,
-        command: SandboxCommand,
-        network: Option<&NetworkProxy>,
-        codex_linux_sandbox_exe: Option<&Path>,
-    ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        SandboxManager::new().transform(command, self, network, codex_linux_sandbox_exe)
     }
 }
 
@@ -291,7 +271,7 @@ impl SandboxManager {
             SandboxType::WindowsRestrictedToken => (os_argv_to_strings(argv), None),
         };
 
-        Ok(SandboxExecRequest {
+        let mut request = SandboxExecRequest {
             command: argv,
             cwd: command.cwd,
             env: command.env,
@@ -303,7 +283,9 @@ impl SandboxManager {
             file_system_sandbox_policy: effective_file_system_policy,
             network_sandbox_policy: effective_network_policy,
             arg0: arg0_override,
-        })
+        };
+        request.prepare_env_for_spawn();
+        Ok(request)
     }
 }
 

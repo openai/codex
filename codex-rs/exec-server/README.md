@@ -242,7 +242,7 @@ The crate exports:
 - `RemoteExecServerConnectArgs`
 - protocol structs `InitializeParams` and `InitializeResponse`
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
-- `run_main_with_listen_url()`
+- `run_main_with_runtime()`
 - `run_main()` for embedding the websocket server in a binary
 
 ## Example session

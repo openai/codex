@@ -1,6 +1,6 @@
 use clap::Parser;
 
-#[cfg(target_os = "linux")]
+use std::future::Future;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
@@ -18,6 +18,26 @@ struct ExecServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    linux_sandbox_arg0_dispatch_or_else(run_main)
+}
+
+async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    let args = ExecServerArgs::parse();
+    let runtime = codex_exec_server::ExecServerRuntimeConfig::new(codex_linux_sandbox_exe);
+    codex_exec_server::run_main_with_runtime(&args.listen, runtime)
+        .await
+        .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+    Ok(())
+}
+
+// Keep this standalone-server wrapper local instead of using
+// codex_arg0::arg0_dispatch_or_else: codex-arg0 owns CLI aliases such as
+// apply_patch, and depends on codex-exec-server to apply patches.
+fn linux_sandbox_arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
+where
+    F: FnOnce(Option<PathBuf>) -> Fut,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
     dispatch_linux_sandbox_arg0();
 
     let _linux_sandbox_alias = LinuxSandboxAlias::create();
@@ -31,14 +51,7 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async move {
-        let args = ExecServerArgs::parse();
-        let runtime = codex_exec_server::ExecServerRuntimeConfig::new(codex_linux_sandbox_exe);
-        codex_exec_server::run_main_with_runtime(&args.listen, runtime)
-            .await
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
-        Ok(())
-    })
+    runtime.block_on(main_fn(codex_linux_sandbox_exe))
 }
 
 #[cfg(target_os = "linux")]

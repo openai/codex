@@ -43,7 +43,6 @@ use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxLaunchConfig;
-use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxablePreference;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -1030,20 +1029,12 @@ impl JsReplManager {
             );
         }
 
-        let sandbox = SandboxManager::new();
         let has_managed_network_requirements = turn
             .config
             .config_layer_stack
             .requirements_toml()
             .network
             .is_some();
-        let sandbox_type = sandbox.select_initial(
-            &turn.file_system_sandbox_policy,
-            turn.network_sandbox_policy,
-            SandboxablePreference::Auto,
-            turn.windows_sandbox_level,
-            has_managed_network_requirements,
-        );
         let command = SandboxCommand {
             program: node_path.into_os_string(),
             args: vec![
@@ -1059,7 +1050,7 @@ impl JsReplManager {
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let sandbox_launch_config = SandboxLaunchConfig {
-            sandbox_preference: SandboxablePreference::from_selected_sandbox(sandbox_type),
+            sandbox_preference: SandboxablePreference::Auto,
             policy: turn.sandbox_policy.get().clone(),
             file_system_policy: turn.file_system_sandbox_policy.clone(),
             network_policy: turn.network_sandbox_policy,
@@ -1073,7 +1064,7 @@ impl JsReplManager {
                 .windows_sandbox_private_desktop,
             use_legacy_landlock: turn.features.use_legacy_landlock(),
         };
-        let exec_env = sandbox
+        let exec_env = codex_sandboxing::SandboxManager::new()
             .transform(
                 command,
                 &sandbox_launch_config,

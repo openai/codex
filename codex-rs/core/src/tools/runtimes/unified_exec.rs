@@ -88,7 +88,7 @@ fn build_remote_exec_sandbox_config(
     additional_permissions: Option<PermissionProfile>,
 ) -> SandboxLaunchConfig {
     SandboxLaunchConfig {
-        sandbox_preference: SandboxablePreference::from_selected_sandbox(attempt.sandbox),
+        sandbox_preference: attempt.sandbox_preference(),
         policy: attempt.policy.clone(),
         file_system_policy: attempt.file_system_policy.clone(),
         network_policy: attempt.network_policy,
@@ -244,6 +244,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .as_ref()
             .filter(|environment| environment.exec_server_url().is_some())
         {
+            // Let the exec-server host perform sandbox transformation for its platform.
+            // The local fallback below still transforms in core, where the session's
+            // linux-sandbox helper path and zsh-fork spawn lifecycle are available.
             if let UnifiedExecShellMode::ZshFork(_) = &self.shell_mode {
                 return Err(ToolError::Rejected(
                     "unified_exec zsh-fork is not supported when exec_server_url is configured"

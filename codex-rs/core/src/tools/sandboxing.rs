@@ -332,6 +332,15 @@ pub(crate) struct SandboxAttempt<'a> {
 }
 
 impl<'a> SandboxAttempt<'a> {
+    pub(crate) fn sandbox_preference(&self) -> SandboxablePreference {
+        match self.sandbox {
+            SandboxType::None => SandboxablePreference::Forbid,
+            SandboxType::MacosSeatbelt
+            | SandboxType::LinuxSeccomp
+            | SandboxType::WindowsRestrictedToken => SandboxablePreference::Require,
+        }
+    }
+
     pub fn env_for(
         &self,
         command: SandboxCommand,
@@ -339,7 +348,7 @@ impl<'a> SandboxAttempt<'a> {
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         let sandbox_launch_config = SandboxLaunchConfig {
-            sandbox_preference: SandboxablePreference::from_selected_sandbox(self.sandbox),
+            sandbox_preference: self.sandbox_preference(),
             policy: self.policy.clone(),
             file_system_policy: self.file_system_policy.clone(),
             network_policy: self.network_policy,
