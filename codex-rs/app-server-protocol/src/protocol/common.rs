@@ -459,6 +459,11 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
+    McpResourceRead => "mcpServer/resource/read" {
+        params: v2::McpResourceReadParams,
+        response: v2::McpResourceReadResponse,
+    },
+
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
         params: v2::WindowsSandboxSetupStartParams,
         response: v2::WindowsSandboxSetupStartResponse,
@@ -612,6 +617,41 @@ macro_rules! server_request_definitions {
                 match self {
                     $(Self::$variant { request_id, .. } => request_id,)*
                 }
+            }
+        }
+
+        /// Typed response from the client to the server.
+        #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ServerResponse {
+            $(
+                $(#[$variant_meta])*
+                $(#[serde(rename = $wire)])?
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    response: $response,
+                },
+            )*
+        }
+
+        impl ServerResponse {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
             }
         }
 
@@ -965,6 +1005,8 @@ server_notification_definitions! {
     ThreadRealtimeTranscriptUpdated => "thread/realtime/transcriptUpdated" (v2::ThreadRealtimeTranscriptUpdatedNotification),
     #[experimental("thread/realtime/outputAudio/delta")]
     ThreadRealtimeOutputAudioDelta => "thread/realtime/outputAudio/delta" (v2::ThreadRealtimeOutputAudioDeltaNotification),
+    #[experimental("thread/realtime/sdp")]
+    ThreadRealtimeSdp => "thread/realtime/sdp" (v2::ThreadRealtimeSdpNotification),
     #[experimental("thread/realtime/error")]
     ThreadRealtimeError => "thread/realtime/error" (v2::ThreadRealtimeErrorNotification),
     #[experimental("thread/realtime/closed")]
@@ -1221,6 +1263,30 @@ mod tests {
                 }
             }),
             serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_server_response() -> Result<()> {
+        let response = ServerResponse::CommandExecutionRequestApproval {
+            request_id: RequestId::Integer(8),
+            response: v2::CommandExecutionRequestApprovalResponse {
+                decision: v2::CommandExecutionApprovalDecision::AcceptForSession,
+            },
+        };
+
+        assert_eq!(response.id(), &RequestId::Integer(8));
+        assert_eq!(response.method(), "item/commandExecution/requestApproval");
+        assert_eq!(
+            json!({
+                "method": "item/commandExecution/requestApproval",
+                "id": 8,
+                "response": {
+                    "decision": "acceptForSession"
+                }
+            }),
+            serde_json::to_value(&response)?,
         );
         Ok(())
     }
@@ -1630,6 +1696,7 @@ mod tests {
         let request = ClientRequest::FsWatch {
             request_id: RequestId::Integer(10),
             params: v2::FsWatchParams {
+                watch_id: "watch-git".to_string(),
                 path: absolute_path("tmp/repo/.git"),
             },
         };
@@ -1638,6 +1705,7 @@ mod tests {
                 "method": "fs/watch",
                 "id": 10,
                 "params": {
+                    "watchId": "watch-git",
                     "path": absolute_path_string("tmp/repo/.git")
                 }
             }),
@@ -1695,6 +1763,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: Some("sess_456".to_string()),
+                transport: None,
             },
         };
         assert_eq!(
@@ -1704,7 +1773,8 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456"
+                    "sessionId": "sess_456",
+                    "transport": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1784,6 +1854,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: None,
+                transport: None,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);

@@ -6,7 +6,10 @@ use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(version)]
+#[command(
+    version,
+    override_usage = "codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]"
+)]
 pub struct Cli {
     /// Action to perform. If omitted, runs a new non-interactive session.
     #[command(subcommand)]
@@ -44,7 +47,7 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (--sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,
 

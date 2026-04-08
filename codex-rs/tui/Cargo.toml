@@ -33,6 +33,7 @@ codex-chatgpt = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
@@ -105,6 +106,7 @@ two-face = { version = "0.5", default-features = false, features = ["syntect-def
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
+urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 uuid = { workspace = true }
 

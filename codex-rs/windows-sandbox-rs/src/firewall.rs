@@ -39,7 +39,7 @@ const OFFLINE_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY: &str =
     "Codex Sandbox Offline - Block Loopback TCP (Except Proxy)";
 const OFFLINE_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY: &str = "Codex Sandbox Offline - Block Loopback UDP";
 const OFFLINE_PROXY_ALLOW_RULE_NAME: &str = "codex_sandbox_offline_allow_loopback_proxy";
-const LOOPBACK_REMOTE_ADDRESSES: &str = "127.0.0.0/8,::1";
+const LOOPBACK_REMOTE_ADDRESSES: &str = "127.0.0.0/8,::/127";
 const NON_LOOPBACK_REMOTE_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
 
 struct BlockRuleSpec<'a> {
@@ -399,4 +399,41 @@ fn log_line(log: &mut File, msg: &str) -> Result<()> {
     let ts = chrono::Utc::now().to_rfc3339();
     writeln!(log, "[{ts}] {msg}")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_remote_address_literals_are_accepted_by_firewall_com() {
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        assert!(hr.is_ok(), "CoInitializeEx failed: {hr:?}");
+
+        let candidates = [
+            LOOPBACK_REMOTE_ADDRESSES,
+            NON_LOOPBACK_REMOTE_ADDRESSES,
+            "*",
+        ];
+        let results = candidates.map(|remote_addresses| unsafe {
+            let rule: windows::core::Result<INetFwRule3> =
+                CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER);
+            rule.and_then(|rule| {
+                rule.SetRemoteAddresses(&BSTR::from(remote_addresses))?;
+                rule.RemoteAddresses()
+            })
+            .map(|stored| stored.to_string())
+        });
+
+        unsafe {
+            CoUninitialize();
+        }
+
+        for (remote_addresses, result) in candidates.into_iter().zip(results) {
+            assert!(
+                result.is_ok(),
+                "firewall rejected RemoteAddresses={remote_addresses:?}: {result:?}"
+            );
+        }
+    }
 }

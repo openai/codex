@@ -7,6 +7,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -50,6 +51,18 @@ pub struct AppInvocation {
     pub invocation_type: Option<InvocationType>,
 }
 
+#[derive(Clone)]
+pub struct SubAgentThreadStartedInput {
+    pub thread_id: String,
+    pub product_client_id: String,
+    pub client_name: String,
+    pub client_version: String,
+    pub model: String,
+    pub ephemeral: bool,
+    pub subagent_source: SubAgentSource,
+    pub created_at: u64,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -75,6 +88,7 @@ pub(crate) enum AnalyticsFact {
 }
 
 pub(crate) enum CustomAnalyticsFact {
+    SubAgentThreadStarted(SubAgentThreadStartedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

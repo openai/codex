@@ -7,8 +7,8 @@
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-pub mod event_processor_with_jsonl_output;
-pub mod exec_events;
+pub(crate) mod event_processor_with_jsonl_output;
+pub(crate) mod exec_events;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -85,7 +85,42 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+pub use event_processor_with_jsonl_output::CodexStatus;
+pub use event_processor_with_jsonl_output::CollectedThreadEvents;
+pub use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+pub use exec_events::AgentMessageItem;
+pub use exec_events::CollabAgentState;
+pub use exec_events::CollabAgentStatus;
+pub use exec_events::CollabTool;
+pub use exec_events::CollabToolCallItem;
+pub use exec_events::CollabToolCallStatus;
+pub use exec_events::CommandExecutionItem;
+pub use exec_events::CommandExecutionStatus;
+pub use exec_events::ErrorItem;
+pub use exec_events::FileChangeItem;
+pub use exec_events::FileUpdateChange;
+pub use exec_events::ItemCompletedEvent;
+pub use exec_events::ItemStartedEvent;
+pub use exec_events::ItemUpdatedEvent;
+pub use exec_events::McpToolCallItem;
+pub use exec_events::McpToolCallItemError;
+pub use exec_events::McpToolCallItemResult;
+pub use exec_events::McpToolCallStatus;
+pub use exec_events::PatchApplyStatus;
+pub use exec_events::PatchChangeKind;
+pub use exec_events::ReasoningItem;
+pub use exec_events::ThreadErrorEvent;
+pub use exec_events::ThreadEvent;
+pub use exec_events::ThreadItem as ExecThreadItem;
+pub use exec_events::ThreadItemDetails;
+pub use exec_events::ThreadStartedEvent;
+pub use exec_events::TodoItem;
+pub use exec_events::TodoListItem;
+pub use exec_events::TurnCompletedEvent;
+pub use exec_events::TurnFailedEvent;
+pub use exec_events::TurnStartedEvent;
+pub use exec_events::Usage;
+pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::IsTerminal;
@@ -105,7 +140,6 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 use crate::cli::Command as ExecCommand;
-use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
@@ -514,6 +548,66 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
 
+    let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
+        (Some(ExecCommand::Review(review_cli)), _, _) => {
+            let review_request = build_review_request(review_cli)?;
+            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
+            (InitialOperation::Review { review_request }, summary)
+        }
+        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
+            let prompt_arg = args
+                .prompt
+                .clone()
+                .or_else(|| {
+                    if args.last {
+                        args.session_id.clone()
+                    } else {
+                        None
+                    }
+                })
+                .or(root_prompt);
+            let prompt_text = resolve_prompt(prompt_arg);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .chain(args.images.iter().cloned())
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
+            });
+            let output_schema = load_output_schema(output_schema_path.clone());
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+        (None, root_prompt, imgs) => {
+            let prompt_text = resolve_root_prompt(root_prompt);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
+            });
+            let output_schema = load_output_schema(output_schema_path);
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+    };
+
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
     if !skip_git_repo_check
@@ -587,66 +681,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let session_configured = fallback_session_configured;
 
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
-
-    let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
-        (Some(ExecCommand::Review(review_cli)), _, _) => {
-            let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary)
-        }
-        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
-            let prompt_arg = args
-                .prompt
-                .clone()
-                .or_else(|| {
-                    if args.last {
-                        args.session_id.clone()
-                    } else {
-                        None
-                    }
-                })
-                .or(root_prompt);
-            let prompt_text = resolve_prompt(prompt_arg);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .chain(args.images.iter().cloned())
-                .map(|path| UserInput::LocalImage { path })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path.clone());
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
-        }
-        (None, root_prompt, imgs) => {
-            let prompt_text = resolve_root_prompt(root_prompt);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .map(|path| UserInput::LocalImage { path })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path);
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
-        }
-    };
 
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
@@ -790,8 +824,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     error_seen = true;
                 }
 
-                maybe_backfill_turn_completed_items(&client, &mut request_ids, &mut notification)
-                    .await;
+                maybe_backfill_turn_completed_items(
+                    config.ephemeral,
+                    &client,
+                    &mut request_ids,
+                    &mut notification,
+                )
+                .await;
 
                 if should_process_notification(
                     &notification,
@@ -1051,6 +1090,7 @@ fn should_process_notification(
 }
 
 async fn maybe_backfill_turn_completed_items(
+    thread_ephemeral: bool,
     client: &InProcessAppServerClient,
     request_ids: &mut RequestIdSequencer,
     notification: &mut ServerNotification,
@@ -1059,12 +1099,13 @@ async fn maybe_backfill_turn_completed_items(
     // guaranteeing `turn/completed`. Because app-server currently emits that completion with an
     // empty `turn.items`, exec does one last `thread/read` here so human/json output can recover
     // the final message and reconcile any still-running items before shutdown.
+    if !should_backfill_turn_completed_items(thread_ephemeral, notification) {
+        return;
+    }
+
     let ServerNotification::TurnCompleted(payload) = notification else {
         return;
     };
-    if !payload.turn.items.is_empty() {
-        return;
-    }
 
     let response = send_request_with_response::<ThreadReadResponse>(
         client,
@@ -1089,6 +1130,19 @@ async fn maybe_backfill_turn_completed_items(
             warn!("thread/read failed while backfilling turn items for turn completion: {err}");
         }
     }
+}
+
+/// Returns true only when `exec` can safely recover missing turn items from
+/// rollout-backed thread history.
+fn should_backfill_turn_completed_items(
+    thread_ephemeral: bool,
+    notification: &ServerNotification,
+) -> bool {
+    let ServerNotification::TurnCompleted(payload) = notification else {
+        return false;
+    };
+
+    !thread_ephemeral && payload.turn.items.is_empty()
 }
 
 fn turn_items_for_thread(

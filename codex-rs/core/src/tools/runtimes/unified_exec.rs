@@ -207,6 +207,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
+            &req.env,
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
@@ -239,7 +240,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    if ctx.turn.environment.exec_server_url().is_some() {
+                    let Some(environment) = ctx.turn.environment.as_ref() else {
+                        return Err(ToolError::Rejected(
+                            "exec_command is unavailable in this session".to_string(),
+                        ));
+                    };
+                    if environment.is_remote() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
                         ));
@@ -251,7 +257,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
-                            ctx.turn.environment.as_ref(),
+                            environment.as_ref(),
                         )
                         .await
                         .map_err(|err| match err {
@@ -281,13 +287,18 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let exec_env = attempt
             .env_for(command, options, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
+        let Some(environment) = ctx.turn.environment.as_ref() else {
+            return Err(ToolError::Rejected(
+                "exec_command is unavailable in this session".to_string(),
+            ));
+        };
         self.manager
             .open_session_with_exec_env(
                 req.process_id,
                 &exec_env,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
-                ctx.turn.environment.as_ref(),
+                environment.as_ref(),
             )
             .await
             .map_err(|err| match err {

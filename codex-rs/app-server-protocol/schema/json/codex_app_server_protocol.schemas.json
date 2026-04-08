@@ -1208,6 +1208,30 @@
             },
             "method": {
               "enum": [
+                "mcpServer/resource/read"
+              ],
+              "title": "McpServer/resource/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/McpResourceReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "McpServer/resource/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "windowsSandbox/setupStart"
               ],
               "title": "WindowsSandbox/setupStartRequestMethod",
@@ -4309,6 +4333,26 @@
             "params"
           ],
           "title": "Thread/realtime/outputAudio/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/sdp"
+              ],
+              "title": "Thread/realtime/sdpNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeSdpNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/sdpNotification",
           "type": "object"
         },
         {
@@ -7487,7 +7531,7 @@
             "type": "array"
           },
           "watchId": {
-            "description": "Watch identifier returned by `fs/watch`.",
+            "description": "Watch identifier previously provided to `fs/watch`.",
             "type": "string"
           }
         },
@@ -7757,7 +7801,7 @@
         "description": "Stop filesystem watch notifications for a prior `fs/watch`.",
         "properties": {
           "watchId": {
-            "description": "Watch identifier returned by `fs/watch`.",
+            "description": "Watch identifier previously provided to `fs/watch`.",
             "type": "string"
           }
         },
@@ -7784,25 +7828,6 @@
               }
             ],
             "description": "Absolute file or directory path to watch."
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "title": "FsWatchParams",
-        "type": "object"
-      },
-      "FsWatchResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Created watch handle returned by `fs/watch`.",
-        "properties": {
-          "path": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
-              }
-            ],
-            "description": "Canonicalized path associated with the watch."
           },
           "watchId": {
             "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
@@ -7812,6 +7837,25 @@
         "required": [
           "path",
           "watchId"
+        ],
+        "title": "FsWatchParams",
+        "type": "object"
+      },
+      "FsWatchResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `fs/watch`.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Canonicalized path associated with the watch."
+          }
+        },
+        "required": [
+          "path"
         ],
         "title": "FsWatchResponse",
         "type": "object"
@@ -8604,6 +8648,17 @@
               "null"
             ]
           },
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpServerStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls how much MCP inventory data to fetch for each server. Defaults to `Full` when omitted."
+          },
           "limit": {
             "description": "Optional page size; defaults to a server-defined value.",
             "format": "uint32",
@@ -8929,6 +8984,43 @@
         ],
         "type": "string"
       },
+      "McpResourceReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "server": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "threadId",
+          "uri"
+        ],
+        "title": "McpResourceReadParams",
+        "type": "object"
+      },
+      "McpResourceReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "contents": {
+            "items": {
+              "$ref": "#/definitions/v2/ResourceContent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "contents"
+        ],
+        "title": "McpResourceReadResponse",
+        "type": "object"
+      },
       "McpServerOauthLoginCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -9044,6 +9136,13 @@
         ],
         "type": "object"
       },
+      "McpServerStatusDetail": {
+        "enum": [
+          "full",
+          "toolsAndAuthOnly"
+        ],
+        "type": "string"
+      },
       "McpServerStatusUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -9105,6 +9204,7 @@
       },
       "McpToolCallResult": {
         "properties": {
+          "_meta": true,
           "content": {
             "items": true,
             "type": "array"
@@ -9208,6 +9308,13 @@
       },
       "Model": {
         "properties": {
+          "additionalSpeedTiers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "availabilityNux": {
             "anyOf": [
               {
@@ -9470,6 +9577,12 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "dangerFullAccessDenylistOnly": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -10642,6 +10755,57 @@
           "uri"
         ],
         "type": "object"
+      },
+      "ResourceContent": {
+        "anyOf": [
+          {
+            "properties": {
+              "_meta": true,
+              "mimeType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "uri": {
+                "description": "The URI of this resource.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "uri"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "_meta": true,
+              "blob": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "uri": {
+                "description": "The URI of this resource.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "blob",
+              "uri"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Contents returned when reading a resource from an MCP server."
       },
       "ResourceTemplate": {
         "description": "A template description for resources available on the server.",
@@ -13518,6 +13682,66 @@
         "title": "ThreadRealtimeOutputAudioDeltaNotification",
         "type": "object"
       },
+      "ThreadRealtimeSdpNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.",
+        "properties": {
+          "sdp": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sdp",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeSdpNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeStartTransport": {
+        "description": "EXPERIMENTAL - transport used by thread realtime.",
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "websocket"
+                ],
+                "title": "WebsocketThreadRealtimeStartTransportType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "WebsocketThreadRealtimeStartTransport",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "sdp": {
+                "description": "SDP offer generated by a WebRTC RTCPeerConnection after configuring audio and the realtime events data channel.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "webrtc"
+                ],
+                "title": "WebrtcThreadRealtimeStartTransportType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sdp",
+              "type"
+            ],
+            "title": "WebrtcThreadRealtimeStartTransport",
+            "type": "object"
+          }
+        ]
+      },
       "ThreadRealtimeStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
@@ -14329,6 +14553,22 @@
       },
       "Turn": {
         "properties": {
+          "completedAt": {
+            "description": "Unix timestamp (in seconds) when the turn completed.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "description": "Duration between turn start and completion in milliseconds, if known.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "error": {
             "anyOf": [
               {
@@ -14349,6 +14589,14 @@
               "$ref": "#/definitions/v2/ThreadItem"
             },
             "type": "array"
+          },
+          "startedAt": {
+            "description": "Unix timestamp (in seconds) when the turn started.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "status": {
             "$ref": "#/definitions/v2/TurnStatus"

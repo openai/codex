@@ -17,6 +17,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-collaboration-mode-templates = { workspace = true }
+codex-config = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }

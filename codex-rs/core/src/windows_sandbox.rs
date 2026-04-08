@@ -1,7 +1,7 @@
 use crate::config::Config;
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::profile::ConfigProfile;
+use codex_config::config_toml::ConfigToml;
+use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::Features;
@@ -363,7 +363,7 @@ fn emit_windows_sandbox_setup_success_metrics(
     originator_tag: &str,
     duration: std::time::Duration,
 ) {
-    let Some(metrics) = codex_otel::metrics::global() else {
+    let Some(metrics) = codex_otel::global() else {
         return;
     };
     let mode_tag = windows_sandbox_setup_mode_tag(mode);
@@ -389,7 +389,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     duration: std::time::Duration,
     _err: &anyhow::Error,
 ) {
-    let Some(metrics) = codex_otel::metrics::global() else {
+    let Some(metrics) = codex_otel::global() else {
         return;
     };
     let mode_tag = windows_sandbox_setup_mode_tag(mode);

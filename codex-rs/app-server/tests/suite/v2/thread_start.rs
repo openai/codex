@@ -18,9 +18,9 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
 use codex_git_utils::resolve_root_git_project_for_trust;
-use codex_login::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
@@ -827,7 +827,7 @@ fn create_config_toml_with_chatgpt_base_url(
     general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
     let general_analytics_toml = if general_analytics_enabled {
-        "\n[features]\ngeneral_analytics = true\n".to_string()
+        "\ngeneral_analytics = true".to_string()
     } else {
         String::new()
     };
@@ -842,6 +842,8 @@ sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
+
+[features]
 {general_analytics_toml}
 
 [model_providers.mock_provider]

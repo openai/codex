@@ -24,7 +24,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
-use codex_login::AuthCredentialsStoreMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -563,7 +563,7 @@ fn create_config_toml_with_chatgpt_base_url(
     general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
     let general_analytics_toml = if general_analytics_enabled {
-        "\n[features]\ngeneral_analytics = true\n".to_string()
+        "\ngeneral_analytics = true".to_string()
     } else {
         String::new()
     };
@@ -578,6 +578,8 @@ sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
+
+[features]
 {general_analytics_toml}
 
 [model_providers.mock_provider]

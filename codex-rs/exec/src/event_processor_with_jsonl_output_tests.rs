@@ -38,6 +38,9 @@ fn failed_turn_does_not_overwrite_output_last_message_file() {
                     additional_details: None,
                     codex_error_info: None,
                 }),
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         },
     ));

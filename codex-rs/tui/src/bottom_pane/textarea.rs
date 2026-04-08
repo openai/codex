@@ -35,6 +35,32 @@ fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
 }
 
+fn split_word_pieces(run: &str) -> Vec<(usize, &str)> {
+    let mut pieces = Vec::new();
+    for (segment_start, segment) in run.split_word_bound_indices() {
+        let mut piece_start = 0;
+        let mut chars = segment.char_indices();
+        let Some((_, first_char)) = chars.next() else {
+            continue;
+        };
+        let mut in_separator = is_word_separator(first_char);
+
+        for (idx, ch) in chars {
+            let is_separator = is_word_separator(ch);
+            if is_separator == in_separator {
+                continue;
+            }
+            pieces.push((segment_start + piece_start, &segment[piece_start..idx]));
+            piece_start = idx;
+            in_separator = is_separator;
+        }
+
+        pieces.push((segment_start + piece_start, &segment[piece_start..]));
+    }
+
+    pieces
+}
+
 #[derive(Debug, Clone)]
 struct TextElement {
     id: u64,
@@ -1216,36 +1242,55 @@ impl TextArea {
         else {
             return 0;
         };
-        let is_separator = is_word_separator(ch);
-        let mut start = first_non_ws_idx;
-        for (idx, ch) in prefix[..first_non_ws_idx].char_indices().rev() {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
-                start = idx + ch.len_utf8();
-                break;
+        let run_start = prefix[..first_non_ws_idx]
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| ch.is_whitespace())
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+        let run_end = first_non_ws_idx + ch.len_utf8();
+        let pieces = split_word_pieces(&prefix[run_start..run_end]);
+        let mut pieces = pieces.into_iter().rev().peekable();
+        let Some((piece_start, piece)) = pieces.next() else {
+            return run_start;
+        };
+        let mut start = run_start + piece_start;
+
+        if piece.chars().all(is_word_separator) {
+            while let Some((idx, piece)) = pieces.peek() {
+                if !piece.chars().all(is_word_separator) {
+                    break;
+                }
+                start = run_start + *idx;
+                pieces.next();
             }
-            start = idx;
         }
+
         self.adjust_pos_out_of_elements(start, /*prefer_start*/ true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
+        let suffix = &self.text[self.cursor_pos..];
+        let Some(first_non_ws) = suffix.find(|ch: char| !ch.is_whitespace()) else {
             return self.text.len();
         };
-        let word_start = self.cursor_pos + first_non_ws;
-        let mut iter = self.text[word_start..].char_indices();
-        let Some((_, first_ch)) = iter.next() else {
-            return word_start;
+        let run = &suffix[first_non_ws..];
+        let run = &run[..run.find(char::is_whitespace).unwrap_or(run.len())];
+        let mut pieces = split_word_pieces(run).into_iter().peekable();
+        let Some((start, piece)) = pieces.next() else {
+            return self.cursor_pos + first_non_ws;
         };
-        let is_separator = is_word_separator(first_ch);
-        let mut end = self.text.len();
-        for (idx, ch) in iter {
-            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
-                end = word_start + idx;
-                break;
+        let word_start = self.cursor_pos + first_non_ws + start;
+        let mut end = word_start + piece.len();
+        if piece.chars().all(is_word_separator) {
+            while let Some((idx, piece)) = pieces.peek() {
+                if !piece.chars().all(is_word_separator) {
+                    break;
+                }
+                end = self.cursor_pos + first_non_ws + *idx + piece.len();
+                pieces.next();
             }
         }
+
         self.adjust_pos_out_of_elements(end, /*prefer_start*/ false)
     }
 
@@ -2038,6 +2083,80 @@ mod tests {
         // If at end, end_of_next_word returns len
         t.set_cursor(t.text().len());
         assert_eq!(t.end_of_next_word(), t.text().len());
+    }
+
+    #[test]
+    fn word_navigation_cjk_each_char_is_boundary() {
+        let text = "你好世界";
+        let mut t = ta_with(text);
+
+        t.set_cursor(/*pos*/ text.len());
+        assert_eq!(t.beginning_of_previous_word(), 9);
+
+        t.set_cursor(/*pos*/ 9);
+        assert_eq!(t.beginning_of_previous_word(), 6);
+
+        t.set_cursor(/*pos*/ 6);
+        assert_eq!(t.beginning_of_previous_word(), 3);
+
+        t.set_cursor(/*pos*/ 3);
+        assert_eq!(t.beginning_of_previous_word(), 0);
+    }
+
+    #[test]
+    fn word_navigation_cjk_forward() {
+        let text = "你好世界";
+        let mut t = ta_with(text);
+
+        t.set_cursor(/*pos*/ 0);
+        assert_eq!(t.end_of_next_word(), 3);
+
+        t.set_cursor(/*pos*/ 3);
+        assert_eq!(t.end_of_next_word(), 6);
+
+        t.set_cursor(/*pos*/ 6);
+        assert_eq!(t.end_of_next_word(), 9);
+
+        t.set_cursor(/*pos*/ 9);
+        assert_eq!(t.end_of_next_word(), 12);
+    }
+
+    #[test]
+    fn word_navigation_mixed_ascii_cjk() {
+        let text = "hello你好";
+        let mut t = ta_with(text);
+
+        t.set_cursor(/*pos*/ 0);
+        assert_eq!(t.end_of_next_word(), 5);
+
+        t.set_cursor(/*pos*/ 5);
+        assert_eq!(t.end_of_next_word(), 8);
+
+        t.set_cursor(/*pos*/ text.len());
+        assert_eq!(t.beginning_of_previous_word(), 8);
+
+        t.set_cursor(/*pos*/ 8);
+        assert_eq!(t.beginning_of_previous_word(), 5);
+
+        t.set_cursor(/*pos*/ 5);
+        assert_eq!(t.beginning_of_previous_word(), 0);
+    }
+
+    #[test]
+    fn word_navigation_preserves_separator_breaks_within_unicode_segments() {
+        let mut t = ta_with("can't 32.3 foo.bar");
+
+        t.set_cursor(/*pos*/ 5);
+        assert_eq!(t.beginning_of_previous_word(), 4);
+
+        t.set_cursor(/*pos*/ 4);
+        assert_eq!(t.beginning_of_previous_word(), 3);
+
+        t.set_cursor(/*pos*/ 10);
+        assert_eq!(t.beginning_of_previous_word(), 9);
+
+        t.set_cursor(/*pos*/ 18);
+        assert_eq!(t.beginning_of_previous_word(), 15);
     }
 
     #[test]

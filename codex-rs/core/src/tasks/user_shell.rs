@@ -111,6 +111,7 @@ pub(crate) async fn execute_user_shell_command(
         // freshly reinjected context before the summary/replacement history is applied.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_context.sub_id.clone(),
+            started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
             model_context_window: turn_context.model_context_window(),
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
@@ -123,11 +124,16 @@ pub(crate) async fn execute_user_shell_command(
     let use_login_shell = true;
     let session_shell = session.user_shell();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
+    let exec_env_map = create_env(
+        &turn_context.shell_environment_policy,
+        Some(session.conversation_id),
+    );
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
         turn_context.cwd.as_path(),
         &turn_context.shell_environment_policy.r#set,
+        &exec_env_map,
     );
 
     let call_id = Uuid::new_v4().to_string();
@@ -155,10 +161,7 @@ pub(crate) async fn execute_user_shell_command(
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.to_path_buf(),
-        env: create_env(
-            &turn_context.shell_environment_policy,
-            Some(session.conversation_id),
-        ),
+        env: exec_env_map,
         network: turn_context.network.clone(),
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.

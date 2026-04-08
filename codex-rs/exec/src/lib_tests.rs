@@ -268,6 +268,9 @@ fn turn_items_for_thread_returns_matching_turn_items() {
                 }],
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
             codex_app_server_protocol::Turn {
                 id: "turn-2".to_string(),
@@ -277,6 +280,9 @@ fn turn_items_for_thread_returns_matching_turn_items() {
                 }],
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         ],
     };
@@ -291,6 +297,28 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         }])
     );
     assert_eq!(turn_items_for_thread(&thread, "missing-turn"), None);
+}
+
+#[test]
+fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
+    let notification =
+        ServerNotification::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        });
+
+    assert!(!should_backfill_turn_completed_items(
+        /*thread_ephemeral*/ true,
+        &notification
+    ));
 }
 
 #[test]

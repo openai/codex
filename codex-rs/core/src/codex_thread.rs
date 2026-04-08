@@ -22,6 +22,7 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use rmcp::model::ReadResourceRequestParams;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -100,12 +101,13 @@ impl CodexThread {
         self.codex.steer_input(input, expected_turn_id).await
     }
 
-    pub async fn set_app_server_client_name(
+    pub async fn set_app_server_client_info(
         &self,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
     ) -> ConstraintResult<()> {
         self.codex
-            .set_app_server_client_name(app_server_client_name)
+            .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
     }
 
@@ -196,6 +198,26 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn read_mcp_resource(
+        &self,
+        server: &str,
+        uri: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let result = self
+            .codex
+            .session
+            .read_resource(
+                server,
+                ReadResourceRequestParams {
+                    meta: None,
+                    uri: uri.to_string(),
+                },
+            )
+            .await?;
+
+        Ok(serde_json::to_value(result)?)
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

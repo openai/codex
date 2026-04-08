@@ -366,6 +366,12 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .map(codex_app_server_protocol::AskForApproval::from)
                 .collect()
         }),
+        allowed_approvals_reviewers: requirements.allowed_approvals_reviewers.map(|reviewers| {
+            reviewers
+                .into_iter()
+                .map(codex_app_server_protocol::ApprovalsReviewer::from)
+                .collect()
+        }),
         allowed_sandbox_modes: requirements.allowed_sandbox_modes.map(|modes| {
             modes
                 .into_iter()
@@ -443,6 +449,7 @@ fn map_network_requirements_to_api(
                 .collect()
         }),
         managed_allowed_domains_only: network.managed_allowed_domains_only,
+        danger_full_access_denylist_only: network.danger_full_access_denylist_only,
         allowed_domains,
         denied_domains,
         unix_sockets: network.unix_sockets.map(|unix_sockets| {
@@ -519,6 +526,7 @@ mod tests {
     use codex_features::Feature;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
+    use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -544,6 +552,10 @@ mod tests {
             allowed_approval_policies: Some(vec![
                 CoreAskForApproval::Never,
                 CoreAskForApproval::OnRequest,
+            ]),
+            allowed_approvals_reviewers: Some(vec![
+                CoreApprovalsReviewer::User,
+                CoreApprovalsReviewer::GuardianSubagent,
             ]),
             allowed_sandbox_modes: Some(vec![
                 CoreSandboxModeRequirement::ReadOnly,
@@ -583,6 +595,7 @@ mod tests {
                     ]),
                 }),
                 managed_allowed_domains_only: Some(false),
+                danger_full_access_denylist_only: Some(true),
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/proxy.sock".to_string(),
@@ -600,6 +613,13 @@ mod tests {
             Some(vec![
                 codex_app_server_protocol::AskForApproval::Never,
                 codex_app_server_protocol::AskForApproval::OnRequest,
+            ])
+        );
+        assert_eq!(
+            mapped.allowed_approvals_reviewers,
+            Some(vec![
+                codex_app_server_protocol::ApprovalsReviewer::User,
+                codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
             ])
         );
         assert_eq!(
@@ -635,6 +655,7 @@ mod tests {
                     ("example.com".to_string(), NetworkDomainPermission::Deny),
                 ])),
                 managed_allowed_domains_only: Some(false),
+                danger_full_access_denylist_only: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -651,6 +672,7 @@ mod tests {
     fn map_requirements_toml_to_api_omits_unix_socket_none_entries_from_legacy_network_fields() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
             guardian_developer_instructions: None,
@@ -668,6 +690,7 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
+                danger_full_access_denylist_only: None,
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/ignored.sock".to_string(),
@@ -691,6 +714,7 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
+                danger_full_access_denylist_only: None,
                 allowed_domains: None,
                 denied_domains: None,
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -707,6 +731,7 @@ mod tests {
     fn map_requirements_toml_to_api_normalizes_allowed_web_search_modes() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_developer_instructions: None,

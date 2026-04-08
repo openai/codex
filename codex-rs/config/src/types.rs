@@ -36,6 +36,36 @@ const fn default_enabled() -> bool {
     true
 }
 
+/// Determine where Codex should store CLI auth credentials.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthCredentialsStoreMode {
+    #[default]
+    /// Persist credentials in CODEX_HOME/auth.json.
+    File,
+    /// Persist credentials in the keyring. Fail if unavailable.
+    Keyring,
+    /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
+    Auto,
+    /// Store credentials in memory only for the current process.
+    Ephemeral,
+}
+
+/// Determine where Codex should store and read MCP credentials.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum OAuthCredentialsStoreMode {
+    /// `Keyring` when available; otherwise, `File`.
+    /// Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
+    #[default]
+    Auto,
+    /// CODEX_HOME/.credentials.json
+    /// This file will be readable to Codex and other applications running as the same user.
+    File,
+    /// Keyring when available, otherwise fail.
+    Keyring,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowsSandboxModeToml {

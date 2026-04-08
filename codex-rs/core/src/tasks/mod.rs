@@ -33,10 +33,10 @@ use crate::state::TaskKind;
 use codex_login::AuthManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_otel::SessionTelemetry;
-use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
-use codex_otel::metrics::names::TURN_NETWORK_PROXY_METRIC;
-use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
-use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
+use codex_otel::TURN_E2E_DURATION_METRIC;
+use codex_otel::TURN_NETWORK_PROXY_METRIC;
+use codex_otel::TURN_TOKEN_USAGE_METRIC;
+use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -511,9 +511,15 @@ impl Session {
                 &[("token_type", "reasoning_output"), tmp_mem],
             );
         }
+        let (completed_at, duration_ms) = turn_context
+            .turn_timing_state
+            .completed_at_and_duration_ms()
+            .await;
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
+            completed_at,
+            duration_ms,
         });
         self.send_event(turn_context.as_ref(), event).await;
 
@@ -588,9 +594,16 @@ impl Session {
             self.flush_rollout().await;
         }
 
+        let (completed_at, duration_ms) = task
+            .turn_context
+            .turn_timing_state
+            .completed_at_and_duration_ms()
+            .await;
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
+            completed_at,
+            duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
     }

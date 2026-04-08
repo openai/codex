@@ -107,54 +107,56 @@ pub fn build_tool_registry_plan(
         );
     }
 
-    match &config.shell_type {
-        ConfigShellToolType::Default => {
-            plan.push_spec(
-                create_shell_tool(ShellToolOptions {
-                    exec_permission_approvals_enabled,
-                }),
-                /*supports_parallel_tool_calls*/ true,
-                config.code_mode_enabled,
-            );
-        }
-        ConfigShellToolType::Local => {
-            plan.push_spec(
-                create_local_shell_tool(),
-                /*supports_parallel_tool_calls*/ true,
-                config.code_mode_enabled,
-            );
-        }
-        ConfigShellToolType::UnifiedExec => {
-            plan.push_spec(
-                create_exec_command_tool(CommandToolOptions {
-                    allow_login_shell: config.allow_login_shell,
-                    exec_permission_approvals_enabled,
-                }),
-                /*supports_parallel_tool_calls*/ true,
-                config.code_mode_enabled,
-            );
-            plan.push_spec(
-                create_write_stdin_tool(),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            plan.register_handler("exec_command", ToolHandlerKind::UnifiedExec);
-            plan.register_handler("write_stdin", ToolHandlerKind::UnifiedExec);
-        }
-        ConfigShellToolType::Disabled => {}
-        ConfigShellToolType::ShellCommand => {
-            plan.push_spec(
-                create_shell_command_tool(CommandToolOptions {
-                    allow_login_shell: config.allow_login_shell,
-                    exec_permission_approvals_enabled,
-                }),
-                /*supports_parallel_tool_calls*/ true,
-                config.code_mode_enabled,
-            );
+    if config.has_environment {
+        match &config.shell_type {
+            ConfigShellToolType::Default => {
+                plan.push_spec(
+                    create_shell_tool(ShellToolOptions {
+                        exec_permission_approvals_enabled,
+                    }),
+                    /*supports_parallel_tool_calls*/ true,
+                    config.code_mode_enabled,
+                );
+            }
+            ConfigShellToolType::Local => {
+                plan.push_spec(
+                    create_local_shell_tool(),
+                    /*supports_parallel_tool_calls*/ true,
+                    config.code_mode_enabled,
+                );
+            }
+            ConfigShellToolType::UnifiedExec => {
+                plan.push_spec(
+                    create_exec_command_tool(CommandToolOptions {
+                        allow_login_shell: config.allow_login_shell,
+                        exec_permission_approvals_enabled,
+                    }),
+                    /*supports_parallel_tool_calls*/ true,
+                    config.code_mode_enabled,
+                );
+                plan.push_spec(
+                    create_write_stdin_tool(),
+                    /*supports_parallel_tool_calls*/ false,
+                    config.code_mode_enabled,
+                );
+                plan.register_handler("exec_command", ToolHandlerKind::UnifiedExec);
+                plan.register_handler("write_stdin", ToolHandlerKind::UnifiedExec);
+            }
+            ConfigShellToolType::Disabled => {}
+            ConfigShellToolType::ShellCommand => {
+                plan.push_spec(
+                    create_shell_command_tool(CommandToolOptions {
+                        allow_login_shell: config.allow_login_shell,
+                        exec_permission_approvals_enabled,
+                    }),
+                    /*supports_parallel_tool_calls*/ true,
+                    config.code_mode_enabled,
+                );
+            }
         }
     }
 
-    if config.shell_type != ConfigShellToolType::Disabled {
+    if config.has_environment && config.shell_type != ConfigShellToolType::Disabled {
         plan.register_handler("shell", ToolHandlerKind::Shell);
         plan.register_handler("container.exec", ToolHandlerKind::Shell);
         plan.register_handler("local_shell", ToolHandlerKind::Shell);
@@ -189,7 +191,7 @@ pub fn build_tool_registry_plan(
     );
     plan.register_handler("update_plan", ToolHandlerKind::Plan);
 
-    if config.js_repl_enabled {
+    if config.has_environment && config.js_repl_enabled {
         plan.push_spec(
             create_js_repl_tool(),
             /*supports_parallel_tool_calls*/ false,
@@ -204,19 +206,17 @@ pub fn build_tool_registry_plan(
         plan.register_handler("js_repl_reset", ToolHandlerKind::JsReplReset);
     }
 
-    if config.request_user_input {
-        plan.push_spec(
-            create_request_user_input_tool(request_user_input_tool_description(
-                config.default_mode_request_user_input,
-            )),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        plan.register_handler(
-            REQUEST_USER_INPUT_TOOL_NAME,
-            ToolHandlerKind::RequestUserInput,
-        );
-    }
+    plan.push_spec(
+        create_request_user_input_tool(request_user_input_tool_description(
+            config.default_mode_request_user_input,
+        )),
+        /*supports_parallel_tool_calls*/ false,
+        config.code_mode_enabled,
+    );
+    plan.register_handler(
+        REQUEST_USER_INPUT_TOOL_NAME,
+        ToolHandlerKind::RequestUserInput,
+    );
 
     if config.request_permissions_tool_enabled {
         plan.push_spec(
@@ -265,7 +265,9 @@ pub fn build_tool_registry_plan(
         plan.register_handler(TOOL_SUGGEST_TOOL_NAME, ToolHandlerKind::ToolSuggest);
     }
 
-    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
+    if config.has_environment
+        && let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
+    {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
                 plan.push_spec(
@@ -285,10 +287,11 @@ pub fn build_tool_registry_plan(
         plan.register_handler("apply_patch", ToolHandlerKind::ApplyPatch);
     }
 
-    if config
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "list_dir")
+    if config.has_environment
+        && config
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == "list_dir")
     {
         plan.push_spec(
             create_list_dir_tool(),
@@ -331,14 +334,16 @@ pub fn build_tool_registry_plan(
         );
     }
 
-    plan.push_spec(
-        create_view_image_tool(ViewImageToolOptions {
-            can_request_original_image_detail: config.can_request_original_image_detail,
-        }),
-        /*supports_parallel_tool_calls*/ true,
-        config.code_mode_enabled,
-    );
-    plan.register_handler("view_image", ToolHandlerKind::ViewImage);
+    if config.has_environment {
+        plan.push_spec(
+            create_view_image_tool(ViewImageToolOptions {
+                can_request_original_image_detail: config.can_request_original_image_detail,
+            }),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("view_image", ToolHandlerKind::ViewImage);
+    }
 
     if config.collab_tools {
         if config.multi_agent_v2 {
@@ -348,6 +353,7 @@ pub fn build_tool_registry_plan(
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -390,6 +396,7 @@ pub fn build_tool_registry_plan(
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
