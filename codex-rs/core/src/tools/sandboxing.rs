@@ -339,7 +339,7 @@ impl<'a> SandboxAttempt<'a> {
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         let sandbox_launch_config = SandboxLaunchConfig {
-            sandbox: self.sandbox,
+            sandbox_preference: SandboxablePreference::from_selected_sandbox(self.sandbox),
             policy: self.policy.clone(),
             file_system_policy: self.file_system_policy.clone(),
             network_policy: self.network_policy,

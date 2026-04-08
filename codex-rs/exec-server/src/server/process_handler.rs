@@ -1,5 +1,6 @@
 use codex_app_server_protocol::JSONRPCErrorError;
 
+use crate::ExecServerRuntimeConfig;
 use crate::local_process::LocalProcess;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
@@ -18,9 +19,12 @@ pub(crate) struct ProcessHandler {
 }
 
 impl ProcessHandler {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn new(
+        notifications: RpcNotificationSender,
+        runtime: ExecServerRuntimeConfig,
+    ) -> Self {
         Self {
-            process: LocalProcess::new(notifications),
+            process: LocalProcess::new_with_runtime(notifications, runtime),
         }
     }
 

@@ -98,21 +98,19 @@ struct LocalExecProcess {
 }
 
 #[derive(Clone, Debug, Default)]
-struct ExecServerRuntimeConfig {
+pub struct ExecServerRuntimeConfig {
     codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl ExecServerRuntimeConfig {
-    fn detect() -> Self {
+    pub fn new(codex_linux_sandbox_exe: Option<PathBuf>) -> Self {
         Self {
-            // The Codex CLI and codex-exec-server both dispatch the Linux
-            // sandbox helper from their own executable via argv[0].
-            codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
-                std::env::current_exe().ok()
-            } else {
-                None
-            },
+            codex_linux_sandbox_exe,
         }
+    }
+
+    pub fn detect() -> Self {
+        Self::default()
     }
 }
 
@@ -133,13 +131,20 @@ impl Default for LocalProcess {
 
 impl LocalProcess {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+        Self::new_with_runtime(notifications, ExecServerRuntimeConfig::detect())
+    }
+
+    pub(crate) fn new_with_runtime(
+        notifications: RpcNotificationSender,
+        runtime: ExecServerRuntimeConfig,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 notifications,
                 processes: Mutex::new(HashMap::new()),
                 initialize_requested: AtomicBool::new(false),
                 initialized: AtomicBool::new(false),
-                runtime: ExecServerRuntimeConfig::detect(),
+                runtime,
             }),
         }
     }
@@ -306,6 +311,7 @@ impl LocalProcess {
             .await
             .map(|started| ExecResponse {
                 process_id: started.process_id,
+                sandbox: started.sandbox_type,
             })
     }
 
@@ -523,7 +529,7 @@ fn prepare_exec_launch(
         &params.env,
         params.sandbox.additional_permissions.clone(),
     )?;
-    params
+    let mut launch = params
         .sandbox
         .transform(
             command,
@@ -533,7 +539,9 @@ fn prepare_exec_launch(
             None,
             runtime.codex_linux_sandbox_exe.as_ref(),
         )
-        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))
+        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))?;
+    launch.prepare_env_for_spawn();
+    Ok(launch)
 }
 
 impl LocalProcess {

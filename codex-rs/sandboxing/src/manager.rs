@@ -43,17 +43,29 @@ impl SandboxType {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SandboxablePreference {
     Auto,
     Require,
     Forbid,
 }
 
+impl SandboxablePreference {
+    pub fn from_selected_sandbox(sandbox: SandboxType) -> Self {
+        match sandbox {
+            SandboxType::None => Self::Forbid,
+            SandboxType::MacosSeatbelt
+            | SandboxType::LinuxSeccomp
+            | SandboxType::WindowsRestrictedToken => Self::Require,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxLaunchConfig {
-    pub sandbox: SandboxType,
+    pub sandbox_preference: SandboxablePreference,
     pub policy: SandboxPolicy,
     pub file_system_policy: FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
@@ -68,7 +80,7 @@ pub struct SandboxLaunchConfig {
 impl SandboxLaunchConfig {
     pub fn no_sandbox(sandbox_policy_cwd: PathBuf) -> Self {
         Self {
-            sandbox: SandboxType::None,
+            sandbox_preference: SandboxablePreference::Forbid,
             policy: SandboxPolicy::DangerFullAccess,
             file_system_policy: FileSystemSandboxPolicy::unrestricted(),
             network_policy: NetworkSandboxPolicy::Enabled,
@@ -129,6 +141,22 @@ pub struct SandboxExecRequest {
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub arg0: Option<String>,
+}
+
+impl SandboxExecRequest {
+    pub fn prepare_env_for_spawn(&mut self) {
+        if !self.network_sandbox_policy.is_enabled() {
+            self.env.insert(
+                "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
+                "1".to_string(),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        if self.sandbox == SandboxType::MacosSeatbelt {
+            self.env
+                .insert("CODEX_SANDBOX".to_string(), "seatbelt".to_string());
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -208,11 +236,18 @@ impl SandboxManager {
             launch.network_policy,
             additional_permissions.as_ref(),
         );
+        let sandbox = self.select_initial(
+            &effective_file_system_policy,
+            effective_network_policy,
+            launch.sandbox_preference,
+            launch.windows_sandbox_level,
+            launch.enforce_managed_network,
+        );
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
 
-        let (argv, arg0_override) = match launch.sandbox {
+        let (argv, arg0_override) = match sandbox {
             SandboxType::None => (os_argv_to_strings(argv), None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
@@ -261,7 +296,7 @@ impl SandboxManager {
             cwd: command.cwd,
             env: command.env,
             network: network.cloned(),
-            sandbox: launch.sandbox,
+            sandbox,
             windows_sandbox_level: launch.windows_sandbox_level,
             windows_sandbox_private_desktop: launch.windows_sandbox_private_desktop,
             sandbox_policy: effective_policy,

@@ -12,9 +12,6 @@ use crate::exec::ExecExpiration;
 use crate::exec::StdoutStream;
 use crate::exec::WindowsRestrictedTokenFilesystemOverlay;
 use crate::exec::execute_exec_request;
-#[cfg(target_os = "macos")]
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
-use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -88,13 +85,14 @@ impl ExecRequest {
     }
 
     pub(crate) fn from_sandbox_exec_request(
-        request: SandboxExecRequest,
+        mut request: SandboxExecRequest,
         options: ExecOptions,
     ) -> Self {
+        request.prepare_env_for_spawn();
         let SandboxExecRequest {
             command,
             cwd,
-            mut env,
+            env,
             network,
             sandbox,
             windows_sandbox_level,
@@ -108,16 +106,6 @@ impl ExecRequest {
             expiration,
             capture_policy,
         } = options;
-        if !network_sandbox_policy.is_enabled() {
-            env.insert(
-                CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
-                "1".to_string(),
-            );
-        }
-        #[cfg(target_os = "macos")]
-        if sandbox == SandboxType::MacosSeatbelt {
-            env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
-        }
         Self {
             command,
             cwd,

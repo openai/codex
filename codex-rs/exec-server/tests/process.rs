@@ -75,6 +75,7 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
         process_start_response,
         ExecResponse {
             process_id: ProcessId::from("proc-1"),
+            sandbox: codex_sandboxing::SandboxType::None,
         }
     );
 

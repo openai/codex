@@ -836,7 +836,7 @@ impl CoreShellCommandExecutor {
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let sandbox_launch_config = SandboxLaunchConfig {
-            sandbox,
+            sandbox_preference: SandboxablePreference::from_selected_sandbox(sandbox),
             policy: sandbox_policy.clone(),
             file_system_policy: file_system_sandbox_policy.clone(),
             network_policy: network_sandbox_policy,

@@ -1059,7 +1059,7 @@ impl JsReplManager {
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let sandbox_launch_config = SandboxLaunchConfig {
-            sandbox: sandbox_type,
+            sandbox_preference: SandboxablePreference::from_selected_sandbox(sandbox_type),
             policy: turn.sandbox_policy.get().clone(),
             file_system_policy: turn.file_system_sandbox_policy.clone(),
             network_policy: turn.network_sandbox_policy,

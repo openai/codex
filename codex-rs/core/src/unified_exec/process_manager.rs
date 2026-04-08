@@ -615,8 +615,8 @@ impl UnifiedExecProcessManager {
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-                return UnifiedExecProcess::from_remote_started(started, request.sandbox).await;
-            }
+            return UnifiedExecProcess::from_remote_started(started, request.sandbox).await;
+        }
 
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
@@ -651,12 +651,12 @@ impl UnifiedExecProcessManager {
         params: codex_exec_server::ExecParams,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let sandbox_type = params.sandbox.sandbox;
         let started = environment
             .get_exec_backend()
             .start(params)
             .await
             .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        let sandbox_type = started.sandbox_type;
         UnifiedExecProcess::from_remote_started(started, sandbox_type).await
     }
 

@@ -284,7 +284,7 @@ pub fn build_exec_request(
         capture_policy,
     };
     let sandbox_launch_config = SandboxLaunchConfig {
-        sandbox: sandbox_type,
+        sandbox_preference: SandboxablePreference::from_selected_sandbox(sandbox_type),
         policy: sandbox_policy.clone(),
         file_system_policy: file_system_sandbox_policy.clone(),
         network_policy: network_sandbox_policy,

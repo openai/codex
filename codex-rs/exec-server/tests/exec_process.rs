@@ -17,7 +17,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxLaunchConfig;
-use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -224,16 +224,6 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
     Ok(())
 }
 
-fn platform_sandbox_type() -> SandboxType {
-    if cfg!(target_os = "macos") {
-        SandboxType::MacosSeatbelt
-    } else if cfg!(target_os = "linux") {
-        SandboxType::LinuxSeccomp
-    } else {
-        unreachable!("unix exec-server tests only run on macOS and Linux");
-    }
-}
-
 fn write_outside_workspace_sandbox(workspace_root: &std::path::Path) -> SandboxLaunchConfig {
     let mut policy = SandboxPolicy::new_workspace_write_policy();
     if let SandboxPolicy::WorkspaceWrite {
@@ -246,7 +236,7 @@ fn write_outside_workspace_sandbox(workspace_root: &std::path::Path) -> SandboxL
         *exclude_slash_tmp = true;
     }
     SandboxLaunchConfig {
-        sandbox: platform_sandbox_type(),
+        sandbox_preference: SandboxablePreference::Require,
         policy: policy.clone(),
         file_system_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy(
             &policy,

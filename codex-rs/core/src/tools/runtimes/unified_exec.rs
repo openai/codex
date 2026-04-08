@@ -87,12 +87,8 @@ fn build_remote_exec_sandbox_config(
     attempt: &SandboxAttempt<'_>,
     additional_permissions: Option<PermissionProfile>,
 ) -> SandboxLaunchConfig {
-    if matches!(attempt.sandbox, codex_sandboxing::SandboxType::None) {
-        return SandboxLaunchConfig::no_sandbox(attempt.sandbox_cwd.to_path_buf());
-    }
-
     SandboxLaunchConfig {
-        sandbox: attempt.sandbox,
+        sandbox_preference: SandboxablePreference::from_selected_sandbox(attempt.sandbox),
         policy: attempt.policy.clone(),
         file_system_policy: attempt.file_system_policy.clone(),
         network_policy: attempt.network_policy,

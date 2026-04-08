@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 
 use super::ExecServerHandler;
+use crate::ExecServerRuntimeConfig;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeResponse;
@@ -36,9 +37,10 @@ fn exec_params(process_id: &str) -> ExecParams {
 
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
-    let handler = Arc::new(ExecServerHandler::new(RpcNotificationSender::new(
-        outgoing_tx,
-    )));
+    let handler = Arc::new(ExecServerHandler::new(
+        RpcNotificationSender::new(outgoing_tx),
+        ExecServerRuntimeConfig::detect(),
+    ));
     assert_eq!(
         handler.initialize().expect("initialize"),
         InitializeResponse {}

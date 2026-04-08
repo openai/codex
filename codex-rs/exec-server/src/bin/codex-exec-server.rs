@@ -1,9 +1,6 @@
-#[cfg(target_os = "linux")]
-use std::path::Path;
-
 use clap::Parser;
-#[cfg(target_os = "linux")]
-use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use codex_arg0::Arg0DispatchPaths;
+use codex_arg0::arg0_dispatch_or_else;
 
 #[derive(Debug, Parser)]
 struct ExecServerArgs {
@@ -17,29 +14,13 @@ struct ExecServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    dispatch_arg0();
-
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = ExecServerArgs::parse();
-        codex_exec_server::run_main_with_listen_url(&args.listen)
+        let runtime =
+            codex_exec_server::ExecServerRuntimeConfig::new(arg0_paths.codex_linux_sandbox_exe);
+        codex_exec_server::run_main_with_runtime(&args.listen, runtime)
             .await
-            .map_err(|err| anyhow::Error::msg(err.to_string()))
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        Ok(())
     })
 }
-
-#[cfg(target_os = "linux")]
-fn dispatch_arg0() {
-    let argv0 = std::env::args_os().next().unwrap_or_default();
-    let exe_name = Path::new(&argv0)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-
-    if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
-        codex_linux_sandbox::run_main();
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn dispatch_arg0() {}
