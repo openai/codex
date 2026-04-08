@@ -1186,6 +1186,8 @@ mod tests {
         let url = websocket_url_from_api_url_for_call(
             "https://api.openai.com/v1",
             /*query_params*/ None,
+            RealtimeEventParser::RealtimeV2,
+            RealtimeSessionMode::Conversational,
             "rtc_test",
         )
         .expect("build ws url");
