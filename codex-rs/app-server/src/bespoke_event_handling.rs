@@ -13,6 +13,8 @@ use crate::thread_state::resolve_server_request_on_thread_listener;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
+use codex_app_server_protocol::AddCreditsNudgeEmailNotification;
+use codex_app_server_protocol::AddCreditsNudgeEmailResult;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -116,6 +118,7 @@ use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynam
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AddCreditsNudgeEmailStatus as CoreAddCreditsNudgeEmailStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -221,6 +224,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
+        }
+        EventMsg::AddCreditsNudgeEmailResponse(event) => {
+            if let ApiVersion::V2 = api_version {
+                let result = match event.result {
+                    Ok(CoreAddCreditsNudgeEmailStatus::Sent) => AddCreditsNudgeEmailResult::Sent,
+                    Ok(CoreAddCreditsNudgeEmailStatus::CooldownActive) => {
+                        AddCreditsNudgeEmailResult::CooldownActive
+                    }
+                    Err(message) => AddCreditsNudgeEmailResult::Failed { message },
+                };
+                let notification = AddCreditsNudgeEmailNotification {
+                    thread_id: conversation_id.to_string(),
+                    result,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::AddCreditsNudgeEmailCompleted(
+                        notification,
+                    ))
+                    .await;
+            }
         }
         EventMsg::SkillsUpdateAvailable => {
             if let ApiVersion::V2 = api_version {

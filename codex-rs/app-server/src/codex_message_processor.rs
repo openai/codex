@@ -17,7 +17,6 @@ use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
-use axum::http::StatusCode;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -196,6 +195,7 @@ use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
+use codex_core::SendAddCreditsNudgeEmailError;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
@@ -1802,45 +1802,28 @@ impl CodexMessageProcessor {
     }
 
     async fn send_add_credits_nudge_email(&self, request_id: ConnectionRequestId) {
-        let Some(auth) = self.auth_manager.auth().await else {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: "codex account authentication required to notify workspace owner"
-                            .to_string(),
-                        data: None,
-                    },
-                )
-                .await;
-            return;
-        };
-
-        if !auth.is_chatgpt_auth() {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: "chatgpt authentication required to notify workspace owner"
-                            .to_string(),
-                        data: None,
-                    },
-                )
-                .await;
-            return;
-        }
-
-        let client = match BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth) {
-            Ok(client) => client,
+        let status = match codex_core::send_add_credits_nudge_email(
+            &self.config,
+            self.auth_manager.as_ref(),
+        )
+        .await
+        {
+            Ok(status) => status,
             Err(err) => {
+                let code = match &err {
+                    SendAddCreditsNudgeEmailError::AuthRequired
+                    | SendAddCreditsNudgeEmailError::ChatGptAuthRequired => {
+                        INVALID_REQUEST_ERROR_CODE
+                    }
+                    SendAddCreditsNudgeEmailError::CreateClient(_)
+                    | SendAddCreditsNudgeEmailError::Request(_) => INTERNAL_ERROR_CODE,
+                };
                 self.outgoing
                     .send_error(
                         request_id,
                         JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to construct backend client: {err}"),
+                            code,
+                            message: err.to_string(),
                             data: None,
                         },
                     )
@@ -1848,24 +1831,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-
-        let status = match client.send_add_credits_nudge_email().await {
-            Ok(()) => AddCreditsNudgeEmailStatus::Sent,
-            Err(err) if err.status() == Some(StatusCode::TOO_MANY_REQUESTS) => {
+        let status = match status {
+            codex_core::AddCreditsNudgeEmailStatus::Sent => AddCreditsNudgeEmailStatus::Sent,
+            codex_core::AddCreditsNudgeEmailStatus::CooldownActive => {
                 AddCreditsNudgeEmailStatus::CooldownActive
-            }
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to notify workspace owner: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
             }
         };
 

@@ -6213,6 +6213,24 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AddCreditsNudgeEmailNotification {
+    pub thread_id: String,
+    pub result: AddCreditsNudgeEmailResult,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "status", rename_all = "camelCase")]
+#[ts(tag = "status", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum AddCreditsNudgeEmailResult {
+    Sent,
+    CooldownActive,
+    Failed { message: String },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

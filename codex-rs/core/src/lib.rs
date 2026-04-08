@@ -5,6 +5,7 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod account;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
@@ -109,7 +110,10 @@ mod stream_events_utils;
 pub mod test_support;
 mod unified_exec;
 pub mod windows_sandbox;
+pub use account::send_add_credits_nudge_email;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
+pub use codex_account::AddCreditsNudgeEmailStatus;
+pub use codex_account::SendAddCreditsNudgeEmailError;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
 mod event_mapping;
 pub mod review_format;

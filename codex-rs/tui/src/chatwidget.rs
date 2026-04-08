@@ -67,7 +67,7 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
-use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
+use codex_app_server_protocol::AddCreditsNudgeEmailResult as AppServerAddCreditsNudgeEmailResult;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
@@ -135,6 +135,7 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
 #[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 #[cfg(test)]
@@ -6568,6 +6569,18 @@ impl ChatWidget {
                     );
                 }
             }
+            ServerNotification::AddCreditsNudgeEmailCompleted(notification) => {
+                let result = match notification.result {
+                    AppServerAddCreditsNudgeEmailResult::Sent => {
+                        Ok(AddCreditsNudgeEmailStatus::Sent)
+                    }
+                    AppServerAddCreditsNudgeEmailResult::CooldownActive => {
+                        Ok(AddCreditsNudgeEmailStatus::CooldownActive)
+                    }
+                    AppServerAddCreditsNudgeEmailResult::Failed { message } => Err(message),
+                };
+                self.finish_notify_workspace_owner(result);
+            }
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
@@ -6998,6 +7011,9 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::AddCreditsNudgeEmailResponse(ev) => {
+                self.finish_notify_workspace_owner(ev.result);
+            }
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
                     Vec::new(),

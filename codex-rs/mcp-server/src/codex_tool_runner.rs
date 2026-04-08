@@ -337,6 +337,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::McpToolCallEnd(_)
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListSkillsResponse(_)
+                    | EventMsg::AddCreditsNudgeEmailResponse(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::TerminalInteraction(_)
                     | EventMsg::ExecCommandOutputDelta(_)
