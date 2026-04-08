@@ -432,6 +432,39 @@ fn record_windows_sandbox_spawn_failure(
 }
 
 #[cfg(target_os = "windows")]
+fn is_powershell_executable(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path)
+            .to_ascii_lowercase()
+            .as_str(),
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_powershell_no_profile_for_sandbox(mut command: Vec<String>) -> Vec<String> {
+    let Some(program) = command.first() else {
+        return command;
+    };
+    if !is_powershell_executable(program) {
+        return command;
+    }
+    if command
+        .iter()
+        .skip(1)
+        .any(|arg| arg.eq_ignore_ascii_case("-NoProfile") || arg.eq_ignore_ascii_case("/NoProfile"))
+    {
+        return command;
+    }
+
+    command.insert(1, "-NoProfile".to_string());
+    command
+}
+
+#[cfg(target_os = "windows")]
 async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
@@ -455,6 +488,7 @@ async fn exec_windows_sandbox(
     if let Some(network) = network.as_ref() {
         network.apply_to_env(&mut env);
     }
+    let command = ensure_powershell_no_profile_for_sandbox(command);
 
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
     // variants of ExecExpiration, not just timeout.

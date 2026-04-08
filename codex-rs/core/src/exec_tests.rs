@@ -77,6 +77,61 @@ fn sandbox_detection_uses_aggregated_output() {
     ));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_sandbox_powershell_inserts_no_profile() {
+    let command = ensure_powershell_no_profile_for_sandbox(vec![
+        "powershell.exe".to_string(),
+        "-Command".to_string(),
+        "Write-Output ok".to_string(),
+    ]);
+
+    assert_eq!(
+        command,
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ]
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_sandbox_powershell_preserves_existing_no_profile() {
+    let command = ensure_powershell_no_profile_for_sandbox(vec![
+        "pwsh.exe".to_string(),
+        "-NoLogo".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "Write-Output ok".to_string(),
+    ]);
+
+    assert_eq!(
+        command,
+        vec![
+            "pwsh.exe".to_string(),
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ]
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_sandbox_powershell_detects_full_path() {
+    let command = ensure_powershell_no_profile_for_sandbox(vec![
+        r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(),
+        "-Command".to_string(),
+        "Write-Output ok".to_string(),
+    ]);
+
+    assert_eq!(command[1], "-NoProfile");
+}
+
 #[test]
 fn sandbox_detection_ignores_network_policy_text_with_zero_exit_code() {
     let output = make_exec_output(
