@@ -815,6 +815,9 @@ pub(crate) struct Session {
     agent_status: watch::Sender<AgentStatus>,
     out_of_band_elicitation_paused: watch::Sender<bool>,
     state: Mutex<SessionState>,
+    /// Serializes rebuild/apply cycles for the running proxy; each cycle
+    /// rebuilds from the current SessionState while holding this lock.
+    managed_network_proxy_refresh_lock: Mutex<()>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: ManagedFeatures,
@@ -1325,6 +1328,48 @@ impl Session {
             }
         };
         Ok((network_proxy, session_network_proxy))
+    }
+
+    async fn refresh_managed_network_proxy_for_current_sandbox_policy(&self) {
+        let Some(started_proxy) = self.services.network_proxy.as_ref() else {
+            return;
+        };
+        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let Some(spec) = session_configuration
+            .original_config_do_not_use
+            .permissions
+            .network
+            .as_ref()
+        else {
+            return;
+        };
+
+        let spec = match spec
+            .recompute_for_sandbox_policy(session_configuration.sandbox_policy.get())
+        {
+            Ok(spec) => spec,
+            Err(err) => {
+                warn!("failed to rebuild managed network proxy policy for sandbox change: {err}");
+                return;
+            }
+        };
+        let current_exec_policy = self.services.exec_policy.current();
+        let spec = match spec.with_exec_policy_network_rules(current_exec_policy.as_ref()) {
+            Ok(spec) => spec,
+            Err(err) => {
+                warn!(
+                    "failed to apply execpolicy network rules while refreshing managed network proxy: {err}"
+                );
+                spec
+            }
+        };
+        if let Err(err) = spec.apply_to_started_proxy(started_proxy).await {
+            warn!("failed to refresh managed network proxy for sandbox change: {err}");
+        }
     }
 
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
@@ -1981,6 +2026,7 @@ impl Session {
             agent_status,
             out_of_band_elicitation_paused,
             state: Mutex::new(state),
+            managed_network_proxy_refresh_lock: Mutex::new(()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -2397,6 +2443,8 @@ impl Session {
         match state.session_configuration.apply(&updates) {
             Ok(updated) => {
                 let previous_cwd = state.session_configuration.cwd.clone();
+                let sandbox_policy_changed =
+                    state.session_configuration.sandbox_policy != updated.sandbox_policy;
                 let next_cwd = updated.cwd.clone();
                 let codex_home = updated.codex_home.clone();
                 let session_source = updated.session_source.clone();
@@ -2409,6 +2457,10 @@ impl Session {
                     &codex_home,
                     &session_source,
                 );
+                if sandbox_policy_changed {
+                    self.refresh_managed_network_proxy_for_current_sandbox_policy()
+                        .await;
+                }
 
                 Ok(())
             }
@@ -2495,6 +2547,8 @@ impl Session {
             .set_approval_policy(&session_configuration.approval_policy);
 
         if sandbox_policy_changed {
+            self.refresh_managed_network_proxy_for_current_sandbox_policy()
+                .await;
             let sandbox_state = SandboxState {
                 sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
@@ -2930,6 +2984,7 @@ impl Session {
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
     ) -> anyhow::Result<()> {
+        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
         let host =
             Self::validated_network_policy_amendment_host(amendment, network_approval_context)?;
         let codex_home = self
