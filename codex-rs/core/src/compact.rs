@@ -132,7 +132,6 @@ async fn run_compact_task_inner(
             turn_context.as_ref(),
             compaction_status_from_result(&result),
             result.as_ref().err().map(ToString::to_string),
-            /*deleted_items_before_remote_compact*/ None,
         )
         .await;
     result
@@ -295,8 +294,6 @@ pub(crate) struct CompactionAnalyticsAttempt {
 }
 
 struct CompactionAnalyticsSnapshot {
-    input_tokens: Option<i64>,
-    estimated_tokens: Option<i64>,
     history_items: usize,
 }
 
@@ -325,7 +322,6 @@ impl CompactionAnalyticsAttempt {
         turn_context: &TurnContext,
         status: CompactionStatus,
         error: Option<String>,
-        deleted_items_before_remote_compact: Option<usize>,
     ) {
         if !self.enabled {
             return;
@@ -345,30 +341,16 @@ impl CompactionAnalyticsAttempt {
                 duration_ms: Some(
                     u64::try_from(self.start_instant.elapsed().as_millis()).unwrap_or(u64::MAX),
                 ),
-                input_tokens_before: self.before.input_tokens,
-                input_tokens_after: after.input_tokens,
-                estimated_tokens_before: self.before.estimated_tokens,
-                estimated_tokens_after: after.estimated_tokens,
                 history_items_before: self.before.history_items,
                 history_items_after: after.history_items,
-                deleted_items_before_remote_compact,
             });
     }
 }
 
 impl CompactionAnalyticsSnapshot {
-    async fn capture(sess: &Session, turn_context: &TurnContext) -> Self {
-        let input_tokens = sess
-            .total_token_usage()
-            .await
-            .map(|usage| usage.input_tokens);
-        let estimated_tokens = sess.get_estimated_token_count(turn_context).await;
+    async fn capture(sess: &Session, _turn_context: &TurnContext) -> Self {
         let history_items = sess.clone_history().await.raw_items().len();
-        Self {
-            input_tokens,
-            estimated_tokens,
-            history_items,
-        }
+        Self { history_items }
     }
 }
 

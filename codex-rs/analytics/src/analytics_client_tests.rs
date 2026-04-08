@@ -287,13 +287,8 @@ fn compaction_event_serializes_expected_shape() {
                 started_at: 100,
                 completed_at: 106,
                 duration_ms: Some(6543),
-                input_tokens_before: Some(1000),
-                input_tokens_after: Some(600),
-                estimated_tokens_before: Some(1500),
-                estimated_tokens_after: Some(900),
                 history_items_before: 50,
                 history_items_after: 12,
-                deleted_items_before_remote_compact: Some(3),
             },
         ),
     }));
@@ -327,13 +322,8 @@ fn compaction_event_serializes_expected_shape() {
                 "started_at": 100,
                 "completed_at": 106,
                 "duration_ms": 6543,
-                "input_tokens_before": 1000,
-                "input_tokens_after": 600,
-                "estimated_tokens_before": 1500,
-                "estimated_tokens_after": 900,
                 "history_items_before": 50,
-                "history_items_after": 12,
-                "deleted_items_before_remote_compact": 3
+                "history_items_after": 12
             }
         })
     );
@@ -552,13 +542,8 @@ async fn compaction_event_waits_for_thread_connection_metadata() {
                     started_at: 100,
                     completed_at: 101,
                     duration_ms: Some(1200),
-                    input_tokens_before: Some(2000),
-                    input_tokens_after: Some(2000),
-                    estimated_tokens_before: Some(2500),
-                    estimated_tokens_after: Some(2500),
                     history_items_before: 20,
                     history_items_after: 20,
-                    deleted_items_before_remote_compact: None,
                 },
             ))),
             &mut events,

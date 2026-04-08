@@ -98,13 +98,8 @@ pub struct CodexCompactionEvent {
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,
-    pub input_tokens_before: Option<i64>,
-    pub input_tokens_after: Option<i64>,
-    pub estimated_tokens_before: Option<i64>,
-    pub estimated_tokens_after: Option<i64>,
     pub history_items_before: usize,
     pub history_items_after: usize,
-    pub deleted_items_before_remote_compact: Option<usize>,
 }
 
 #[allow(dead_code)]

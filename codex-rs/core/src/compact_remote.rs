@@ -75,14 +75,12 @@ async fn run_remote_compact_task_inner(
     .await;
     let result =
         run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await;
-    let deleted_items_before_remote_compact = result.as_ref().ok().copied();
     attempt
         .track(
             sess.as_ref(),
             turn_context.as_ref(),
             compaction_status_from_result(&result),
             result.as_ref().err().map(ToString::to_string),
-            deleted_items_before_remote_compact,
         )
         .await;
     if let Err(err) = result {
@@ -99,7 +97,7 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
-) -> CodexResult<usize> {
+) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
@@ -192,7 +190,7 @@ async fn run_remote_compact_task_inner_impl(
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
-    Ok(deleted_items)
+    Ok(())
 }
 
 pub(crate) async fn process_compacted_history(

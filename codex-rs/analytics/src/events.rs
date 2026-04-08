@@ -137,13 +137,8 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) started_at: u64,
     pub(crate) completed_at: u64,
     pub(crate) duration_ms: Option<u64>,
-    pub(crate) input_tokens_before: Option<i64>,
-    pub(crate) input_tokens_after: Option<i64>,
-    pub(crate) estimated_tokens_before: Option<i64>,
-    pub(crate) estimated_tokens_after: Option<i64>,
     pub(crate) history_items_before: usize,
     pub(crate) history_items_after: usize,
-    pub(crate) deleted_items_before_remote_compact: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -248,13 +243,8 @@ pub(crate) fn codex_compaction_event_params(
         started_at: input.started_at,
         completed_at: input.completed_at,
         duration_ms: input.duration_ms,
-        input_tokens_before: input.input_tokens_before,
-        input_tokens_after: input.input_tokens_after,
-        estimated_tokens_before: input.estimated_tokens_before,
-        estimated_tokens_after: input.estimated_tokens_after,
         history_items_before: input.history_items_before,
         history_items_after: input.history_items_after,
-        deleted_items_before_remote_compact: input.deleted_items_before_remote_compact,
     }
 }
 
