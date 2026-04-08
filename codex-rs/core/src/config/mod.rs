@@ -785,12 +785,12 @@ impl Config {
 /// applied yet, which risks failing to enforce required constraints.
 pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
-    cwd: &AbsolutePathBuf,
+    cwd: Option<&AbsolutePathBuf>,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         codex_home,
-        Some(cwd.clone()),
+        cwd.cloned(),
         &cli_overrides,
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
