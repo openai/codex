@@ -383,6 +383,20 @@ fn parse_tool_input_schema_rewrites_const_to_single_value_enum() {
 }
 
 #[test]
+fn parse_tool_input_schema_rejects_singleton_null_type() {
+    let err = parse_tool_input_schema(&serde_json::json!({
+        "type": "null"
+    }))
+    .expect_err("singleton null should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("tool input schema must not be a singleton null type"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_fills_default_properties_for_nullable_object_union() {
     // Example schema shape:
     // {
@@ -584,7 +598,6 @@ fn parse_tool_input_schema_preserves_nested_nullable_type_union() {
         )
     );
 }
-
 
 #[test]
 fn parse_tool_input_schema_preserves_nested_any_of_property() {

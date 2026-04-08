@@ -149,7 +149,14 @@ impl From<JsonSchema> for AdditionalProperties {
 pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
     let mut input_schema = input_schema.clone();
     sanitize_json_schema(&mut input_schema);
-    serde_json::from_value(input_schema)
+    let schema: JsonSchema = serde_json::from_value(input_schema)?;
+    if matches!(
+        schema.schema_type,
+        Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Null))
+    ) {
+        return Err(singleton_null_schema_error());
+    }
+    Ok(schema)
 }
 
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
@@ -334,6 +341,13 @@ fn schema_type_name(schema_type: JsonSchemaPrimitiveType) -> &'static str {
         JsonSchemaPrimitiveType::Array => "array",
         JsonSchemaPrimitiveType::Null => "null",
     }
+}
+
+fn singleton_null_schema_error() -> serde_json::Error {
+    serde_json::Error::io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "tool input schema must not be a singleton null type",
+    ))
 }
 
 #[cfg(test)]
