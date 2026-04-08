@@ -19,7 +19,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxLaunchConfig;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::get_platform_sandbox;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -36,8 +35,13 @@ struct ProcessContext {
 }
 
 fn platform_sandbox_type() -> SandboxType {
-    get_platform_sandbox(/*windows_sandbox_enabled*/ false)
-        .expect("sandbox denial test requires a Unix sandbox")
+    if cfg!(target_os = "macos") {
+        SandboxType::MacosSeatbelt
+    } else if cfg!(target_os = "linux") {
+        SandboxType::LinuxSeccomp
+    } else {
+        SandboxType::None
+    }
 }
 
 async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
