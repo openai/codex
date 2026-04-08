@@ -857,11 +857,7 @@ pub struct ConfigEditsBuilder {
 
 impl ConfigEditsBuilder {
     pub fn new(codex_home: &Path) -> Self {
-        Self {
-            config_path: codex_home.join(CONFIG_TOML_FILE),
-            profile: None,
-            edits: Vec::new(),
-        }
+        Self::for_config_path(&codex_home.join(CONFIG_TOML_FILE))
     }
 
     pub fn for_config(config: &crate::config::Config) -> Self {
@@ -870,7 +866,15 @@ impl ConfigEditsBuilder {
             .get_user_config_file()
             .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
             .unwrap_or_else(|| config.codex_home.join(CONFIG_TOML_FILE));
-        Self::new(&config.codex_home).with_config_path(&config_path)
+        Self::for_config_path(&config_path)
+    }
+
+    pub fn for_config_path(config_path: &Path) -> Self {
+        Self {
+            config_path: config_path.to_path_buf(),
+            profile: None,
+            edits: Vec::new(),
+        }
     }
 
     pub fn with_config_path(mut self, config_path: &Path) -> Self {

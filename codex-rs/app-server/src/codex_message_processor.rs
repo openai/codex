@@ -2267,11 +2267,11 @@ impl CodexMessageProcessor {
         {
             let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
                 .unwrap_or_else(|| config.cwd.to_path_buf());
-            if let Err(err) = codex_core::config::set_project_trust_level(
-                &listener_task_context.codex_home,
-                trust_target.as_path(),
-                TrustLevel::Trusted,
-            ) {
+            if let Err(err) = ConfigEditsBuilder::for_config(&config)
+                .set_project_trust_level(trust_target.as_path(), TrustLevel::Trusted)
+                .apply()
+                .await
+            {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to persist trusted project state: {err}"),
@@ -5970,6 +5970,8 @@ impl CodexMessageProcessor {
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let cli_overrides = self.current_cli_overrides();
+        let loader_overrides = self.loader_overrides.clone();
+        let cloud_requirements = self.current_cloud_requirements();
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
@@ -5994,8 +5996,8 @@ impl CodexMessageProcessor {
                 &self.config.codex_home,
                 Some(cwd_abs),
                 &cli_overrides,
-                LoaderOverrides::default(),
-                CloudRequirementsLoader::default(),
+                loader_overrides.clone(),
+                cloud_requirements.clone(),
             )
             .await
             {

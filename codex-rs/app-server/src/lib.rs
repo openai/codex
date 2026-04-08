@@ -391,7 +391,7 @@ pub async fn run_main_with_transport(
                         config
                             .config_layer_stack
                             .get_user_config_file()
-                            .map(|path| path.as_path()),
+                            .map(codex_utils_absolute_path::AbsolutePathBuf::as_path),
                     )
                     .await
                     {
