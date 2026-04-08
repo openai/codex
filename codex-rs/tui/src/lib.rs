@@ -96,6 +96,7 @@ mod audio_device {
     }
 }
 mod bottom_pane;
+mod buffer_hyperlinks;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;
@@ -130,6 +131,7 @@ mod model_migration;
 mod multi_agents;
 mod notifications;
 pub(crate) mod onboarding;
+mod osc8;
 mod oss_selection;
 mod pager_overlay;
 pub(crate) mod public_widgets;
@@ -146,6 +148,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod terminal_title;
+mod terminal_wrappers;
 mod text_formatting;
 mod theme_picker;
 mod tooltips;

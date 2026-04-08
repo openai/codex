@@ -2,6 +2,7 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
+use crate::osc8::osc8_hyperlink;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::line_contains_url_like;
@@ -26,6 +27,7 @@ use ratatui::layout::Size;
 use ratatui::prelude::Backend;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
@@ -98,23 +100,9 @@ where
     // - Non-URL lines also flow through adaptive wrapping; behavior is
     //   equivalent to standard wrapping when no URL is present.
     let wrap_width = area.width.max(1) as usize;
-    let mut wrapped = Vec::new();
-    let mut wrapped_rows = 0usize;
-
-    for line in &lines {
-        let line_wrapped =
-            if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) {
-                vec![line.clone()]
-            } else {
-                adaptive_wrap_line(line, RtOptions::new(wrap_width))
-            };
-        wrapped_rows += line_wrapped
-            .iter()
-            .map(|wrapped_line| wrapped_line.width().max(1).div_ceil(wrap_width))
-            .sum::<usize>();
-        wrapped.extend(line_wrapped);
-    }
-    let wrapped_lines = wrapped_rows as u16;
+    let prepared = prepare_history_lines(&lines, wrap_width);
+    let wrapped = prepared.lines;
+    let wrapped_lines = prepared.rows;
 
     if matches!(mode, InsertHistoryMode::Zellij) {
         let space_below = screen_size.height.saturating_sub(area.bottom());
@@ -141,7 +129,7 @@ where
             if i > 0 {
                 queue!(writer, Print("\r\n"))?;
             }
-            write_history_line(writer, line, wrap_width)?;
+            write_prepared_history_line(writer, line, wrap_width)?;
         }
     } else {
         let cursor_top = if area.bottom() < screen_size.height {
@@ -187,7 +175,7 @@ where
 
         for line in &wrapped {
             queue!(writer, Print("\r\n"))?;
-            write_history_line(writer, line, wrap_width)?;
+            write_prepared_history_line(writer, line, wrap_width)?;
         }
 
         queue!(writer, ResetScrollRegion)?;
@@ -207,10 +195,56 @@ where
     Ok(())
 }
 
+struct PreparedHistoryLines<'a> {
+    lines: Vec<PreparedHistoryLine<'a>>,
+    rows: u16,
+}
+
+struct PreparedHistoryLine<'a> {
+    line: Line<'a>,
+    span_hyperlinks: Vec<Option<String>>,
+}
+
+fn prepare_history_lines<'a>(lines: &'a [Line<'a>], wrap_width: usize) -> PreparedHistoryLines<'a> {
+    let mut prepared_lines = Vec::new();
+    let mut rows = 0usize;
+
+    for line in lines {
+        let wrapped =
+            if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) {
+                vec![line.clone()]
+            } else {
+                adaptive_wrap_line(line, RtOptions::new(wrap_width))
+            };
+        rows += wrapped
+            .iter()
+            .map(|wrapped_line| wrapped_line.width().max(1).div_ceil(wrap_width))
+            .sum::<usize>();
+        prepared_lines.extend(mark_markdown_link_spans(wrapped));
+    }
+
+    PreparedHistoryLines {
+        lines: prepared_lines,
+        rows: rows as u16,
+    }
+}
+
 /// Render a single wrapped history line: clear continuation rows for wide lines,
 /// set foreground/background colors, and write styled spans. Caller is responsible
 /// for cursor positioning and any leading `\r\n`.
+#[cfg(test)]
 fn write_history_line<W: Write>(writer: &mut W, line: &Line, wrap_width: usize) -> io::Result<()> {
+    let prepared = mark_markdown_link_spans(vec![line.clone()]);
+    let prepared = prepared.first().expect("one prepared line");
+    write_prepared_history_line(writer, prepared, wrap_width)
+}
+
+fn write_prepared_history_line<W: Write>(
+    writer: &mut W,
+    prepared: &PreparedHistoryLine<'_>,
+    wrap_width: usize,
+) -> io::Result<()> {
+    let line = &prepared.line;
     let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
     if physical_rows > 1 {
         queue!(writer, SavePosition)?;
@@ -244,7 +278,8 @@ fn write_history_line<W: Write>(writer: &mut W, line: &Line, wrap_width: usize) 
             content: s.content.clone(),
         })
         .collect();
-    write_spans(writer, merged_spans.iter())
+    let merged_span_refs = merged_spans.iter().collect::<Vec<_>>();
+    write_spans_with_hyperlinks(writer, &merged_span_refs, &prepared.span_hyperlinks)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,37 +389,34 @@ impl ModifierDiff {
     }
 }
 
+#[cfg(test)]
 fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Span<'a>>,
 {
+    let spans = content.into_iter().collect::<Vec<_>>();
+    let hyperlinks = vec![None; spans.len()];
+    write_spans_with_hyperlinks(&mut writer, &spans, &hyperlinks)
+}
+
+fn write_spans_with_hyperlinks(
+    mut writer: &mut impl Write,
+    spans: &[&Span<'_>],
+    hyperlinks: &[Option<String>],
+) -> io::Result<()> {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
     let mut last_modifier = Modifier::empty();
-    for span in content {
-        let mut modifier = Modifier::empty();
-        modifier.insert(span.style.add_modifier);
-        modifier.remove(span.style.sub_modifier);
-        if modifier != last_modifier {
-            let diff = ModifierDiff {
-                from: last_modifier,
-                to: modifier,
-            };
-            diff.queue(&mut writer)?;
-            last_modifier = modifier;
-        }
-        let next_fg = span.style.fg.unwrap_or(Color::Reset);
-        let next_bg = span.style.bg.unwrap_or(Color::Reset);
-        if next_fg != fg || next_bg != bg {
-            queue!(
-                writer,
-                SetColors(Colors::new(next_fg.into(), next_bg.into()))
-            )?;
-            fg = next_fg;
-            bg = next_bg;
-        }
 
-        queue!(writer, Print(span.content.clone()))?;
+    for (span, hyperlink) in spans.iter().zip(hyperlinks) {
+        write_span(
+            &mut writer,
+            span,
+            hyperlink.as_deref(),
+            &mut fg,
+            &mut bg,
+            &mut last_modifier,
+        )?;
     }
 
     queue!(
@@ -395,6 +427,176 @@ where
     )
 }
 
+fn write_span(
+    writer: &mut impl Write,
+    span: &Span<'_>,
+    hyperlink_destination: Option<&str>,
+    fg: &mut Color,
+    bg: &mut Color,
+    last_modifier: &mut Modifier,
+) -> io::Result<()> {
+    let mut modifier = Modifier::empty();
+    modifier.insert(span.style.add_modifier);
+    modifier.remove(span.style.sub_modifier);
+    if modifier != *last_modifier {
+        let diff = ModifierDiff {
+            from: *last_modifier,
+            to: modifier,
+        };
+        diff.queue(&mut *writer)?;
+        *last_modifier = modifier;
+    }
+    let next_fg = span.style.fg.unwrap_or(Color::Reset);
+    let next_bg = span.style.bg.unwrap_or(Color::Reset);
+    if next_fg != *fg || next_bg != *bg {
+        queue!(
+            writer,
+            SetColors(Colors::new(next_fg.into(), next_bg.into()))
+        )?;
+        *fg = next_fg;
+        *bg = next_bg;
+    }
+
+    if let Some(destination) = hyperlink_destination {
+        queue!(
+            writer,
+            Print(osc8_hyperlink(destination, span.content.as_ref()))
+        )?;
+    } else {
+        queue!(writer, Print(span.content.clone()))?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct SpanPosition {
+    line: usize,
+    span: usize,
+}
+
+struct LinkSpanSnapshot<'a> {
+    position: SpanPosition,
+    content: &'a str,
+    style: Style,
+}
+
+struct MarkdownLink<'a> {
+    label: &'a [LinkSpanSnapshot<'a>],
+    destination_spans: &'a [LinkSpanSnapshot<'a>],
+    destination: String,
+    end: usize,
+}
+
+impl<'a> MarkdownLink<'a> {
+    fn parse(spans: &'a [LinkSpanSnapshot<'a>], start: usize) -> Option<Self> {
+        if !is_link_label_styled(spans.get(start)?) {
+            return None;
+        }
+
+        let mut separator = start;
+        while separator < spans.len() && is_link_label_styled(&spans[separator]) {
+            separator += 1;
+        }
+        if !matches!(spans.get(separator)?.content, " (" | "(") {
+            return None;
+        }
+
+        let destination_start = separator + 1;
+        let mut close = destination_start;
+        while close < spans.len() && is_link_destination_styled(&spans[close]) {
+            close += 1;
+        }
+        if close == destination_start || spans.get(close)?.content != ")" {
+            return None;
+        }
+
+        let destination = spans[destination_start..close]
+            .iter()
+            .map(|span| span.content)
+            .collect::<String>();
+        if !is_remote_url(&destination) {
+            return None;
+        }
+
+        Some(Self {
+            label: &spans[start..separator],
+            destination_spans: &spans[destination_start..close],
+            destination,
+            end: close + 1,
+        })
+    }
+}
+
+fn mark_markdown_link_spans(lines: Vec<Line<'_>>) -> Vec<PreparedHistoryLine<'_>> {
+    let mut prepared = lines
+        .into_iter()
+        .map(|line| {
+            let span_hyperlinks = vec![None; line.spans.len()];
+            PreparedHistoryLine {
+                line,
+                span_hyperlinks,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let annotations =
+        {
+            let snapshots =
+                prepared
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(line_index, prepared_line)| {
+                        prepared_line.line.spans.iter().enumerate().map(
+                            move |(span_index, span)| LinkSpanSnapshot {
+                                position: SpanPosition {
+                                    line: line_index,
+                                    span: span_index,
+                                },
+                                content: span.content.as_ref(),
+                                style: span.style,
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+            let mut annotations = Vec::new();
+            let mut start = 0;
+            while start < snapshots.len() {
+                let Some(link) = MarkdownLink::parse(&snapshots, start) else {
+                    start += 1;
+                    continue;
+                };
+
+                for snapshot in link.label.iter().chain(link.destination_spans) {
+                    annotations.push((snapshot.position, link.destination.clone()));
+                }
+                start = link.end;
+            }
+            annotations
+        };
+
+    for (position, destination) in annotations {
+        prepared[position.line].span_hyperlinks[position.span] = Some(destination);
+    }
+
+    prepared
+}
+
+fn is_link_label_styled(span: &LinkSpanSnapshot<'_>) -> bool {
+    span.style.add_modifier.contains(Modifier::UNDERLINED)
+        && !span.style.sub_modifier.contains(Modifier::UNDERLINED)
+        && span.style.fg == Some(Color::Cyan)
+        && !span.content.trim().is_empty()
+}
+
+fn is_link_destination_styled(span: &LinkSpanSnapshot<'_>) -> bool {
+    is_link_label_styled(span)
+}
+
+fn is_remote_url(text: &str) -> bool {
+    text.starts_with("http://") || text.starts_with("https://")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +604,7 @@ mod tests {
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::style::Stylize;
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -428,6 +631,108 @@ mod tests {
         assert_eq!(
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn write_history_line_emits_osc8_for_remote_markdown_link() {
+        let text = render_markdown_text("[OpenAI](https://openai.com)");
+        let line = text.lines.first().expect("rendered link line");
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_history_line(&mut actual, line, /*wrap_width*/ 80).unwrap();
+
+        let actual = String::from_utf8(actual).unwrap();
+        assert!(
+            actual.contains("\u{1b}]8;;https://openai.com\u{1b}\\OpenAI\u{1b}]8;;\u{1b}\\"),
+            "label should be printed as an ST-terminated OSC-8 hyperlink: {actual:?}"
+        );
+        assert!(
+            actual.contains(
+                "\u{1b}]8;;https://openai.com\u{1b}\\https://openai.com\u{1b}]8;;\u{1b}\\"
+            ),
+            "destination should be printed as an ST-terminated OSC-8 hyperlink: {actual:?}"
+        );
+        assert!(
+            !actual.contains('\u{7}'),
+            "new OSC-8 output should not use BEL"
+        );
+    }
+
+    #[test]
+    fn write_history_line_does_not_emit_osc8_for_underlined_non_markdown_url_pattern() {
+        let line = Line::from(vec![
+            "underlined note".underlined(),
+            " (".into(),
+            "https://example.com/not-a-markdown-destination".underlined(),
+            ")".into(),
+        ]);
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_history_line(&mut actual, &line, /*wrap_width*/ 80).unwrap();
+
+        let actual = String::from_utf8(actual).unwrap();
+        assert!(
+            !actual.contains("\u{1b}]8;;"),
+            "plain underlined text should stay as styled text, not OSC-8: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn inserted_history_preserves_osc8_when_markdown_link_wraps_before_writing() {
+        let text = render_markdown_text("[OpenAI Platform](https://openai.com/docs/codex/osc8)");
+        let width: u16 = 24;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+        insert_history_lines(&mut term, text.lines).expect("history insertion should succeed");
+
+        let actual = String::from_utf8_lossy(term.backend().written_output());
+        assert!(
+            actual.contains(
+                "\u{1b}]8;;https://openai.com/docs/codex/osc8\u{1b}\\OpenAI Platform\u{1b}]8;;\u{1b}\\"
+            ),
+            "wrapped label should still be printed as OSC-8: {actual:?}"
+        );
+        assert!(
+            actual.contains("\u{1b}]8;;https://openai.com/docs/codex/osc8\u{1b}\\https://"),
+            "wrapped destination should still be printed as OSC-8: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn write_history_line_does_not_expand_heading_underline_into_link_label() {
+        let text = render_markdown_text("# See [docs](https://example.com/docs)");
+        let line = text.lines.first().expect("rendered heading line");
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_history_line(&mut actual, line, /*wrap_width*/ 80).unwrap();
+
+        let actual = String::from_utf8(actual).unwrap();
+        assert!(
+            actual.contains("\u{1b}]8;;https://example.com/docs\u{1b}\\docs\u{1b}]8;;\u{1b}\\"),
+            "actual markdown label should be OSC-8: {actual:?}"
+        );
+        assert!(
+            !actual.contains("\u{1b}]8;;https://example.com/docs\u{1b}\\# See"),
+            "heading marker/text before the link must not be included in OSC-8 label: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn write_history_line_emits_osc8_for_link_inside_blockquote() {
+        let text = render_markdown_text("> [OpenAI](https://openai.com)");
+        let line = text.lines.first().expect("rendered blockquote link line");
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_history_line(&mut actual, line, /*wrap_width*/ 80).unwrap();
+
+        let actual = String::from_utf8(actual).unwrap();
+        assert!(
+            actual.contains("\u{1b}]8;;https://openai.com\u{1b}\\OpenAI\u{1b}]8;;\u{1b}\\"),
+            "blockquote link label should be OSC-8 despite line-level blockquote style: {actual:?}"
         );
     }
 
