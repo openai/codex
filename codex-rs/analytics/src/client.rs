@@ -225,7 +225,7 @@ impl AnalyticsEventsClient {
     }
 
     pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
-        self.record_fact(AnalyticsFact::Response {
+        self.record_fact(AnalyticsFact::ClientResponse {
             connection_id,
             response: Box::new(response),
         });

@@ -98,12 +98,12 @@ impl AnalyticsReducer {
                     rpc_transport,
                 );
             }
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: _connection_id,
                 request_id: _request_id,
                 request: _request,
             } => {}
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id,
                 response,
             } => {

@@ -74,12 +74,12 @@ pub(crate) enum AnalyticsFact {
         runtime: CodexRuntimeMetadata,
         rpc_transport: AppServerRpcTransport,
     },
-    Request {
+    ClientRequest {
         connection_id: u64,
         request_id: RequestId,
         request: Box<ClientRequest>,
     },
-    Response {
+    ClientResponse {
         connection_id: u64,
         response: Box<ClientResponse>,
     },
