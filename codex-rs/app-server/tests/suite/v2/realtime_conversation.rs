@@ -140,6 +140,21 @@ impl RealtimeTestVersion {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RealtimeTestSandbox {
+    ReadOnly,
+    DangerFullAccess,
+}
+
+impl RealtimeTestSandbox {
+    fn config_value(self) -> &'static str {
+        match self {
+            RealtimeTestSandbox::ReadOnly => "read-only",
+            RealtimeTestSandbox::DangerFullAccess => "danger-full-access",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct StartedWebrtcRealtime {
     started: ThreadRealtimeStartedNotification,
@@ -162,14 +177,50 @@ impl RealtimeE2eHarness {
         sideband_connections: Vec<WebSocketConnectionConfig>,
     ) -> Result<Self> {
         let responses_server = create_mock_responses_server_sequence_unchecked(responses).await;
-        Self::new_with_responses_server(realtime_version, responses_server, sideband_connections)
-            .await
+        Self::new_with_responses_server_and_sandbox(
+            realtime_version,
+            responses_server,
+            sideband_connections,
+            RealtimeTestSandbox::ReadOnly,
+        )
+        .await
+    }
+
+    async fn new_with_sandbox(
+        realtime_version: RealtimeTestVersion,
+        responses: Vec<String>,
+        sideband_connections: Vec<WebSocketConnectionConfig>,
+        sandbox: RealtimeTestSandbox,
+    ) -> Result<Self> {
+        let responses_server = create_mock_responses_server_sequence_unchecked(responses).await;
+        Self::new_with_responses_server_and_sandbox(
+            realtime_version,
+            responses_server,
+            sideband_connections,
+            sandbox,
+        )
+        .await
     }
 
     async fn new_with_responses_server(
         realtime_version: RealtimeTestVersion,
         responses_server: MockServer,
         sideband_connections: Vec<WebSocketConnectionConfig>,
+    ) -> Result<Self> {
+        Self::new_with_responses_server_and_sandbox(
+            realtime_version,
+            responses_server,
+            sideband_connections,
+            RealtimeTestSandbox::ReadOnly,
+        )
+        .await
+    }
+
+    async fn new_with_responses_server_and_sandbox(
+        realtime_version: RealtimeTestVersion,
+        responses_server: MockServer,
+        sideband_connections: Vec<WebSocketConnectionConfig>,
+        sandbox: RealtimeTestSandbox,
     ) -> Result<Self> {
         let call_capture = RealtimeCallRequestCapture::new();
         Mock::given(method("POST"))
@@ -192,6 +243,7 @@ impl RealtimeE2eHarness {
             /*realtime_enabled*/ true,
             StartupContextConfig::Override("startup context"),
             realtime_version,
+            sandbox,
         )?;
 
         let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -1080,11 +1132,11 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
 async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let mut harness = RealtimeE2eHarness::new(
+    let mut harness = RealtimeE2eHarness::new_with_sandbox(
         RealtimeTestVersion::V2,
         vec![
             create_shell_command_sse_response(
-                vec!["printf".to_string(), "realtime-tool-ok".to_string()],
+                realtime_tool_ok_command(),
                 /*workdir*/ None,
                 Some(5000),
                 "shell_call",
@@ -1098,6 +1150,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
             ],
             vec![],
         ])],
+        RealtimeTestSandbox::DangerFullAccess,
     )
     .await?;
 
@@ -1398,6 +1451,22 @@ fn response_request_contains_text(request: &Value, text: &str) -> bool {
     request.to_string().contains(text)
 }
 
+fn realtime_tool_ok_command() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        vec![
+            "Write-Output".to_string(),
+            "-NoNewline".to_string(),
+            "realtime-tool-ok".to_string(),
+        ]
+    }
+
+    #[cfg(not(windows))]
+    {
+        vec!["printf".to_string(), "realtime-tool-ok".to_string()]
+    }
+}
+
 fn function_call_output_sideband_requests(server: &WebSocketTestServer) -> Vec<Value> {
     server
         .single_connection()
@@ -1509,6 +1578,7 @@ fn create_config_toml(
         realtime_enabled,
         startup_context,
         RealtimeTestVersion::V2,
+        RealtimeTestSandbox::ReadOnly,
     )
 }
 
@@ -1519,6 +1589,7 @@ fn create_config_toml_with_realtime_version(
     realtime_enabled: bool,
     startup_context: StartupContextConfig<'_>,
     realtime_version: RealtimeTestVersion,
+    sandbox: RealtimeTestSandbox,
 ) -> std::io::Result<()> {
     let realtime_feature_key = FEATURES
         .iter()
@@ -1526,6 +1597,7 @@ fn create_config_toml_with_realtime_version(
         .map(|spec| spec.key)
         .unwrap_or("realtime_conversation");
     let realtime_version = realtime_version.config_value();
+    let sandbox = sandbox.config_value();
     let startup_context = match startup_context {
         StartupContextConfig::Generated => String::new(),
         StartupContextConfig::Override(context) => {
@@ -1539,7 +1611,7 @@ fn create_config_toml_with_realtime_version(
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "read-only"
+sandbox_mode = "{sandbox}"
 model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
 experimental_realtime_ws_backend_prompt = "backend prompt"
