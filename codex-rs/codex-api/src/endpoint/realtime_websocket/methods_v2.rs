@@ -62,7 +62,9 @@ pub(super) fn session_update_session(
 ) -> SessionUpdateSession {
     match session_mode {
         RealtimeSessionMode::Conversational => SessionUpdateSession {
+            id: None,
             r#type: SessionType::Realtime,
+            model: None,
             instructions: Some(instructions),
             output_modalities: Some(vec![REALTIME_V2_OUTPUT_MODALITY_AUDIO.to_string()]),
             audio: SessionAudio {
@@ -107,7 +109,9 @@ pub(super) fn session_update_session(
             tool_choice: Some(REALTIME_V2_TOOL_CHOICE.to_string()),
         },
         RealtimeSessionMode::Transcription => SessionUpdateSession {
+            id: None,
             r#type: SessionType::Transcription,
+            model: None,
             instructions: None,
             output_modalities: None,
             audio: SessionAudio {

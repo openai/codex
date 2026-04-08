@@ -592,15 +592,11 @@ async fn get_base_instructions_no_user_content() {
 
         {
             let mut state = session.state.lock().await;
-            state.session_configuration.base_instructions =
-                Some(model_info.base_instructions.clone());
+            state.session_configuration.base_instructions = model_info.base_instructions.clone();
         }
 
         let base_instructions = session.get_base_instructions().await;
-        assert_eq!(
-            base_instructions.expect("base instructions").text,
-            model_info.base_instructions
-        );
+        assert_eq!(base_instructions.text, model_info.base_instructions);
     }
 }
 
@@ -1096,7 +1092,7 @@ async fn recompute_token_usage_uses_session_base_instructions() {
     let override_instructions = "SESSION_OVERRIDE_INSTRUCTIONS_ONLY".repeat(120);
     {
         let mut state = session.state.lock().await;
-        state.session_configuration.base_instructions = Some(override_instructions.clone());
+        state.session_configuration.base_instructions = override_instructions.clone();
     }
 
     let item = user_message("hello");
@@ -1854,14 +1850,13 @@ async fn set_rate_limits_retains_previous_credits() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        developer_instructions_override: config.developer_instructions_override.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -1957,14 +1952,13 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        developer_instructions_override: config.developer_instructions_override.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2229,8 +2223,7 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
             ThreadId::default(),
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
-            /*developer_instructions*/ None,
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -2308,14 +2301,13 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        developer_instructions_override: config.developer_instructions_override.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2572,14 +2564,13 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        developer_instructions_override: config.developer_instructions_override.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2676,14 +2667,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        developer_instructions_override: config.developer_instructions_override.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -3518,14 +3508,13 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        developer_instructions_override: config.developer_instructions_override.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -4270,8 +4259,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
             ThreadId::default(),
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
-            /*developer_instructions*/ None,
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -4368,8 +4356,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
             ThreadId::default(),
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
-            /*developer_instructions*/ None,
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),

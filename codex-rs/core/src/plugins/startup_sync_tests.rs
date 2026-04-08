@@ -34,6 +34,7 @@ fn has_plugins_clone_dirs(codex_home: &Path) -> bool {
     })
 }
 
+#[cfg(unix)]
 fn write_executable_script(path: &Path, contents: &str) {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
