@@ -180,6 +180,74 @@ fn test_build_specs_collab_tools_enabled() {
 }
 
 #[test]
+fn tool_description_override_replaces_enabled_tool_description() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    let available_models = Vec::new();
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "spawn_agent".to_string(),
+        "Use this custom spawn guidance.".to_string(),
+    );
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_tool_description_overrides(overrides);
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        &find_tool(&tools, "spawn_agent").spec
+    else {
+        panic!("expected spawn_agent function tool");
+    };
+
+    assert_eq!(description, "Use this custom spawn guidance.");
+}
+
+#[test]
+fn tool_description_override_for_disabled_tool_is_ignored() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "spawn_agents_on_csv".to_string(),
+        "Use this custom batch guidance.".to_string(),
+    );
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_tool_description_overrides(overrides);
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+}
+
+#[test]
 fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -1658,6 +1726,43 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     ));
     assert!(description.contains("### `update_plan` (`update_plan`)"));
     assert!(description.contains("### `view_image` (`view_image`)"));
+}
+
+#[test]
+fn code_mode_only_exec_description_uses_nested_tool_description_overrides() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    let available_models = Vec::new();
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "update_plan".to_string(),
+        "Use this custom plan guidance.".to_string(),
+    );
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_tool_description_overrides(overrides);
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
+    else {
+        panic!("expected freeform tool");
+    };
+
+    assert!(description.contains("Use this custom plan guidance."));
 }
 
 #[test]

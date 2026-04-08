@@ -40,6 +40,18 @@ When Codex knows which client started the turn, the legacy notify JSON payload a
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
 
+## Tool Description Overrides
+
+Tool descriptions can be overridden by tool name under `[tools.description_overrides]`.
+Overrides only apply when that tool is enabled for the current turn; entries for
+disabled tools are ignored.
+
+```toml
+[tools.description_overrides]
+spawn_agent = "Use these custom spawn instructions."
+update_plan = "Use these custom planning instructions."
+```
+
 ## SQLite State DB
 
 Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the

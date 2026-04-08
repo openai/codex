@@ -64,6 +64,17 @@ impl ToolSpec {
             ToolSpec::Freeform(tool) => tool.name.as_str(),
         }
     }
+
+    pub fn description_mut(&mut self) -> Option<&mut String> {
+        match self {
+            ToolSpec::Function(tool) => Some(&mut tool.description),
+            ToolSpec::ToolSearch { description, .. } => Some(description),
+            ToolSpec::Freeform(tool) => Some(&mut tool.description),
+            ToolSpec::LocalShell {}
+            | ToolSpec::ImageGeneration { .. }
+            | ToolSpec::WebSearch { .. } => None,
+        }
+    }
 }
 
 pub fn create_local_shell_tool() -> ToolSpec {

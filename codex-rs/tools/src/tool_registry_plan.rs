@@ -491,6 +491,22 @@ pub fn build_tool_registry_plan(
         }
     }
 
+    if !config.tool_description_overrides.is_empty() {
+        for configured_tool in &mut plan.specs {
+            let Some(override_description) = config
+                .tool_description_overrides
+                .get(configured_tool.name())
+            else {
+                continue;
+            };
+            let Some(description) = configured_tool.spec.description_mut() else {
+                continue;
+            };
+
+            *description = override_description.clone();
+        }
+    }
+
     plan
 }
 

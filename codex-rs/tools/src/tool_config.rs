@@ -14,6 +14,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -110,6 +111,7 @@ pub struct ToolsConfig {
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
     pub agent_type_description: String,
+    pub tool_description_overrides: BTreeMap<String, String>,
 }
 
 pub struct ToolsConfigParams<'a> {
@@ -225,11 +227,20 @@ impl ToolsConfig {
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
             agent_type_description: String::new(),
+            tool_description_overrides: BTreeMap::new(),
         }
     }
 
     pub fn with_agent_type_description(mut self, agent_type_description: String) -> Self {
         self.agent_type_description = agent_type_description;
+        self
+    }
+
+    pub fn with_tool_description_overrides(
+        mut self,
+        tool_description_overrides: BTreeMap<String, String>,
+    ) -> Self {
+        self.tool_description_overrides = tool_description_overrides;
         self
     }
 

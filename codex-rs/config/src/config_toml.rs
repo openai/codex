@@ -482,6 +482,11 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Tool descriptions keyed by tool name. Overrides only apply to tools
+    /// that are enabled for the current turn.
+    #[serde(default)]
+    pub description_overrides: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
