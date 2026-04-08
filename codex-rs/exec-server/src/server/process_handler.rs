@@ -11,6 +11,7 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::internal_error;
 
 #[derive(Clone)]
 pub(crate) struct ProcessHandler {
@@ -29,7 +30,13 @@ impl ProcessHandler {
     }
 
     pub(crate) fn initialize(&self) -> Result<InitializeResponse, JSONRPCErrorError> {
-        self.process.initialize()
+        self.process.initialize()?;
+        let cwd = std::env::current_dir().map_err(|err| {
+            internal_error(format!(
+                "failed to read exec-server current directory: {err}"
+            ))
+        })?;
+        Ok(InitializeResponse { cwd })
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {

@@ -189,10 +189,10 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
+                let cwd = resolve_workdir_base_path(&arguments, context.turn.environment_cwd())?;
                 let args: ExecCommandArgs =
                     parse_arguments_with_base_path(&arguments, cwd.as_path())?;
-                let workdir = context.turn.resolve_path(args.workdir.clone());
+                let workdir = context.turn.resolve_environment_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     context.turn.as_ref(),
@@ -255,7 +255,7 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.filter(|value| !value.is_empty());
 
-                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
+                let workdir = workdir.map(|dir| context.turn.resolve_environment_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or(cwd);
                 let normalized_additional_permissions = match implicit_granted_permissions(
                     sandbox_permissions,

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -44,13 +45,27 @@ pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
     exec_server_with_env(&[]).await
 }
 
+pub(crate) async fn exec_server_in_cwd(cwd: &Path) -> anyhow::Result<ExecServerHarness> {
+    exec_server_with_env_and_cwd(&[], Some(cwd)).await
+}
+
 pub(crate) async fn exec_server_with_env(
     env: &[(&str, &str)],
+) -> anyhow::Result<ExecServerHarness> {
+    exec_server_with_env_and_cwd(env, None).await
+}
+
+pub(crate) async fn exec_server_with_env_and_cwd(
+    env: &[(&str, &str)],
+    cwd: Option<&Path>,
 ) -> anyhow::Result<ExecServerHarness> {
     let binary = cargo_bin("codex-exec-server")?;
     let mut child = Command::new(binary);
     child.args(["--listen", "ws://127.0.0.1:0"]);
     child.envs(env.iter().copied());
+    if let Some(cwd) = cwd {
+        child.current_dir(cwd);
+    }
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());

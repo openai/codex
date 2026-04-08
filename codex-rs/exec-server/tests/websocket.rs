@@ -53,7 +53,12 @@ async fn exec_server_reports_malformed_websocket_json_and_keeps_running() -> any
     };
     assert_eq!(id, initialize_id);
     let initialize_response: InitializeResponse = serde_json::from_value(result)?;
-    assert_eq!(initialize_response, InitializeResponse {});
+    assert_eq!(
+        initialize_response,
+        InitializeResponse {
+            cwd: std::env::current_dir()?
+        }
+    );
 
     server.shutdown().await?;
     Ok(())
