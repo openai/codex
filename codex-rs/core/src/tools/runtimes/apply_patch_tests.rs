@@ -1,9 +1,9 @@
 use super::*;
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_FILE_ARG1;
 use codex_protocol::protocol::GranularApprovalConfig;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-#[cfg(not(target_os = "windows"))]
 use std::path::PathBuf;
 
 #[test]
@@ -135,4 +135,48 @@ fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
             .expect("current exe")
             .into_os_string()
     );
+}
+
+#[test]
+fn build_sandbox_command_can_use_file_backed_patch_payload() {
+    let path = std::env::temp_dir()
+        .join("apply-patch-file-backed-test.txt")
+        .abs();
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+    let request = ApplyPatchRequest {
+        action,
+        file_paths: vec![path.clone()],
+        changes: HashMap::from([(
+            path.to_path_buf(),
+            FileChange::Add {
+                content: "hello".to_string(),
+            },
+        )]),
+        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+        timeout_ms: None,
+    };
+    let patch_file = PathBuf::from(r"C:\tmp\large.patch");
+
+    let command = ApplyPatchRuntime::build_sandbox_command_with_args(
+        &request,
+        PathBuf::from(r"C:\codex.exe"),
+        vec![
+            CODEX_CORE_APPLY_PATCH_FILE_ARG1.to_string(),
+            patch_file.to_string_lossy().into_owned(),
+        ],
+    );
+
+    assert_eq!(
+        command.args,
+        vec![
+            CODEX_CORE_APPLY_PATCH_FILE_ARG1.to_string(),
+            patch_file.to_string_lossy().into_owned(),
+        ]
+    );
+    assert!(!command.args.iter().any(|arg| arg == &request.action.patch));
 }

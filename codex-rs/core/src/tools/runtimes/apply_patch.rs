@@ -22,6 +22,8 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+#[cfg(target_os = "windows")]
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_FILE_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
@@ -35,6 +37,8 @@ use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
+#[cfg(target_os = "windows")]
+use tempfile::NamedTempFile;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -98,17 +102,57 @@ impl ApplyPatchRuntime {
     }
 
     fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
-        SandboxCommand {
-            program: exe.into_os_string(),
-            args: vec![
+        Self::build_sandbox_command_with_args(
+            req,
+            exe,
+            vec![
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
                 req.action.patch.clone(),
             ],
+        )
+    }
+
+    fn build_sandbox_command_with_args(
+        req: &ApplyPatchRequest,
+        exe: PathBuf,
+        args: Vec<String>,
+    ) -> SandboxCommand {
+        SandboxCommand {
+            program: exe.into_os_string(),
+            args,
             cwd: req.action.cwd.to_path_buf(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn build_sandbox_command_with_patch_file(
+        req: &ApplyPatchRequest,
+        codex_home: &std::path::Path,
+        patch_file: &std::path::Path,
+    ) -> SandboxCommand {
+        Self::build_sandbox_command_with_args(
+            req,
+            codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
+            vec![
+                CODEX_CORE_APPLY_PATCH_FILE_ARG1.to_string(),
+                patch_file.to_string_lossy().into_owned(),
+            ],
+        )
+    }
+
+    #[cfg(target_os = "windows")]
+    fn write_patch_file(req: &ApplyPatchRequest) -> Result<NamedTempFile, ToolError> {
+        let mut file = tempfile::Builder::new()
+            .prefix(".codex-apply-patch-")
+            .suffix(".patch")
+            .tempfile_in(req.action.cwd.as_path())
+            .map_err(|err| ToolError::Codex(anyhow::Error::from(err)))?;
+        std::io::Write::write_all(&mut file, req.action.patch.as_bytes())
+            .map_err(|err| ToolError::Codex(anyhow::Error::from(err)))?;
+        Ok(file)
     }
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
@@ -241,7 +285,13 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         }
 
         #[cfg(target_os = "windows")]
-        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        let patch_file = Self::write_patch_file(req)?;
+        #[cfg(target_os = "windows")]
+        let command = Self::build_sandbox_command_with_patch_file(
+            req,
+            &ctx.turn.config.codex_home,
+            patch_file.path(),
+        );
         #[cfg(not(target_os = "windows"))]
         let command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
         let options = ExecOptions {
