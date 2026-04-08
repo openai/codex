@@ -645,7 +645,7 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.developer_instructions = Some(
         parent_config
-            .guardian_developer_instructions
+            .guardian_policy_config
             .as_deref()
             .map(guardian_policy_prompt_with_config)
             .unwrap_or_else(guardian_policy_prompt),
