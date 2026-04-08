@@ -185,7 +185,6 @@ use codex_app_server_protocol::WorkspaceRole;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
-use codex_backend_client::WorkspaceRole as BackendWorkspaceRole;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_config::types::McpServerTransportConfig;
@@ -199,6 +198,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
+use codex_core::WorkspaceRole as CoreWorkspaceRole;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -485,49 +485,19 @@ async fn resolve_workspace_role_and_owner_for_auth(
     chatgpt_base_url: &str,
     auth: Option<&CodexAuth>,
 ) -> (Option<WorkspaceRole>, Option<bool>) {
-    let token_is_workspace_owner = auth.and_then(CodexAuth::is_workspace_owner);
-    let Some(auth) = auth else {
-        return (None, None);
-    };
-
-    let workspace_role = fetch_current_workspace_role_for_auth(chatgpt_base_url, auth).await;
-    let is_workspace_owner = workspace_role
-        .map(|role| {
-            matches!(
-                role,
-                WorkspaceRole::AccountOwner | WorkspaceRole::AccountAdmin
-            )
-        })
-        .or(token_is_workspace_owner);
-    (workspace_role, is_workspace_owner)
+    let ownership =
+        codex_core::resolve_workspace_role_and_owner_for_auth(chatgpt_base_url, auth).await;
+    (
+        ownership.workspace_role.map(workspace_role_to_v2),
+        ownership.is_workspace_owner,
+    )
 }
 
-async fn fetch_current_workspace_role_for_auth(
-    chatgpt_base_url: &str,
-    auth: &CodexAuth,
-) -> Option<WorkspaceRole> {
-    if !auth.is_chatgpt_auth() || auth.get_account_id().is_none() {
-        return None;
-    }
-
-    let client = match BackendClient::from_auth(chatgpt_base_url.to_string(), auth) {
-        Ok(client) => client,
-        Err(err) => {
-            warn!("failed to construct backend client for workspace role fetch: {err}");
-            return None;
-        }
-    };
-
-    match client.get_current_workspace_role().await {
-        Ok(role) => role.map(|role| match role {
-            BackendWorkspaceRole::AccountOwner => WorkspaceRole::AccountOwner,
-            BackendWorkspaceRole::AccountAdmin => WorkspaceRole::AccountAdmin,
-            BackendWorkspaceRole::StandardUser => WorkspaceRole::StandardUser,
-        }),
-        Err(err) => {
-            warn!("failed to fetch current workspace role from backend: {err}");
-            None
-        }
+fn workspace_role_to_v2(role: CoreWorkspaceRole) -> WorkspaceRole {
+    match role {
+        CoreWorkspaceRole::AccountOwner => WorkspaceRole::AccountOwner,
+        CoreWorkspaceRole::AccountAdmin => WorkspaceRole::AccountAdmin,
+        CoreWorkspaceRole::StandardUser => WorkspaceRole::StandardUser,
     }
 }
 
