@@ -16,6 +16,8 @@ use crate::facts::TrackEventsContext;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
@@ -110,6 +112,18 @@ impl AnalyticsEventsClient {
         Self {
             queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager), base_url),
             analytics_enabled,
+        }
+    }
+
+    pub fn new_disabled() -> Self {
+        let (sender, _receiver) = mpsc::channel(1);
+        Self {
+            queue: AnalyticsEventsQueue {
+                sender,
+                app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+                plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+            },
+            analytics_enabled: Some(false),
         }
     }
 
@@ -222,8 +236,21 @@ impl AnalyticsEventsClient {
     }
 
     pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
-        self.record_fact(AnalyticsFact::Response {
+        self.record_fact(AnalyticsFact::ClientResponse {
             connection_id,
+            response: Box::new(response),
+        });
+    }
+
+    pub fn track_server_request(&self, connection_id: u64, request: ServerRequest) {
+        self.record_fact(AnalyticsFact::ServerRequest {
+            connection_id,
+            request: Box::new(request),
+        });
+    }
+
+    pub fn track_server_response(&self, response: ServerResponse) {
+        self.record_fact(AnalyticsFact::ServerResponse {
             response: Box::new(response),
         });
     }
