@@ -2,6 +2,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::AuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -69,12 +70,6 @@ pub enum OpenAiFileError {
     UploadFailed { file_id: String, message: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenAiFileUploadAuth {
-    pub access_token: String,
-    pub account_id: Option<String>,
-}
-
 #[derive(Deserialize)]
 struct CreateFileResponse {
     file_id: String,
@@ -97,7 +92,7 @@ pub fn openai_file_uri(file_id: &str) -> String {
 
 pub async fn upload_local_file(
     base_url: &str,
-    auth: &OpenAiFileUploadAuth,
+    auth: &impl AuthProvider,
     path: &Path,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     let metadata = tokio::fs::metadata(path)
@@ -240,16 +235,18 @@ pub async fn upload_local_file(
 }
 
 fn authorized_request(
-    auth: &OpenAiFileUploadAuth,
+    auth: &impl AuthProvider,
     method: reqwest::Method,
     url: &str,
 ) -> reqwest::RequestBuilder {
     let client = build_reqwest_client();
     let mut request = client
         .request(method, url)
-        .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
-        .bearer_auth(&auth.access_token);
-    if let Some(account_id) = &auth.account_id {
+        .timeout(OPENAI_FILE_REQUEST_TIMEOUT);
+    if let Some(token) = auth.bearer_token() {
+        request = request.bearer_auth(token);
+    }
+    if let Some(account_id) = auth.account_id() {
         request = request.header("chatgpt-account-id", account_id);
     }
     request
@@ -265,6 +262,7 @@ fn build_reqwest_client() -> reqwest::Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CoreAuthProvider;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use wiremock::Mock;
@@ -275,11 +273,8 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
-    fn chatgpt_auth() -> OpenAiFileUploadAuth {
-        OpenAiFileUploadAuth {
-            access_token: "token".to_string(),
-            account_id: Some("account_id".to_string()),
-        }
+    fn chatgpt_auth() -> CoreAuthProvider {
+        CoreAuthProvider::for_test(Some("token"), Some("account_id"))
     }
 
     fn base_url_for(server: &MockServer) -> String {

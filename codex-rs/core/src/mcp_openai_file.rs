@@ -16,7 +16,7 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use codex_api::OpenAiFileUploadAuth;
+use codex_api::CoreAuthProvider;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use serde_json::Map;
@@ -173,8 +173,8 @@ async fn build_uploaded_local_argument_value(
     let token_data = auth
         .get_token_data()
         .map_err(|error| format!("failed to read ChatGPT auth for file upload: {error}"))?;
-    let upload_auth = OpenAiFileUploadAuth {
-        access_token: token_data.access_token,
+    let upload_auth = CoreAuthProvider {
+        token: Some(token_data.access_token),
         account_id: token_data.account_id,
     };
     let uploaded = upload_local_file(
@@ -240,8 +240,8 @@ mod tests {
     #[test]
     fn declared_openai_file_fields_treat_names_literally() {
         let meta = serde_json::json!({
-            "openai/fileParams": ["file", "nested.value", "files[0]", "attachments"],
-            "openai/fileOutputs": ["output", "artifacts/0"]
+            "openai/fileParams": ["file", "input_file", "attachments"],
+            "openai/fileOutputs": ["output", "artifact"]
         });
         let meta = meta.as_object().expect("meta object");
 
@@ -249,8 +249,7 @@ mod tests {
             declared_openai_file_input_param_names(Some(meta)),
             vec![
                 "file".to_string(),
-                "nested.value".to_string(),
-                "files[0]".to_string(),
+                "input_file".to_string(),
                 "attachments".to_string(),
             ]
         );

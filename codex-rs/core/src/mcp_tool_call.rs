@@ -36,7 +36,6 @@ use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::ToolInfo;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
@@ -184,13 +183,11 @@ pub(crate) async fn handle_mcp_tool_call(
                     execute_mcp_tool_call(
                         sess.as_ref(),
                         turn_context.as_ref(),
-                        McpToolExecutionInvocation {
-                            server: &server,
-                            tool_name: &tool_name,
-                            arguments_value: arguments_value.clone(),
-                            metadata: metadata.as_ref(),
-                            request_meta: request_meta.clone(),
-                        },
+                        &server,
+                        &tool_name,
+                        arguments_value.clone(),
+                        metadata.as_ref(),
+                        request_meta.clone(),
                     )
                     .await
                 }
@@ -298,13 +295,11 @@ pub(crate) async fn handle_mcp_tool_call(
         execute_mcp_tool_call(
             sess.as_ref(),
             turn_context.as_ref(),
-            McpToolExecutionInvocation {
-                server: &server,
-                tool_name: &tool_name,
-                arguments_value: arguments_value.clone(),
-                metadata: metadata.as_ref(),
-                request_meta,
-            },
+            &server,
+            &tool_name,
+            arguments_value.clone(),
+            metadata.as_ref(),
+            request_meta,
         )
         .await
     }
@@ -457,24 +452,21 @@ fn record_server_fields(span: &Span, url: Option<&str>) {
 async fn execute_mcp_tool_call(
     sess: &Session,
     turn_context: &TurnContext,
-    invocation: McpToolExecutionInvocation<'_>,
+    server: &str,
+    tool_name: &str,
+    arguments_value: Option<serde_json::Value>,
+    metadata: Option<&McpToolApprovalMetadata>,
+    request_meta: Option<serde_json::Value>,
 ) -> Result<CallToolResult, String> {
     let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
         sess,
         turn_context,
-        invocation.arguments_value,
-        invocation
-            .metadata
-            .and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+        arguments_value,
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
     )
     .await?;
     let result = sess
-        .call_tool(
-            invocation.server,
-            invocation.tool_name,
-            rewritten_arguments,
-            invocation.request_meta,
-        )
+        .call_tool(server, tool_name, rewritten_arguments, request_meta)
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
     sanitize_mcp_tool_result_for_model(
@@ -484,14 +476,6 @@ async fn execute_mcp_tool_call(
             .contains(&InputModality::Image),
         Ok(result),
     )
-}
-
-struct McpToolExecutionInvocation<'a> {
-    server: &'a str,
-    tool_name: &'a str,
-    arguments_value: Option<serde_json::Value>,
-    metadata: Option<&'a McpToolApprovalMetadata>,
-    request_meta: Option<serde_json::Value>,
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
@@ -1028,14 +1012,6 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let tool_info = tools
         .into_values()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
-    mcp_tool_approval_metadata_from_tool_info(turn_context, server, tool_info).await
-}
-
-async fn mcp_tool_approval_metadata_from_tool_info(
-    turn_context: &TurnContext,
-    server: &str,
-    tool_info: ToolInfo,
-) -> Option<McpToolApprovalMetadata> {
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
