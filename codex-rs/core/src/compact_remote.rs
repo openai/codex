@@ -78,7 +78,6 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(
             sess.as_ref(),
-            turn_context.as_ref(),
             compaction_status_from_result(&result),
             result.as_ref().err().map(ToString::to_string),
         )

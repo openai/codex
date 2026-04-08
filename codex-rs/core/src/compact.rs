@@ -129,7 +129,6 @@ async fn run_compact_task_inner(
     attempt
         .track(
             sess.as_ref(),
-            turn_context.as_ref(),
             compaction_status_from_result(&result),
             result.as_ref().err().map(ToString::to_string),
         )
@@ -290,11 +289,6 @@ pub(crate) struct CompactionAnalyticsAttempt {
     mode: CompactionMode,
     started_at: u64,
     start_instant: Instant,
-    before: CompactionAnalyticsSnapshot,
-}
-
-struct CompactionAnalyticsSnapshot {
-    history_items: usize,
 }
 
 impl CompactionAnalyticsAttempt {
@@ -312,21 +306,18 @@ impl CompactionAnalyticsAttempt {
             mode,
             started_at: now_unix_seconds(),
             start_instant: Instant::now(),
-            before: CompactionAnalyticsSnapshot::capture(sess, turn_context).await,
         }
     }
 
     pub(crate) async fn track(
         self,
         sess: &Session,
-        turn_context: &TurnContext,
         status: CompactionStatus,
         error: Option<String>,
     ) {
         if !self.enabled {
             return;
         }
-        let after = CompactionAnalyticsSnapshot::capture(sess, turn_context).await;
         sess.services
             .analytics_events_client
             .track_compaction(CodexCompactionEvent {
@@ -341,16 +332,7 @@ impl CompactionAnalyticsAttempt {
                 duration_ms: Some(
                     u64::try_from(self.start_instant.elapsed().as_millis()).unwrap_or(u64::MAX),
                 ),
-                history_items_before: self.before.history_items,
-                history_items_after: after.history_items,
             });
-    }
-}
-
-impl CompactionAnalyticsSnapshot {
-    async fn capture(sess: &Session, _turn_context: &TurnContext) -> Self {
-        let history_items = sess.clone_history().await.raw_items().len();
-        Self { history_items }
     }
 }
 

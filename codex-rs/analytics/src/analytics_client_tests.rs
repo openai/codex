@@ -287,8 +287,6 @@ fn compaction_event_serializes_expected_shape() {
                 started_at: 100,
                 completed_at: 106,
                 duration_ms: Some(6543),
-                history_items_before: 50,
-                history_items_after: 12,
             },
         ),
     }));
@@ -321,9 +319,7 @@ fn compaction_event_serializes_expected_shape() {
                 "error": null,
                 "started_at": 100,
                 "completed_at": 106,
-                "duration_ms": 6543,
-                "history_items_before": 50,
-                "history_items_after": 12
+                "duration_ms": 6543
             }
         })
     );
@@ -542,8 +538,6 @@ async fn compaction_event_waits_for_thread_connection_metadata() {
                     started_at: 100,
                     completed_at: 101,
                     duration_ms: Some(1200),
-                    history_items_before: 20,
-                    history_items_after: 20,
                 },
             ))),
             &mut events,

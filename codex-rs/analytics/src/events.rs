@@ -137,8 +137,6 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) started_at: u64,
     pub(crate) completed_at: u64,
     pub(crate) duration_ms: Option<u64>,
-    pub(crate) history_items_before: usize,
-    pub(crate) history_items_after: usize,
 }
 
 #[derive(Serialize)]
@@ -243,8 +241,6 @@ pub(crate) fn codex_compaction_event_params(
         started_at: input.started_at,
         completed_at: input.completed_at,
         duration_ms: input.duration_ms,
-        history_items_before: input.history_items_before,
-        history_items_after: input.history_items_after,
     }
 }
 
