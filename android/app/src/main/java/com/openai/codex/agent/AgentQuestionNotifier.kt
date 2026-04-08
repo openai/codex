@@ -16,6 +16,8 @@ object AgentQuestionNotifier {
     const val ACTION_REPLY_FROM_NOTIFICATION =
         "com.openai.codex.agent.action.REPLY_FROM_NOTIFICATION"
     const val EXTRA_SESSION_ID = "sessionId"
+    const val EXTRA_ANSWER_SESSION_ID = "answerSessionId"
+    const val EXTRA_ANSWER_PARENT_SESSION_ID = "answerParentSessionId"
     const val EXTRA_NOTIFICATION_TOKEN = "notificationToken"
     const val REMOTE_INPUT_KEY = "codexAgentNotificationReply"
 
@@ -40,32 +42,30 @@ object AgentQuestionNotifier {
 
     fun showOrUpdateDelegatedNotification(
         context: Context,
-        session: AgentSessionInfo,
+        presentation: AgentNotificationPresentation,
         notificationToken: String,
-        notificationText: String,
     ): Boolean {
-        if (!activateNotificationToken(session.sessionId, notificationToken)) {
+        if (!activateNotificationToken(presentation.notificationSessionId, notificationToken)) {
             return false
         }
         val manager = context.getSystemService(NotificationManager::class.java) ?: return false
         if (
-            !shouldShowDelegatedNotification(session.state) ||
-            isSuppressedNotificationToken(session.sessionId, notificationToken)
+            !shouldShowDelegatedNotification(presentation.state) ||
+            isSuppressedNotificationToken(presentation.notificationSessionId, notificationToken)
         ) {
-            manager.cancel(notificationId(session.sessionId))
+            manager.cancel(notificationId(presentation.notificationSessionId))
             return true
         }
-        if (notificationText.isBlank()) {
+        if (presentation.notificationText.isBlank()) {
             return false
         }
         ensureChannel(manager)
         manager.notify(
-            notificationId(session.sessionId),
+            notificationId(presentation.notificationSessionId),
             buildDelegatedNotification(
                 context = context,
-                session = session,
+                presentation = presentation,
                 notificationToken = notificationToken,
-                notificationText = notificationText.trim(),
             ),
         )
         return true
@@ -148,24 +148,23 @@ object AgentQuestionNotifier {
 
     private fun buildDelegatedNotification(
         context: Context,
-        session: AgentSessionInfo,
+        presentation: AgentNotificationPresentation,
         notificationToken: String,
-        notificationText: String,
     ): Notification {
-        val targetIdentity = resolveTargetIdentity(context, session.targetPackage)
+        val targetIdentity = resolveTargetIdentity(context, presentation.targetPackage)
         val contentIntent = PendingIntent.getActivity(
             context,
-            notificationId(session.sessionId),
-            SessionPopupActivity.intent(context, session.sessionId).apply {
+            notificationId(presentation.notificationSessionId),
+            SessionPopupActivity.intent(context, presentation.contentSessionId).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val contentText = notificationText.take(MAX_CONTENT_PREVIEW_CHARS)
+        val contentText = presentation.notificationText.take(MAX_CONTENT_PREVIEW_CHARS)
         val builder = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(targetIdentity.icon)
             .setLargeIcon(targetIdentity.icon)
-            .setContentTitle(buildNotificationTitle(session.state, targetIdentity.displayName))
+            .setContentTitle(buildNotificationTitle(presentation.state, targetIdentity.displayName))
             .setContentText(contentText)
             .setStyle(Notification.BigTextStyle().bigText(contentText))
             .setContentIntent(contentIntent)
@@ -173,7 +172,7 @@ object AgentQuestionNotifier {
             .setOngoing(true)
         buildInlineReplyAction(
             context = context,
-            session = session,
+            presentation = presentation,
             notificationToken = notificationToken,
         )?.let { replyAction ->
             builder.addAction(replyAction)
@@ -204,18 +203,20 @@ object AgentQuestionNotifier {
 
     private fun buildInlineReplyAction(
         context: Context,
-        session: AgentSessionInfo,
+        presentation: AgentNotificationPresentation,
         notificationToken: String,
     ): Notification.Action? {
-        if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER || notificationToken.isBlank()) {
+        if (presentation.state != AgentSessionInfo.STATE_WAITING_FOR_USER || notificationToken.isBlank()) {
             return null
         }
         val replyIntent = PendingIntent.getBroadcast(
             context,
-            notificationId(session.sessionId),
+            notificationId(presentation.notificationSessionId),
             Intent(context, AgentNotificationReplyReceiver::class.java).apply {
                 action = ACTION_REPLY_FROM_NOTIFICATION
-                putExtra(EXTRA_SESSION_ID, session.sessionId)
+                putExtra(EXTRA_SESSION_ID, presentation.notificationSessionId)
+                putExtra(EXTRA_ANSWER_SESSION_ID, presentation.answerSessionId)
+                putExtra(EXTRA_ANSWER_PARENT_SESSION_ID, presentation.answerParentSessionId)
                 putExtra(EXTRA_NOTIFICATION_TOKEN, notificationToken)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,

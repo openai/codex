@@ -318,14 +318,15 @@ class CodexAgentService : AgentService() {
                 }
                 return@thread
             }
-            val effectiveNotificationText =
-                AgentPlannerQuestionRegistry.latestQuestion(session.sessionId) ?: notificationText
+            val presentation = buildNotificationPresentation(
+                session = session,
+                notificationText = notificationText,
+            )
             val posted = runCatching {
                 AgentQuestionNotifier.showOrUpdateDelegatedNotification(
                     context = this,
-                    session = session,
+                    presentation = presentation,
                     notificationToken = notificationToken,
-                    notificationText = effectiveNotificationText,
                 )
             }.onFailure { err ->
                 Log.w(
@@ -347,6 +348,66 @@ class CodexAgentService : AgentService() {
                 )
             }
         }
+    }
+
+    private fun buildNotificationPresentation(
+        session: AgentSessionInfo,
+        notificationText: String,
+    ): AgentNotificationPresentation {
+        val plannerQuestion = AgentPlannerQuestionRegistry.latestQuestion(session.sessionId)
+        val childQuestions = if (plannerQuestion == null && isDirectParentSession(session)) {
+            loadWaitingChildNotificationQuestions(session)
+        } else {
+            emptyList()
+        }
+        return AgentNotificationPresentationSelector.select(
+            sessionId = session.sessionId,
+            state = session.state,
+            targetPackage = session.targetPackage,
+            notificationText = notificationText,
+            plannerQuestion = plannerQuestion,
+            childQuestions = childQuestions,
+        )
+    }
+
+    private fun loadWaitingChildNotificationQuestions(
+        parentSession: AgentSessionInfo,
+    ): List<AgentNotificationChildQuestion> {
+        val manager = agentManager ?: return emptyList()
+        val sessions = runCatching {
+            manager.getSessions(currentUserId())
+        }.onFailure { err ->
+            Log.w(TAG, "Failed to load child sessions for parent notification ${parentSession.sessionId}", err)
+        }.getOrDefault(emptyList())
+        return sessions.mapNotNull { childSession ->
+            if (!isCurrentWaitingChild(parentSession, childSession)) {
+                return@mapNotNull null
+            }
+            val latestQuestion = runCatching {
+                findLatestQuestion(manager.getSessionEvents(childSession.sessionId))
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to load latest question for ${childSession.sessionId}", err)
+            }.getOrNull() ?: return@mapNotNull null
+            AgentNotificationChildQuestion(
+                sessionId = childSession.sessionId,
+                targetPackage = childSession.targetPackage,
+                question = latestQuestion,
+            )
+        }
+    }
+
+    private fun isCurrentWaitingChild(
+        parentSession: AgentSessionInfo,
+        childSession: AgentSessionInfo,
+    ): Boolean {
+        if (
+            childSession.parentSessionId != parentSession.sessionId ||
+            childSession.state != AgentSessionInfo.STATE_WAITING_FOR_USER
+        ) {
+            return false
+        }
+        return parentSession.continuationGeneration == AgentSessionInfo.CONTINUATION_GENERATION_NONE ||
+            childSession.continuationGeneration == parentSession.continuationGeneration
     }
 
     private fun shouldSuppressDelegatedChildNotification(session: AgentSessionInfo): Boolean {

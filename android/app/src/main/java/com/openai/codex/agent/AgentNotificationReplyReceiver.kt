@@ -13,6 +13,13 @@ class AgentNotificationReplyReceiver : BroadcastReceiver() {
             return
         }
         val sessionId = intent.getStringExtra(AgentQuestionNotifier.EXTRA_SESSION_ID)?.trim().orEmpty()
+        val answerSessionId = intent.getStringExtra(AgentQuestionNotifier.EXTRA_ANSWER_SESSION_ID)
+            ?.trim()
+            ?.ifEmpty { null }
+            ?: sessionId
+        val answerParentSessionId = intent.getStringExtra(AgentQuestionNotifier.EXTRA_ANSWER_PARENT_SESSION_ID)
+            ?.trim()
+            ?.ifEmpty { null }
         val notificationToken = intent.getStringExtra(
             AgentQuestionNotifier.EXTRA_NOTIFICATION_TOKEN,
         )?.trim().orEmpty()
@@ -32,15 +39,25 @@ class AgentNotificationReplyReceiver : BroadcastReceiver() {
                     sessionId = sessionId,
                     notificationToken = notificationToken,
                 )
+                val sessionController = AgentSessionController(context)
                 runCatching {
-                    AgentSessionController(context).answerQuestionFromNotification(
-                        sessionId = sessionId,
-                        notificationToken = notificationToken,
-                        answer = answer,
-                        parentSessionId = null,
-                    )
+                    if (answerSessionId == sessionId) {
+                        sessionController.answerQuestionFromNotification(
+                            sessionId = sessionId,
+                            notificationToken = notificationToken,
+                            answer = answer,
+                            parentSessionId = null,
+                        )
+                    } else {
+                        sessionController.answerQuestion(
+                            sessionId = answerSessionId,
+                            answer = answer,
+                            parentSessionId = answerParentSessionId,
+                        )
+                        sessionController.ackSessionNotification(sessionId, notificationToken)
+                    }
                 }.onFailure { err ->
-                    Log.w(TAG, "Failed to answer notification question for $sessionId", err)
+                    Log.w(TAG, "Failed to answer notification question for $answerSessionId", err)
                 }
             } finally {
                 pendingResult.finish()
