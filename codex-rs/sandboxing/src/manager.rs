@@ -15,10 +15,10 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
-use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SandboxType {
@@ -66,7 +66,7 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
 pub struct SandboxCommand {
     pub program: OsString,
     pub args: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub additional_permissions: Option<PermissionProfile>,
 }
@@ -74,7 +74,7 @@ pub struct SandboxCommand {
 #[derive(Debug)]
 pub struct SandboxExecRequest {
     pub command: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox: SandboxType,
@@ -100,7 +100,7 @@ pub struct SandboxTransformRequest<'a> {
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
-    pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
+    pub codex_linux_sandbox_exe: Option<&'a Path>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -232,10 +232,7 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));
                 full_command.append(&mut args);
-                (
-                    full_command,
-                    Some(linux_sandbox_arg0_override(exe.as_path())),
-                )
+                (full_command, Some(linux_sandbox_arg0_override(exe)))
             }
             #[cfg(target_os = "windows")]
             SandboxType::WindowsRestrictedToken => (os_argv_to_strings(argv), None),
