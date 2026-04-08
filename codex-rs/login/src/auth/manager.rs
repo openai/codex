@@ -24,6 +24,7 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
+use crate::default_client::build_reqwest_client;
 use crate::default_client::create_client;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
@@ -49,6 +50,7 @@ pub enum CodexAuth {
 #[derive(Debug, Clone)]
 pub struct ApiKeyAuth {
     api_key: String,
+    api_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +86,38 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+pub const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
+pub const OPENAI_GOV_API_BASE_URL: &str = "https://gov.api.openai.com/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiApiKeyLoginProbeConfig {
+    pub commercial_api_base_url: String,
+    pub gov_api_base_url: String,
+    pub explicit_api_base_url: Option<String>,
+}
+
+impl OpenAiApiKeyLoginProbeConfig {
+    pub fn new(explicit_api_base_url: Option<String>) -> Self {
+        Self {
+            commercial_api_base_url: OPENAI_API_BASE_URL.to_string(),
+            gov_api_base_url: OPENAI_GOV_API_BASE_URL.to_string(),
+            explicit_api_base_url,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MeAuthCheckResponse {
+    #[serde(default)]
+    current_organization_is_fedramp: bool,
+}
+
+#[derive(Debug)]
+enum MeAuthCheckOutcome {
+    Success(MeAuthCheckResponse),
+    AuthRejected,
+    Unavailable(String),
+}
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -195,7 +229,10 @@ impl CodexAuth {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
-            return Ok(Self::from_api_key(api_key));
+            return Ok(Self::from_api_key_and_base_url(
+                api_key,
+                auth_dot_json.api_base_url,
+            ));
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -356,6 +393,7 @@ impl CodexAuth {
         let auth_dot_json = AuthDotJson {
             auth_mode: Some(ApiAuthMode::Chatgpt),
             openai_api_key: None,
+            api_base_url: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
                 access_token: "Access Token".to_string(),
@@ -375,8 +413,13 @@ impl CodexAuth {
     }
 
     pub fn from_api_key(api_key: &str) -> Self {
+        Self::from_api_key_and_base_url(api_key, None)
+    }
+
+    pub fn from_api_key_and_base_url(api_key: &str, api_base_url: Option<String>) -> Self {
         Self::ApiKey(ApiKeyAuth {
             api_key: api_key.to_owned(),
+            api_base_url,
         })
     }
 }
@@ -397,6 +440,16 @@ impl ChatgptAuth {
 
     fn client(&self) -> &CodexHttpClient {
         &self.state.client
+    }
+}
+
+impl ApiKeyAuth {
+    pub fn api_key(&self) -> &str {
+        self.api_key.as_str()
+    }
+
+    pub fn api_base_url(&self) -> Option<&str> {
+        self.api_base_url.as_deref()
     }
 }
 
@@ -427,15 +480,114 @@ pub fn logout(
     storage.delete()
 }
 
+pub async fn validate_openai_api_key_for_login(
+    api_key: &str,
+    config: &OpenAiApiKeyLoginProbeConfig,
+) -> std::io::Result<Option<String>> {
+    validate_openai_api_key_for_login_with_client(api_key, config, &build_reqwest_client()).await
+}
+
+async fn validate_openai_api_key_for_login_with_client(
+    api_key: &str,
+    config: &OpenAiApiKeyLoginProbeConfig,
+    client: &reqwest::Client,
+) -> std::io::Result<Option<String>> {
+    if let Some(explicit_api_base_url) = &config.explicit_api_base_url {
+        return match probe_openai_me(client, explicit_api_base_url, api_key).await {
+            MeAuthCheckOutcome::Success(_) => Ok(None),
+            MeAuthCheckOutcome::AuthRejected => Err(invalid_api_key_login_error()),
+            MeAuthCheckOutcome::Unavailable(message) => Err(std::io::Error::other(message)),
+        };
+    }
+
+    match probe_openai_me(client, &config.commercial_api_base_url, api_key).await {
+        MeAuthCheckOutcome::Success(me) => {
+            if me.current_organization_is_fedramp {
+                Ok(Some(config.gov_api_base_url.clone()))
+            } else {
+                Ok(None)
+            }
+        }
+        MeAuthCheckOutcome::AuthRejected => {
+            validate_gov_api_key_for_login(api_key, config, client).await
+        }
+        MeAuthCheckOutcome::Unavailable(message) => Err(std::io::Error::other(message)),
+    }
+}
+
+async fn validate_gov_api_key_for_login(
+    api_key: &str,
+    config: &OpenAiApiKeyLoginProbeConfig,
+    client: &reqwest::Client,
+) -> std::io::Result<Option<String>> {
+    match probe_openai_me(client, &config.gov_api_base_url, api_key).await {
+        MeAuthCheckOutcome::Success(me) if me.current_organization_is_fedramp => {
+            Ok(Some(config.gov_api_base_url.clone()))
+        }
+        MeAuthCheckOutcome::Success(_) => Err(std::io::Error::other(
+            "API key was accepted by the Fed API endpoint, but /v1/me did not report a FedRAMP current organization.",
+        )),
+        MeAuthCheckOutcome::AuthRejected => Err(invalid_api_key_login_error()),
+        MeAuthCheckOutcome::Unavailable(message) => Err(std::io::Error::other(message)),
+    }
+}
+
+async fn probe_openai_me(
+    client: &reqwest::Client,
+    api_base_url: &str,
+    api_key: &str,
+) -> MeAuthCheckOutcome {
+    let url = format!("{}/me", api_base_url.trim_end_matches('/'));
+    let response = match client.get(url).bearer_auth(api_key).send().await {
+        Ok(response) => response,
+        Err(err) => return MeAuthCheckOutcome::Unavailable(format!("/v1/me probe failed: {err}")),
+    };
+
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED
+        || status == StatusCode::FORBIDDEN
+        || status == StatusCode::NOT_FOUND
+    {
+        return MeAuthCheckOutcome::AuthRejected;
+    }
+    if !status.is_success() {
+        return MeAuthCheckOutcome::Unavailable(format!("/v1/me probe failed with {status}"));
+    }
+
+    match response.json::<MeAuthCheckResponse>().await {
+        Ok(payload) => MeAuthCheckOutcome::Success(payload),
+        Err(err) => MeAuthCheckOutcome::Unavailable(format!(
+            "/v1/me probe returned an invalid response: {err}"
+        )),
+    }
+}
+
+fn invalid_api_key_login_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "API key was rejected by /v1/me.",
+    )
+}
+
 /// Writes an `auth.json` that contains only the API key.
 pub fn login_with_api_key(
     codex_home: &Path,
     api_key: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
+    login_with_api_key_and_base_url(codex_home, api_key, None, auth_credentials_store_mode)
+}
+
+pub fn login_with_api_key_and_base_url(
+    codex_home: &Path,
+    api_key: &str,
+    api_base_url: Option<String>,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
+        api_base_url,
         tokens: None,
         last_refresh: None,
     };
@@ -809,6 +961,7 @@ impl AuthDotJson {
         Ok(Self {
             auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
             openai_api_key: None,
+            api_base_url: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
         })

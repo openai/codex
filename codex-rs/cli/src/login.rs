@@ -12,11 +12,13 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
+use codex_login::OpenAiApiKeyLoginProbeConfig;
 use codex_login::ServerOptions;
-use codex_login::login_with_api_key;
+use codex_login::login_with_api_key_and_base_url;
 use codex_login::logout;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_login::validate_openai_api_key_for_login;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
@@ -171,9 +173,27 @@ pub async fn run_login_with_api_key(
         std::process::exit(1);
     }
 
-    match login_with_api_key(
+    let api_base_url = if config.model_provider.is_openai() {
+        match validate_openai_api_key_for_login(
+            &api_key,
+            &OpenAiApiKeyLoginProbeConfig::new(config.model_provider.base_url.clone()),
+        )
+        .await
+        {
+            Ok(api_base_url) => api_base_url,
+            Err(e) => {
+                eprintln!("Error logging in: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    match login_with_api_key_and_base_url(
         &config.codex_home,
         &api_key,
+        api_base_url,
         config.cli_auth_credentials_store_mode,
     ) {
         Ok(_) => {

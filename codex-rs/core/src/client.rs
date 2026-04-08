@@ -100,6 +100,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::openai_api_key_routing::resolve_api_provider;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::CoreAuthProvider;
 use codex_api::map_api_error;
@@ -664,10 +665,7 @@ impl ModelClient {
             Some(manager) => manager.auth().await,
             None => None,
         };
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+        let api_provider = resolve_api_provider(&self.state.provider, auth.as_ref())?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         Ok(CurrentClientSetup {
             auth,

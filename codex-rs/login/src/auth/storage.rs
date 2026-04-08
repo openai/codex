@@ -35,6 +35,9 @@ pub struct AuthDotJson {
     pub openai_api_key: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_base_url: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenData>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
