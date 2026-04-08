@@ -6581,6 +6581,7 @@ impl ChatWidget {
                 };
                 self.finish_notify_workspace_owner(result);
             }
+            ServerNotification::ThreadRealtimeSdp(_) => {}
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
@@ -7103,6 +7104,7 @@ impl ChatWidget {
                     self.on_realtime_conversation_started(ev);
                 }
             }
+            EventMsg::RealtimeConversationSdp(_) => {}
             EventMsg::RealtimeConversationRealtime(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_realtime(ev);

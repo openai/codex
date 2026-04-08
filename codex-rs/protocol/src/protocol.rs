@@ -48,8 +48,6 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
-use crate::serde_helpers::deserialize_double_option;
-use crate::serde_helpers::serialize_double_option;
 use crate::user_input::UserInput;
 use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -137,6 +135,16 @@ pub struct ConversationStartParams {
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ConversationStartTransport>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+pub enum ConversationStartTransport {
+    Websocket,
+    Webrtc { sdp: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1229,6 +1237,9 @@ pub enum EventMsg {
     /// Realtime conversation lifecycle close event.
     RealtimeConversationClosed(RealtimeConversationClosedEvent),
 
+    /// Realtime session description protocol payload.
+    RealtimeConversationSdp(RealtimeConversationSdpEvent),
+
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
 
@@ -1544,6 +1555,11 @@ pub struct RealtimeConversationRealtimeEvent {
 pub struct RealtimeConversationClosedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct RealtimeConversationSdpEvent {
+    pub sdp: String,
 }
 
 impl From<CollabAgentSpawnBeginEvent> for EventMsg {
@@ -2345,7 +2361,7 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_base_instructions(&self) -> Option<Option<BaseInstructions>> {
+    pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
         // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
             InitialHistory::New => None,
@@ -2357,26 +2373,6 @@ impl InitialHistory {
             }
             InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
-                _ => None,
-            }),
-        }
-    }
-
-    pub fn get_developer_instructions(&self) -> Option<Option<String>> {
-        match self {
-            InitialHistory::New => None,
-            InitialHistory::Resumed(resumed) => {
-                resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => {
-                        meta_line.meta.developer_instructions.clone()
-                    }
-                    _ => None,
-                })
-            }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
-                RolloutItem::SessionMeta(meta_line) => {
-                    meta_line.meta.developer_instructions.clone()
-                }
                 _ => None,
             }),
         }
@@ -2573,20 +2569,7 @@ pub struct SessionMeta {
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_double_option",
-        serialize_with = "serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub base_instructions: Option<Option<BaseInstructions>>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_double_option",
-        serialize_with = "serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub developer_instructions: Option<Option<String>>,
+    pub base_instructions: Option<BaseInstructions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2608,7 +2591,6 @@ impl Default for SessionMeta {
             agent_path: None,
             model_provider: None,
             base_instructions: None,
-            developer_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
         }
@@ -4454,6 +4436,14 @@ mod tests {
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "be helpful".to_string(),
             session_id: Some("conv_1".to_string()),
+            transport: None,
+        });
+        let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "be helpful".to_string(),
+            session_id: Some("conv_1".to_string()),
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
         });
         let text = Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),
@@ -4493,6 +4483,18 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<Op>(serde_json::to_value(&close).unwrap()).unwrap(),
             close
+        );
+        assert_eq!(
+            serde_json::to_value(&webrtc_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "prompt": "be helpful",
+                "session_id": "conv_1",
+                "transport": {
+                    "type": "webrtc",
+                    "sdp": "v=offer\r\n"
+                }
+            })
         );
     }
 

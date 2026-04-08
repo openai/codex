@@ -1660,9 +1660,9 @@ fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
 
 fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Prompt {
     let mut prompt = prompt_with_input(input);
-    prompt.base_instructions = Some(BaseInstructions {
+    prompt.base_instructions = BaseInstructions {
         text: instructions.to_string(),
-    });
+    };
     prompt
 }
 
