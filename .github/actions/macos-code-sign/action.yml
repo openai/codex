@@ -44,6 +44,11 @@ runs:
           exit 1
         fi
 
+        if [[ "${APPLE_CERTIFICATE_PASSWORD+__codex_password_is_set__}" != "__codex_password_is_set__" ]]; then
+          echo "APPLE_CERTIFICATE_PASSWORD must be set for macOS signing"
+          exit 1
+        fi
+
         cert_path="${RUNNER_TEMP}/apple_signing_certificate.p12"
         echo "$APPLE_CERTIFICATE" | base64 -d > "$cert_path"
 
