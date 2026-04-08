@@ -688,15 +688,33 @@ mod tests {
 
     #[test]
     fn context_meter_uses_five_cells_with_partial_blocks() {
-        assert_eq!(format_context_used_meter(100), "Context [█████]");
-        assert_eq!(format_context_used_meter(50), "Context [██▌  ]");
-        assert_eq!(format_context_used_meter(10), "Context [▌    ]");
-        assert_eq!(format_context_used_meter(0), "Context [     ]");
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 100),
+            "Context [█████]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 50),
+            "Context [██▌  ]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 10),
+            "Context [▌    ]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 0),
+            "Context [     ]"
+        );
     }
 
     #[test]
     fn context_meter_clamps_out_of_range_values() {
-        assert_eq!(format_context_used_meter(125), "Context [█████]");
-        assert_eq!(format_context_used_meter(-1), "Context [     ]");
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 125),
+            "Context [█████]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ -1),
+            "Context [     ]"
+        );
     }
 }
