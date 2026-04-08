@@ -1454,11 +1454,7 @@ fn response_request_contains_text(request: &Value, text: &str) -> bool {
 fn realtime_tool_ok_command() -> Vec<String> {
     #[cfg(windows)]
     {
-        vec![
-            "Write-Output".to_string(),
-            "-NoNewline".to_string(),
-            "realtime-tool-ok".to_string(),
-        ]
+        vec!["[Console]::Write('realtime-tool-ok')".to_string()]
     }
 
     #[cfg(not(windows))]
