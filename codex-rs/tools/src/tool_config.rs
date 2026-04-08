@@ -105,6 +105,8 @@ pub struct ToolsConfig {
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
     pub hide_spawn_agent_metadata: bool,
+    pub spawn_agent_usage_hint: bool,
+    pub spawn_agent_usage_hint_text: Option<String>,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -141,7 +143,6 @@ impl ToolsConfig {
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
-        let hide_spawn_agent_metadata = features.enabled(Feature::DebugHideSpawnAgentMetadata);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_default_mode_request_user_input =
             features.enabled(Feature::DefaultModeRequestUserInput);
@@ -219,7 +220,9 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
-            hide_spawn_agent_metadata,
+            hide_spawn_agent_metadata: false,
+            spawn_agent_usage_hint: true,
+            spawn_agent_usage_hint_text: None,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -230,6 +233,24 @@ impl ToolsConfig {
 
     pub fn with_agent_type_description(mut self, agent_type_description: String) -> Self {
         self.agent_type_description = agent_type_description;
+        self
+    }
+
+    pub fn with_spawn_agent_usage_hint(mut self, spawn_agent_usage_hint: bool) -> Self {
+        self.spawn_agent_usage_hint = spawn_agent_usage_hint;
+        self
+    }
+
+    pub fn with_spawn_agent_usage_hint_text(
+        mut self,
+        spawn_agent_usage_hint_text: Option<String>,
+    ) -> Self {
+        self.spawn_agent_usage_hint_text = spawn_agent_usage_hint_text;
+        self
+    }
+
+    pub fn with_hide_spawn_agent_metadata(mut self, hide_spawn_agent_metadata: bool) -> Self {
+        self.hide_spawn_agent_metadata = hide_spawn_agent_metadata;
         self
     }
 

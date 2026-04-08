@@ -9,6 +9,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolHandlerKind;
+use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanDeferredTool;
 use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
@@ -32,6 +33,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -86,6 +88,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ToolRegistryPlanParams {
             mcp_tools: mcp_tools.as_ref(),
             deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
+            tool_namespaces: tool_namespaces.as_ref(),
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,

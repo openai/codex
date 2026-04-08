@@ -109,7 +109,7 @@ fn resolve_windows_sandbox_mode_falls_back_to_legacy_keys() {
         /*value*/ true,
     );
     let cfg = ConfigToml {
-        features: Some(FeaturesToml { entries }),
+        features: Some(FeaturesToml::from(entries)),
         ..Default::default()
     };
 
@@ -127,9 +127,7 @@ fn resolve_windows_sandbox_mode_profile_legacy_false_blocks_top_level_legacy_tru
         /*value*/ false,
     );
     let profile = ConfigProfile {
-        features: Some(FeaturesToml {
-            entries: profile_entries,
-        }),
+        features: Some(FeaturesToml::from(profile_entries)),
         ..Default::default()
     };
 
@@ -139,9 +137,7 @@ fn resolve_windows_sandbox_mode_profile_legacy_false_blocks_top_level_legacy_tru
         /*value*/ true,
     );
     let cfg = ConfigToml {
-        features: Some(FeaturesToml {
-            entries: cfg_entries,
-        }),
+        features: Some(FeaturesToml::from(cfg_entries)),
         ..Default::default()
     };
 

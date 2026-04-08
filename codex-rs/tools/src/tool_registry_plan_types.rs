@@ -59,10 +59,17 @@ pub struct ToolRegistryPlan {
 pub struct ToolRegistryPlanParams<'a> {
     pub mcp_tools: Option<&'a HashMap<String, McpTool>>,
     pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
+    pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
     pub dynamic_tools: &'a [DynamicToolSpec],
     pub default_agent_type_description: &'a str,
     pub wait_agent_timeouts: WaitAgentTimeoutOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolNamespace {
+    pub name: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]

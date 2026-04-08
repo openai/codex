@@ -151,17 +151,13 @@ pub fn create_tool_search_tool(
     let properties = BTreeMap::from([
         (
             "query".to_string(),
-            JsonSchema::String {
-                description: Some("Search query for MCP tools.".to_string()),
-            },
+            JsonSchema::string(Some("Search query for MCP tools.".to_string())),
         ),
         (
             "limit".to_string(),
-            JsonSchema::Number {
-                description: Some(format!(
-                    "Maximum number of tools to return (defaults to {default_limit})."
-                )),
-            },
+            JsonSchema::number(Some(format!(
+                "Maximum number of tools to return (defaults to {default_limit})."
+            ))),
         ),
     ]);
 
@@ -197,11 +193,11 @@ pub fn create_tool_search_tool(
     ToolSpec::ToolSearch {
         execution: "client".to_string(),
         description,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec!["query".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+            Some(vec!["query".to_string()]),
+            Some(false.into()),
+        ),
     }
 }
 
@@ -309,37 +305,29 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
     let properties = BTreeMap::from([
         (
             "tool_type".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::string(Some(
+                "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
+                    .to_string(),
+            )),
         ),
         (
             "action_type".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Suggested action for the tool. Use \"install\" or \"enable\".".to_string(),
-                ),
-            },
+            JsonSchema::string(Some(
+                "Suggested action for the tool. Use \"install\" or \"enable\".".to_string(),
+            )),
         ),
         (
             "tool_id".to_string(),
-            JsonSchema::String {
-                description: Some(format!(
-                    "Connector or plugin id to suggest. Must be one of: {discoverable_tool_ids}."
-                )),
-            },
+            JsonSchema::string(Some(format!(
+                "Connector or plugin id to suggest. Must be one of: {discoverable_tool_ids}."
+            ))),
         ),
         (
             "suggest_reason".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Concise one-line user-facing reason why this tool can help with the current request."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::string(Some(
+                "Concise one-line user-facing reason why this tool can help with the current request."
+                    .to_string(),
+            )),
         ),
     ]);
 
@@ -353,16 +341,16 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
         description,
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec![
+            Some(vec![
                 "tool_type".to_string(),
                 "action_type".to_string(),
                 "tool_id".to_string(),
                 "suggest_reason".to_string(),
             ]),
-            additional_properties: Some(false.into()),
-        },
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 }

@@ -16,6 +16,7 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::ToolNamespace;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use rmcp::model::Tool;
@@ -42,8 +43,35 @@ pub struct ToolRouter {
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
     pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+}
+
+pub(crate) struct McpToolRouterInputs {
+    pub(crate) mcp_tools: HashMap<String, Tool>,
+    pub(crate) tool_namespaces: HashMap<String, ToolNamespace>,
+}
+
+pub(crate) fn map_mcp_tool_infos(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolRouterInputs {
+    McpToolRouterInputs {
+        mcp_tools: mcp_tools
+            .iter()
+            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
+            .collect(),
+        tool_namespaces: mcp_tools
+            .iter()
+            .map(|(name, tool)| {
+                (
+                    name.clone(),
+                    ToolNamespace {
+                        name: tool.callable_namespace.clone(),
+                        description: tool.server_instructions.clone(),
+                    },
+                )
+            })
+            .collect(),
+    }
 }
 
 impl ToolRouter {
@@ -51,6 +79,7 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
+            tool_namespaces,
             discoverable_tools,
             dynamic_tools,
         } = params;
@@ -58,6 +87,7 @@ impl ToolRouter {
             config,
             mcp_tools,
             deferred_mcp_tools,
+            tool_namespaces,
             discoverable_tools,
             dynamic_tools,
         );

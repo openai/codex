@@ -9,9 +9,7 @@ const ANNOUNCEMENT_TIP_URL: &str =
 const IS_MACOS: bool = cfg!(target_os = "macos");
 const IS_WINDOWS: bool = cfg!(target_os = "windows");
 
-const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
-const PAID_TOOLTIP_WINDOWS: &str = "*New* Try the **Codex App**, now available on **Windows**, with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
-const PAID_TOOLTIP_NON_MAC: &str = "*New* 2x rate limits until *April 2nd*.";
+const APP_TOOLTIP: &str = "Try the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
 const FAST_TOOLTIP: &str = "*New* Use **/fast** to enable our fastest inference at 2X plan usage.";
 const OTHER_TOOLTIP: &str = "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
 const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Codex.";
@@ -67,7 +65,9 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
                 ) || plan_type.is_team_like()
                     || plan_type.is_business_like() =>
             {
-                return Some(pick_paid_tooltip(&mut rng, fast_mode_enabled).to_string());
+                if let Some(tooltip) = pick_paid_tooltip(&mut rng, fast_mode_enabled) {
+                    return Some(tooltip.to_string());
+                }
             }
             Some(PlanType::Go) | Some(PlanType::Free) => {
                 return Some(FREE_GO_TOOLTIP.to_string());
@@ -86,13 +86,11 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
     pick_tooltip(&mut rng).map(str::to_string)
 }
 
-fn paid_app_tooltip() -> &'static str {
-    if IS_MACOS {
-        PAID_TOOLTIP
-    } else if IS_WINDOWS {
-        PAID_TOOLTIP_WINDOWS
+fn paid_app_tooltip() -> Option<&'static str> {
+    if IS_MACOS || IS_WINDOWS {
+        Some(APP_TOOLTIP)
     } else {
-        PAID_TOOLTIP_NON_MAC
+        None
     }
 }
 
@@ -100,11 +98,14 @@ fn paid_app_tooltip() -> &'static str {
 /// generic random tip pool. Keep this business logic explicit: we currently split
 /// that slot between the app promo and Fast mode, but suppress the Fast promo once
 /// the user already has Fast mode enabled.
-fn pick_paid_tooltip<R: Rng + ?Sized>(rng: &mut R, fast_mode_enabled: bool) -> &'static str {
+fn pick_paid_tooltip<R: Rng + ?Sized>(
+    rng: &mut R,
+    fast_mode_enabled: bool,
+) -> Option<&'static str> {
     if fast_mode_enabled || rng.random_bool(0.5) {
         paid_app_tooltip()
     } else {
-        FAST_TOOLTIP
+        Some(FAST_TOOLTIP)
     }
 }
 
@@ -296,7 +297,7 @@ mod tests {
             ));
         }
 
-        let expected = std::collections::BTreeSet::from([paid_app_tooltip(), FAST_TOOLTIP]);
+        let expected = std::collections::BTreeSet::from([paid_app_tooltip(), Some(FAST_TOOLTIP)]);
         assert_eq!(seen, expected);
     }
 
@@ -310,7 +311,7 @@ mod tests {
 
         let expected = std::collections::BTreeSet::from([paid_app_tooltip()]);
         assert_eq!(seen, expected);
-        assert!(!seen.contains(&FAST_TOOLTIP));
+        assert!(!seen.contains(&Some(FAST_TOOLTIP)));
     }
 
     #[test]

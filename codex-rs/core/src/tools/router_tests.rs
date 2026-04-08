@@ -26,16 +26,13 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         .list_all_tools()
         .await;
     let deferred_mcp_tools = Some(mcp_tools.clone());
+    let mcp_tool_router_inputs = super::map_mcp_tool_infos(&mcp_tools);
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
             deferred_mcp_tools,
+            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -84,16 +81,13 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
         .list_all_tools()
         .await;
     let deferred_mcp_tools = Some(mcp_tools.clone());
+    let mcp_tool_router_inputs = super::map_mcp_tool_infos(&mcp_tools);
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
             deferred_mcp_tools,
+            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },

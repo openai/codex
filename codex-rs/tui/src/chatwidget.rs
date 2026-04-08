@@ -6502,7 +6502,11 @@ impl ChatWidget {
                     );
                 }
             }
-            ServerNotification::ThreadRealtimeSdp(_) => {}
+            ServerNotification::ThreadRealtimeSdp(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_sdp(notification.sdp);
+                }
+            }
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
@@ -7022,7 +7026,11 @@ impl ChatWidget {
                     self.on_realtime_conversation_started(ev);
                 }
             }
-            EventMsg::RealtimeConversationSdp(_) => {}
+            EventMsg::RealtimeConversationSdp(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_sdp(ev.sdp);
+                }
+            }
             EventMsg::RealtimeConversationRealtime(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_realtime(ev);
@@ -10586,6 +10594,7 @@ impl ChatWidget {
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
         self.config.features = config.features.clone();
         self.config.config_layer_stack = config.config_layer_stack.clone();
+        self.config.realtime = config.realtime.clone();
     }
 
     pub(crate) fn open_review_popup(&mut self) {

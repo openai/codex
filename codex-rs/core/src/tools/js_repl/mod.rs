@@ -1561,17 +1561,14 @@ impl JsReplManager {
             .await
             .list_all_tools()
             .await;
+        let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&mcp_tools);
 
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
-                mcp_tools: Some(
-                    mcp_tools
-                        .into_iter()
-                        .map(|(name, tool)| (name, tool.tool))
-                        .collect(),
-                ),
                 deferred_mcp_tools: None,
+                mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+                tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             },
