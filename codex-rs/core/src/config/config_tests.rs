@@ -247,6 +247,7 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            description_overrides: BTreeMap::new(),
         })
     );
 }
@@ -266,8 +267,95 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            description_overrides: BTreeMap::new(),
         })
     );
+}
+
+#[test]
+fn tools_description_overrides_deserialize() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.description_overrides]
+spawn_agent = "Use custom spawn guidance."
+update_plan = "Use custom plan guidance."
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools.expect("tools config").description_overrides,
+        BTreeMap::from([
+            (
+                "spawn_agent".to_string(),
+                "Use custom spawn guidance.".to_string()
+            ),
+            (
+                "update_plan".to_string(),
+                "Use custom plan guidance.".to_string()
+            ),
+        ])
+    );
+}
+
+#[test]
+fn tool_description_overrides_profile_overlays_base() -> std::io::Result<()> {
+    let mut cfg = ConfigToml {
+        tools: Some(ToolsToml {
+            description_overrides: BTreeMap::from([
+                (
+                    "spawn_agent".to_string(),
+                    "Base spawn guidance.".to_string(),
+                ),
+                ("update_plan".to_string(), "Base plan guidance.".to_string()),
+            ]),
+            ..Default::default()
+        }),
+        profile: Some("custom".to_string()),
+        ..Default::default()
+    };
+    cfg.profiles.insert(
+        "custom".to_string(),
+        ConfigProfile {
+            tools: Some(ToolsToml {
+                description_overrides: BTreeMap::from([
+                    (
+                        "spawn_agent".to_string(),
+                        "Profile spawn guidance.".to_string(),
+                    ),
+                    (
+                        "wait_agent".to_string(),
+                        "Profile wait guidance.".to_string(),
+                    ),
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+
+    let codex_home = tempdir()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.tool_description_overrides,
+        BTreeMap::from([
+            (
+                "spawn_agent".to_string(),
+                "Profile spawn guidance.".to_string(),
+            ),
+            ("update_plan".to_string(), "Base plan guidance.".to_string()),
+            (
+                "wait_agent".to_string(),
+                "Profile wait guidance.".to_string()
+            ),
+        ])
+    );
+    Ok(())
 }
 
 #[test]
@@ -4517,6 +4605,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
+            tool_description_overrides: BTreeMap::new(),
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4662,6 +4751,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        tool_description_overrides: BTreeMap::new(),
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4805,6 +4895,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        tool_description_overrides: BTreeMap::new(),
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4934,6 +5025,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        tool_description_overrides: BTreeMap::new(),
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),

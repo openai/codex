@@ -510,6 +510,9 @@ pub struct Config {
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
 
+    /// Tool descriptions keyed by tool name. Overrides only apply to enabled tools.
+    pub tool_description_overrides: BTreeMap<String, String>,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1279,6 +1282,20 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_tool_description_overrides(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> BTreeMap<String, String> {
+    let mut overrides = BTreeMap::new();
+    if let Some(tools) = &config_toml.tools {
+        overrides.extend(tools.description_overrides.clone());
+    }
+    if let Some(tools) = &config_profile.tools {
+        overrides.extend(tools.description_overrides.clone());
+    }
+    overrides
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -1607,6 +1624,7 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let tool_description_overrides = resolve_tool_description_overrides(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -2037,6 +2055,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
+            tool_description_overrides,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

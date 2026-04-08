@@ -1699,6 +1699,14 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "description_overrides": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Tool descriptions keyed by tool name. Overrides only apply to tools that are enabled for the current turn.",
+          "type": "object"
+        },
         "view_image": {
           "default": null,
           "description": "Enable the `view_image` tool that lets the agent attach local images.",
