@@ -2,7 +2,7 @@ diff --git a/build.rs b/build.rs
 index 3b4a24a..e6fb056 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -375,9 +375,15 @@ fn configure_darwin_sysroot(builder: &mut cc::Build) {
+@@ -375,10 +375,21 @@ fn configure_darwin_sysroot(builder: &mut cc::Build) {
      println!("cargo:rustc-link-lib={}", clang_rt);
      println!("cargo:rustc-link-arg=-ObjC");
  
@@ -20,4 +20,11 @@ index 3b4a24a..e6fb056 100644
 +    let sysroot = sysroot.as_str();
      let sysroot = sysroot.trim();
  
-     let search_dirs = Command::new("cc").arg("--print-search-dirs").output().unwrap();
+-    let search_dirs = Command::new("cc").arg("--print-search-dirs").output().unwrap();
++    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
++    let search_dirs = Command::new(cc)
++        .arg("--print-search-dirs")
++        .output()
++        .unwrap();
++
+     let search_dirs = String::from_utf8_lossy(&search_dirs.stdout);
