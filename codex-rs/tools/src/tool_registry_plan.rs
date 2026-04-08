@@ -206,19 +206,17 @@ pub fn build_tool_registry_plan(
         plan.register_handler("js_repl_reset", ToolHandlerKind::JsReplReset);
     }
 
-    if config.request_user_input {
-        plan.push_spec(
-            create_request_user_input_tool(request_user_input_tool_description(
-                config.default_mode_request_user_input,
-            )),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        plan.register_handler(
-            REQUEST_USER_INPUT_TOOL_NAME,
-            ToolHandlerKind::RequestUserInput,
-        );
-    }
+    plan.push_spec(
+        create_request_user_input_tool(request_user_input_tool_description(
+            config.default_mode_request_user_input,
+        )),
+        /*supports_parallel_tool_calls*/ false,
+        config.code_mode_enabled,
+    );
+    plan.register_handler(
+        REQUEST_USER_INPUT_TOOL_NAME,
+        ToolHandlerKind::RequestUserInput,
+    );
 
     if config.request_permissions_tool_enabled {
         plan.push_spec(
@@ -355,6 +353,7 @@ pub fn build_tool_registry_plan(
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -397,6 +396,7 @@ pub fn build_tool_registry_plan(
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,

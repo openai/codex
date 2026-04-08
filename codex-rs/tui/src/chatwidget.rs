@@ -95,13 +95,13 @@ use codex_chatgpt::connectors;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
 use codex_core::plugins::PluginsManager;
-use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -293,6 +293,7 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
+use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -387,7 +388,6 @@ use unicode_segmentation::UnicodeSegmentation;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
 // Track information about an in-flight exec command.
@@ -5028,15 +5028,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
-                let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        self.add_error_message(format!(
-                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
-                        ));
-                        return;
-                    }
-                };
+                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {
                     let message = format!(
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
@@ -5258,8 +5250,9 @@ impl ChatWidget {
                     self.next_status_refresh_request_id =
                         self.next_status_refresh_request_id.wrapping_add(1);
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
-                    self.app_event_tx
-                        .send(AppEvent::RefreshRateLimits { request_id });
+                    self.app_event_tx.send(AppEvent::RefreshRateLimits {
+                        origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+                    });
                 } else {
                     self.add_status_output(
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
@@ -6509,6 +6502,7 @@ impl ChatWidget {
                     );
                 }
             }
+            ServerNotification::ThreadRealtimeSdp(_) => {}
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
@@ -7028,6 +7022,7 @@ impl ChatWidget {
                     self.on_realtime_conversation_started(ev);
                 }
             }
+            EventMsg::RealtimeConversationSdp(_) => {}
             EventMsg::RealtimeConversationRealtime(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_realtime(ev);
@@ -9497,7 +9492,7 @@ impl ChatWidget {
         model: &str,
         service_tier: Option<ServiceTier>,
     ) -> bool {
-        model == FAST_STATUS_MODEL
+        self.model_supports_fast_mode(model)
             && matches!(service_tier, Some(ServiceTier::Fast))
             && self.has_chatgpt_account
     }
@@ -9610,6 +9605,19 @@ impl ChatWidget {
                     .into_iter()
                     .find(|preset| preset.model == model)
                     .map(|preset| preset.supports_personality)
+            })
+            .unwrap_or(false)
+    }
+
+    fn model_supports_fast_mode(&self, model: &str) -> bool {
+        self.model_catalog
+            .try_list_models()
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.supports_fast_mode())
             })
             .unwrap_or(false)
     }

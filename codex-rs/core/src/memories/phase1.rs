@@ -336,9 +336,9 @@ mod job {
             }],
             tools: Vec::new(),
             parallel_tool_calls: false,
-            base_instructions: Some(BaseInstructions {
+            base_instructions: BaseInstructions {
                 text: phase_one::PROMPT.to_string(),
-            }),
+            },
             personality: None,
             output_schema: Some(output_schema()),
         };

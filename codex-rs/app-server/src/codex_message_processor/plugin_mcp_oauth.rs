@@ -5,10 +5,10 @@ use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_config::types::McpServerConfig;
 use codex_core::config::Config;
-use codex_mcp::mcp::auth::McpOAuthLoginSupport;
-use codex_mcp::mcp::auth::oauth_login_support;
-use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::auth::should_retry_without_scopes;
+use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::oauth_login_support;
+use codex_mcp::resolve_oauth_scopes;
+use codex_mcp::should_retry_without_scopes;
 use codex_rmcp_client::perform_oauth_login_silent;
 use tracing::warn;
 

@@ -173,8 +173,8 @@ fn transform_additional_permissions_preserves_denied_entries() {
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let allowed_path = workspace_root.join("allowed").expect("allowed path");
-    let denied_path = workspace_root.join("denied").expect("denied path");
+    let allowed_path = workspace_root.join("allowed");
+    let denied_path = workspace_root.join("denied");
     let exec_request = manager
         .transform(SandboxTransformRequest {
             command: SandboxCommand {

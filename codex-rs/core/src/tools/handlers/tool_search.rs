@@ -7,7 +7,7 @@ use crate::tools::registry::ToolKind;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
-use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::ToolInfo;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchResultSource;

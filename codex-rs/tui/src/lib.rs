@@ -102,7 +102,8 @@ mod clipboard_paste;
 mod clipboard_text;
 mod collaboration_modes;
 mod color;
-pub mod custom_terminal;
+pub(crate) mod custom_terminal;
+pub use custom_terminal::Terminal;
 mod cwd_prompt;
 mod debug_config;
 mod diff_render;
@@ -113,10 +114,12 @@ mod file_search;
 mod frames;
 mod get_git_diff;
 mod history_cell;
-pub mod insert_history;
+pub(crate) mod insert_history;
+pub use insert_history::insert_history_lines;
 mod key_hint;
 mod line_truncation;
-pub mod live_wrap;
+pub(crate) mod live_wrap;
+pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
 mod markdown;
 mod markdown_render;
@@ -126,10 +129,10 @@ mod model_catalog;
 mod model_migration;
 mod multi_agents;
 mod notifications;
-pub mod onboarding;
+pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
-pub mod public_widgets;
+pub(crate) mod public_widgets;
 mod render;
 mod resume_picker;
 mod selection_list;
@@ -148,7 +151,8 @@ mod theme_picker;
 mod tooltips;
 mod tui;
 mod ui_consts;
-pub mod update_action;
+pub(crate) mod update_action;
+pub use update_action::UpdateAction;
 mod update_prompt;
 mod updates;
 mod version;
@@ -212,7 +216,7 @@ mod voice {
 mod wrapping;
 
 #[cfg(test)]
-pub mod test_backend;
+pub(crate) mod test_backend;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -1611,6 +1615,9 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
+/// Determines the user's authentication mode using a lightweight account read
+/// rather than a full `bootstrap`, avoiding the model-list fetch and
+/// rate-limit round-trip that `bootstrap` would trigger.
 async fn get_login_status(
     app_server: &mut AppServerSession,
     config: &Config,
@@ -1619,9 +1626,14 @@ async fn get_login_status(
         return Ok(LoginStatus::NotAuthenticated);
     }
 
-    let bootstrap = app_server.bootstrap(config).await?;
-    Ok(match bootstrap.account_auth_mode {
-        Some(auth_mode) => LoginStatus::AuthMode(auth_mode),
+    let account = app_server.read_account().await?;
+    Ok(match account.account {
+        Some(codex_app_server_protocol::Account::ApiKey {}) => {
+            LoginStatus::AuthMode(AppServerAuthMode::ApiKey)
+        }
+        Some(codex_app_server_protocol::Account::Chatgpt { .. }) => {
+            LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
+        }
         None => LoginStatus::NotAuthenticated,
     })
 }

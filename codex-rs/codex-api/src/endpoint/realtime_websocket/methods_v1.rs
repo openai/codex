@@ -40,7 +40,9 @@ pub(super) fn conversation_handoff_append_message(
 
 pub(super) fn session_update_session(instructions: String) -> SessionUpdateSession {
     SessionUpdateSession {
+        id: None,
         r#type: SessionType::Quicksilver,
+        model: None,
         instructions: Some(instructions),
         output_modalities: None,
         audio: SessionAudio {

@@ -8,7 +8,7 @@ use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info::with_config_overrides;
 use codex_protocol::config_types::WebSearchMode;

@@ -4,7 +4,7 @@ use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
 use codex_core::config::Config;
-use codex_core::project_doc::discover_project_doc_paths;
+use codex_core::discover_project_doc_paths;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::account::PlanType;
 use codex_utils_absolute_path::AbsolutePathBuf;

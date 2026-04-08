@@ -2,7 +2,6 @@ use crate::endpoint::realtime_websocket::protocol_v1::parse_realtime_event_v1;
 use crate::endpoint::realtime_websocket::protocol_v2::parse_realtime_event_v2;
 pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
-pub use codex_protocol::protocol::RealtimeHandoffRequested;
 pub use codex_protocol::protocol::RealtimeTranscriptDelta;
 pub use codex_protocol::protocol::RealtimeTranscriptEntry;
 use serde::Serialize;
@@ -49,8 +48,12 @@ pub(super) enum RealtimeOutboundMessage {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionUpdateSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) id: Option<String>,
     #[serde(rename = "type")]
     pub(super) r#type: SessionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

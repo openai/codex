@@ -391,6 +391,9 @@ fn server_notification_thread_target(
         ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::ThreadRealtimeSdp(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ThreadRealtimeError(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -623,6 +626,17 @@ fn server_notification_thread_events(
                 msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                     payload: RealtimeEvent::AudioOut(notification.audio.into()),
                 }),
+            }],
+        )),
+        ServerNotification::ThreadRealtimeSdp(notification) => Some((
+            ThreadId::from_string(&notification.thread_id).ok()?,
+            vec![Event {
+                id: String::new(),
+                msg: EventMsg::RealtimeConversationSdp(
+                    codex_protocol::protocol::RealtimeConversationSdpEvent {
+                        sdp: notification.sdp,
+                    },
+                ),
             }],
         )),
         ServerNotification::ThreadRealtimeError(notification) => Some((

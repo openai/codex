@@ -5,6 +5,7 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -68,10 +69,8 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let mut config = build_agent_spawn_config(
-            session.get_base_instructions().await.as_ref(),
-            turn.as_ref(),
-        )?;
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         apply_requested_spawn_agent_model_overrides(
             &session,
             turn.as_ref(),
@@ -208,11 +207,18 @@ impl ToolHandler for Handler {
             )
         })?;
 
-        Ok(SpawnAgentResult {
-            agent_id: None,
-            task_name,
-            nickname,
-        })
+        let hide_agent_metadata = turn
+            .config
+            .features
+            .enabled(Feature::DebugHideSpawnAgentMetadata);
+        if hide_agent_metadata {
+            Ok(SpawnAgentResult::HiddenMetadata { task_name })
+        } else {
+            Ok(SpawnAgentResult::WithNickname {
+                task_name,
+                nickname,
+            })
+        }
     }
 }
 
@@ -268,10 +274,15 @@ impl SpawnAgentArgs {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct SpawnAgentResult {
-    agent_id: Option<String>,
-    task_name: String,
-    nickname: Option<String>,
+#[serde(untagged)]
+pub(crate) enum SpawnAgentResult {
+    WithNickname {
+        task_name: String,
+        nickname: Option<String>,
+    },
+    HiddenMetadata {
+        task_name: String,
+    },
 }
 
 impl ToolOutput for SpawnAgentResult {

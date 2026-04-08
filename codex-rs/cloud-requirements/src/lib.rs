@@ -806,7 +806,7 @@ fn status_code_tag(status_code: Option<u16>) -> String {
 }
 
 fn emit_metric(metric_name: &str, tags: Vec<(&str, String)>) {
-    if let Some(metrics) = codex_otel::metrics::global() {
+    if let Some(metrics) = codex_otel::global() {
         let tag_refs = tags
             .iter()
             .map(|(key, value)| (*key, value.as_str()))
