@@ -1,8 +1,10 @@
 use crate::shell::ShellType;
 
 use super::*;
+use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 
 fn fake_shell() -> Shell {
     Shell {
@@ -16,7 +18,7 @@ fn fake_shell() -> Shell {
 fn serialize_workspace_write_environment_context() {
     let cwd = test_path_buf("/repo");
     let context = EnvironmentContext::new(
-        Some(cwd.clone()),
+        Some(cwd.abs()),
         fake_shell(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
@@ -44,7 +46,7 @@ fn serialize_environment_context_with_network() {
         denied_domains: vec!["blocked.example.com".to_string()],
     };
     let context = EnvironmentContext::new(
-        Some(test_path_buf("/repo")),
+        Some(test_path_buf("/repo").abs()),
         fake_shell(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
@@ -153,7 +155,7 @@ fn serialize_full_access_environment_context() {
 #[test]
 fn equals_except_shell_compares_cwd() {
     let context1 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
+        Some(PathBuf::from("/repo").abs()),
         fake_shell(),
         /*current_date*/ None,
         /*timezone*/ None,
@@ -161,7 +163,7 @@ fn equals_except_shell_compares_cwd() {
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
+        Some(PathBuf::from("/repo").abs()),
         fake_shell(),
         /*current_date*/ None,
         /*timezone*/ None,
@@ -174,7 +176,7 @@ fn equals_except_shell_compares_cwd() {
 #[test]
 fn equals_except_shell_ignores_sandbox_policy() {
     let context1 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
+        Some(PathBuf::from("/repo").abs()),
         fake_shell(),
         /*current_date*/ None,
         /*timezone*/ None,
@@ -182,7 +184,7 @@ fn equals_except_shell_ignores_sandbox_policy() {
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
+        Some(PathBuf::from("/repo").abs()),
         fake_shell(),
         /*current_date*/ None,
         /*timezone*/ None,
@@ -196,7 +198,7 @@ fn equals_except_shell_ignores_sandbox_policy() {
 #[test]
 fn equals_except_shell_compares_cwd_differences() {
     let context1 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo1")),
+        Some(PathBuf::from("/repo1").abs()),
         fake_shell(),
         /*current_date*/ None,
         /*timezone*/ None,
@@ -204,7 +206,7 @@ fn equals_except_shell_compares_cwd_differences() {
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo2")),
+        Some(PathBuf::from("/repo2").abs()),
         fake_shell(),
         /*current_date*/ None,
         /*timezone*/ None,
@@ -218,7 +220,7 @@ fn equals_except_shell_compares_cwd_differences() {
 #[test]
 fn equals_except_shell_ignores_shell() {
     let context1 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
+        Some(PathBuf::from("/repo").abs()),
         Shell {
             shell_type: ShellType::Bash,
             shell_path: "/bin/bash".into(),
@@ -230,7 +232,7 @@ fn equals_except_shell_ignores_shell() {
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
+        Some(PathBuf::from("/repo").abs()),
         Shell {
             shell_type: ShellType::Zsh,
             shell_path: "/bin/zsh".into(),
@@ -248,7 +250,7 @@ fn equals_except_shell_ignores_shell() {
 #[test]
 fn serialize_environment_context_with_subagents() {
     let context = EnvironmentContext::new(
-        Some(test_path_buf("/repo")),
+        Some(test_path_buf("/repo").abs()),
         fake_shell(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),

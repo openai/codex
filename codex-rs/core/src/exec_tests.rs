@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_sandboxing::SandboxType;
+use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -264,7 +265,7 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
     let output = exec(
         ExecParams {
             command,
-            cwd: std::env::current_dir()?,
+            cwd: (std::env::current_dir()?).abs(),
             expiration: 1.into(),
             capture_policy: ExecCapturePolicy::FullBuffer,
             env,
@@ -304,7 +305,7 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
                     "-c".to_string(),
                     "printf hello; sleep 30 &".to_string(),
                 ],
-                cwd: std::env::current_dir()?,
+                cwd: (std::env::current_dir()?).abs(),
                 expiration: 1.into(),
                 capture_policy: ExecCapturePolicy::FullBuffer,
                 env: std::env::vars().collect(),
@@ -350,7 +351,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
         format!("sleep 0.05; head -c {byte_count} /dev/zero | tr '\\0' 'a'"),
     ];
 
-    let cwd = std::env::current_dir()?;
+    let cwd = (std::env::current_dir()?).abs();
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let output = process_exec_tool_call(
         ExecParams {
@@ -723,7 +724,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         "-c".to_string(),
         "sleep 60 & echo $!; sleep 60".to_string(),
     ];
-    let cwd = std::env::current_dir()?;
+    let cwd = (std::env::current_dir()?).abs();
     let env: HashMap<String, String> = std::env::vars().collect();
     let params = ExecParams {
         command,
@@ -780,7 +781,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
 #[tokio::test]
 async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
     let command = long_running_command();
-    let cwd = std::env::current_dir()?;
+    let cwd = (std::env::current_dir()?).abs();
     let env: HashMap<String, String> = std::env::vars().collect();
     let cancel_token = CancellationToken::new();
     let cancel_tx = cancel_token.clone();

@@ -1,4 +1,5 @@
 use super::*;
+use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -80,7 +81,7 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
     let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
         .detect(ExternalAgentConfigDetectOptions {
             include_home: false,
-            cwds: Some(vec![nested, repo_root.clone()]),
+            cwds: Some(vec![nested.abs(), repo_root.abs()]),
         })
         .expect("detect");
 
@@ -92,7 +93,7 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
                 repo_root.join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
-            cwd: Some(repo_root.clone()),
+            cwd: Some(repo_root.abs()),
         },
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
@@ -101,7 +102,7 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
                 repo_root.join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
-            cwd: Some(repo_root),
+            cwd: Some(repo_root.abs()),
         },
     ];
 
@@ -263,12 +264,12 @@ fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: String::new(),
-                cwd: Some(repo_root.clone()),
+                cwd: Some(repo_root.abs()),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: String::new(),
-                cwd: Some(repo_with_existing_target.clone()),
+                cwd: Some(repo_with_existing_target.abs()),
             },
         ])
         .expect("import");
@@ -296,7 +297,7 @@ fn import_repo_agents_md_overwrites_empty_targets() {
         .import(vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: String::new(),
-            cwd: Some(repo_root.clone()),
+            cwd: Some(repo_root.abs()),
         }])
         .expect("import");
 
@@ -322,7 +323,7 @@ fn detect_repo_prefers_non_empty_dot_claude_agents_source() {
     let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
         .detect(ExternalAgentConfigDetectOptions {
             include_home: false,
-            cwds: Some(vec![repo_root.clone()]),
+            cwds: Some(vec![repo_root.abs()]),
         })
         .expect("detect");
 
@@ -335,7 +336,7 @@ fn detect_repo_prefers_non_empty_dot_claude_agents_source() {
                 repo_root.join(".claude").join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
-            cwd: Some(repo_root),
+            cwd: Some(repo_root.abs()),
         }]
     );
 }
@@ -357,7 +358,7 @@ fn import_repo_uses_non_empty_dot_claude_agents_source() {
         .import(vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: String::new(),
-            cwd: Some(repo_root.clone()),
+            cwd: Some(repo_root.abs()),
         }])
         .expect("import");
 

@@ -1049,6 +1049,9 @@ fn resolve_file_system_special_path(
             }
         }
         FileSystemSpecialPath::SlashTmp => {
+            if !cfg!(unix) {
+                return None;
+            }
             #[allow(clippy::expect_used)]
             let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
             if !slash_tmp.as_path().is_dir() {

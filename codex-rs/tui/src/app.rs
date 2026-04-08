@@ -1104,8 +1104,9 @@ impl App {
 
     async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
-        overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
+        let cwd = AbsolutePathBuf::relative_to_current_dir(&cwd)?;
+        overrides.cwd = Some(cwd);
         ConfigBuilder::default()
             .codex_home(self.config.codex_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
@@ -6097,7 +6098,7 @@ async fn fetch_plugins_list(
         .request_typed(ClientRequest::PluginList {
             request_id,
             params: PluginListParams {
-                cwds: Some(vec![cwd]),
+                cwds: Some(vec![cwd.to_path_buf()]),
                 force_remote_sync: false,
             },
         })
@@ -6332,7 +6333,8 @@ mod tests {
     use tokio::time;
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+        AbsolutePathBuf::from_absolute_path(crate::test_support::test_path_buf(path))
+            .expect("absolute test path")
     }
 
     #[test]

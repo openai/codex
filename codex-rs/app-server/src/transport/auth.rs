@@ -405,6 +405,8 @@ mod tests {
     use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use core_test_support::test_absolute_path;
+    use core_test_support::test_path_buf;
     use hmac::Hmac;
     use hmac::Mac;
     use serde_json::json;
@@ -459,7 +461,7 @@ mod tests {
     #[test]
     fn signed_bearer_args_require_mode_when_mode_specific_flags_are_set() {
         let err = AppServerWebsocketAuthArgs {
-            ws_shared_secret_file: Some(PathBuf::from("/tmp/secret")),
+            ws_shared_secret_file: Some(test_path_buf("/tmp/secret")),
             ..Default::default()
         }
         .try_into_settings()
@@ -474,7 +476,7 @@ mod tests {
     fn signed_bearer_args_default_clock_skew_and_trim_optional_claims() {
         let settings = AppServerWebsocketAuthArgs {
             ws_auth: Some(WebsocketAuthCliMode::SignedBearerToken),
-            ws_shared_secret_file: Some(PathBuf::from("/tmp/secret")),
+            ws_shared_secret_file: Some(test_path_buf("/tmp/secret")),
             ws_issuer: Some(" issuer ".to_string()),
             ws_audience: Some("   ".to_string()),
             ..Default::default()
@@ -486,8 +488,7 @@ mod tests {
             settings,
             AppServerWebsocketAuthSettings {
                 config: Some(AppServerWebsocketAuthConfig::SignedBearerToken {
-                    shared_secret_file: AbsolutePathBuf::from_absolute_path("/tmp/secret")
-                        .expect("absolute path"),
+                    shared_secret_file: test_absolute_path("/tmp/secret"),
                     issuer: Some("issuer".to_string()),
                     audience: None,
                     max_clock_skew_seconds: DEFAULT_MAX_CLOCK_SKEW_SECONDS,

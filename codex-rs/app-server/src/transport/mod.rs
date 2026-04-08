@@ -400,6 +400,7 @@ mod tests {
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -407,7 +408,7 @@ mod tests {
     use tokio::time::timeout;
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+        test_absolute_path(path)
     }
 
     #[test]

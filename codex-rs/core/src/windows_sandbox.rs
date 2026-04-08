@@ -10,6 +10,7 @@ use codex_login::default_client::originator;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -273,8 +274,8 @@ pub enum WindowsSandboxSetupMode {
 pub struct WindowsSandboxSetupRequest {
     pub mode: WindowsSandboxSetupMode,
     pub policy: SandboxPolicy,
-    pub policy_cwd: PathBuf,
-    pub command_cwd: PathBuf,
+    pub policy_cwd: AbsolutePathBuf,
+    pub command_cwd: AbsolutePathBuf,
     pub env_map: HashMap<String, String>,
     pub codex_home: PathBuf,
     pub active_profile: Option<String>,

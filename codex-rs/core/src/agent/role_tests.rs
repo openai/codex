@@ -8,6 +8,8 @@ use crate::skills_load_input_from_config;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
+use core_test_support::PathBufExt;
+use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -22,7 +24,7 @@ async fn test_config_with_cli_overrides(
     let config = ConfigBuilder::default()
         .codex_home(home_path.clone())
         .cli_overrides(cli_overrides)
-        .fallback_cwd(Some(home_path))
+        .fallback_cwd(Some(home_path.abs()))
         .build()
         .await
         .expect("load test config");
@@ -237,7 +239,7 @@ model_provider = "test-provider"
             config_profile: Some("test-profile".to_string()),
             ..Default::default()
         })
-        .fallback_cwd(Some(home.path().to_path_buf()))
+        .fallback_cwd(Some(home.abs()))
         .build()
         .await
         .expect("load config");
@@ -286,7 +288,7 @@ model_verbosity = "low"
             config_profile: Some("base-profile".to_string()),
             ..Default::default()
         })
-        .fallback_cwd(Some(home.path().to_path_buf()))
+        .fallback_cwd(Some(home.abs()))
         .build()
         .await
         .expect("load config");
@@ -357,7 +359,7 @@ model_provider = "role-provider"
             config_profile: Some("base-profile".to_string()),
             ..Default::default()
         })
-        .fallback_cwd(Some(home.path().to_path_buf()))
+        .fallback_cwd(Some(home.abs()))
         .build()
         .await
         .expect("load config");
@@ -415,7 +417,7 @@ model_provider = "base-provider"
             config_profile: Some("base-profile".to_string()),
             ..Default::default()
         })
-        .fallback_cwd(Some(home.path().to_path_buf()))
+        .fallback_cwd(Some(home.abs()))
         .build()
         .await
         .expect("load config");
@@ -474,7 +476,7 @@ model_reasoning_effort = "low"
             config_profile: Some("base-profile".to_string()),
             ..Default::default()
         })
-        .fallback_cwd(Some(home.path().to_path_buf()))
+        .fallback_cwd(Some(home.abs()))
         .build()
         .await
         .expect("load config");

@@ -2502,7 +2502,7 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(project_root),
+            cwd: Some(project_root.abs()),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -2622,7 +2622,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(project_root.clone()),
+            cwd: Some(project_root.abs()),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -2644,7 +2644,7 @@ async fn session_update_settings_keeps_runtime_cwds_absolute() {
 
     session
         .update_settings(SessionSettingsUpdate {
-            cwd: Some(PathBuf::from("project")),
+            cwd: Some(updated_cwd.clone()),
             ..Default::default()
         })
         .await
@@ -5539,7 +5539,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),

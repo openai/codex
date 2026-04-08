@@ -585,7 +585,7 @@ pub struct ConfigBuilder {
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
     cloud_requirements: CloudRequirementsLoader,
-    fallback_cwd: Option<PathBuf>,
+    fallback_cwd: Option<AbsolutePathBuf>,
 }
 
 impl ConfigBuilder {
@@ -614,7 +614,7 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
+    pub fn fallback_cwd(mut self, fallback_cwd: Option<AbsolutePathBuf>) -> Self {
         self.fallback_cwd = fallback_cwd;
         self
     }
@@ -634,10 +634,10 @@ impl ConfigBuilder {
         let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
-            Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
+            Some(path) => AbsolutePathBuf::from_absolute_path(normalize_for_native_workdir(path))?,
             None => AbsolutePathBuf::current_dir()?,
         };
-        harness_overrides.cwd = Some(cwd.to_path_buf());
+        harness_overrides.cwd = Some(cwd.clone());
         let config_layer_stack = load_config_layers_state(
             &codex_home,
             Some(cwd),
@@ -1187,7 +1187,7 @@ fn resolve_permission_config_syntax(
 pub struct ConfigOverrides {
     pub model: Option<String>,
     pub review_model: Option<String>,
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
@@ -1424,24 +1424,13 @@ impl Config {
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
-        let resolved_cwd = AbsolutePathBuf::try_from(normalize_for_native_workdir({
-            use std::env;
-
-            match cwd {
-                None => {
-                    tracing::info!("cwd not set, using current dir");
-                    env::current_dir()?
-                }
-                Some(p) if p.is_absolute() => p,
-                Some(p) => {
-                    // Resolve relative path against the current working directory.
-                    tracing::info!("cwd is relative, resolving against current dir");
-                    let mut current = env::current_dir()?;
-                    current.push(p);
-                    current
-                }
+        let resolved_cwd = match cwd {
+            None => {
+                tracing::info!("cwd not set, using current dir");
+                AbsolutePathBuf::current_dir()?
             }
-        }))?;
+            Some(p) => AbsolutePathBuf::from_absolute_path(normalize_for_native_workdir(p))?,
+        };
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))

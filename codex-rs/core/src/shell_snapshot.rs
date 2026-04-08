@@ -16,6 +16,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::watch;
@@ -26,7 +27,7 @@ use tracing::info_span;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
     pub path: PathBuf,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
 }
 
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -38,7 +39,7 @@ impl ShellSnapshot {
     pub fn start_snapshotting(
         codex_home: PathBuf,
         session_id: ThreadId,
-        session_cwd: PathBuf,
+        session_cwd: AbsolutePathBuf,
         shell: &mut Shell,
         session_telemetry: SessionTelemetry,
     ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
@@ -60,7 +61,7 @@ impl ShellSnapshot {
     pub fn refresh_snapshot(
         codex_home: PathBuf,
         session_id: ThreadId,
-        session_cwd: PathBuf,
+        session_cwd: AbsolutePathBuf,
         shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
         session_telemetry: SessionTelemetry,
@@ -78,7 +79,7 @@ impl ShellSnapshot {
     fn spawn_snapshot_task(
         codex_home: PathBuf,
         session_id: ThreadId,
-        session_cwd: PathBuf,
+        session_cwd: AbsolutePathBuf,
         snapshot_shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
         session_telemetry: SessionTelemetry,
@@ -87,14 +88,10 @@ impl ShellSnapshot {
         tokio::spawn(
             async move {
                 let timer = session_telemetry.start_timer("codex.shell_snapshot.duration_ms", &[]);
-                let snapshot = ShellSnapshot::try_new(
-                    &codex_home,
-                    session_id,
-                    session_cwd.as_path(),
-                    &snapshot_shell,
-                )
-                .await
-                .map(Arc::new);
+                let snapshot =
+                    ShellSnapshot::try_new(&codex_home, session_id, &session_cwd, &snapshot_shell)
+                        .await
+                        .map(Arc::new);
                 let success = snapshot.is_ok();
                 let success_tag = if success { "true" } else { "false" };
                 let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
@@ -112,7 +109,7 @@ impl ShellSnapshot {
     async fn try_new(
         codex_home: &Path,
         session_id: ThreadId,
-        session_cwd: &Path,
+        session_cwd: &AbsolutePathBuf,
         shell: &Shell,
     ) -> std::result::Result<Self, &'static str> {
         // File to store the snapshot
@@ -142,7 +139,9 @@ impl ShellSnapshot {
 
         // Make the new snapshot.
         let temp_path =
-            match write_shell_snapshot(shell.shell_type.clone(), &temp_path, session_cwd).await {
+            match write_shell_snapshot(shell.shell_type.clone(), &temp_path, session_cwd.as_path())
+                .await
+            {
                 Ok(path) => {
                     tracing::info!("Shell snapshot successfully created: {}", path.display());
                     path
@@ -158,10 +157,11 @@ impl ShellSnapshot {
 
         let temp_snapshot = Self {
             path: temp_path.clone(),
-            cwd: session_cwd.to_path_buf(),
+            cwd: session_cwd.clone(),
         };
 
-        if let Err(err) = validate_snapshot(shell, &temp_snapshot.path, session_cwd).await {
+        if let Err(err) = validate_snapshot(shell, &temp_snapshot.path, session_cwd.as_path()).await
+        {
             tracing::error!("Shell snapshot validation failed: {err:?}");
             remove_snapshot_file(&temp_snapshot.path).await;
             return Err("validation_failed");
@@ -175,7 +175,7 @@ impl ShellSnapshot {
 
         Ok(Self {
             path,
-            cwd: session_cwd.to_path_buf(),
+            cwd: session_cwd.clone(),
         })
     }
 }

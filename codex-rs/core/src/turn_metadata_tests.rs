@@ -1,5 +1,6 @@
 use super::*;
 
+use core_test_support::TempDirExt;
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -63,7 +64,7 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
 #[test]
 fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().to_path_buf();
+    let cwd = temp_dir.abs();
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let state = TurnMetadataState::new(

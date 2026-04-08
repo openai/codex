@@ -55,10 +55,11 @@ mod tests {
     use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
+
+    use crate::test_support::test_path_display;
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("path must be absolute")
+        AbsolutePathBuf::from_absolute_path(test_path_display(path)).expect("path must be absolute")
     }
 
     #[test]

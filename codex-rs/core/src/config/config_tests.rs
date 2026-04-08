@@ -118,7 +118,7 @@ fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides {
-            cwd: Some(PathBuf::from("nested")),
+            cwd: Some(expected_cwd.clone()),
             ..Default::default()
         },
         codex_home.abs().into_path_buf(),
@@ -438,7 +438,7 @@ fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::i
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -488,7 +488,7 @@ fn permissions_profiles_network_disabled_by_default_does_not_start_proxy() -> st
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -536,7 +536,7 @@ fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::io::Re
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -617,7 +617,7 @@ fn permissions_profiles_require_default_permissions() -> std::io::Result<()> {
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -659,7 +659,7 @@ fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Resul
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -704,7 +704,7 @@ fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> std::io
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -733,7 +733,7 @@ fn load_workspace_permission_profile(profile: PermissionProfileToml) -> std::io:
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -901,7 +901,7 @@ fn permissions_profiles_reject_project_root_parent_traversal() -> std::io::Resul
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -945,7 +945,7 @@ fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> {
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
+            cwd: Some(cwd.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -1174,7 +1174,7 @@ exclude_slash_tmp = true
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
+                cwd: Some(cwd.abs()),
                 ..Default::default()
             },
             codex_home.path().to_path_buf(),
@@ -1348,7 +1348,7 @@ fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
     std::fs::create_dir_all(&backend)?;
 
     let overrides = ConfigOverrides {
-        cwd: Some(frontend),
+        cwd: Some(frontend.abs()),
         sandbox_mode: Some(SandboxMode::WorkspaceWrite),
         additional_writable_roots: vec![PathBuf::from("../backend"), backend.clone()],
         ..Default::default()
@@ -1653,7 +1653,7 @@ profile = "project"
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            cwd: Some(workspace.path().to_path_buf()),
+            cwd: Some(workspace.abs()),
             ..Default::default()
         })
         .build()
@@ -3115,8 +3115,8 @@ impl PrecedenceTestFixture {
         self.cwd.abs()
     }
 
-    fn cwd_path(&self) -> PathBuf {
-        self.cwd.path().to_path_buf()
+    fn cwd_path(&self) -> AbsolutePathBuf {
+        self.cwd.abs()
     }
 
     fn codex_home(&self) -> PathBuf {
@@ -3161,7 +3161,7 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
     };
 
     let overrides = ConfigOverrides {
-        cwd: Some(workspace),
+        cwd: Some(workspace.abs()),
         ..Default::default()
     };
 
@@ -3197,7 +3197,7 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
     let config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
-            cwd: Some(codex_home.path().to_path_buf()),
+            cwd: Some(codex_home.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -3228,7 +3228,7 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
     let config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
-            cwd: Some(codex_home.path().to_path_buf()),
+            cwd: Some(codex_home.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -3302,7 +3302,7 @@ nickname_candidates = ["Hypatia", "Noether"]
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
     assert_eq!(
@@ -3356,7 +3356,7 @@ nickname_candidates = ["Noether"]
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
     let role = config
@@ -3420,7 +3420,7 @@ model = "gpt-5"
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            cwd: Some(nested_cwd),
+            cwd: Some(nested_cwd.abs()),
             ..Default::default()
         })
         .build()
@@ -3473,7 +3473,7 @@ config_file = "./agents/researcher.toml"
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
     assert_eq!(
@@ -3526,7 +3526,7 @@ description = "Review role"
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
     assert!(!config.agent_roles.contains_key("researcher"));
@@ -3589,7 +3589,7 @@ developer_instructions = "Review carefully"
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            cwd: Some(nested_cwd),
+            cwd: Some(nested_cwd.abs()),
             ..Default::default()
         })
         .build()
@@ -3643,7 +3643,7 @@ config_file = "./agents/researcher.toml"
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
     assert_eq!(config.agent_roles.contains_key("researcher"), false);
@@ -3695,7 +3695,7 @@ nickname_candidates = ["Atlas"]
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 
@@ -3830,7 +3830,7 @@ developer_instructions = "Write carefully"
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            cwd: Some(nested_cwd),
+            cwd: Some(nested_cwd.abs()),
             ..Default::default()
         })
         .build()
@@ -3954,7 +3954,7 @@ model = "gpt-5"
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            cwd: Some(nested_cwd),
+            cwd: Some(nested_cwd.abs()),
             ..Default::default()
         })
         .build()
@@ -4074,7 +4074,7 @@ model = "gpt-5-mini"
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            cwd: Some(nested_cwd),
+            cwd: Some(nested_cwd.abs()),
             ..Default::default()
         })
         .build()
@@ -5524,7 +5524,7 @@ fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Resul
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(test_path.to_path_buf()),
+            cwd: Some(test_path.abs()),
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
@@ -5608,7 +5608,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async move {
             Ok(Some(requirements))
         }))
@@ -5633,7 +5633,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_web_search_modes: Some(vec![
@@ -5674,7 +5674,7 @@ trust_level = "untrusted"
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(workspace.path().to_path_buf()))
+        .fallback_cwd(Some(workspace.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -5703,7 +5703,7 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -5767,7 +5767,7 @@ shell_tool = true
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
@@ -5803,7 +5803,7 @@ async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 
@@ -5830,7 +5830,7 @@ include_environment_context = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 
@@ -5853,7 +5853,7 @@ guardian_approval = true
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 
@@ -5873,7 +5873,7 @@ async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> 
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 
@@ -5896,7 +5896,7 @@ approvals_reviewer = "guardian_subagent"
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 
@@ -5942,7 +5942,7 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
@@ -5982,7 +5982,7 @@ approvals_reviewer = "user"
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
@@ -6011,7 +6011,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![
@@ -6051,7 +6051,7 @@ smart_approvals = true
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 
@@ -6080,7 +6080,7 @@ smart_approvals = true
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
 

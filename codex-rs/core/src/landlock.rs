@@ -8,9 +8,9 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 use tokio::process::Child;
 
 /// Spawn a shell tool command under the Linux sandbox helper
@@ -25,7 +25,7 @@ use tokio::process::Child;
 pub async fn spawn_command_under_linux_sandbox<P>(
     codex_linux_sandbox_exe: P,
     command: Vec<String>,
-    command_cwd: PathBuf,
+    command_cwd: AbsolutePathBuf,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,

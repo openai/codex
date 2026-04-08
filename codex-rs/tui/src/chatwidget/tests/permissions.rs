@@ -51,8 +51,12 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .into_iter()
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
+    #[cfg(target_os = "windows")]
+    let extra_root = PathBuf::from("C:\\extra");
+    #[cfg(not(target_os = "windows"))]
+    let extra_root = PathBuf::from("/extra");
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![PathBuf::from("C:\\extra").abs()],
+        writable_roots: vec![extra_root.abs()],
         read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,

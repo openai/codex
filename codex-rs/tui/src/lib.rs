@@ -781,7 +781,7 @@ pub async fn run_main(
         cwd: if matches!(app_server_target, AppServerTarget::Remote { .. }) {
             None
         } else {
-            cwd
+            Some(config_cwd.clone())
         },
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
@@ -1635,6 +1635,19 @@ async fn load_config_or_exit_with_fallback_cwd(
     cloud_requirements: CloudRequirementsLoader,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
+    let fallback_cwd = match fallback_cwd
+        .map(AbsolutePathBuf::relative_to_current_dir)
+        .transpose()
+    {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Error resolving fallback cwd: {err}");
+            }
+            std::process::exit(1);
+        }
+    };
     #[allow(clippy::print_stderr)]
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
@@ -2200,7 +2213,7 @@ trust_level = "untrusted"
         std::fs::write(temp_dir.path().join("config.toml"), config_toml)?;
 
         let trusted_overrides = ConfigOverrides {
-            cwd: Some(trusted.clone()),
+            cwd: Some(AbsolutePathBuf::relative_to_current_dir(&trusted)?),
             ..Default::default()
         };
         let trusted_config = ConfigBuilder::default()
@@ -2214,7 +2227,7 @@ trust_level = "untrusted"
         );
 
         let untrusted_overrides = ConfigOverrides {
-            cwd: Some(untrusted),
+            cwd: Some(AbsolutePathBuf::relative_to_current_dir(&untrusted)?),
             ..trusted_overrides
         };
         let untrusted_config = ConfigBuilder::default()

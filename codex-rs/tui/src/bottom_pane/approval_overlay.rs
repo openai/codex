@@ -856,8 +856,10 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
+    use crate::test_support::test_path_display;
+
     fn absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+        AbsolutePathBuf::from_absolute_path(test_path_display(path)).expect("absolute path")
     }
 
     fn render_overlay_lines(view: &ApprovalOverlay, width: u16) -> String {

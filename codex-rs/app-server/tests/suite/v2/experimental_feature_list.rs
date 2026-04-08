@@ -17,6 +17,7 @@ use codex_app_server_protocol::RequestId;
 use codex_core::config::ConfigBuilder;
 use codex_features::FEATURES;
 use codex_features::Stage;
+use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -31,7 +32,7 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     let codex_home = TempDir::new()?;
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;

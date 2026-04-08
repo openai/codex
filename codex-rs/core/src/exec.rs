@@ -82,7 +82,7 @@ pub const IO_DRAIN_TIMEOUT_MS: u64 = 2_000; // 2 s should be plenty for local pi
 #[derive(Debug)]
 pub struct ExecParams {
     pub command: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub expiration: ExecExpiration,
     pub capture_policy: ExecCapturePolicy,
     pub env: HashMap<String, String>,
@@ -275,7 +275,7 @@ pub fn build_exec_request(
     let command = SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
-        cwd,
+        cwd: cwd.to_path_buf(),
         env,
         additional_permissions: None,
     };

@@ -18,6 +18,7 @@ use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -90,7 +91,7 @@ pub(crate) async fn emit_exec_command_begin(
 pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         freeform: bool,
@@ -101,7 +102,7 @@ pub(crate) enum ToolEmitter {
     },
     UnifiedExec {
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
@@ -111,7 +112,7 @@ pub(crate) enum ToolEmitter {
 impl ToolEmitter {
     pub fn shell(
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         freeform: bool,
     ) -> Self {
@@ -134,7 +135,7 @@ impl ToolEmitter {
 
     pub fn unified_exec(
         command: &[String],
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         process_id: Option<String>,
     ) -> Self {

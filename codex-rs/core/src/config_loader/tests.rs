@@ -22,6 +22,8 @@ use codex_protocol::protocol::AskForApproval;
 #[cfg(target_os = "macos")]
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathBufExt;
+use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -72,7 +74,7 @@ async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<(
             TomlValue::String("run-logs".to_string()),
         )])
         .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd_path.clone()),
+            cwd: Some(cwd_path.abs()),
             ..Default::default()
         })
         .build()
@@ -144,7 +146,7 @@ async fn returns_config_error_for_schema_error_in_user_config() {
 
     let err = ConfigBuilder::default()
         .codex_home(tmp.path().to_path_buf())
-        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .fallback_cwd(Some(tmp.abs()))
         .build()
         .await
         .expect_err("expected error");
@@ -386,7 +388,7 @@ writable_roots = ["~/code"]
 
     let config = ConfigBuilder::default()
         .codex_home(tmp.path().to_path_buf())
-        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .fallback_cwd(Some(tmp.abs()))
         .loader_overrides(loader_overrides)
         .build()
         .await?;
@@ -897,7 +899,7 @@ model_instructions_file = "child.txt"
     let config = ConfigBuilder::default()
         .codex_home(codex_home)
         .harness_overrides(ConfigOverrides {
-            cwd: Some(nested.clone()),
+            cwd: Some(nested.abs()),
             ..ConfigOverrides::default()
         })
         .build()
@@ -933,7 +935,7 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
         .codex_home(codex_home)
         .cli_overrides(cli_overrides)
         .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd),
+            cwd: Some(cwd.abs()),
             ..ConfigOverrides::default()
         })
         .build()
@@ -1237,7 +1239,7 @@ enabled = false
             "mcp_servers.sentry.enabled".to_string(),
             TomlValue::Boolean(true),
         )])
-        .fallback_cwd(Some(nested))
+        .fallback_cwd(Some(nested.abs()))
         .build()
         .await?;
 
@@ -1279,7 +1281,7 @@ enabled = false
             "mcp_servers.sentry.enabled".to_string(),
             TomlValue::Boolean(true),
         )])
-        .fallback_cwd(Some(nested))
+        .fallback_cwd(Some(nested.abs()))
         .build()
         .await
         .expect_err("untrusted project layer should not provide MCP transport");

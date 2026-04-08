@@ -163,7 +163,7 @@ impl ConfigService {
                     .codex_home(self.codex_home.clone())
                     .cli_overrides(self.cli_overrides.clone())
                     .loader_overrides(self.loader_overrides.clone())
-                    .fallback_cwd(Some(cwd.to_path_buf()))
+                    .fallback_cwd(Some(cwd))
                     .cloud_requirements(self.cloud_requirements.clone())
                     .build()
                     .await

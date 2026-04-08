@@ -117,8 +117,8 @@ async fn run_cmd_result_with_policies(
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
-    let cwd = std::env::current_dir().expect("cwd should exist");
-    let sandbox_cwd = cwd.clone();
+    let cwd = AbsolutePathBuf::current_dir().expect("cwd should exist");
+    let sandbox_cwd = cwd.to_path_buf();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
@@ -375,8 +375,8 @@ async fn test_timeout() {
 /// suite remains green on leaner CI images.
 #[expect(clippy::expect_used)]
 async fn assert_network_blocked(cmd: &[&str]) {
-    let cwd = std::env::current_dir().expect("cwd should exist");
-    let sandbox_cwd = cwd.clone();
+    let cwd = AbsolutePathBuf::current_dir().expect("cwd should exist");
+    let sandbox_cwd = cwd.to_path_buf();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
@@ -575,8 +575,8 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
-                    .expect("absolute helper dir"),
+                path: AbsolutePathBuf::relative_to_current_dir(sandbox_helper_dir.as_path())
+                    .expect("helper dir"),
             },
             access: FileSystemAccessMode::Read,
         },
@@ -648,8 +648,8 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
-                    .expect("absolute helper dir"),
+                path: AbsolutePathBuf::relative_to_current_dir(sandbox_helper_dir.as_path())
+                    .expect("helper dir"),
             },
             access: FileSystemAccessMode::Read,
         },

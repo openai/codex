@@ -81,7 +81,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     ) {
         snapshot_cwd != command_cwd
     } else {
-        snapshot.cwd != cwd
+        snapshot.cwd.as_path() != cwd
     } {
         return command.to_vec();
     }

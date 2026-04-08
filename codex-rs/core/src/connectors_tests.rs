@@ -15,6 +15,7 @@ use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
@@ -513,7 +514,7 @@ enabled = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async move {
             Ok(Some(requirements))
         }))
@@ -556,7 +557,7 @@ async fn cloud_requirements_disable_connector_applies_without_user_apps_table() 
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .cloud_requirements(CloudRequirementsLoader::new(async move {
             Ok(Some(requirements))
         }))
@@ -587,7 +588,7 @@ async fn local_requirements_disable_connector_overrides_user_apps_config() {
         AbsolutePathBuf::try_from(codex_home.path().join(CONFIG_TOML_FILE)).expect("abs path");
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await
         .expect("config should build");
@@ -638,7 +639,7 @@ async fn local_requirements_disable_connector_applies_without_user_apps_table() 
     let codex_home = tempdir().expect("tempdir should succeed");
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await
         .expect("config should build");
@@ -679,7 +680,7 @@ async fn with_app_enabled_state_preserves_unrelated_disabled_connector() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(codex_home.abs()))
         .build()
         .await
         .expect("config should build");

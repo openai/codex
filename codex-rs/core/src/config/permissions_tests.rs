@@ -11,6 +11,7 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -58,7 +59,7 @@ fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()>
             ..Default::default()
         },
         ConfigOverrides {
-            cwd: Some(cwd.clone()),
+            cwd: Some(cwd.abs()),
             zsh_path: Some(zsh_path.clone()),
             main_execve_wrapper_exe: Some(execve_wrapper),
             ..Default::default()

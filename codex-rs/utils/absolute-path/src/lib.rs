@@ -51,7 +51,13 @@ impl AbsolutePathBuf {
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
-        Ok(Self(absolutize::absolutize(&expanded)?))
+        if !expanded.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "path must be absolute",
+            ));
+        }
+        Ok(Self(absolutize::absolutize_from(&expanded, &expanded)))
     }
 
     pub fn current_dir() -> std::io::Result<Self> {
@@ -65,10 +71,8 @@ impl AbsolutePathBuf {
     /// Construct an absolute path from `path`, resolving relative paths against
     /// the process current working directory.
     pub fn relative_to_current_dir<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        Ok(Self::resolve_path_against_base(
-            path,
-            std::env::current_dir()?,
-        ))
+        let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        Ok(Self(absolutize::absolutize(&expanded)?))
     }
 
     pub fn join<P: AsRef<Path>>(&self, path: P) -> Self {
@@ -141,7 +145,23 @@ pub mod test_support {
     impl PathExt for Path {
         #[expect(clippy::expect_used)]
         fn abs(&self) -> AbsolutePathBuf {
-            AbsolutePathBuf::try_from(self).expect("path should already be absolute")
+            if let Ok(path) = AbsolutePathBuf::try_from(self) {
+                return path;
+            }
+            if cfg!(windows)
+                && let Some(path) = self.to_str()
+                && path.starts_with('/')
+            {
+                let mut windows_path = PathBuf::from(r"C:\");
+                windows_path.extend(
+                    path.trim_start_matches('/')
+                        .split('/')
+                        .filter(|segment| !segment.is_empty()),
+                );
+                return AbsolutePathBuf::try_from(windows_path)
+                    .expect("windows test path should be absolute");
+            }
+            panic!("path should already be absolute");
         }
     }
 

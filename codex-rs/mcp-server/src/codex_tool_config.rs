@@ -6,6 +6,7 @@ use codex_core::config::ConfigOverrides;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_json_to_toml::json_to_toml;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
@@ -14,7 +15,6 @@ use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Client-supplied configuration for a `codex` tool-call.
@@ -173,7 +173,9 @@ impl CodexToolCallParam {
         let overrides = ConfigOverrides {
             model,
             config_profile: profile,
-            cwd: cwd.map(PathBuf::from),
+            cwd: cwd
+                .map(AbsolutePathBuf::relative_to_current_dir)
+                .transpose()?,
             approval_policy: approval_policy.map(Into::into),
             sandbox_mode: sandbox.map(Into::into),
             codex_self_exe: arg0_paths.codex_self_exe.clone(),

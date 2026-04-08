@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -13,7 +14,7 @@ const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.i
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
     pub include_home: bool,
-    pub cwds: Option<Vec<PathBuf>>,
+    pub cwds: Option<Vec<AbsolutePathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +29,7 @@ pub enum ExternalAgentConfigMigrationItemType {
 pub struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub description: String,
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Clone)]
@@ -112,7 +113,7 @@ impl ExternalAgentConfigService {
         repo_root: Option<&Path>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
-        let cwd = repo_root.map(Path::to_path_buf);
+        let cwd = repo_root.map(AbsolutePathBuf::try_from).transpose()?;
         let source_settings = repo_root.map_or_else(
             || self.claude_home.join("settings.json"),
             |repo_root| repo_root.join(".claude").join("settings.json"),
