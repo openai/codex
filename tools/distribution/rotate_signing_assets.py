@@ -8,6 +8,7 @@ helper:
   - import a manually-created App Store Connect API key,
   - optionally store it in 1Password,
   - upload the matching GitHub Actions repository secrets.
+  - upload an existing Developer ID Application p12 for temporary testing.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Sequence
 
 from cmd_import_api_key import register as register_import_api_key
 from cmd_upload_api_key_secrets import register as register_upload_api_key_secrets
+from cmd_upload_mac_signing_secrets import register as register_upload_mac_signing_secrets
 from rotation_shared import DEFAULT_OUT_DIR
 
 
@@ -55,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_import_api_key(subparsers)
     register_upload_api_key_secrets(subparsers)
+    register_upload_mac_signing_secrets(subparsers)
 
     return parser
 

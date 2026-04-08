@@ -44,11 +44,6 @@ runs:
           exit 1
         fi
 
-        if [[ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
-          echo "APPLE_CERTIFICATE_PASSWORD is required for macOS signing"
-          exit 1
-        fi
-
         cert_path="${RUNNER_TEMP}/apple_signing_certificate.p12"
         echo "$APPLE_CERTIFICATE" | base64 -d > "$cert_path"
 

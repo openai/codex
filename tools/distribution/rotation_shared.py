@@ -9,6 +9,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -24,6 +25,8 @@ DEFAULT_GITHUB_REPO = "openai/codex"
 DEFAULT_ISSUER_ID_SECRET_NAME = "APPLE_NOTARIZATION_ISSUER_ID"
 DEFAULT_KEY_ID_SECRET_NAME = "APPLE_NOTARIZATION_KEY_ID"
 DEFAULT_PRIVATE_KEY_SECRET_NAME = "APPLE_NOTARIZATION_KEY_P8"
+NEW_MAC_SIGNING_CERTIFICATE_SECRET_NAME = "NEW_APPLE_CERTIFICATE_P12"
+NEW_MAC_SIGNING_CERTIFICATE_PASSWORD_SECRET_NAME = "NEW_APPLE_CERTIFICATE_PASSWORD"
 PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 
@@ -158,6 +161,111 @@ def load_one_password_item_fields(
     except Exception as error:
         raise SystemExit(f"Failed to load 1Password fields from {item!r}: {error}") from error
     return _parse_one_password_fields(raw, fields)
+
+
+def load_one_password_item_json(
+    *,
+    item: str,
+    vault: str | None,
+    account: str,
+) -> dict[str, Any]:
+    argv = [
+        "op",
+        "item",
+        "get",
+        item,
+        "--account",
+        account,
+        "--format",
+        "json",
+    ]
+    if vault:
+        argv.extend(["--vault", vault])
+    try:
+        raw = subprocess.check_output(argv, text=True)
+    except Exception as error:
+        raise SystemExit(f"Failed to load 1Password item {item!r}: {error}") from error
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"Failed to parse 1Password item JSON for {item!r}: {error}") from error
+    if not isinstance(payload, dict):
+        raise SystemExit(f"1Password item JSON for {item!r} was not an object")
+    return payload
+
+
+def _one_password_item_file_name(file_payload: object) -> str | None:
+    if not isinstance(file_payload, dict):
+        return None
+    for key in ("name", "fileName", "title"):
+        value = file_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return Path(value).name
+    return None
+
+
+def one_password_item_file_names(
+    *,
+    item: str,
+    vault: str | None,
+    account: str,
+) -> list[str]:
+    payload = load_one_password_item_json(item=item, vault=vault, account=account)
+    raw_files = payload.get("files", [])
+    if not isinstance(raw_files, list):
+        return []
+    return [
+        file_name
+        for file_name in (_one_password_item_file_name(file_payload) for file_payload in raw_files)
+        if file_name
+    ]
+
+
+def select_one_password_p12_file_name(file_names: Sequence[str]) -> str:
+    p12_file_names = sorted(
+        {file_name for file_name in file_names if file_name.lower().endswith(".p12")}
+    )
+    if not p12_file_names:
+        raise SystemExit("The 1Password item does not have an attached .p12 file")
+    if len(p12_file_names) > 1:
+        raise SystemExit(
+            "The 1Password item has multiple .p12 files; pass --p12-file-name with one of: "
+            + ", ".join(p12_file_names)
+        )
+    return p12_file_names[0]
+
+
+def one_password_secret_reference(*, vault: str, item: str, field_or_file: str) -> str:
+    return f"op://{vault}/{item}/{field_or_file}"
+
+
+def download_one_password_file(
+    *,
+    item: str,
+    vault: str,
+    account: str,
+    file_name: str,
+    output_path: Path,
+) -> None:
+    argv = [
+        "op",
+        "read",
+        "--out-file",
+        str(output_path),
+        "--file-mode",
+        "0600",
+        one_password_secret_reference(vault=vault, item=item, field_or_file=file_name),
+        "--account",
+        account,
+    ]
+    try:
+        subprocess.run(argv, check=True, stdout=subprocess.DEVNULL)
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            f"Failed to download 1Password file {file_name!r} from {item!r}: {error}"
+        ) from error
+    if not output_path.exists():
+        raise SystemExit(f"1Password file download did not produce {output_path}")
 
 
 def _one_password_item_exists(
@@ -397,4 +505,52 @@ def cmd_upload_api_key_secrets(args: argparse.Namespace) -> None:
             args.private_key_secret_name,
         ],
         stdin_text=private_key_body,
+    )
+
+
+def cmd_upload_mac_signing_secrets(args: argparse.Namespace) -> None:
+    runner = CommandRunner(dry_run=not args.execute, verbose=args.log_verbose)
+
+    file_name = args.p12_file_name or select_one_password_p12_file_name(
+        one_password_item_file_names(
+            item=args.one_password_item,
+            vault=args.one_password_vault,
+            account=args.one_password_account,
+        )
+    )
+    with tempfile.TemporaryDirectory(prefix="codex-cli-mac-signing-p12-") as temp_dir:
+        p12_path = Path(temp_dir) / file_name
+        download_one_password_file(
+            item=args.one_password_item,
+            vault=args.one_password_vault,
+            account=args.one_password_account,
+            file_name=file_name,
+            output_path=p12_path,
+        )
+        p12_body = normalize_base64_secret_body(
+            base64.b64encode(p12_path.read_bytes()).decode("ascii")
+        )
+
+    runner.run(
+        [
+            "gh",
+            "secret",
+            "set",
+            "--repo",
+            args.github_repo,
+            args.certificate_secret_name,
+        ],
+        stdin_text=p12_body,
+    )
+    runner.run(
+        [
+            "gh",
+            "secret",
+            "set",
+            "--repo",
+            args.github_repo,
+            args.password_secret_name,
+            "--body",
+            args.certificate_password,
+        ],
     )
