@@ -4653,29 +4653,6 @@
         },
         "method": {
           "enum": [
-            "account/sendAddCreditsNudgeEmail"
-          ],
-          "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "type": "null"
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "Account/sendAddCreditsNudgeEmailRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
             "feedback/upload"
           ],
           "title": "Feedback/uploadRequestMethod",

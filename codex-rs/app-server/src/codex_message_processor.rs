@@ -24,7 +24,6 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
-use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -108,7 +107,6 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
-use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SkillSummary;
@@ -196,7 +194,6 @@ use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
-use codex_core::SendAddCreditsNudgeEmailError;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
@@ -1049,13 +1046,6 @@ impl CodexMessageProcessor {
                 self.get_account_rate_limits(to_connection_request_id(request_id))
                     .await;
             }
-            ClientRequest::SendAddCreditsNudgeEmail {
-                request_id,
-                params: _,
-            } => {
-                self.send_add_credits_nudge_email(to_connection_request_id(request_id))
-                    .await;
-            }
             ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(to_connection_request_id(request_id), params)
                     .await;
@@ -1801,48 +1791,6 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
-    }
-
-    async fn send_add_credits_nudge_email(&self, request_id: ConnectionRequestId) {
-        let status = match codex_core::send_add_credits_nudge_email(
-            &self.config,
-            self.auth_manager.as_ref(),
-        )
-        .await
-        {
-            Ok(status) => status,
-            Err(err) => {
-                let code = match &err {
-                    SendAddCreditsNudgeEmailError::AuthRequired
-                    | SendAddCreditsNudgeEmailError::ChatGptAuthRequired => {
-                        INVALID_REQUEST_ERROR_CODE
-                    }
-                    SendAddCreditsNudgeEmailError::CreateClient(_)
-                    | SendAddCreditsNudgeEmailError::Request(_) => INTERNAL_ERROR_CODE,
-                };
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code,
-                            message: err.to_string(),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let status = match status {
-            codex_core::AddCreditsNudgeEmailStatus::Sent => AddCreditsNudgeEmailStatus::Sent,
-            codex_core::AddCreditsNudgeEmailStatus::CooldownActive => {
-                AddCreditsNudgeEmailStatus::CooldownActive
-            }
-        };
-
-        self.outgoing
-            .send_response(request_id, SendAddCreditsNudgeEmailResponse { status })
-            .await;
     }
 
     async fn fetch_account_rate_limits(

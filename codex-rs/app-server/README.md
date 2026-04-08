@@ -1367,7 +1367,6 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` plus `isWorkspaceOwner` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
-- `account/sendAddCreditsNudgeEmail` — request that Codex notify the current workspace owner about depleted credits; returns whether the email was sent or blocked by cooldown.
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
 - `mcpServer/startupStatus/updated` (notify) — emitted when a configured MCP server's startup status changes for a loaded thread; payload includes `{ name, status, error }` where `status` is `starting`, `ready`, `failed`, or `cancelled`.
@@ -1471,18 +1470,6 @@ Field notes:
 - `usedPercent` is current usage within the OpenAI quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
-
-### 8) Notify the workspace owner about depleted credits
-
-```json
-{ "method": "account/sendAddCreditsNudgeEmail", "id": 8 }
-{ "id": 8, "result": { "status": "sent" } }
-```
-
-Possible `status` values:
-
-- `sent` — the request was accepted and an email was queued.
-- `cooldownActive` — an email was already sent recently, so no new email was triggered.
 
 ## Experimental API Opt-in
 

@@ -6,7 +6,6 @@ export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUp
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AddCreditsNudgeEmailNotification } from "./AddCreditsNudgeEmailNotification";
 export type { AddCreditsNudgeEmailResult } from "./AddCreditsNudgeEmailResult";
-export type { AddCreditsNudgeEmailStatus } from "./AddCreditsNudgeEmailStatus";
 export type { AdditionalFileSystemPermissions } from "./AdditionalFileSystemPermissions";
 export type { AdditionalNetworkPermissions } from "./AdditionalNetworkPermissions";
 export type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";
@@ -251,7 +250,6 @@ export type { ReviewTarget } from "./ReviewTarget";
 export type { SandboxMode } from "./SandboxMode";
 export type { SandboxPolicy } from "./SandboxPolicy";
 export type { SandboxWorkspaceWrite } from "./SandboxWorkspaceWrite";
-export type { SendAddCreditsNudgeEmailResponse } from "./SendAddCreditsNudgeEmailResponse";
 export type { ServerRequestResolvedNotification } from "./ServerRequestResolvedNotification";
 export type { SessionSource } from "./SessionSource";
 export type { SkillDependencies } from "./SkillDependencies";
