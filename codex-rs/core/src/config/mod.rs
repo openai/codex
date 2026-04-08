@@ -124,6 +124,7 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -780,6 +781,29 @@ impl Config {
     }
 }
 
+pub fn resolve_profile_v2_config_path(
+    codex_home: &Path,
+    profile_name: &str,
+) -> std::io::Result<PathBuf> {
+    if profile_name.is_empty()
+        || profile_name == "."
+        || profile_name == ".."
+        || profile_name.contains(std::path::MAIN_SEPARATOR)
+        || profile_name.contains('/')
+        || profile_name.contains('\\')
+        || profile_name.ends_with(".toml")
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "invalid --profile-v2 value `{profile_name}`; pass a plain name such as `work`"
+            ),
+        ));
+    }
+
+    Ok(codex_home.join(format!("{profile_name}{CONFIG_PROFILE_V2_SUFFIX}")))
+}
+
 /// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
 /// with [ConfigToml] directly means that [ConfigRequirements] have not been
 /// applied yet, which risks failing to enforce required constraints.
@@ -787,12 +811,13 @@ pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         codex_home,
         Some(cwd.clone()),
         &cli_overrides,
-        LoaderOverrides::default(),
+        loader_overrides,
         CloudRequirementsLoader::default(),
     )
     .await?;

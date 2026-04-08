@@ -385,9 +385,13 @@ pub async fn run_main_with_transport(
             let effective_toml = config.config_layer_stack.effective_config();
             match effective_toml.try_into() {
                 Ok(config_toml) => {
-                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
+                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality_with_config_path(
                         &config.codex_home,
                         &config_toml,
+                        config
+                            .config_layer_stack
+                            .get_user_config_file()
+                            .map(|path| path.as_path()),
                     )
                     .await
                     {

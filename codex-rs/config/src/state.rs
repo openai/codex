@@ -16,6 +16,7 @@ use toml::Value as TomlValue;
 /// LoaderOverrides overrides managed configuration inputs (primarily for tests).
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
+    pub user_config_path: Option<PathBuf>,
     pub managed_config_path: Option<PathBuf>,
     //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
     #[cfg(target_os = "macos")]
@@ -40,6 +41,7 @@ impl LoaderOverrides {
     /// This is intended for tests that supply an explicit managed config fixture.
     pub fn with_managed_config_path_for_tests(managed_config_path: PathBuf) -> Self {
         Self {
+            user_config_path: None,
             managed_config_path: Some(managed_config_path),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: Some(String::new()),
@@ -179,6 +181,14 @@ impl ConfigLayerStack {
     pub fn get_user_layer(&self) -> Option<&ConfigLayerEntry> {
         self.user_layer_index
             .and_then(|index| self.layers.get(index))
+    }
+
+    pub fn get_user_config_file(&self) -> Option<&AbsolutePathBuf> {
+        let layer = self.get_user_layer()?;
+        let ConfigLayerSource::User { file } = &layer.name else {
+            return None;
+        };
+        Some(file)
     }
 
     pub fn requirements(&self) -> &ConfigRequirements {

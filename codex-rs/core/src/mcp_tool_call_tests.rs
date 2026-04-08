@@ -993,8 +993,13 @@ fn accepted_elicitation_without_content_defaults_to_accept() {
 #[tokio::test]
 async fn persist_codex_app_tool_approval_writes_tool_override() {
     let tmp = tempdir().expect("tempdir");
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
 
-    persist_codex_app_tool_approval(tmp.path(), "calendar", "calendar/list_events")
+    persist_codex_app_tool_approval(&config, "calendar", "calendar/list_events")
         .await
         .expect("persist approval");
 

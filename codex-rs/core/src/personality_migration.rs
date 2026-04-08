@@ -28,6 +28,14 @@ pub async fn maybe_migrate_personality(
     codex_home: &Path,
     config_toml: &ConfigToml,
 ) -> io::Result<PersonalityMigrationStatus> {
+    maybe_migrate_personality_with_config_path(codex_home, config_toml, None).await
+}
+
+pub async fn maybe_migrate_personality_with_config_path(
+    codex_home: &Path,
+    config_toml: &ConfigToml,
+    user_config_path: Option<&Path>,
+) -> io::Result<PersonalityMigrationStatus> {
     let marker_path = codex_home.join(PERSONALITY_MIGRATION_FILENAME);
     if tokio::fs::try_exists(&marker_path).await? {
         return Ok(PersonalityMigrationStatus::SkippedMarker);
@@ -51,7 +59,11 @@ pub async fn maybe_migrate_personality(
         return Ok(PersonalityMigrationStatus::SkippedNoSessions);
     }
 
-    ConfigEditsBuilder::new(codex_home)
+    let mut builder = ConfigEditsBuilder::new(codex_home);
+    if let Some(user_config_path) = user_config_path {
+        builder = builder.with_config_path(user_config_path);
+    }
+    builder
         .set_personality(Some(Personality::Pragmatic))
         .apply()
         .await

@@ -124,6 +124,7 @@ pub async fn load_config_layers_state(
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> io::Result<ConfigLayerStack> {
+    let user_config_path = overrides.user_config_path.clone();
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
@@ -187,7 +188,10 @@ pub async fn load_config_layers_state(
     // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
     // exists, but is malformed, then this error should be propagated to the
     // user.
-    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
+    let user_file = match user_config_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home),
+    };
     let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
