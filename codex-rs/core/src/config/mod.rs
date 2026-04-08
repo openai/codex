@@ -242,6 +242,9 @@ pub struct Config {
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
+    /// Path to the global AGENTS file loaded into `user_instructions`.
+    pub user_instructions_path: Option<PathBuf>,
+
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
@@ -1349,7 +1352,10 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let (user_instructions, user_instructions_path) =
+            Self::load_instructions(Some(&codex_home))
+                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
+                .unwrap_or((None, None));
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1941,6 +1947,7 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
+            user_instructions_path,
             base_instructions,
             personality,
             developer_instructions,
@@ -2107,7 +2114,7 @@ impl Config {
         Ok(config)
     }
 
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
+    fn load_instructions(codex_dir: Option<&Path>) -> Option<LoadedUserInstructions> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
             let mut path = base.to_path_buf();
@@ -2115,7 +2122,10 @@ impl Config {
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
+                    return Some(LoadedUserInstructions {
+                        contents: trimmed.to_string(),
+                        path,
+                    });
                 }
             }
         }
@@ -2187,6 +2197,11 @@ impl Config {
     pub fn bundled_skills_enabled(&self) -> bool {
         crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
+}
+
+struct LoadedUserInstructions {
+    contents: String,
+    path: PathBuf,
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {

@@ -129,6 +129,56 @@ fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
 }
 
 #[test]
+fn load_config_records_global_agents_path() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+    std::fs::write(&global_agents_path, "\n  global instructions  \n")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs().into_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.user_instructions.as_deref(),
+        Some("global instructions")
+    );
+    assert_eq!(
+        config.user_instructions_path.as_deref(),
+        Some(global_agents_path.as_path())
+    );
+    Ok(())
+}
+
+#[test]
+fn load_config_records_preferred_global_agents_override_path() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    std::fs::write(
+        codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME),
+        "global instructions",
+    )?;
+    let global_agents_override_path = codex_home.path().join(LOCAL_PROJECT_DOC_FILENAME);
+    std::fs::write(&global_agents_override_path, "local override instructions")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs().into_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.user_instructions.as_deref(),
+        Some("local override instructions")
+    );
+    assert_eq!(
+        config.user_instructions_path.as_deref(),
+        Some(global_agents_override_path.as_path())
+    );
+    Ok(())
+}
+
+#[test]
 fn test_toml_parsing() {
     let history_with_persistence = r#"
 [history]
@@ -4457,6 +4507,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
+            user_instructions_path: None,
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -4602,6 +4653,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -4745,6 +4797,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -4874,6 +4927,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
