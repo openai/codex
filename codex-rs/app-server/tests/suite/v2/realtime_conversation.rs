@@ -171,6 +171,8 @@ struct RealtimeE2eHarness {
 }
 
 impl RealtimeE2eHarness {
+    // Owns the full mocked app-server realtime route: MCP client, Responses mocks, WebRTC call
+    // creation capture, sideband WebSocket server, login, config, and a started thread.
     async fn new(
         realtime_version: RealtimeTestVersion,
         responses: Vec<String>,
@@ -271,6 +273,8 @@ impl RealtimeE2eHarness {
     }
 
     async fn start_webrtc_realtime(&mut self, offer_sdp: &str) -> Result<StartedWebrtcRealtime> {
+        // Starts realtime through the public JSON-RPC method, then waits for the same client-visible
+        // notifications a desktop app needs: started first, SDP answer second.
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -894,6 +898,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
 async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Phase 1: build a v1 realtime thread with a mocked call-create response and a sideband socket
+    // that immediately proves the joined connection can receive server events.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V1,
         Vec::new(),
@@ -903,6 +909,8 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
     )
     .await?;
 
+    // Phase 2: start through app-server and assert the app receives both the started notification
+    // and the answer SDP.
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(
         started,
@@ -919,6 +927,8 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
         }
     );
 
+    // Phase 3: verify the HTTP call-create leg, the direct sideband join, and the normal v1
+    // session.update; the WebRTC transport should remain alive instead of closing after SDP.
     assert_call_create_multipart(
         harness.call_capture.single_request(),
         "v=offer\r\n",
@@ -949,6 +959,7 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
 async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Phase 1: script one v1 handoff request on the sideband and one delegated Responses turn.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V1,
         vec![create_final_assistant_message_sse_response(
@@ -976,6 +987,7 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
 
+    // Phase 2: wait for the delegated Codex turn that is launched by the handoff request.
     let turn_started = harness
         .read_notification::<TurnStartedNotification>("turn/started")
         .await?;
@@ -985,6 +997,8 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
+    // Phase 3: assert the delegated prompt went to Responses, then the v1 handoff append went back
+    // over the existing sideband connection.
     let requests = harness.responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
@@ -1011,6 +1025,8 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
 async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Phase 1: create a v2 WebRTC conversation whose sideband sends transcript + output audio
+    // after the client has had a chance to append input.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V2,
         Vec::new(),
@@ -1039,6 +1055,8 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     assert_eq!(started.started.version, RealtimeConversationVersion::V2);
     assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
 
+    // Phase 2: drive app-server as the client would: append audio, append text, then receive
+    // transcript/audio notifications that came from the sideband socket.
     let thread_id = started.started.thread_id.clone();
     harness.append_audio(thread_id.clone()).await?;
     harness.append_text(thread_id, "hello").await?;
@@ -1056,6 +1074,7 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
         .await?;
     assert_eq!(output_audio.audio.data, "AQID");
 
+    // Phase 3: prove the client inputs were translated into the v2 realtime sideband events.
     let requests = [
         harness.sideband_outbound_request(/*request_index*/ 1).await,
         harness.sideband_outbound_request(/*request_index*/ 2).await,
@@ -1086,6 +1105,8 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
 async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Phase 1: script a v2 codex function call and a delegated Responses turn that returns final
+    // assistant text.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V2,
         vec![create_final_assistant_message_sse_response(
@@ -1104,6 +1125,7 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V2);
 
+    // Phase 2: wait for the delegated turn lifecycle kicked off by the v2 function-call item.
     let turn_started = harness
         .read_notification::<TurnStartedNotification>("turn/started")
         .await?;
@@ -1113,6 +1135,8 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
+    // Phase 3: assert the delegated prompt went to Responses and the result returned as exactly one
+    // v2 function-call output event on the sideband.
     let requests = harness.responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
@@ -1132,6 +1156,8 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
 async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Phase 1: script a v2 codex function call; the delegated turn first requests a shell command
+    // and then completes after Codex reports the command output back to Responses.
     let mut harness = RealtimeE2eHarness::new_with_sandbox(
         RealtimeTestVersion::V2,
         vec![
@@ -1156,6 +1182,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
 
     let _ = harness.start_webrtc_realtime("v=offer\r\n").await?;
 
+    // Phase 2: observe the delegated turn executing the requested shell command.
     let started_command = wait_for_started_command_execution(&mut harness.mcp).await?;
     let ThreadItem::CommandExecution { id, status, .. } = started_command.item else {
         unreachable!("helper returns command execution items");
@@ -1179,6 +1206,8 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     assert_eq!(status, CommandExecutionStatus::Completed);
     assert_eq!(aggregated_output.as_deref(), Some("realtime-tool-ok"));
 
+    // Phase 3: verify the shell output reached Responses and the final delegated answer returned
+    // to realtime as a single function-call-output item.
     let turn_completed = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
@@ -1207,6 +1236,8 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
 async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Phase 1: gate the delegated Responses stream so the sideband can send audio while the tool
+    // call is still waiting on its delegated turn.
     let responses_server = responses::start_mock_server().await;
     let (gate_completed_tx, gate_completed_rx) = mpsc::channel();
     let gated_response = responses::sse(vec![
@@ -1249,6 +1280,8 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
         .read_notification::<TurnStartedNotification>("turn/started")
         .await?;
 
+    // Phase 2: require app-server to fan out sideband audio before the delegated tool call is
+    // allowed to finish.
     let audio = harness
         .read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
             "thread/realtime/outputAudio/delta",
@@ -1256,6 +1289,8 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
         .await?;
     assert_eq!(audio.audio.data, "CQoL");
 
+    // Phase 3: release the delegated turn and assert the sideband function-call output is delivered
+    // after the nonblocking audio.
     let _ = gate_completed_tx.send(());
     let turn_completed = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
@@ -1273,6 +1308,7 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
 async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Phase 1: make call creation fail before any sideband connection can matter.
     let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     Mock::given(method("POST"))
         .and(path("/v1/realtime/calls"))
@@ -1294,6 +1330,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     mcp.initialize().await?;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
+    // Phase 2: start a normal app-server thread and request realtime over WebRTC.
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams::default())
         .await?;
@@ -1321,6 +1358,8 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     .await??;
     let _: ThreadRealtimeStartResponse = to_response(start_response)?;
 
+    // Phase 3: the JSON-RPC start request returns, and the realtime failure is delivered as the
+    // typed realtime error notification.
     let error =
         read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")
             .await?;
