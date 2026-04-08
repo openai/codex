@@ -615,7 +615,7 @@ fn spawn_agent_description_omits_usage_hint_when_disabled() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
-    .with_spawn_agent_usage_hint(false);
+    .with_spawn_agent_usage_hint(/*spawn_agent_usage_hint*/ false);
 
     let (tools, _) = build_specs(
         &tools_config,
