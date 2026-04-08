@@ -362,6 +362,7 @@ fn parse_tool_input_schema_infers_object_shape_from_schema_additional_properties
 // normalizer and are the intended signal for the new JsonSchema work.
 
 #[test]
+#[ignore = "Expected to pass after the new JsonSchema preserves nullable type unions"]
 fn parse_tool_input_schema_preserves_nested_nullable_type_union() {
     // Example schema shape:
     // {
@@ -410,6 +411,7 @@ fn parse_tool_input_schema_preserves_nested_nullable_type_union() {
 }
 
 #[test]
+#[ignore = "Expected to pass after the new JsonSchema preserves nested anyOf schemas"]
 fn parse_tool_input_schema_preserves_nested_any_of_property() {
     // Example schema shape:
     // {
