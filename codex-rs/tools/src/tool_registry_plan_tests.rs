@@ -485,7 +485,7 @@ fn disabled_environment_omits_environment_backed_tools() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
